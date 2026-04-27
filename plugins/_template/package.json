@@ -1,0 +1,23 @@
+{
+  "name": "@bakin-bits/_template",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./index.ts",
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "@bakin/sdk": "^0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@bakin/sdk": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
+  }
+}
