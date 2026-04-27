@@ -1,0 +1,13 @@
+{
+  "id": "_template",
+  "name": "Plugin Template",
+  "version": "0.0.0",
+  "bakin": ">=1.0.0",
+  "description": "Starter scaffold demonstrating the BakinPlugin contract with hot-reload-safe lifecycle hooks.",
+  "entry": {
+    "server": "index.ts",
+    "client": "client.tsx"
+  },
+  "permissions": [],
+  "dependencies": []
+}
