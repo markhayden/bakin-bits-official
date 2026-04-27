@@ -4,9 +4,10 @@
  * Renders at `/_template` in the shell. Uses only `@bakin/sdk/*`
  * imports — never reach into Bakin internals or other plugin packages.
  */
+import type { ReactElement } from 'react'
 import { PluginHeader } from '@bakin/sdk/components'
 
-export function TemplatePage(): JSX.Element {
+export function TemplatePage(): ReactElement {
   return (
     <div className="p-6 space-y-4">
       <PluginHeader title="Plugin Template" />

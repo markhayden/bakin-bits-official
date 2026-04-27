@@ -16,7 +16,8 @@
   },
   "include": [
     "plugins/**/*.ts",
-    "plugins/**/*.tsx"
+    "plugins/**/*.tsx",
+    "types/**/*.d.ts"
   ],
   "exclude": [
     "node_modules",

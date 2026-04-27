@@ -9,8 +9,15 @@
     "react-dom": "^19.0.0",
     "@bakin/sdk": "^0.1.0"
   },
-  "devDependencies": {
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0"
+  "peerDependenciesMeta": {
+    "@bakin/sdk": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
   }
 }
