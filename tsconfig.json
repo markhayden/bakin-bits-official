@@ -21,6 +21,7 @@
   ],
   "exclude": [
     "node_modules",
-    "plugins/**/dist/**"
+    "plugins/**/dist/**",
+    "plugins/**/tests/**"
   ]
 }
