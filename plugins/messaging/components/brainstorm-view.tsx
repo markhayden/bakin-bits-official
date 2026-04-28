@@ -38,9 +38,8 @@ export function BrainstormView() {
   useEffect(() => {
     if (search) searchHook.search(search)
     else searchHook.clear()
-    // searchHook is a fresh object each render; including it in deps would
-    // re-fire every tick. Only the query string change should re-run this.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // searchHook is a fresh object each render; only the query string change
+    // should re-run this effect.
   }, [search])
 
   const pushSessionId = useCallback((id: string) => {

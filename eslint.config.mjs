@@ -15,6 +15,11 @@ export default tseslint.config(
   {
     files: ['plugins/**/*.{ts,tsx}'],
     rules: {
+      '@typescript-eslint/no-unused-vars': ['error', {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+        caughtErrorsIgnorePattern: '^_',
+      }],
       // Plugins MUST NOT reach past the SDK. Direct imports of bakin
       // internals (`@/core/*`, `@bakin/core/*`, other plugin packages)
       // break under hot reload and won't resolve when the plugin is
@@ -27,6 +32,20 @@ export default tseslint.config(
           },
         ],
       }],
+    },
+  },
+  {
+    files: [
+      'plugins/**/tests/**/*.{ts,tsx}',
+      'plugins/test-helpers.ts',
+    ],
+    rules: {
+      // Tests intentionally mock old core paths and use dynamic require()
+      // when a module must be loaded after Bun mocks are registered.
+      'no-restricted-imports': 'off',
+      '@typescript-eslint/no-require-imports': 'off',
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-unused-vars': 'off',
     },
   },
   {

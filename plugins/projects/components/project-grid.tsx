@@ -58,7 +58,8 @@ export function ProjectGrid() {
   useEffect(() => {
     if (search) searchHook.search(search)
     else searchHook.clear()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // searchHook is a fresh object each render; only the query string change
+    // should re-run this effect.
   }, [search])
 
   // Build a score map keyed by project id. Projects index with the raw

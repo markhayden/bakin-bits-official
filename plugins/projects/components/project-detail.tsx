@@ -178,7 +178,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
     } else {
       fetchProject(initialEdit)
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [])
 
   // Sync default owner once main agent id resolves from the team store.
   useEffect(() => {

@@ -10,7 +10,7 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "bun test --isolate",
+    "test": "bun test --isolate --preload ./test/setup-dom.ts",
     "lint": "eslint plugins"
   },
   "devDependencies": {
@@ -18,6 +18,10 @@
     "eslint": "^9.0.0",
     "@eslint/js": "^9.0.0",
     "typescript-eslint": "^8.0.0",
+    "@happy-dom/global-registrator": "^20.9.0",
+    "@bakin/sdk": "file:./test-sdk",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/bun": "latest",
     "@types/js-yaml": "^4.0.9",
     "@types/react": "^19.0.0",
