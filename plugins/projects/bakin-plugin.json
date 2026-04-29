@@ -32,10 +32,10 @@
   ],
   "contributes": {
     "clientRoutes": [
-      { "path": "/projects", "summary": "Project grid", "slot": "page:/projects" },
-      { "path": "/projects/new", "summary": "Create project", "slot": "page:/projects/new" },
-      { "path": "/projects/[id]", "summary": "Project detail", "slot": "page:/projects/[id]" },
-      { "path": "/projects/[id]/edit", "summary": "Edit project", "slot": "page:/projects/[id]/edit" }
+      { "path": "/projects", "summary": "Project grid" },
+      { "path": "/projects/new", "summary": "Create project" },
+      { "path": "/projects/[id]", "summary": "Project detail" },
+      { "path": "/projects/[id]/edit", "summary": "Edit project" }
     ],
     "apiRoutes": [
       { "method": "GET", "path": "/", "summary": "List projects", "permissions": ["storage.read"] },

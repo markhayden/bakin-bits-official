@@ -43,7 +43,8 @@ bakin-bits-official/
    `@bakin-bits/my-plugin`), keep `@bakin/sdk` in `peerDependencies`.
 4. **Implement.** `index.ts` exports a `BakinPlugin` with `activate(ctx)`
    and (recommended) `onShutdown(ctx)`. `client.tsx` calls
-   `registerPlugin({ id, navItems, slots })` as a side effect.
+   `registerPlugin({ id, navItems, routes })` for plugin-owned pages.
+   Use `slots` only for extension surfaces inside another page.
 5. **Test.**
    ```sh
    cd ../..
