@@ -1,0 +1,95 @@
+{
+  "id": "projects",
+  "name": "Projects",
+  "version": "1.0.0",
+  "bakin": ">=1.0.0",
+  "description": "Project management with specs, checklists, task linking, and agent access via MCP tools",
+  "entry": {
+    "server": "index.ts",
+    "client": "client.tsx"
+  },
+  "contentFiles": [],
+  "secrets": [],
+  "tests": "tests/",
+  "dependencies": ["tasks", "assets", "team"],
+  "permissions": [
+    "storage.read",
+    "storage.write",
+    "events.emit",
+    "runtime.agents",
+    "runtime.messaging",
+    "tasks.read",
+    "tasks.write",
+    "search.read",
+    "search.write",
+    "assets.read"
+  ],
+  "runtimeCapabilities": [
+    "agents",
+    "messaging",
+    "tasks",
+    "search"
+  ],
+  "contributes": {
+    "clientRoutes": [
+      { "path": "/projects", "summary": "Project grid", "slot": "page:/projects" },
+      { "path": "/projects/new", "summary": "Create project", "slot": "page:/projects/new" },
+      { "path": "/projects/[id]", "summary": "Project detail", "slot": "page:/projects/[id]" },
+      { "path": "/projects/[id]/edit", "summary": "Edit project", "slot": "page:/projects/[id]/edit" }
+    ],
+    "apiRoutes": [
+      { "method": "GET", "path": "/", "summary": "List projects", "permissions": ["storage.read"] },
+      { "method": "GET", "path": "/:projectId", "summary": "Get a project", "permissions": ["storage.read", "tasks.read", "assets.read"] },
+      { "method": "POST", "path": "/", "summary": "Create a project", "permissions": ["storage.write", "runtime.agents"] },
+      { "method": "PUT", "path": "/:projectId", "summary": "Update a project", "permissions": ["storage.write"] },
+      { "method": "DELETE", "path": "/:projectId", "summary": "Delete a project", "permissions": ["storage.write", "tasks.write"] },
+      { "method": "POST", "path": "/:projectId/checklist", "summary": "Add a checklist item", "permissions": ["storage.write"] },
+      { "method": "PUT", "path": "/:projectId/checklist/:itemId/toggle", "summary": "Toggle a checklist item", "permissions": ["storage.write"] },
+      { "method": "PUT", "path": "/:projectId/checklist/:itemId", "summary": "Update a checklist item", "permissions": ["storage.write"] },
+      { "method": "DELETE", "path": "/:projectId/checklist/:itemId", "summary": "Remove a checklist item", "permissions": ["storage.write"] },
+      { "method": "POST", "path": "/:projectId/checklist/:itemId/link", "summary": "Link a checklist item to a task", "permissions": ["storage.write", "tasks.read"] },
+      { "method": "POST", "path": "/:projectId/checklist/:itemId/promote", "summary": "Promote a checklist item to a task", "permissions": ["storage.write", "tasks.write"] },
+      { "method": "POST", "path": "/:projectId/assets", "summary": "Attach an asset", "permissions": ["storage.write", "assets.read"] },
+      { "method": "DELETE", "path": "/:projectId/assets/:filename", "summary": "Detach an asset", "permissions": ["storage.write"] },
+      { "method": "POST", "path": "/:projectId/ask", "summary": "Ask an agent about a project", "permissions": ["runtime.messaging", "storage.read"] }
+    ],
+    "execTools": [
+      { "name": "bakin_exec_project_list", "summary": "List projects", "permissions": ["storage.read"] },
+      { "name": "bakin_exec_project_get", "summary": "Get a project", "permissions": ["storage.read", "tasks.read", "assets.read"] },
+      { "name": "bakin_exec_project_create", "summary": "Create a project", "permissions": ["storage.write"] },
+      { "name": "bakin_exec_project_update", "summary": "Update a project", "permissions": ["storage.write"] },
+      { "name": "bakin_exec_project_delete", "summary": "Delete a project", "permissions": ["storage.write"] },
+      { "name": "bakin_exec_project_add_item", "summary": "Add a checklist item", "permissions": ["storage.write"] },
+      { "name": "bakin_exec_project_mark_item", "summary": "Mark a checklist item", "permissions": ["storage.write"] },
+      { "name": "bakin_exec_project_remove_item", "summary": "Remove a checklist item", "permissions": ["storage.write"] },
+      { "name": "bakin_exec_project_link_item", "summary": "Link a checklist item to a task", "permissions": ["storage.write", "tasks.read"] },
+      { "name": "bakin_exec_project_promote_item", "summary": "Promote a checklist item to a task", "permissions": ["storage.write", "tasks.write"] },
+      { "name": "bakin_exec_project_attach_asset", "summary": "Attach an asset to a project", "permissions": ["storage.write", "assets.read"] },
+      { "name": "bakin_exec_project_detach_asset", "summary": "Detach an asset from a project", "permissions": ["storage.write"] },
+      { "name": "bakin_exec_project_toggle_item", "summary": "Toggle a checklist item", "permissions": ["storage.write"] },
+      { "name": "bakin_exec_project_update_item", "summary": "Update a checklist item", "permissions": ["storage.write"] },
+      { "name": "bakin_exec_project_ask", "summary": "Ask an agent about a project", "permissions": ["runtime.messaging", "storage.read"] }
+    ],
+    "cliCommands": [
+      { "name": "projects:list", "usage": "bakin projects list", "summary": "List projects", "dispatch": { "type": "execTool", "name": "bakin_exec_project_list" } },
+      { "name": "projects:get", "usage": "bakin projects get <projectId>", "summary": "Get a project", "dispatch": { "type": "execTool", "name": "bakin_exec_project_get" } },
+      { "name": "projects:create", "usage": "bakin projects create <title>", "summary": "Create a project", "dispatch": { "type": "execTool", "name": "bakin_exec_project_create" } },
+      { "name": "projects:update", "usage": "bakin projects update <projectId>", "summary": "Update a project", "dispatch": { "type": "execTool", "name": "bakin_exec_project_update" } },
+      { "name": "projects:delete", "usage": "bakin projects delete <projectId>", "summary": "Delete a project", "dispatch": { "type": "execTool", "name": "bakin_exec_project_delete" } },
+      { "name": "projects:add-item", "usage": "bakin projects add-item <projectId> <title>", "summary": "Add a checklist item", "dispatch": { "type": "execTool", "name": "bakin_exec_project_add_item" } },
+      { "name": "projects:toggle-item", "usage": "bakin projects toggle-item <projectId> <itemId> <checked>", "summary": "Toggle a checklist item", "dispatch": { "type": "execTool", "name": "bakin_exec_project_toggle_item" } },
+      { "name": "projects:update-item", "usage": "bakin projects update-item <projectId> <itemId>", "summary": "Update a checklist item", "dispatch": { "type": "execTool", "name": "bakin_exec_project_update_item" } },
+      { "name": "projects:remove-item", "usage": "bakin projects remove-item <projectId> <taskItemId>", "summary": "Remove a checklist item", "dispatch": { "type": "execTool", "name": "bakin_exec_project_remove_item" } },
+      { "name": "projects:link-item", "usage": "bakin projects link-item <projectId> <taskItemId> <taskId>", "summary": "Link a checklist item to a task", "dispatch": { "type": "execTool", "name": "bakin_exec_project_link_item" } },
+      { "name": "projects:promote-item", "usage": "bakin projects promote-item <projectId> <taskItemId>", "summary": "Promote a checklist item to a task", "dispatch": { "type": "execTool", "name": "bakin_exec_project_promote_item" } },
+      { "name": "projects:attach-asset", "usage": "bakin projects attach-asset <projectId> <filename>", "summary": "Attach an asset to a project", "dispatch": { "type": "execTool", "name": "bakin_exec_project_attach_asset" } },
+      { "name": "projects:detach-asset", "usage": "bakin projects detach-asset <projectId> <filename>", "summary": "Detach an asset from a project", "dispatch": { "type": "execTool", "name": "bakin_exec_project_detach_asset" } },
+      { "name": "projects:ask", "usage": "bakin projects ask <projectId> <message>", "summary": "Ask an agent about a project", "dispatch": { "type": "execTool", "name": "bakin_exec_project_ask" } }
+    ],
+    "settings": [
+      { "key": "defaultOwner", "summary": "Default project owner when no owner is supplied" }
+    ],
+    "docs": { "slug": "official/projects" }
+  },
+  "devWatch": ["**/*.ts", "**/*.tsx", "bakin-plugin.json"]
+}

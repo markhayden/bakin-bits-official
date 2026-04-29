@@ -15,6 +15,11 @@ export default tseslint.config(
   {
     files: ['plugins/**/*.{ts,tsx}'],
     rules: {
+      '@typescript-eslint/no-unused-vars': ['error', {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+        caughtErrorsIgnorePattern: '^_',
+      }],
       // Plugins MUST NOT reach past the SDK. Direct imports of bakin
       // internals (`@/core/*`, `@bakin/core/*`, other plugin packages)
       // break under hot reload and won't resolve when the plugin is
@@ -22,11 +27,25 @@ export default tseslint.config(
       'no-restricted-imports': ['error', {
         patterns: [
           {
-            group: ['@/*', '@bakin/core/*', '@bakin/tasks/*', '@bakin/messaging/*', '@bakin/projects/*', '@bakin/workflows/*', '@bakin/team/*', '@bakin/health/*', '@bakin/memory/*', '@bakin/assets/*', '@bakin/schedule/*', '@bakin/models/*'],
+            group: ['@/*', '@bakin/core/*', '@bakin/tasks/*', '@bakin/workflows/*', '@bakin/team/*', '@bakin/health/*', '@bakin/memory/*', '@bakin/assets/*', '@bakin/schedule/*', '@bakin/models/*'],
             message: 'Plugins may only import from `@bakin/sdk/*`. Cross-plugin imports break under hot reload and at runtime.',
           },
         ],
       }],
+    },
+  },
+  {
+    files: [
+      'plugins/**/tests/**/*.{ts,tsx}',
+      'plugins/test-helpers.ts',
+    ],
+    rules: {
+      // Tests intentionally mock old core paths and use dynamic require()
+      // when a module must be loaded after Bun mocks are registered.
+      'no-restricted-imports': 'off',
+      '@typescript-eslint/no-require-imports': 'off',
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-unused-vars': 'off',
     },
   },
   {

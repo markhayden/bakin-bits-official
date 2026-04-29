@@ -5,7 +5,6 @@ node_modules/
 dist/
 
 # bun
-bun.lock
 .bun/
 
 # editor
