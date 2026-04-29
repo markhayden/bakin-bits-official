@@ -1,5 +1,10 @@
 const registry = new Map()
 
+function normalizeRoutes(routes = {}, owner = '') {
+  if (Array.isArray(routes)) return routes
+  return Object.entries(routes).map(([path, component]) => ({ path, component, owner }))
+}
+
 export function registerPlugin(def) {
   registry.set(def.id, def)
 }
@@ -13,7 +18,7 @@ export function getAllNavItems() {
 }
 
 export function getPluginRoutes(id) {
-  return registry.get(id)?.routes ?? []
+  return normalizeRoutes(registry.get(id)?.routes, id)
 }
 
 export function getPluginRoute(id, path) {

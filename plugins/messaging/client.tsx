@@ -3,6 +3,8 @@
  */
 import { registerPlugin } from '@bakin/sdk'
 import type { NavItem } from '@bakin/sdk'
+import { useRouter } from '@bakin/sdk/hooks'
+import { Suspense, useEffect, type ReactNode } from 'react'
 import { ContentCalendar } from './components/content-calendar'
 import { BrainstormView } from './components/brainstorm-view'
 
@@ -21,11 +23,46 @@ const navItems: NavItem[] = [
   },
 ]
 
+function MessagingIndexRoute() {
+  const router = useRouter()
+
+  useEffect(() => {
+    router.replace('/messaging/calendar')
+  }, [router])
+
+  return null
+}
+
+function MessagingPageFrame({ children }: { children: ReactNode }) {
+  return (
+    <div className="p-6 flex flex-col h-full min-h-0 min-w-0 overflow-hidden">
+      <Suspense>{children}</Suspense>
+    </div>
+  )
+}
+
+function MessagingCalendarRoute() {
+  return (
+    <MessagingPageFrame>
+      <ContentCalendar />
+    </MessagingPageFrame>
+  )
+}
+
+function MessagingBrainstormRoute() {
+  return (
+    <MessagingPageFrame>
+      <BrainstormView />
+    </MessagingPageFrame>
+  )
+}
+
 registerPlugin({
   id: 'messaging',
   navItems,
-  slots: {
-    'page:/messaging/calendar': ContentCalendar,
-    'page:/messaging/brainstorm': BrainstormView,
+  routes: {
+    '/messaging': MessagingIndexRoute,
+    '/messaging/calendar': MessagingCalendarRoute,
+    '/messaging/brainstorm': MessagingBrainstormRoute,
   },
 })

@@ -29,8 +29,9 @@
   ],
   "contributes": {
     "clientRoutes": [
-      { "path": "/messaging/calendar", "summary": "Messaging content calendar", "slot": "page:/messaging/calendar" },
-      { "path": "/messaging/brainstorm", "summary": "Messaging brainstorming sessions", "slot": "page:/messaging/brainstorm" }
+      { "path": "/messaging", "summary": "Messaging default route" },
+      { "path": "/messaging/calendar", "summary": "Messaging content calendar" },
+      { "path": "/messaging/brainstorm", "summary": "Messaging brainstorming sessions" }
     ],
     "apiRoutes": [
       { "method": "GET", "path": "/", "summary": "List messaging items", "permissions": ["storage.read"] },

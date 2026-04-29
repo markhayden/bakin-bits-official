@@ -632,7 +632,7 @@ declare module '@bakin/sdk' {
   export interface PluginRegistration {
     id: string
     navItems?: NavItem[]
-    routes?: ClientRouteEntry[]
+    routes?: Record<string, ComponentType<any>>
     slots?: Record<string, ComponentType<any>>
   }
 
