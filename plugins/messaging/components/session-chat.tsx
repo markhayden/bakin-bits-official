@@ -191,7 +191,7 @@ export function SessionChat({
   )
 
   return (
-    <div className="h-full min-h-0 pt-5" data-testid="session-chat-shell">
+    <div className="h-full min-h-0" data-testid="session-chat-shell">
       <IntegratedBrainstorm
         messages={messages}
         onMessagesChange={setMessages}

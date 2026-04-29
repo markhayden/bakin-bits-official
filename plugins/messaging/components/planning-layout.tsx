@@ -25,6 +25,27 @@ interface Props {
   onSessionUpdated?: () => void
 }
 
+const REVIEW_MIN_WIDTH = 320
+const REVIEW_MAX_WIDTH = 720
+const REVIEW_DEFAULT_WIDTH = 480
+const REVIEW_WIDTH_STORAGE_KEY = 'messaging:review-panel-width'
+
+function clampReviewWidth(width: number) {
+  return Math.min(REVIEW_MAX_WIDTH, Math.max(REVIEW_MIN_WIDTH, width))
+}
+
+function getStoredReviewWidth() {
+  if (typeof window === 'undefined') return REVIEW_DEFAULT_WIDTH
+  try {
+    const stored = window.localStorage.getItem(REVIEW_WIDTH_STORAGE_KEY)
+    if (!stored) return REVIEW_DEFAULT_WIDTH
+    const parsed = Number.parseInt(stored, 10)
+    return Number.isFinite(parsed) ? clampReviewWidth(parsed) : REVIEW_DEFAULT_WIDTH
+  } catch {
+    return REVIEW_DEFAULT_WIDTH
+  }
+}
+
 export function PlanningLayout({ sessionId, onBack, onSessionUpdated }: Props) {
   const [session, setSession] = useState<PlanningSession | null>(null)
   const [loading, setLoading] = useState(true)
@@ -32,7 +53,51 @@ export function PlanningLayout({ sessionId, onBack, onSessionUpdated }: Props) {
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [reviewWidth, setReviewWidth] = useState(() => getStoredReviewWidth())
   const titleInputRef = useRef<HTMLInputElement>(null)
+  const draggingRef = useRef(false)
+  const dragStartXRef = useRef(0)
+  const dragStartWidthRef = useRef(0)
+  const reviewWidthRef = useRef(reviewWidth)
+
+  useEffect(() => {
+    reviewWidthRef.current = reviewWidth
+  }, [reviewWidth])
+
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    draggingRef.current = true
+    dragStartXRef.current = e.clientX
+    dragStartWidthRef.current = reviewWidthRef.current
+
+    const handleMouseMove = (ev: MouseEvent) => {
+      if (!draggingRef.current) return
+      // Drag handle sits on the LEFT edge of the review panel:
+      // moving the cursor left grows the panel, right shrinks it.
+      const delta = dragStartXRef.current - ev.clientX
+      const next = clampReviewWidth(dragStartWidthRef.current + delta)
+      reviewWidthRef.current = next
+      setReviewWidth(next)
+    }
+
+    const handleMouseUp = () => {
+      draggingRef.current = false
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      try {
+        window.localStorage.setItem(REVIEW_WIDTH_STORAGE_KEY, String(reviewWidthRef.current))
+      } catch {
+        // Ignore storage failures; in-memory width still applies.
+      }
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }, [])
 
   const sessionAgent = useAgent(session?.agentId ?? '')
 
@@ -247,9 +312,9 @@ export function PlanningLayout({ sessionId, onBack, onSessionUpdated }: Props) {
       </div>
 
       {/* Split layout */}
-      <div className="flex flex-1 min-h-0 overflow-hidden gap-6 pt-5">
+      <div className="flex flex-1 min-h-0 overflow-hidden pt-5">
         {/* Chat panel */}
-        <div className={`flex h-full min-h-0 flex-1 min-w-0 flex-col ${showReview ? 'md:w-[60%]' : 'w-full'}`}>
+        <div className="flex h-full min-h-0 flex-1 min-w-0 flex-col pl-3 pr-6 pt-3">
           <SessionChat
             sessionId={sessionId}
             agentId={agentId}
@@ -262,8 +327,19 @@ export function PlanningLayout({ sessionId, onBack, onSessionUpdated }: Props) {
 
         {/* Review panel */}
         {showReview && (
-          <div className="hidden min-h-0 md:flex md:w-[40%] border-l border-border">
-            <div className="w-full h-full min-h-0">
+          <div
+            className="hidden min-h-0 md:flex shrink-0 relative border-l border-border"
+            style={{ width: `${reviewWidth}px` }}
+          >
+            {/* Drag handle — left edge */}
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize review panel"
+              className="absolute inset-y-0 -left-0.5 w-1.5 cursor-col-resize hover:bg-accent/50 active:bg-accent transition-colors z-10"
+              onMouseDown={handleResizeStart}
+            />
+            <div className="w-full h-full min-h-0 px-3">
               <ReviewPanel
                 sessionId={sessionId}
                 proposals={session.proposals}
