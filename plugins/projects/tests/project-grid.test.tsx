@@ -95,6 +95,7 @@ type StubSearchResult = {
 let stubSearchResults: StubSearchResult[] = []
 const searchSpy = mock<(q: string) => void>()
 const clearSpy = mock<() => void>()
+const routerPushSpy = mock<(path: string) => void>()
 
 mock.module('@/hooks/use-search', () => ({
   useSearch: () => ({
@@ -173,10 +174,21 @@ const fixtureProjects = [
   },
 ]
 
-const fetchMock = mock(async () => ({
-  ok: true,
-  json: async () => ({ projects: fixtureProjects }),
-})) as unknown as typeof fetch
+const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = typeof input === 'string' ? input : String(input)
+  if (url === '/api/plugins/projects/' && init?.method === 'POST') {
+    return {
+      ok: true,
+      json: async () => ({ ok: true, id: 'created-project' }),
+      text: async () => '',
+    }
+  }
+  return {
+    ok: true,
+    json: async () => ({ projects: fixtureProjects }),
+    text: async () => '',
+  }
+}) as unknown as typeof fetch
 
 beforeEach(() => {
   for (const k of Object.keys(queryState)) delete queryState[k]
@@ -184,7 +196,13 @@ beforeEach(() => {
   stubSearchResults = []
   searchSpy.mockClear()
   clearSpy.mockClear()
+  routerPushSpy.mockClear()
   ;(globalThis as unknown as { __bakinTestSdkHooks?: Record<string, unknown> }).__bakinTestSdkHooks = {
+    useRouter: () => ({
+      push: routerPushSpy,
+      replace: mock(),
+      back: mock(),
+    }),
     useSearch: () => ({
       get results() {
         return stubSearchResults
@@ -287,5 +305,34 @@ describe('ProjectGrid', () => {
       expect(screen.queryByTestId('project-card-p1')).toBeNull()
       expect(screen.queryByTestId('project-card-p3')).toBeNull()
     })
+  })
+
+  it('creates a titled project before opening the edit view', async () => {
+    render(<ProjectGrid />)
+
+    await waitFor(() => {
+      expect(screen.getByText('New Project')).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByText('New Project'))
+    const titleInput = screen.getByPlaceholderText('Project title...')
+    const createButton = screen.getByText('Create Project') as HTMLButtonElement
+    expect(createButton.disabled).toBe(true)
+
+    fireEvent.change(titleInput, { target: { value: 'Website Refresh' } })
+    expect((screen.getByText('Create Project') as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(screen.getByText('Create Project'))
+
+    await waitFor(() => {
+      expect(routerPushSpy).toHaveBeenCalledWith('/projects/created-project/edit')
+    })
+
+    const fetchCalls = (fetchMock as unknown as { mock: { calls: unknown[][] } }).mock.calls
+    const createCall = fetchCalls.find(([url, init]) => (
+      url === '/api/plugins/projects/'
+      && (init as RequestInit | undefined)?.method === 'POST'
+    ))
+    expect(createCall).toBeDefined()
+    expect(JSON.parse(String((createCall?.[1] as RequestInit).body))).toEqual({ title: 'Website Refresh' })
   })
 })
