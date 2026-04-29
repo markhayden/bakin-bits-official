@@ -73,10 +73,18 @@
     "cliCommands": [
       { "name": "projects:list", "usage": "bakin projects list", "summary": "List projects", "dispatch": { "type": "execTool", "name": "bakin_exec_project_list" } },
       { "name": "projects:get", "usage": "bakin projects get <projectId>", "summary": "Get a project", "dispatch": { "type": "execTool", "name": "bakin_exec_project_get" } },
-      { "name": "projects:create", "usage": "bakin projects create", "summary": "Create a project", "dispatch": { "type": "execTool", "name": "bakin_exec_project_create" } },
+      { "name": "projects:create", "usage": "bakin projects create <title>", "summary": "Create a project", "dispatch": { "type": "execTool", "name": "bakin_exec_project_create" } },
       { "name": "projects:update", "usage": "bakin projects update <projectId>", "summary": "Update a project", "dispatch": { "type": "execTool", "name": "bakin_exec_project_update" } },
       { "name": "projects:delete", "usage": "bakin projects delete <projectId>", "summary": "Delete a project", "dispatch": { "type": "execTool", "name": "bakin_exec_project_delete" } },
-      { "name": "projects:ask", "usage": "bakin projects ask <projectId>", "summary": "Ask an agent about a project", "dispatch": { "type": "execTool", "name": "bakin_exec_project_ask" } }
+      { "name": "projects:add-item", "usage": "bakin projects add-item <projectId> <title>", "summary": "Add a checklist item", "dispatch": { "type": "execTool", "name": "bakin_exec_project_add_item" } },
+      { "name": "projects:toggle-item", "usage": "bakin projects toggle-item <projectId> <itemId> <checked>", "summary": "Toggle a checklist item", "dispatch": { "type": "execTool", "name": "bakin_exec_project_toggle_item" } },
+      { "name": "projects:update-item", "usage": "bakin projects update-item <projectId> <itemId>", "summary": "Update a checklist item", "dispatch": { "type": "execTool", "name": "bakin_exec_project_update_item" } },
+      { "name": "projects:remove-item", "usage": "bakin projects remove-item <projectId> <taskItemId>", "summary": "Remove a checklist item", "dispatch": { "type": "execTool", "name": "bakin_exec_project_remove_item" } },
+      { "name": "projects:link-item", "usage": "bakin projects link-item <projectId> <taskItemId> <taskId>", "summary": "Link a checklist item to a task", "dispatch": { "type": "execTool", "name": "bakin_exec_project_link_item" } },
+      { "name": "projects:promote-item", "usage": "bakin projects promote-item <projectId> <taskItemId>", "summary": "Promote a checklist item to a task", "dispatch": { "type": "execTool", "name": "bakin_exec_project_promote_item" } },
+      { "name": "projects:attach-asset", "usage": "bakin projects attach-asset <projectId> <filename>", "summary": "Attach an asset to a project", "dispatch": { "type": "execTool", "name": "bakin_exec_project_attach_asset" } },
+      { "name": "projects:detach-asset", "usage": "bakin projects detach-asset <projectId> <filename>", "summary": "Detach an asset from a project", "dispatch": { "type": "execTool", "name": "bakin_exec_project_detach_asset" } },
+      { "name": "projects:ask", "usage": "bakin projects ask <projectId> <message>", "summary": "Ask an agent about a project", "dispatch": { "type": "execTool", "name": "bakin_exec_project_ask" } }
     ],
     "settings": [
       { "key": "defaultOwner", "summary": "Default project owner when no owner is supplied" }

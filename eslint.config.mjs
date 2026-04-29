@@ -27,7 +27,7 @@ export default tseslint.config(
       'no-restricted-imports': ['error', {
         patterns: [
           {
-            group: ['@/*', '@bakin/core/*', '@bakin/tasks/*', '@bakin/messaging/*', '@bakin/projects/*', '@bakin/workflows/*', '@bakin/team/*', '@bakin/health/*', '@bakin/memory/*', '@bakin/assets/*', '@bakin/schedule/*', '@bakin/models/*'],
+            group: ['@/*', '@bakin/core/*', '@bakin/tasks/*', '@bakin/workflows/*', '@bakin/team/*', '@bakin/health/*', '@bakin/memory/*', '@bakin/assets/*', '@bakin/schedule/*', '@bakin/models/*'],
             message: 'Plugins may only import from `@bakin/sdk/*`. Cross-plugin imports break under hot reload and at runtime.',
           },
         ],

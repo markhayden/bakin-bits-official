@@ -70,10 +70,20 @@
     ],
     "cliCommands": [
       { "name": "messaging:list", "usage": "bakin messaging list", "summary": "List messaging items", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_list" } },
-      { "name": "messaging:create", "usage": "bakin messaging create", "summary": "Create a messaging item", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_create" } },
+      { "name": "messaging:get", "usage": "bakin messaging get <itemId>", "summary": "Get a messaging item", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_get" } },
+      { "name": "messaging:create", "usage": "bakin messaging create <title> <agent> <scheduledAt>", "summary": "Create a messaging item", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_create" } },
+      { "name": "messaging:update", "usage": "bakin messaging update <itemId>", "summary": "Update a messaging item", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_update" } },
+      { "name": "messaging:delete", "usage": "bakin messaging delete <itemId>", "summary": "Delete a messaging item", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_delete" } },
       { "name": "messaging:approve", "usage": "bakin messaging approve <itemId>", "summary": "Approve a messaging item", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_approve" } },
       { "name": "messaging:reject", "usage": "bakin messaging reject <itemId>", "summary": "Reject a messaging item", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_reject" } },
-      { "name": "messaging:sessions", "usage": "bakin messaging sessions", "summary": "List planning sessions", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_list" } }
+      { "name": "messaging:sessions", "usage": "bakin messaging sessions", "summary": "List planning sessions", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_list" } },
+      { "name": "messaging:session", "usage": "bakin messaging session <sessionId>", "summary": "Get a planning session", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_get" } },
+      { "name": "messaging:session-create", "usage": "bakin messaging session-create <agentId>", "summary": "Create a planning session", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_create" } },
+      { "name": "messaging:session-update", "usage": "bakin messaging session-update <sessionId>", "summary": "Update a planning session", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_update" } },
+      { "name": "messaging:session-delete", "usage": "bakin messaging session-delete <sessionId>", "summary": "Delete a planning session", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_delete" } },
+      { "name": "messaging:message", "usage": "bakin messaging message <sessionId> <message>", "summary": "Message a planning session", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_message" } },
+      { "name": "messaging:confirm", "usage": "bakin messaging confirm <sessionId>", "summary": "Confirm planning-session proposals", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_confirm" } },
+      { "name": "messaging:proposal", "usage": "bakin messaging proposal <sessionId> <proposalId>", "summary": "Update a planning-session proposal", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_proposal_update" } }
     ],
     "settings": [
       { "key": "channels", "summary": "Default notification channels for delivered messaging items" },

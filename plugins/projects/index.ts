@@ -143,9 +143,33 @@ const projectsPlugin: BakinPlugin = {
       }
     }
 
-    // Register cross-plugin hooks
-    ctx.hooks.register('projects.readProject', (d: unknown) => readProject((d as Record<string, unknown>).id as string))
-    ctx.hooks.register('projects.autoCheckLinkedItem', (d: unknown) => autoCheckLinkedItem((d as Record<string, unknown>).boardTaskId as string))
+    // Register task extension hooks. Core emits task lifecycle events and
+    // the tasks plugin asks for generic detail enrichment; projects owns the
+    // project-specific behavior behind those extension points.
+    ctx.hooks.register('tasks.statusChanged', async (d: unknown) => {
+      const data = d as Record<string, unknown>
+      const to = String(data.to ?? '').toLowerCase()
+      if (to !== 'done' && to !== 'archived') return
+      const taskId = data.taskId as string | undefined
+      if (taskId) await autoCheckLinkedItem(taskId)
+    })
+    ctx.hooks.register('tasks.enrichDetails', (d: unknown) => {
+      const data = d as Record<string, unknown>
+      const task = data.task as Record<string, unknown> | undefined
+      const projectId = task?.projectId as string | undefined
+      if (!projectId) return data
+
+      const project = readProject(projectId)
+      if (!project) return data
+
+      return {
+        ...data,
+        projectTitle: project.title,
+        projectStatus: project.status,
+        projectProgress: project.progress,
+        projectExcerpt: project.body.slice(0, 500),
+      }
+    })
 
     // Build in-memory index on startup
     try {

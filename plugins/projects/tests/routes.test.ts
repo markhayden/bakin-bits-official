@@ -1201,8 +1201,8 @@ describe('Registration', () => {
   })
 
   it('registers hooks', () => {
-    expect(plugin.ctx.hooks.register).toHaveBeenCalledWith('projects.readProject', expect.any(Function))
-    expect(plugin.ctx.hooks.register).toHaveBeenCalledWith('projects.autoCheckLinkedItem', expect.any(Function))
+    expect(plugin.ctx.hooks.register).toHaveBeenCalledWith('tasks.statusChanged', expect.any(Function))
+    expect(plugin.ctx.hooks.register).toHaveBeenCalledWith('tasks.enrichDetails', expect.any(Function))
   })
 
   it('watches project files', () => {
