@@ -191,22 +191,24 @@ export function SessionChat({
   )
 
   return (
-    <IntegratedBrainstorm
-      messages={messages}
-      onMessagesChange={setMessages}
-      onSend={onSend}
-      agentId={agentId}
-      placeholder={`Ask ${agentName} for content ideas…`}
-      emptyState={emptyState}
-      transformAssistantMessage={transformAssistantReply}
-      readOnly={isCompleted}
-      readOnlyNotice={
-        <Badge variant="outline" className="text-muted-foreground">
-          Session completed — read-only
-        </Badge>
-      }
-      fitParent
-      showHeader={false}
-    />
+    <div className="h-full min-h-0 pt-5" data-testid="session-chat-shell">
+      <IntegratedBrainstorm
+        messages={messages}
+        onMessagesChange={setMessages}
+        onSend={onSend}
+        agentId={agentId}
+        placeholder={`Ask ${agentName} for content ideas…`}
+        emptyState={emptyState}
+        transformAssistantMessage={transformAssistantReply}
+        readOnly={isCompleted}
+        readOnlyNotice={
+          <Badge variant="outline" className="text-muted-foreground">
+            Session completed — read-only
+          </Badge>
+        }
+        fitParent
+        showHeader={false}
+      />
+    </div>
   )
 }
