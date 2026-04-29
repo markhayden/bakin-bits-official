@@ -80,7 +80,7 @@ export function BrainstormView() {
 
   if (sessionId) {
     return (
-      <div className="h-[calc(100vh-120px)]">
+      <div className="flex h-full min-h-0 flex-col">
         <PlanningLayout
           sessionId={sessionId}
           onBack={() => pushSessionId('')}
@@ -90,7 +90,7 @@ export function BrainstormView() {
   }
 
   return (
-    <div>
+    <div className="flex h-full min-h-0 flex-col">
       <PluginHeader
         title="Brainstorm"
         count={sessionCount}
@@ -126,7 +126,7 @@ export function BrainstormView() {
         }
       />
 
-      <div className="mt-4 flex flex-col gap-4">
+      <div className="mt-4 flex flex-1 min-h-0 flex-col gap-4">
         <AgentFilter
           agentIds={agentIds}
           value={agentFilter}

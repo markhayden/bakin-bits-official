@@ -165,16 +165,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
 
   useEffect(() => {
     if (isNew) {
-      // New project — start in edit mode with empty state
-      setProject({
-        id: '', title: '', status: 'draft', owner: mainAgentId, progress: 0,
-        tasks: [], assets: [], body: '', updated: new Date().toISOString(),
-        resolvedTasks: {}, resolvedAssets: [],
-      })
-      setEditOwner(mainAgentId)
-      setEditStatus('draft')
-      setEditing(true)
-      onEditChange?.(true)
+      router.replace('/projects', { scroll: false })
     } else {
       fetchProject(initialEdit)
     }
@@ -203,9 +194,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   // Dirty state — anything changed from server state
   // ---------------------------------------------------------------------------
 
-  const isDirty = isNew
-    ? (editTitle.trim() !== '' || editBody.trim() !== '')
-    : project && (
+  const isDirty = project && (
       editTitle !== project.title ||
       editOwner !== project.owner ||
       editStatus !== project.status ||
@@ -235,7 +224,6 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   }
 
   const cancelEdit = () => {
-    if (isNew) { onBack(); return }
     if (!project) return
     setEditTitle(project.title)
     setEditBody(project.body)
@@ -244,22 +232,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   }
 
   const handleSave = async () => {
-    if (!project || !isDirty) return
-
-    if (isNew) {
-      // Create the project on first save
-      const title = editTitle.trim() || 'Untitled Project'
-      const res = await fetch('/api/plugins/projects/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, owner: editOwner, body: editBody }),
-      })
-      if (res.ok) {
-        const data = await res.json()
-        router.replace(`/projects/${data.id}`, { scroll: false })
-      }
-      return
-    }
+    if (!project || !isDirty || !currentId) return
 
     const updates: Record<string, string> = { id: currentId }
     if (editTitle !== project.title) updates.title = editTitle
@@ -279,18 +252,22 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   // ---------------------------------------------------------------------------
 
   const toggleItem = async (taskItemId: string, checked: boolean) => {
+    if (!currentId) return
     await fetch(`/api/plugins/projects/${currentId}/checklist/${taskItemId}/toggle`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ checked }) })
     fetchProject()
   }
   const addItem = async (title: string) => {
+    if (!currentId) return
     await fetch(`/api/plugins/projects/${currentId}/checklist`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) })
     fetchProject()
   }
   const removeItem = async (taskItemId: string) => {
+    if (!currentId) return
     await fetch(`/api/plugins/projects/${currentId}/checklist/${taskItemId}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } })
     fetchProject()
   }
   const promoteItem = async (taskItemId: string) => {
+    if (!currentId) return
     await fetch(`/api/plugins/projects/${currentId}/checklist/${taskItemId}/promote`, { method: 'POST', headers: { 'Content-Type': 'application/json' } })
     fetchProject()
   }
@@ -305,6 +282,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
       history: BrainstormMessage[],
       ctx: { signal: AbortSignal; onToken: (text: string) => void },
     ): Promise<{ content: string }> => {
+      if (!currentId) throw new Error('Create the project before starting a brainstorm.')
       const res = await fetch(`/api/plugins/projects/${currentId}/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -402,12 +380,14 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   }
 
   const handleAttachAsset = async (filename: string) => {
+    if (!currentId) return
     await fetch(`/api/plugins/projects/${currentId}/assets`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename }) })
     setAssetPickerOpen(false)
     fetchProject()
   }
 
   const handleDetachAsset = async (filename: string) => {
+    if (!currentId) return
     await fetch(`/api/plugins/projects/${currentId}/assets/${encodeURIComponent(filename)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } })
     fetchProject()
   }
@@ -425,6 +405,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   const linkedTaskCount = project?.tasks.filter(t => t.taskId).length ?? 0
 
   const handleDelete = async (deleteLinkedTasks: boolean) => {
+    if (!currentId) return
     setDeleting(true)
     try {
       await fetch(`/api/plugins/projects/${currentId}`, {

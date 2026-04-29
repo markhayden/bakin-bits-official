@@ -11,6 +11,7 @@ import { useQueryState } from "@bakin/sdk/hooks"
 import { useSearch } from "@bakin/sdk/hooks"
 import { useDebug } from "@bakin/sdk/hooks"
 import { ProjectCard } from './project-card'
+import { NewProjectDialog } from './new-project-dialog'
 import type { ProjectSummary, ProjectStatus } from '../types'
 
 interface ScoreInfo {
@@ -30,6 +31,9 @@ export function ProjectGrid() {
   const router = useRouter()
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [loading, setLoading] = useState(true)
+  const [newProjectOpen, setNewProjectOpen] = useState(false)
+  const [creatingProject, setCreatingProject] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
 
   const [status, setStatus] = useQueryState('status', 'all')
   const [search, setSearch] = useQueryState('q', '')
@@ -86,7 +90,34 @@ export function ProjectGrid() {
   }, [projects, search, searchHook.results, scoreMap])
 
   const handleNew = () => {
-    router.push('/projects/new')
+    setCreateError(null)
+    setNewProjectOpen(true)
+  }
+
+  const handleCreateProject = async (title: string) => {
+    setCreatingProject(true)
+    setCreateError(null)
+    try {
+      const res = await fetch('/api/plugins/projects/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      })
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        throw new Error(text || `Failed to create project (${res.status})`)
+      }
+      const data = await res.json()
+      if (typeof data.id !== 'string' || !data.id) {
+        throw new Error('Project create response did not include an id')
+      }
+      setNewProjectOpen(false)
+      router.push(`/projects/${data.id}/edit`)
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setCreatingProject(false)
+    }
   }
 
   return (
@@ -170,6 +201,16 @@ export function ProjectGrid() {
           </div>
         )}
       </div>
+
+      <NewProjectDialog
+        open={newProjectOpen}
+        creating={creatingProject}
+        error={createError}
+        onConfirm={handleCreateProject}
+        onCancel={() => {
+          if (!creatingProject) setNewProjectOpen(false)
+        }}
+      />
     </div>
   )
 }

@@ -247,9 +247,9 @@ export function PlanningLayout({ sessionId, onBack, onSessionUpdated }: Props) {
       </div>
 
       {/* Split layout */}
-      <div className="flex flex-1 overflow-hidden gap-6 pt-5">
+      <div className="flex flex-1 min-h-0 overflow-hidden gap-6 pt-5">
         {/* Chat panel */}
-        <div className={`flex-1 min-w-0 ${showReview ? 'md:w-[60%]' : 'w-full'}`}>
+        <div className={`flex h-full min-h-0 flex-1 min-w-0 flex-col ${showReview ? 'md:w-[60%]' : 'w-full'}`}>
           <SessionChat
             sessionId={sessionId}
             agentId={agentId}
@@ -262,8 +262,8 @@ export function PlanningLayout({ sessionId, onBack, onSessionUpdated }: Props) {
 
         {/* Review panel */}
         {showReview && (
-          <div className="hidden md:flex md:w-[40%] border-l border-border">
-            <div className="w-full">
+          <div className="hidden min-h-0 md:flex md:w-[40%] border-l border-border">
+            <div className="w-full h-full min-h-0">
               <ReviewPanel
                 sessionId={sessionId}
                 proposals={session.proposals}
