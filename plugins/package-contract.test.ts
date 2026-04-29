@@ -88,5 +88,17 @@ describe('official plugin package contracts', () => {
         [...missing].map(([pkgName, refs]) => `${pkgName}: ${[...refs].sort().join(', ')}`),
       ).toEqual([])
     })
+
+    it(`${plugin} declares its auto-registered search API route`, () => {
+      const pluginDir = join(import.meta.dir, plugin)
+      const manifest = JSON.parse(readFileSync(join(pluginDir, 'bakin-plugin.json'), 'utf-8')) as {
+        contributes?: {
+          apiRoutes?: Array<{ method?: string; path?: string }>
+        }
+      }
+      expect(manifest.contributes?.apiRoutes).toContainEqual(
+        expect.objectContaining({ method: 'GET', path: '/search' }),
+      )
+    })
   }
 })
