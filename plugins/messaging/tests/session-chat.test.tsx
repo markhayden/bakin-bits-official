@@ -81,6 +81,11 @@ describe('SessionChat', () => {
     expect(screen.getByText('Here are some ideas!')).toBeDefined()
   })
 
+  it('pads the chat pane below the session frame', () => {
+    render(<SessionChat sessionId="s1" agentId="scout" />)
+    expect(screen.getByTestId('session-chat-shell').className).toContain('pt-5')
+  })
+
   it('shows read-only badge for completed sessions', () => {
     render(<SessionChat sessionId="s1" agentId="basil" isCompleted={true} />)
     expect(screen.getByText('Session completed — read-only')).toBeDefined()
