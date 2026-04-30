@@ -152,6 +152,10 @@ const projectsPlugin: BakinPlugin = {
       if (to !== 'done' && to !== 'archived') return
       const taskId = data.taskId as string | undefined
       if (taskId) await autoCheckLinkedItem(taskId)
+    }, {
+      label: 'Sync project task state.',
+      summary: 'Updates linked project checklist items when a task moves into a completed state. Use it to keep project progress in sync with task lifecycle events.',
+      hookKind: 'event',
     })
     ctx.hooks.register('tasks.enrichDetails', (d: unknown) => {
       const data = d as Record<string, unknown>
@@ -169,6 +173,10 @@ const projectsPlugin: BakinPlugin = {
         projectProgress: project.progress,
         projectExcerpt: project.body.slice(0, 500),
       }
+    }, {
+      label: 'Add project task context.',
+      summary: 'Adds project title, status, progress, and excerpt data to task detail payloads. Use it when a task surface wants project context without depending on project storage.',
+      hookKind: 'waterfall',
     })
 
     // Build in-memory index on startup
