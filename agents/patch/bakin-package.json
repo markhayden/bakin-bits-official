@@ -1,0 +1,45 @@
+{
+  "id": "patch",
+  "kind": "agent",
+  "name": "Patch",
+  "version": "0.1.0",
+  "description": "Developer agent — API integrations, automation, debugging, tool extensions.",
+  "bakin": "^1.0.0",
+  "author": "Made in Wyo",
+  "agent": {
+    "identity": { "name": "Patch", "emoji": "⚙️" },
+    "role": "Developer agent",
+    "defaultModel": "openai-codex/gpt-5.5",
+    "dispatchableBy": ["main"],
+    "tags": ["dev", "automation", "tooling"],
+    "allowedTools": [
+      "bakin_exec_tasks_*",
+      "bakin_exec_assets_*",
+      "bakin_exec_git_*",
+      "bakin_exec_knowledge_search",
+      "bakin_exec_get_paths",
+      "bakin_exec_log",
+      "bakin_exec_heartbeat"
+    ],
+    "allowedSkills": ["git-isolation"]
+  },
+  "install": {
+    "createIfMissing": true,
+    "adoptIfExists": true,
+    "writeWorkspaceFiles": true,
+    "installSkills": true,
+    "installWorkflows": true,
+    "enableKnowledge": ["dev-discipline"]
+  },
+  "contributions": {
+    "workspaceFiles": [
+      "workspace/SOUL.md",
+      "workspace/IDENTITY.md",
+      "workspace/AGENTS.md",
+      "workspace/TOOLS.md"
+    ],
+    "skills": ["skills/git-isolation"],
+    "knowledge": ["knowledge/dev-discipline.md"],
+    "assets": ["assets/avatar.jpg", "assets/avatar-full.png"]
+  }
+}

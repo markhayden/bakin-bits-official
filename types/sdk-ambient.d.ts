@@ -160,8 +160,22 @@ declare module '@bakin/sdk/types' {
     audit(event: string, agent: string, data?: Record<string, unknown>): void
   }
 
+  export type HookKind = 'rpc' | 'event' | 'waterfall'
+
+  export interface HookRegistrationMetadata {
+    label?: string
+    summary: string
+    description?: string
+    hookKind?: HookKind
+    input?: SchemaLike
+    output?: SchemaLike
+    visibility?: ContractVisibility
+    stability?: ContractStability
+    examples?: DocsExample[]
+  }
+
   export interface HookAPI {
-    register(name: string, handler: (data: unknown) => unknown): () => void
+    register(name: string, handler: (data: unknown) => unknown, metadata?: HookRegistrationMetadata): () => void
     has(name: string): boolean
     invoke<R>(name: string, data: unknown): Promise<R | undefined>
   }

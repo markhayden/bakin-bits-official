@@ -1,26 +1,39 @@
 # bakin-bits-official
 
-Community plugins for [Bakin](https://github.com/madeinwyo/bakin). Each plugin
-ships independently of the Bakin core binary — install via:
+Official Bakin plugins and agent packages distributed independently of the
+Bakin core binary.
+
+Install a plugin from this monorepo with:
 
 ```sh
 bakin plugins install github:madeinwyo/bakin-bits-official#plugins/<name>
 ```
 
-The `#subpath` syntax (Bakin 1.x+) clones this monorepo, copies just the
-selected plugin directory into `~/.bakin/plugins/<id>/`, and runs the
-build pipeline against it.
+Install an agent package with:
+
+```sh
+bakin agents install github:madeinwyo/bakin-bits-official#agents/<name>
+```
+
+The `#subpath` syntax clones this monorepo, copies just the selected package
+directory into the local Bakin runtime, and leaves the rest of the repository
+out of the installed artifact.
 
 ## Plugins
 
 | Plugin | Status | Description |
 |---|---|---|
-| _template | scaffold | Starter plugin layout for new contributors |
+| `messaging` | active | Content planning, publish dates, and prep workflow support. |
+| `projects` | active | Project specs, checklists, task links, and project MCP tools. |
+| `_template` | scaffold | Starter plugin layout for new contributors. |
 
-(More land here as plugins are extracted from `bakin/plugins/` or
-contributed fresh.)
+## Agents
 
-## Local development
+| Agent | Status | Description |
+|---|---|---|
+| `patch` | active | Developer agent package with git-isolation skill, dev discipline knowledge, workspace templates, and avatar assets. |
+
+## Local Development
 
 ```sh
 # Clone alongside your bakin checkout so paths line up.
@@ -28,18 +41,16 @@ git clone git@github.com:madeinwyo/bakin-bits-official.git
 cd bakin-bits-official
 bun install
 
-# Link a plugin directly into a running bakin's runtime.
+# Link a plugin directly into a running Bakin runtime.
 BAKIN_DEV_HOTRELOAD=1 bakin start
 bakin plugins link ./plugins/_template
-
-# Edit files; saves trigger in-process rebuild + module swap.
 ```
 
-See `CONTRIBUTING.md` for the full contributor flow, plugin API surface,
-and review expectations.
+See `CONTRIBUTING.md` for the contributor flow, plugin API surface, and review
+expectations.
 
 ## License
 
-MIT — see `LICENSE`. Plugin authors retain copyright on their contributed
-plugins; the `MIT` license applies to the repository scaffold + plugins
+MIT. Plugin and agent-package authors retain copyright on their contributed
+work; the MIT license applies to the repository scaffold and official packages
 authored by the Bakin core team.
