@@ -3,6 +3,16 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { join } from 'path'
 
 const agentsRoot = join(import.meta.dir)
+const textFilePattern = /\.(json|md|txt|yaml|yml)$/i
+const disallowedPersonalPatterns = [
+  /~\/go\/src\/github\.com\/madeinwyo/i,
+  /roscoe/i,
+  /profile="user"/i,
+  /Chrome "Work" profile/i,
+  /Work profile/i,
+  /current year is \*\*2026\*\*/i,
+  /anthropic\/claude-opus-4-6/i,
+]
 
 type AgentManifest = {
   id?: string
@@ -12,6 +22,7 @@ type AgentManifest = {
   description?: string
   agent?: {
     identity?: { name?: string; emoji?: string }
+    defaultModel?: string
     allowedTools?: string[]
     allowedSkills?: string[]
   }
@@ -39,6 +50,15 @@ function readManifest(agentId: string): AgentManifest {
 
 function expectPath(agentId: string, relativePath: string): void {
   expect(existsSync(join(agentsRoot, agentId, relativePath)), `${agentId}: missing ${relativePath}`).toBe(true)
+}
+
+function listTextFiles(dir: string): string[] {
+  return readdirSync(dir).flatMap((entry) => {
+    const fullPath = join(dir, entry)
+    const stat = statSync(fullPath)
+    if (stat.isDirectory()) return listTextFiles(fullPath)
+    return textFilePattern.test(entry) ? [fullPath] : []
+  })
 }
 
 describe('agent package contracts', () => {
@@ -89,8 +109,20 @@ describe('agent package contracts', () => {
       'bakin_exec_knowledge_search',
       'bakin_exec_tasks_*',
     ]))
+    expect(manifest.agent?.defaultModel).toBe('openai-codex/gpt-5.5')
     expect(manifest.agent?.allowedSkills ?? []).toContain('git-isolation')
     expect(manifest.contributions?.knowledge ?? []).toContain('knowledge/dev-discipline.md')
     expect(manifest.contributions?.skills ?? []).toContain('skills/git-isolation')
+  })
+
+  it('agent package text does not include local machine assumptions', () => {
+    for (const agentId of agentIds) {
+      for (const filePath of listTextFiles(join(agentsRoot, agentId))) {
+        const content = readFileSync(filePath, 'utf-8')
+        for (const pattern of disallowedPersonalPatterns) {
+          expect(content, `${filePath} includes ${pattern}`).not.toMatch(pattern)
+        }
+      }
+    }
   })
 })

@@ -9,7 +9,7 @@
   "agent": {
     "identity": { "name": "Patch", "emoji": "⚙️" },
     "role": "Developer agent",
-    "defaultModel": "anthropic/claude-opus-4-6",
+    "defaultModel": "openai-codex/gpt-5.5",
     "dispatchableBy": ["main"],
     "tags": ["dev", "automation", "tooling"],
     "allowedTools": [

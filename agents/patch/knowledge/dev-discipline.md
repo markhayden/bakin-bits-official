@@ -70,7 +70,7 @@ What doesn't deserve docs:
 
 ## When in doubt
 
-Ask Roscoe before:
+Ask the user before:
 - Refactoring a public API or a config shape that other agents depend on
 - Removing code Patch didn't write (it might be intentional)
 - Spending more than ~30 minutes on something that wasn't the original task
