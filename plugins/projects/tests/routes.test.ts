@@ -1201,8 +1201,16 @@ describe('Registration', () => {
   })
 
   it('registers hooks', () => {
-    expect(plugin.ctx.hooks.register).toHaveBeenCalledWith('tasks.statusChanged', expect.any(Function))
-    expect(plugin.ctx.hooks.register).toHaveBeenCalledWith('tasks.enrichDetails', expect.any(Function))
+    expect(plugin.ctx.hooks.register).toHaveBeenCalledWith(
+      'tasks.statusChanged',
+      expect.any(Function),
+      expect.objectContaining({ hookKind: 'event' }),
+    )
+    expect(plugin.ctx.hooks.register).toHaveBeenCalledWith(
+      'tasks.enrichDetails',
+      expect.any(Function),
+      expect.objectContaining({ hookKind: 'waterfall' }),
+    )
   })
 
   it('watches project files', () => {

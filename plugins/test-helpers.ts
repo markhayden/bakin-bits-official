@@ -332,6 +332,8 @@ export function createTestContext(pluginId: string, testDir: string): ActivatedP
     },
     hooks: {
       register: mock(() => () => {}),
+      call: mock(async <T>(_name: string, data: T): Promise<T> => data) as PluginContext['hooks']['call'],
+      callAll: mock(async () => {}),
       has: mock(() => false),
       invoke: mock(async () => undefined),
     },
