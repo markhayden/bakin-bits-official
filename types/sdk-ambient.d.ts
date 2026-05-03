@@ -75,7 +75,40 @@ declare module '@bakin/sdk/types' {
     path: string
     summary: string
     description?: string
+    operationId?: string
+    tags?: string[]
+    visibility?: 'public' | 'internal' | 'experimental'
+    stability?: 'stable' | 'beta' | 'experimental' | 'deprecated'
+    parameters?: ApiParameterContribution[]
+    requestBody?: ApiRequestBodyContribution
+    responses?: Record<string, ApiResponseContribution>
     permissions?: PluginPermission[]
+  }
+
+  export type JsonSchemaContribution = Record<string, unknown>
+
+  export interface ApiParameterContribution {
+    name: string
+    in: 'path' | 'query' | 'header' | 'cookie'
+    required?: boolean
+    description?: string
+    schema?: JsonSchemaContribution
+    example?: unknown
+  }
+
+  export interface ApiRequestBodyContribution {
+    description?: string
+    required?: boolean
+    contentType?: string
+    schema?: JsonSchemaContribution
+    example?: unknown
+  }
+
+  export interface ApiResponseContribution {
+    description: string
+    contentType?: string
+    schema?: JsonSchemaContribution
+    example?: unknown
   }
 
   export interface ClientRouteContribution {
@@ -176,6 +209,8 @@ declare module '@bakin/sdk/types' {
 
   export interface HookAPI {
     register(name: string, handler: (data: unknown) => unknown, metadata?: HookRegistrationMetadata): () => void
+    call<T>(name: string, data: T): Promise<T>
+    callAll(name: string, data: Record<string, unknown>): Promise<void>
     has(name: string): boolean
     invoke<R>(name: string, data: unknown): Promise<R | undefined>
   }
