@@ -1204,12 +1204,18 @@ describe('Registration', () => {
     expect(plugin.ctx.hooks.register).toHaveBeenCalledWith(
       'tasks.statusChanged',
       expect.any(Function),
-      expect.objectContaining({ hookKind: 'event' }),
+      expect.objectContaining({
+        hookKind: 'event',
+        label: 'Sync project task state.',
+      }),
     )
     expect(plugin.ctx.hooks.register).toHaveBeenCalledWith(
       'tasks.enrichDetails',
       expect.any(Function),
-      expect.objectContaining({ hookKind: 'waterfall' }),
+      expect.objectContaining({
+        hookKind: 'waterfall',
+        label: 'Add project task context.',
+      }),
     )
   })
 

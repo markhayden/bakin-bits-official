@@ -193,13 +193,7 @@ declare module '@bakin/sdk/types' {
     audit(event: string, agent: string, data?: Record<string, unknown>): void
   }
 
-  export interface HookAPI {
-    register(name: string, handler: (data: unknown) => unknown, metadata?: HookRegistrationMetadata): () => void
-    call<T>(name: string, data: T): Promise<T>
-    callAll(name: string, data: Record<string, unknown>): Promise<void>
-    has(name: string): boolean
-    invoke<R>(name: string, data: unknown): Promise<R | undefined>
-  }
+  export type HookKind = 'rpc' | 'event' | 'waterfall'
 
   export interface HookRegistrationMetadata {
     label?: string
@@ -213,7 +207,13 @@ declare module '@bakin/sdk/types' {
     examples?: DocsExample[]
   }
 
-  export type HookKind = 'rpc' | 'event' | 'waterfall'
+  export interface HookAPI {
+    register(name: string, handler: (data: unknown) => unknown, metadata?: HookRegistrationMetadata): () => void
+    call<T>(name: string, data: T): Promise<T>
+    callAll(name: string, data: Record<string, unknown>): Promise<void>
+    has(name: string): boolean
+    invoke<R>(name: string, data: unknown): Promise<R | undefined>
+  }
 
   export interface NavItem {
     id: string
