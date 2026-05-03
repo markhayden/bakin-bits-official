@@ -5,8 +5,8 @@
 <p align="center"><em>Official plugins and agent packages for <a href="https://github.com/madeinwyo/bakin">Bakin</a>.</em></p>
 
 <p align="center">
-  <a href="https://github.com/madeinwyo/bakin-bits-official/actions/workflows/ci.yml"><img src="https://github.com/madeinwyo/bakin-bits-official/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://codecov.io/gh/madeinwyo/bakin-bits-official"><img src="https://codecov.io/gh/madeinwyo/bakin-bits-official/branch/main/graph/badge.svg" alt="Coverage" /></a>
+  <a href="https://github.com/markhayden/bakin-bits-official/actions/workflows/ci.yml"><img src="https://github.com/markhayden/bakin-bits-official/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://codecov.io/gh/markhayden/bakin-bits-official"><img src="https://codecov.io/gh/markhayden/bakin-bits-official/branch/main/graph/badge.svg" alt="Coverage" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
   <img src="https://img.shields.io/badge/runtime-Bun_%E2%89%A5_1.3.13-black" alt="Bun ≥ 1.3.13" />
 </p>
@@ -25,8 +25,8 @@ Each package in this monorepo is installed by **git subpath**, not by
 publishing to a registry:
 
 ```sh
-bakin plugins install github:madeinwyo/bakin-bits-official#plugins/<name>
-bakin agents  install github:madeinwyo/bakin-bits-official#agents/<name>
+bakin plugins install github:markhayden/bakin-bits-official#plugins/<name>
+bakin agents  install github:markhayden/bakin-bits-official#agents/<name>
 ```
 
 The `#subpath` syntax tells Bakin to clone this repo, copy just the selected
@@ -40,13 +40,13 @@ get one package, not the whole monorepo.
 Install the messaging plugin into a running Bakin runtime:
 
 ```sh
-bakin plugins install github:madeinwyo/bakin-bits-official#plugins/messaging
+bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging
 ```
 
 Pin to a released version with the `@<ref>` suffix:
 
 ```sh
-bakin plugins install github:madeinwyo/bakin-bits-official#plugins/messaging@messaging-v1.0.0
+bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging@messaging-v1.0.0
 ```
 
 ## Available packages
@@ -71,7 +71,7 @@ Clone alongside your Bakin checkout so paths line up, then link a plugin
 into a running runtime via hot-reload:
 
 ```sh
-git clone git@github.com:madeinwyo/bakin-bits-official.git
+git clone git@github.com:markhayden/bakin-bits-official.git
 cd bakin-bits-official
 bun install
 
