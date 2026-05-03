@@ -25,4 +25,4 @@ on a per-plugin basis: each plugin tags its own releases as
 
 - `patch`: initial agent package added (#10).
 
-[Unreleased]: https://github.com/madeinwyo/bakin-bits-official/commits/main
+[Unreleased]: https://github.com/markhayden/bakin-bits-official/commits/main

@@ -7,7 +7,7 @@ assets; plugins ship runtime code.
 Install an agent package from this monorepo with:
 
 ```sh
-bakin agents install github:madeinwyo/bakin-bits-official#agents/<agent-id>
+bakin agents install github:markhayden/bakin-bits-official#agents/<agent-id>
 ```
 
 ## Packages
