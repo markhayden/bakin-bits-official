@@ -1,0 +1,19 @@
+coverage:
+  range: 60..80
+  round: down
+  precision: 1
+
+  status:
+    project:
+      default:
+        target: 70%
+        threshold: 2%
+    patch:
+      default:
+        target: 70%
+        threshold: 5%
+
+comment:
+  layout: "reach, diff, flags, files"
+  behavior: default
+  require_changes: true
