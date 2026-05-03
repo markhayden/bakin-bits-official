@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/madeinwyo/bakin-bits-official/blob/main/SECURITY.md
+    about: Please report security issues privately per our SECURITY.md, not as a public issue.
+  - name: Bakin core (runtime) issues
+    url: https://github.com/madeinwyo/bakin/issues
+    about: Bugs in the Bakin runtime itself belong in the core repo.
