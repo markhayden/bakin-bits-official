@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/madeinwyo/bakin-bits-official/actions/workflows/ci.yml"><img src="https://github.com/madeinwyo/bakin-bits-official/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://codecov.io/gh/madeinwyo/bakin-bits-official"><img src="https://codecov.io/gh/madeinwyo/bakin-bits-official/branch/main/graph/badge.svg" alt="Coverage" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
   <img src="https://img.shields.io/badge/runtime-Bun_%E2%89%A5_1.3.13-black" alt="Bun ≥ 1.3.13" />
 </p>
