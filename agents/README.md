@@ -1,7 +1,7 @@
 # Agents
 
 Official Bakin agent packages. Agent packages are separate from plugins:
-agents ship identity, workspace templates, skills, knowledge, workflows, and
+agents ship identity, workspace templates, skills, lessons, workflows, and
 assets; plugins ship runtime code.
 
 Install an agent package from this monorepo with:
@@ -14,7 +14,7 @@ bakin agents install github:markhayden/bakin-bits-official#agents/<agent-id>
 
 | Agent | Status | Description |
 |---|---|---|
-| `patch` | active | Developer agent with git-isolation skill, dev discipline knowledge, and workspace templates. |
+| `patch` | active | Developer agent with git-isolation skill, dev discipline lessons, and workspace templates. |
 
 ## Layout
 
@@ -26,7 +26,7 @@ agents/
     ├── workspace/
     ├── skills/<name>/
     ├── workflows/*.yaml
-    ├── knowledge/*.md
+    ├── lessons/*.md
     ├── assets/
     └── README.md
 ```
