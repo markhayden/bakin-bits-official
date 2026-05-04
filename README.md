@@ -2,7 +2,7 @@
   <img src="assets/bakin-bits-logo.svg" alt="Bakin Bits" width="240" />
 </p>
 
-<p align="center"><em>Official plugins and agent packages for <a href="https://github.com/madeinwyo/bakin">Bakin</a>.</em></p>
+<p align="center"><em>Official plugins and agent packages for <a href="https://github.com/markhayden/bakin">Bakin</a>.</em></p>
 
 <p align="center">
   <a href="https://github.com/markhayden/bakin-bits-official/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/markhayden/bakin-bits-official/ci.yml?branch=main&style=for-the-badge&label=build" alt="Build" /></a>
@@ -15,7 +15,7 @@
 ## What is Bakin Bits?
 
 **Bakin Bits** is the home for first-party plugins and agent packages that
-extend [Bakin](https://github.com/madeinwyo/bakin), a personal AI runtime.
+extend [Bakin](https://github.com/markhayden/bakin), a personal AI runtime.
 Plugins live here so they can ship and update independently of the Bakin
 core binary — a fix to a plugin doesn't require a new core release, and
 contributors can land changes without coordinating with the runtime team.

@@ -9,7 +9,7 @@ dependencies beyond `@bakin/sdk`.
 
 - **Bun** ≥ 1.3.13 (matches Bakin core; pinned in `.bun-version`)
 - A working **Bakin checkout** alongside this repo for end-to-end testing
-  (clone `madeinwyo/bakin` as a sibling of this repo)
+  (clone `markhayden/bakin` as a sibling of this repo)
 
 ## Repo layout
 

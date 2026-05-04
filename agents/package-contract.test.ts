@@ -5,7 +5,7 @@ import { join } from 'path'
 const agentsRoot = join(import.meta.dir)
 const textFilePattern = /\.(json|md|txt|yaml|yml)$/i
 const disallowedPersonalPatterns = [
-  /~\/go\/src\/github\.com\/madeinwyo/i,
+  /~\/go\/src\/github\.com\/markhayden/i,
   /roscoe/i,
   /profile="user"/i,
   /Chrome "Work" profile/i,
