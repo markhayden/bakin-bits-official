@@ -62,7 +62,7 @@ bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging@me
 
 | Agent   | Status | Description                                                                                          |
 | ------- | ------ | ---------------------------------------------------------------------------------------------------- |
-| `patch` | active | Developer agent package — git-isolation skill, dev-discipline knowledge, workspace templates, avatar. |
+| `patch` | active | Developer agent package — git-isolation skill, dev-discipline lessons, workspace templates, avatar. |
 
 ## Local development
 
