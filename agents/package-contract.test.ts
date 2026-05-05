@@ -5,7 +5,7 @@ import { join } from "path";
 const agentsRoot = join(import.meta.dir);
 const textFilePattern = /\.(json|md|txt|yaml|yml)$/i;
 const disallowedPersonalPatterns = [
-  /~\/go\/src\/github\.com\/madeinwyo/i,
+  /~\/go\/src\/github\.com\/markhayden/i,
   /roscoe/i,
   /profile="user"/i,
   /Chrome "Work" profile/i,
@@ -32,7 +32,7 @@ type AgentManifest = {
     skills?: string[];
     workflows?: string[];
     workflowSkills?: string[];
-    knowledge?: string[];
+    lessons?: string[];
     assets?: string[];
   };
 };
@@ -103,8 +103,8 @@ describe("agent package contracts", () => {
         []) {
         expectPath(agentId, workflowSkillPath);
       }
-      for (const knowledgePath of manifest.contributions?.knowledge ?? []) {
-        expectPath(agentId, knowledgePath);
+      for (const lessonPath of manifest.contributions?.lessons ?? []) {
+        expectPath(agentId, lessonPath);
       }
       for (const assetPath of manifest.contributions?.assets ?? []) {
         expectPath(agentId, assetPath);
@@ -118,14 +118,14 @@ describe("agent package contracts", () => {
     expect(manifest.agent?.allowedTools ?? []).toEqual(
       expect.arrayContaining([
         "bakin_exec_git_*",
-        "bakin_exec_knowledge_search",
+        "bakin_exec_lesson_search",
         "bakin_exec_tasks_*",
       ]),
     );
     expect(manifest.agent?.defaultModel).toBe("openai-codex/gpt-5.5");
     expect(manifest.agent?.allowedSkills ?? []).toContain("git-isolation");
-    expect(manifest.contributions?.knowledge ?? []).toContain(
-      "knowledge/dev-discipline.md",
+    expect(manifest.contributions?.lessons ?? []).toContain(
+      "lessons/dev-discipline.md",
     );
     expect(manifest.contributions?.skills ?? []).toContain(
       "skills/git-isolation",
