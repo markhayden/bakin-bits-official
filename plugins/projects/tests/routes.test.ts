@@ -744,14 +744,14 @@ describe('Routes', () => {
 
 describe('Exec Tools', () => {
   // -------------------------------------------------------------------------
-  // bakin_exec_project_list
+  // bakin_exec_projects_list
   // -------------------------------------------------------------------------
-  describe('bakin_exec_project_list', () => {
+  describe('bakin_exec_projects_list', () => {
     it('lists all projects', async () => {
       writeProjectFixture('proj-a', { title: 'A', status: 'active' })
       writeProjectFixture('proj-b', { title: 'B', status: 'draft' })
 
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_list')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_list')!
       expect(tool).toBeDefined()
       const result = await callTool(tool, {})
       expect(result.ok).toBe(true)
@@ -763,7 +763,7 @@ describe('Exec Tools', () => {
       writeProjectFixture('proj-a', { title: 'A', status: 'active' })
       writeProjectFixture('proj-b', { title: 'B', status: 'draft' })
 
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_list')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_list')!
       const result = await callTool(tool, { status: 'active' })
       const projects = result.projects as Array<Record<string, unknown>>
       expect(projects).toHaveLength(1)
@@ -771,23 +771,23 @@ describe('Exec Tools', () => {
     })
 
     it('returns empty list when no projects', async () => {
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_list')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_list')!
       const result = await callTool(tool, {})
       expect(result.projects).toEqual([])
     })
   })
 
   // -------------------------------------------------------------------------
-  // bakin_exec_project_get
+  // bakin_exec_projects_get
   // -------------------------------------------------------------------------
-  describe('bakin_exec_project_get', () => {
+  describe('bakin_exec_projects_get', () => {
     it('returns a project with resolved linked tasks', async () => {
       writeProjectFixture('proj-get', {
         title: 'Get Project',
         tasks: [{ id: 't001', title: 'Linked', checked: false, taskId: 'board01' }],
       })
 
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_get')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_get')!
       expect(tool).toBeDefined()
       const result = await callTool(tool, { projectId: 'proj-get' })
       expect(result.ok).toBe(true)
@@ -797,7 +797,7 @@ describe('Exec Tools', () => {
     })
 
     it('returns error for non-existent project', async () => {
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_get')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_get')!
       const result = await callTool(tool, { projectId: 'ghost' })
       expect(result.ok).toBe(false)
       expect(result.error).toMatch(/not found/i)
@@ -805,11 +805,11 @@ describe('Exec Tools', () => {
   })
 
   // -------------------------------------------------------------------------
-  // bakin_exec_project_create
+  // bakin_exec_projects_create
   // -------------------------------------------------------------------------
-  describe('bakin_exec_project_create', () => {
+  describe('bakin_exec_projects_create', () => {
     it('creates a project and returns id', async () => {
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_create')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_create')!
       expect(tool).toBeDefined()
       const result = await callTool(tool, { title: 'Created via Tool' })
       expect(result.ok).toBe(true)
@@ -818,7 +818,7 @@ describe('Exec Tools', () => {
     })
 
     it('creates with initial tasks', async () => {
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_create')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_create')!
       const result = await callTool(tool, {
         title: 'With Items',
         tasks: ['Item A', 'Item B'],
@@ -832,7 +832,7 @@ describe('Exec Tools', () => {
     })
 
     it('uses agent as owner fallback', async () => {
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_create')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_create')!
       const result = await callTool(tool, { title: 'Agent Owner' }, 'pixel')
       expect(result.ok).toBe(true)
       // The owner should be 'pixel' (passed as agent param)
@@ -842,13 +842,13 @@ describe('Exec Tools', () => {
   })
 
   // -------------------------------------------------------------------------
-  // bakin_exec_project_update
+  // bakin_exec_projects_update
   // -------------------------------------------------------------------------
-  describe('bakin_exec_project_update', () => {
+  describe('bakin_exec_projects_update', () => {
     it('updates project fields', async () => {
       writeProjectFixture('proj-tool-upd', { title: 'Old', status: 'draft' })
 
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_update')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_update')!
       expect(tool).toBeDefined()
       const result = await callTool(tool, {
         projectId: 'proj-tool-upd',
@@ -859,7 +859,7 @@ describe('Exec Tools', () => {
     })
 
     it('returns error for non-existent project', async () => {
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_update')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_update')!
       const result = await callTool(tool, { projectId: 'ghost', title: 'X' })
       expect(result.ok).toBe(false)
       expect(result.error).toMatch(/not found/i)
@@ -871,7 +871,7 @@ describe('Exec Tools', () => {
         tasks: [{ id: 't001', title: 'Not done', checked: false }],
       })
 
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_update')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_update')!
       const result = await callTool(tool, { projectId: 'proj-incomplete', status: 'completed' })
       expect(result.ok).toBe(false)
       expect(result.error).toMatch(/unchecked/i)
@@ -879,13 +879,13 @@ describe('Exec Tools', () => {
   })
 
   // -------------------------------------------------------------------------
-  // bakin_exec_project_delete
+  // bakin_exec_projects_delete
   // -------------------------------------------------------------------------
-  describe('bakin_exec_project_delete', () => {
+  describe('bakin_exec_projects_delete', () => {
     it('deletes a project', async () => {
       writeProjectFixture('proj-tool-del', { title: 'Delete Me' })
 
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_delete')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_delete')!
       expect(tool).toBeDefined()
       const result = await callTool(tool, { projectId: 'proj-tool-del' })
       expect(result.ok).toBe(true)
@@ -893,7 +893,7 @@ describe('Exec Tools', () => {
     })
 
     it('returns error for non-existent project', async () => {
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_delete')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_delete')!
       const result = await callTool(tool, { projectId: 'nope' })
       expect(result.ok).toBe(false)
       expect(result.error).toMatch(/not found/i)
@@ -901,13 +901,13 @@ describe('Exec Tools', () => {
   })
 
   // -------------------------------------------------------------------------
-  // bakin_exec_project_add_item
+  // bakin_exec_projects_add_item
   // -------------------------------------------------------------------------
-  describe('bakin_exec_project_add_item', () => {
+  describe('bakin_exec_projects_add_item', () => {
     it('adds a checklist item', async () => {
       writeProjectFixture('proj-ai', { title: 'Add Item', tasks: [{ id: 't001', title: 'Existing', checked: false }] })
 
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_add_item')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_add_item')!
       expect(tool).toBeDefined()
       const result = await callTool(tool, { projectId: 'proj-ai', title: 'New Item' })
       expect(result.ok).toBe(true)
@@ -916,16 +916,16 @@ describe('Exec Tools', () => {
   })
 
   // -------------------------------------------------------------------------
-  // bakin_exec_project_mark_item
+  // bakin_exec_projects_mark_item
   // -------------------------------------------------------------------------
-  describe('bakin_exec_project_mark_item', () => {
+  describe('bakin_exec_projects_mark_item', () => {
     it('marks an item as checked', async () => {
       writeProjectFixture('proj-mi', {
         title: 'Mark Item',
         tasks: [{ id: 't001', title: 'To Check', checked: false }, { id: 't002', title: 'Other', checked: false }],
       })
 
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_mark_item')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_mark_item')!
       expect(tool).toBeDefined()
       const result = await callTool(tool, { projectId: 'proj-mi', taskItemId: 't001', checked: true })
       expect(result.ok).toBe(true)
@@ -938,7 +938,7 @@ describe('Exec Tools', () => {
         tasks: [{ id: 't001', title: 'Checked', checked: true }],
       })
 
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_mark_item')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_mark_item')!
       const result = await callTool(tool, { projectId: 'proj-mi2', taskItemId: 't001', checked: false })
       expect(result.ok).toBe(true)
       expect(result.progress).toBe(0)
@@ -946,16 +946,16 @@ describe('Exec Tools', () => {
   })
 
   // -------------------------------------------------------------------------
-  // bakin_exec_project_remove_item
+  // bakin_exec_projects_remove_item
   // -------------------------------------------------------------------------
-  describe('bakin_exec_project_remove_item', () => {
+  describe('bakin_exec_projects_remove_item', () => {
     it('removes a checklist item', async () => {
       writeProjectFixture('proj-ri', {
         title: 'Remove Item',
         tasks: [{ id: 't001', title: 'Remove', checked: false }, { id: 't002', title: 'Keep', checked: false }],
       })
 
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_remove_item')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_remove_item')!
       expect(tool).toBeDefined()
       const result = await callTool(tool, { projectId: 'proj-ri', taskItemId: 't001' })
       expect(result.ok).toBe(true)
@@ -964,7 +964,7 @@ describe('Exec Tools', () => {
     it('returns error for non-existent item', async () => {
       writeProjectFixture('proj-ri2', { title: 'No Item', tasks: [] })
 
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_remove_item')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_remove_item')!
       const result = await callTool(tool, { projectId: 'proj-ri2', taskItemId: 't999' })
       expect(result.ok).toBe(false)
       expect(result.error).toMatch(/not found/i)
@@ -972,23 +972,23 @@ describe('Exec Tools', () => {
   })
 
   // -------------------------------------------------------------------------
-  // bakin_exec_project_link_item
+  // bakin_exec_projects_link_item
   // -------------------------------------------------------------------------
-  describe('bakin_exec_project_link_item', () => {
+  describe('bakin_exec_projects_link_item', () => {
     it('links a board task to a checklist item', async () => {
       writeProjectFixture('proj-li', {
         title: 'Link Item',
         tasks: [{ id: 't001', title: 'To Link', checked: false }],
       })
 
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_link_item')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_link_item')!
       expect(tool).toBeDefined()
       const result = await callTool(tool, { projectId: 'proj-li', taskItemId: 't001', taskId: 'board01' })
       expect(result.ok).toBe(true)
     })
 
     it('returns error for non-existent project', async () => {
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_link_item')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_link_item')!
       const result = await callTool(tool, { projectId: 'ghost', taskItemId: 't001', taskId: 'board01' })
       expect(result.ok).toBe(false)
       expect(result.error).toMatch(/not found/i)
@@ -996,16 +996,16 @@ describe('Exec Tools', () => {
   })
 
   // -------------------------------------------------------------------------
-  // bakin_exec_project_promote_item
+  // bakin_exec_projects_promote_item
   // -------------------------------------------------------------------------
-  describe('bakin_exec_project_promote_item', () => {
+  describe('bakin_exec_projects_promote_item', () => {
     it('promotes a checklist item to a board task', async () => {
       writeProjectFixture('proj-pi', {
         title: 'Promote Item',
         tasks: [{ id: 't001', title: 'Promote Me', checked: false }],
       })
 
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_promote_item')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_promote_item')!
       expect(tool).toBeDefined()
       const result = await callTool(tool, { projectId: 'proj-pi', taskItemId: 't001', assignee: 'pixel' })
       expect(result.ok).toBe(true)
@@ -1026,14 +1026,14 @@ describe('Exec Tools', () => {
         tasks: [{ id: 't001', title: 'Linked', checked: false, taskId: 'existing01' }],
       })
 
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_promote_item')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_promote_item')!
       const result = await callTool(tool, { projectId: 'proj-pi2', taskItemId: 't001' })
       expect(result.ok).toBe(false)
       expect(result.error).toMatch(/already linked/i)
     })
 
     it('returns error for non-existent project', async () => {
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_promote_item')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_promote_item')!
       const result = await callTool(tool, { projectId: 'ghost', taskItemId: 't001' })
       expect(result.ok).toBe(false)
       expect(result.error).toMatch(/not found/i)
@@ -1041,13 +1041,13 @@ describe('Exec Tools', () => {
   })
 
   // -------------------------------------------------------------------------
-  // bakin_exec_project_attach_asset
+  // bakin_exec_projects_attach_asset
   // -------------------------------------------------------------------------
-  describe('bakin_exec_project_attach_asset', () => {
+  describe('bakin_exec_projects_attach_asset', () => {
     it('attaches an asset', async () => {
       writeProjectFixture('proj-aa', { title: 'Attach Asset' })
 
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_attach_asset')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_attach_asset')!
       expect(tool).toBeDefined()
       const result = await callTool(tool, {
         projectId: 'proj-aa',
@@ -1058,7 +1058,7 @@ describe('Exec Tools', () => {
     })
 
     it('returns error for non-existent project', async () => {
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_attach_asset')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_attach_asset')!
       const result = await callTool(tool, { projectId: 'ghost', filename: '20260401-x-abcdef12.md' })
       expect(result.ok).toBe(false)
       expect(result.error).toMatch(/not found/i)
@@ -1066,23 +1066,23 @@ describe('Exec Tools', () => {
   })
 
   // -------------------------------------------------------------------------
-  // bakin_exec_project_detach_asset
+  // bakin_exec_projects_detach_asset
   // -------------------------------------------------------------------------
-  describe('bakin_exec_project_detach_asset', () => {
+  describe('bakin_exec_projects_detach_asset', () => {
     it('detaches an asset', async () => {
       writeProjectFixture('proj-da', {
         title: 'Detach Asset',
         assets: [{ filename: '20260401-brief-abcdef12.md', label: 'Brief' }],
       })
 
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_detach_asset')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_detach_asset')!
       expect(tool).toBeDefined()
       const result = await callTool(tool, { projectId: 'proj-da', filename: '20260401-brief-abcdef12.md' })
       expect(result.ok).toBe(true)
     })
 
     it('returns error for non-existent project', async () => {
-      const tool = findTool(plugin.execTools, 'bakin_exec_project_detach_asset')!
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_detach_asset')!
       const result = await callTool(tool, { projectId: 'ghost', filename: '20260401-x-abcdef12.md' })
       expect(result.ok).toBe(false)
       expect(result.error).toMatch(/not found/i)
@@ -1180,18 +1180,18 @@ describe('Registration', () => {
 
   it('registers all expected exec tools', async () => {
     const expectedTools = [
-      'bakin_exec_project_list',
-      'bakin_exec_project_get',
-      'bakin_exec_project_create',
-      'bakin_exec_project_update',
-      'bakin_exec_project_delete',
-      'bakin_exec_project_add_item',
-      'bakin_exec_project_mark_item',
-      'bakin_exec_project_remove_item',
-      'bakin_exec_project_link_item',
-      'bakin_exec_project_promote_item',
-      'bakin_exec_project_attach_asset',
-      'bakin_exec_project_detach_asset',
+      'bakin_exec_projects_list',
+      'bakin_exec_projects_get',
+      'bakin_exec_projects_create',
+      'bakin_exec_projects_update',
+      'bakin_exec_projects_delete',
+      'bakin_exec_projects_add_item',
+      'bakin_exec_projects_mark_item',
+      'bakin_exec_projects_remove_item',
+      'bakin_exec_projects_link_item',
+      'bakin_exec_projects_promote_item',
+      'bakin_exec_projects_attach_asset',
+      'bakin_exec_projects_detach_asset',
     ]
 
     for (const name of expectedTools) {
