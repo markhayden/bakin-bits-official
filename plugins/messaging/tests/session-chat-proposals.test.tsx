@@ -164,6 +164,39 @@ describe('SessionChat — proposal forwarding over SSE', () => {
     }
   })
 
+  it('renders activity SSE events in the brainstorm history', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = mock(async () =>
+      sseResponse([
+        {
+          event: 'activity',
+          data: {
+            activity: {
+              id: 'act-1',
+              kind: 'runtime_status',
+              content: 'Checking existing plan',
+            },
+          },
+        },
+        { event: 'token', data: { text: 'Done.' } },
+        { event: 'done', data: { content: 'Done.' } },
+      ]),
+    ) as unknown as typeof fetch
+    try {
+      render(<SessionChat sessionId="s1" agentId="basil" />)
+      const ta = screen.getByLabelText(/Ask Basil/) as HTMLTextAreaElement
+      act(() => {
+        fireEvent.change(ta, { target: { value: 'show work' } })
+        fireEvent.keyDown(ta, { key: 'Enter' })
+      })
+      await waitFor(() => {
+        expect(screen.getByText('Checking existing plan')).toBeDefined()
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   it('surfaces SSE error events as an error bubble (role=alert)', async () => {
     const originalFetch = globalThis.fetch
     globalThis.fetch = mock(async () =>

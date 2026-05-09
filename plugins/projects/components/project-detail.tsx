@@ -39,6 +39,12 @@ interface ProjectData {
   resolvedAssets: ResolvedAsset[]
 }
 
+interface BrainstormSessionData {
+  agentId: string
+  messages: Array<{ id: string; role: 'user' | 'assistant'; content: string; timestamp?: string }>
+  activities: Array<{ id: string; kind: string; content: string; data?: unknown; timestamp?: string }>
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -81,6 +87,30 @@ function AssetThumb({ asset }: { asset: ResolvedAsset }) {
       <AssetIcon type={asset.type} />
     </div>
   )
+}
+
+function mapBrainstormSession(session: BrainstormSessionData): BrainstormMessage[] {
+  return [
+    ...session.messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      agentId: message.role === 'assistant' ? session.agentId : undefined,
+      timestamp: message.timestamp,
+    })),
+    ...session.activities.map((activity) => ({
+      id: activity.id,
+      role: 'activity' as const,
+      kind: activity.kind,
+      content: activity.content,
+      data: activity.data,
+      timestamp: activity.timestamp,
+    })),
+  ].sort((a, b) => {
+    const aTime = a.timestamp ? Date.parse(a.timestamp) : 0
+    const bTime = b.timestamp ? Date.parse(b.timestamp) : 0
+    return aTime - bTime
+  })
 }
 
 function PickerThumb({ asset }: { asset: { filename: string; type: string } }) {
@@ -163,6 +193,14 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
     }
   }, [currentId, onEditChange])
 
+  const fetchBrainstormSession = useCallback(async () => {
+    if (!currentId || !brainstormAgent) return
+    const res = await fetch(`/api/plugins/projects/${currentId}/brainstorm?agent=${encodeURIComponent(brainstormAgent)}`)
+    if (!res.ok) return
+    const data = await res.json().catch(() => null) as { session?: BrainstormSessionData } | null
+    if (data?.session) setBrainstormMessages(mapBrainstormSession(data.session))
+  }, [currentId, brainstormAgent])
+
   useEffect(() => {
     if (isNew) {
       router.replace('/projects', { scroll: false })
@@ -180,6 +218,14 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
       setProject((prev) => (prev && !prev.owner ? { ...prev, owner: mainAgentId } : prev))
     }
   }, [mainAgentId, isNew])
+
+  useEffect(() => {
+    if (isNew || !currentId || !brainstormAgent) {
+      setBrainstormMessages([])
+      return
+    }
+    void fetchBrainstormSession()
+  }, [isNew, currentId, brainstormAgent, fetchBrainstormSession])
 
   // Close status dropdown on outside click
   useEffect(() => {
@@ -279,8 +325,8 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   const projectAskOnSend = useCallback(
     async (
       prompt: string,
-      history: BrainstormMessage[],
-      ctx: { signal: AbortSignal; onToken: (text: string) => void },
+      _history: BrainstormMessage[],
+      ctx: { signal: AbortSignal; onToken: (text: string) => void; onCustom?: (name: string, data: unknown) => void },
     ): Promise<{ content: string }> => {
       if (!currentId) throw new Error('Create the project before starting a brainstorm.')
       const res = await fetch(`/api/plugins/projects/${currentId}/ask`, {
@@ -291,7 +337,6 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
           projectId: currentId,
           prompt,
           agent: brainstormAgent,
-          history: history.map((m) => ({ role: m.role, content: m.content })),
         }),
       })
       if (!res.ok || !res.body) {
@@ -320,6 +365,8 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
               if (currentEvent === 'token') {
                 accumulated += data.text ?? ''
                 ctx.onToken(data.text ?? '')
+              } else if (currentEvent === 'activity') {
+                ctx.onCustom?.('activity', data)
               } else if (currentEvent === 'done') {
                 finalContent = data.content ?? accumulated
               } else if (currentEvent === 'error') {

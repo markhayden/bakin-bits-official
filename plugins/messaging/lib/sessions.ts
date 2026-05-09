@@ -10,6 +10,8 @@ import type {
   PlanningSession,
   ProposalStatus,
   ProposedItem,
+  SessionActivity,
+  SessionActivityKind,
   SessionMessage,
 } from '../types'
 import { DEFAULT_CHANNEL } from '../types'
@@ -37,6 +39,7 @@ function writeJson(storage: StorageAdapter, path: string, value: unknown): void 
 
 function normalizeSession(session: PlanningSession): PlanningSession {
   if (!Array.isArray(session.messages)) session.messages = []
+  if (!Array.isArray(session.activities)) session.activities = []
   if (!Array.isArray(session.proposals)) session.proposals = []
   return session
 }
@@ -60,6 +63,7 @@ export interface MessagingSessionStore {
   updateSession(sessionId: string, updates: { title?: string; status?: 'active' | 'completed' }): PlanningSession
   deleteSession(sessionId: string): void
   appendMessage(sessionId: string, message: { role: 'user' | 'assistant'; content: string }, proposalIds?: string[]): SessionMessage
+  appendActivity(sessionId: string, activity: { kind: SessionActivityKind; content: string; data?: unknown }): SessionActivity
   addProposals(sessionId: string, messageId: string, items: Array<{
     title: string
     scheduledAt: string
@@ -103,6 +107,7 @@ export function createMessagingSessionStore(
       createdAt: now,
       updatedAt: now,
       messages: [],
+      activities: [],
       proposals: [],
     }
     writeJson(storage, sessionPath(session.id), session)
@@ -176,6 +181,27 @@ export function createMessagingSessionStore(
     session.updatedAt = new Date().toISOString()
     writeJson(storage, sessionPath(sessionId), session)
     return msg
+  }
+
+  function appendActivity(
+    sessionId: string,
+    activity: { kind: SessionActivityKind; content: string; data?: unknown },
+  ): SessionActivity {
+    const session = loadSession(sessionId)
+    if (!session) throw new Error(`Session ${sessionId} not found`)
+    const timestamp = new Date().toISOString()
+    const entry: SessionActivity = {
+      id: generateId(),
+      kind: activity.kind,
+      content: activity.content,
+      timestamp,
+    }
+    if (activity.data !== undefined) entry.data = activity.data
+    if (!Array.isArray(session.activities)) session.activities = []
+    session.activities.push(entry)
+    session.updatedAt = timestamp
+    writeJson(storage, sessionPath(sessionId), session)
+    return entry
   }
 
   function upsertProposals(
@@ -321,6 +347,7 @@ export function createMessagingSessionStore(
     updateSession,
     deleteSession,
     appendMessage,
+    appendActivity,
     addProposals,
     upsertProposals,
     updateProposal,

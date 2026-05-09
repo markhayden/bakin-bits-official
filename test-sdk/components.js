@@ -57,7 +57,21 @@ export function IntegratedBrainstorm({
       const result = await onSend(prompt, renderedMessages, {
         signal: new AbortController().signal,
         onToken: text => { streamed += text },
-        onCustom: () => {},
+        onCustom: (name, data) => {
+          if (name !== 'activity') return
+          const activity = data?.activity ?? data
+          if (!activity?.content) return
+          setLocalMessages(prev => [
+            ...prev,
+            {
+              id: activity.id ?? `activity-${prev.length}`,
+              role: 'activity',
+              kind: activity.kind,
+              content: activity.content,
+              data: activity.data,
+            },
+          ])
+        },
       })
       setLocalMessages(prev => [
         ...prev,

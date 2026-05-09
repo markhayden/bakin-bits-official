@@ -79,6 +79,12 @@ async function* streamRuntimeText(content: string): AsyncIterable<{ type: 'text'
   }
 }
 
+async function* streamRuntimeActivity(): AsyncIterable<{ type: 'status' | 'tool' | 'text'; content: string; data?: unknown }> {
+  yield { type: 'status', content: 'Checking existing plan' }
+  yield { type: 'tool', content: 'Read calendar state', data: { tool: 'bakin_exec_messaging_session_get' } }
+  yield { type: 'text', content: 'Ready.' }
+}
+
 function installRuntimeMessagingMocks(): void {
   plugin.ctx.runtime.messaging.send = mockRuntimeSend as RuntimeSend
   plugin.ctx.runtime.messaging.stream = mockRuntimeStream as RuntimeStream
@@ -195,6 +201,66 @@ describe('Streaming endpoint', () => {
     const fullText = tokenEvents.map(e => e.data.text).join('')
     expect(fullText).toContain('Here')
     expect(fullText).toContain('ideas')
+  })
+
+  it('uses a stable runtime thread id for repeated session messages', async () => {
+    streamRuntimeResponse('First')
+    const sessionId = await createTestSession()
+    await (await sendMessage(sessionId, 'First prompt')).text()
+
+    streamRuntimeResponse('Second')
+    await (await sendMessage(sessionId, 'Second prompt')).text()
+
+    const firstArgs = mockRuntimeStream.mock.calls[0][0] as { threadId?: string }
+    const secondArgs = mockRuntimeStream.mock.calls[1][0] as { threadId?: string }
+    expect(firstArgs.threadId).toBe(`messaging-${sessionId}-basil`)
+    expect(secondArgs.threadId).toBe(`messaging-${sessionId}-basil`)
+  })
+
+  it('bounds prompt history sent to runtime', async () => {
+    streamRuntimeResponse('Fresh answer')
+    const sessionId = await createTestSession()
+    const sessionPath = join(testDir, 'messaging', 'sessions', `${sessionId}.json`)
+    const session = JSON.parse(readFileSync(sessionPath, 'utf-8'))
+    session.messages = Array.from({ length: 30 }, (_, index) => ({
+      id: `m${index}`,
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `history-${index}`,
+      timestamp: `2026-04-07T00:${String(index).padStart(2, '0')}:00Z`,
+    }))
+    writeFileSync(sessionPath, JSON.stringify(session, null, 2))
+
+    await (await sendMessage(sessionId, 'Continue')).text()
+
+    const args = mockRuntimeStream.mock.calls[0][0] as { content?: string }
+    expect(args.content).not.toContain('history-0')
+    expect(args.content).not.toContain('history-17')
+    expect(args.content).toContain('history-18')
+    expect(args.content).toContain('history-29')
+  })
+
+  it('streams and persists runtime activity events', async () => {
+    mockRuntimeStream.mockImplementationOnce(() => streamRuntimeActivity())
+    const sessionId = await createTestSession()
+    const res = await sendMessage(sessionId, 'Show the plan')
+    const text = await res.text()
+    const events = parseSSEEvents(text)
+
+    const activityEvents = events.filter(e => e.event === 'activity')
+    expect(activityEvents).toHaveLength(2)
+    expect(activityEvents[0].data.activity).toMatchObject({
+      kind: 'runtime_status',
+      content: 'Checking existing plan',
+    })
+    expect(activityEvents[1].data.activity).toMatchObject({
+      kind: 'tool_call',
+      content: 'Read calendar state',
+      data: { tool: 'bakin_exec_messaging_session_get' },
+    })
+
+    const sessionPath = join(testDir, 'messaging', 'sessions', `${sessionId}.json`)
+    const session = JSON.parse(readFileSync(sessionPath, 'utf-8'))
+    expect(session.activities.map((activity: Record<string, unknown>) => activity.kind)).toEqual(['runtime_status', 'tool_call'])
   })
 
   it('sends done event after stream completes', async () => {

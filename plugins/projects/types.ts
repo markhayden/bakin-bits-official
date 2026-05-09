@@ -43,3 +43,34 @@ export interface ProjectSummary {
   assetCount: number
   updated: string
 }
+
+export type ProjectBrainstormMessageRole = 'user' | 'assistant'
+
+export interface ProjectBrainstormMessage {
+  id: string
+  role: ProjectBrainstormMessageRole
+  content: string
+  timestamp: string
+}
+
+export type ProjectBrainstormActivityKind = 'runtime_status' | 'tool_call' | 'error'
+
+export interface ProjectBrainstormActivity {
+  id: string
+  kind: ProjectBrainstormActivityKind
+  content: string
+  timestamp: string
+  data?: unknown
+}
+
+export interface ProjectBrainstormSession {
+  id: string
+  projectId: string
+  agentId: string
+  runtimeThreadId: string
+  summary?: string
+  createdAt: string
+  updatedAt: string
+  messages: ProjectBrainstormMessage[]
+  activities: ProjectBrainstormActivity[]
+}

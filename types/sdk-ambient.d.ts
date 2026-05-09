@@ -770,9 +770,12 @@ declare module '@bakin/sdk/components' {
   export interface BrainstormMessage {
     id?: string
     agentId?: string
-    role: 'user' | 'assistant' | 'system'
+    role: 'user' | 'assistant' | 'system' | 'activity'
     content: string
     createdAt?: string
+    timestamp?: string
+    kind?: string
+    data?: unknown
     metadata?: Record<string, unknown>
     [key: string]: unknown
   }

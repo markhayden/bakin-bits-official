@@ -5,12 +5,13 @@ import { AgentAvatar, IntegratedBrainstorm } from "@bakin/sdk/components"
 import type { BrainstormMessage } from "@bakin/sdk/components"
 import { Badge } from "@bakin/sdk/ui"
 import { useAgent } from "@bakin/sdk/hooks"
-import type { ProposedItem, SessionMessage } from '../types'
+import type { ProposedItem, SessionActivity, SessionMessage } from '../types'
 
 interface Props {
   sessionId: string
   agentId: string
   initialMessages?: SessionMessage[]
+  initialActivities?: SessionActivity[]
   initialProposals?: ProposedItem[]
   isCompleted?: boolean
   onProposalsReceived?: (proposals: ProposedItem[]) => void
@@ -24,6 +25,32 @@ function toBrainstorm(agentId: string, sm: SessionMessage): BrainstormMessage {
     agentId: sm.role === 'assistant' ? agentId : undefined,
     timestamp: sm.timestamp,
   }
+}
+
+function toBrainstormActivity(activity: SessionActivity): BrainstormMessage {
+  return {
+    id: activity.id,
+    role: 'activity',
+    kind: activity.kind,
+    content: activity.content,
+    data: activity.data,
+    timestamp: activity.timestamp,
+  }
+}
+
+function toBrainstormTimeline(
+  agentId: string,
+  messages: SessionMessage[],
+  activities: SessionActivity[],
+): BrainstormMessage[] {
+  return [
+    ...messages.map((message) => toBrainstorm(agentId, message)),
+    ...activities.map(toBrainstormActivity),
+  ].sort((a, b) => {
+    const aTime = a.timestamp ? Date.parse(a.timestamp) : 0
+    const bTime = b.timestamp ? Date.parse(b.timestamp) : 0
+    return aTime - bTime
+  })
 }
 
 /**
@@ -81,24 +108,25 @@ export function SessionChat({
   sessionId,
   agentId,
   initialMessages = [],
+  initialActivities = [],
   isCompleted = false,
   onProposalsReceived,
 }: Props) {
   const [messages, setMessages] = useState<BrainstormMessage[]>(() =>
-    initialMessages.map((m) => toBrainstorm(agentId, m)),
+    toBrainstormTimeline(agentId, initialMessages, initialActivities),
   )
   const agent = useAgent(agentId)
   const agentName = agent?.name ?? agentId
   // Re-sync only when the session changes (not on every parent re-render;
   // the parent re-creates initialMessages each tick which would otherwise
   // reset our message state infinitely).
-  const lastSyncedIdsRef = useRef(initialMessages.map((m) => m.id).join('|'))
+  const lastSyncedIdsRef = useRef([...initialMessages, ...initialActivities].map((m) => m.id).join('|'))
   useEffect(() => {
-    const idKey = initialMessages.map((m) => m.id).join('|')
+    const idKey = [...initialMessages, ...initialActivities].map((m) => m.id).join('|')
     if (idKey === lastSyncedIdsRef.current) return
     lastSyncedIdsRef.current = idKey
-    setMessages(initialMessages.map((m) => toBrainstorm(agentId, m)))
-  }, [initialMessages, agentId])
+    setMessages(toBrainstormTimeline(agentId, initialMessages, initialActivities))
+  }, [initialMessages, initialActivities, agentId])
 
   // Proposal forwarding + SSE parser bundled together — SessionChat is the
   // only caller so there's no value in splitting them into separate
@@ -159,6 +187,9 @@ export function SessionChat({
                     onProposalsReceived?.(data.proposals as ProposedItem[])
                     for (const p of data.proposals) ctx.onCustom?.('proposal', p)
                   }
+                  break
+                case 'activity':
+                  ctx.onCustom?.('activity', data)
                   break
                 case 'done':
                   finalContent = data.content ?? accumulated

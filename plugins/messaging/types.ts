@@ -72,6 +72,16 @@ export interface SessionMessage {
   proposalIds?: string[]
 }
 
+export type SessionActivityKind = 'runtime_status' | 'tool_call' | 'error'
+
+export interface SessionActivity {
+  id: string
+  kind: SessionActivityKind
+  content: string
+  timestamp: string
+  data?: unknown
+}
+
 export interface PlanningSession {
   id: string
   agentId: string
@@ -80,6 +90,7 @@ export interface PlanningSession {
   createdAt: string
   updatedAt: string
   messages: SessionMessage[]
+  activities?: SessionActivity[]
   proposals: ProposedItem[]
   participants?: string[]
 }

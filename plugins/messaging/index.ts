@@ -3,10 +3,10 @@
  * Manages content pipeline: draft → scheduled → executing → waiting → review → published
  */
 import { z } from 'zod'
-import type { BakinPlugin, PluginContext } from '@bakin/sdk/types'
+import type { BakinPlugin, PluginContext, RuntimeChatChunk } from '@bakin/sdk/types'
 import { createMessagingStorage } from './lib/storage'
 import type { MessagingStorage } from './lib/storage'
-import type { CalendarItem, ContentStatus, ProposalStatus, MessagingSettings } from './types'
+import type { CalendarItem, ContentStatus, ProposalStatus, MessagingSettings, SessionActivity } from './types'
 import { DEFAULT_CHANNEL, DEFAULT_CONTENT_TYPES } from './types'
 import { createMessagingSessionStore } from './lib/sessions'
 import { buildMessages } from './lib/prompt-builder'
@@ -67,6 +67,33 @@ function flattenChatMessages(messages: Array<{ role: string; content: string }>)
   return messages.map((message) => `${message.role.toUpperCase()}:\n${message.content}`).join('\n\n')
 }
 
+function safeRuntimeSegment(value: string): string {
+  const normalized = value.trim().replace(/[^a-zA-Z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '')
+  return normalized || 'default'
+}
+
+function runtimeThreadId(sessionId: string, agentId: string): string {
+  return `messaging-${safeRuntimeSegment(sessionId)}-${safeRuntimeSegment(agentId)}`
+}
+
+function runtimeActivityFromChunk(chunk: RuntimeChatChunk): Omit<SessionActivity, 'id' | 'timestamp'> | null {
+  if (chunk.type === 'status') {
+    return {
+      kind: 'runtime_status',
+      content: chunk.content || 'Agent status update',
+      data: chunk.data,
+    }
+  }
+  if (chunk.type === 'tool') {
+    return {
+      kind: 'tool_call',
+      content: chunk.content || 'Tool call',
+      data: chunk.data,
+    }
+  }
+  return null
+}
+
 async function sendRuntimeChatCompletion(ctx: PluginContext, opts: RuntimeChatOpts): Promise<string> {
   void opts.signal
   const result = await ctx.runtime.messaging.send({
@@ -95,6 +122,11 @@ async function streamRuntimeChatCompletion(ctx: PluginContext, opts: RuntimeChat
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: chunk.content } }] })}\n\n`))
           } else if (chunk.type === 'error') {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: chunk.content ?? 'Runtime stream error' })}\n\n`))
+          } else {
+            const activity = runtimeActivityFromChunk(chunk)
+            if (activity) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ activity })}\n\n`))
+            }
           }
         }
         controller.enqueue(encoder.encode('data: [DONE]\n\n'))
@@ -286,6 +318,7 @@ const messagingPlugin: BakinPlugin = {
       updateSession: updateSessionFn,
       deleteSession: deleteSessionFn,
       appendMessage,
+      appendActivity,
       upsertProposals,
       updateProposal,
       confirmSession,
@@ -696,8 +729,8 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
 
         // Build messages array with full session history
         const promptOptions = await resolvePromptOptions(ctx, session.agentId)
-        const messages = buildMessages(session, body.message, promptOptions)
-        const sessionKey = `session-${id}-${Date.now()}`
+        const messages = buildMessages(session, body.message, { ...promptOptions, historyMessageLimit: 12 })
+        const sessionKey = runtimeThreadId(id, session.agentId)
 
         // Create a ReadableStream that pipes runtime SSE to the client
         const stream = new ReadableStream({
@@ -793,6 +826,12 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
                         if (token.includes('`')) {
                           checkForCompletedBlocks()
                         }
+                      } else if (parsed.activity) {
+                        const activityInput = parsed.activity as Omit<SessionActivity, 'id' | 'timestamp'>
+                        const activity = appendActivity(sessionId, activityInput)
+                        send('activity', { activity })
+                      } else if (parsed.error) {
+                        send('error', { message: String(parsed.error) })
                       }
                     } catch {
                       // Skip malformed chunks
@@ -1245,8 +1284,8 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
 
         // Non-streaming: call runtime synchronously and collect full response
         const promptOptions = await resolvePromptOptions(ctx, session.agentId)
-        const messages = buildMessages(session, params.message as string, promptOptions)
-        const sessionKey = `session-${params.sessionId}-${Date.now()}`
+        const messages = buildMessages(session, params.message as string, { ...promptOptions, historyMessageLimit: 12 })
+        const sessionKey = runtimeThreadId(params.sessionId as string, session.agentId)
 
         let fullContent: string
         try {

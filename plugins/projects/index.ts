@@ -3,10 +3,11 @@
  * Registers API routes, exec tools, and the task-link index.
  */
 import { z } from 'zod'
-import type { BakinPlugin, PluginContext, RuntimeAgent } from '@bakin/sdk/types'
+import type { BakinPlugin, PluginContext, RuntimeAgent, RuntimeChatChunk } from '@bakin/sdk/types'
 import { createProjectRepository, projectToSummary } from './lib/parser'
 import { createProjectService } from './lib/project-service'
-import type { Project, ProjectStatus } from './types'
+import { createProjectBrainstormSessionStore } from './lib/brainstorm-sessions'
+import type { Project, ProjectBrainstormActivity, ProjectBrainstormMessage, ProjectStatus } from './types'
 
 const log = {
   info: (...args: unknown[]) => console.info('[projects]', ...args),
@@ -39,6 +40,62 @@ async function getRuntimeMainAgentId(ctx: PluginContext): Promise<string> {
   return main?.id ?? 'main'
 }
 
+function buildProjectAskContext(
+  project: Project,
+  prompt: string,
+  previousMessages: ProjectBrainstormMessage[] = [],
+): string {
+  const assetLines = project.assets.length > 0
+    ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.filename}${a.label ? ` — ${a.label}` : ''}`)]
+    : []
+
+  const recentMessages = previousMessages.slice(-8)
+  const historyLines: string[] = []
+  if (recentMessages.length > 0) {
+    historyLines.push('', 'Previous conversation in this brainstorm session:')
+    for (const msg of recentMessages) {
+      const speaker = msg.role === 'user' ? 'User' : 'Assistant'
+      historyLines.push(`${speaker}: ${msg.content}`)
+    }
+    historyLines.push('')
+  }
+
+  return [
+    `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
+    `Progress: ${project.progress}% (${project.tasks.filter(t => t.checked).length}/${project.tasks.length} items checked)`,
+    '',
+    'Project spec:',
+    project.body.slice(0, 3000),
+    '',
+    'Checklist items:',
+    ...project.tasks.map(t => `- [${t.checked ? 'x' : ' '}] ${t.title}${t.taskId ? ` (linked: ${t.taskId})` : ''}`),
+    ...assetLines,
+    ...historyLines,
+    'User request:',
+    prompt,
+    '',
+    'Respond concisely. If suggesting tasks, format them as a numbered list.',
+  ].join('\n')
+}
+
+function runtimeActivityFromChunk(chunk: RuntimeChatChunk): Omit<ProjectBrainstormActivity, 'id' | 'timestamp'> | null {
+  if (chunk.type === 'status') {
+    return {
+      kind: 'runtime_status',
+      content: chunk.content || 'Agent status update',
+      data: chunk.data,
+    }
+  }
+  if (chunk.type === 'tool') {
+    return {
+      kind: 'tool_call',
+      content: chunk.content || 'Tool call',
+      data: chunk.data,
+    }
+  }
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // Plugin
 // ---------------------------------------------------------------------------
@@ -63,6 +120,7 @@ const projectsPlugin: BakinPlugin = {
     const repo = createProjectRepository(ctx.storage)
     activeProjectRepository = repo
     const projectService = createProjectService(ctx, repo)
+    const brainstormSessions = createProjectBrainstormSessionStore(ctx.storage)
     const {
       createProject,
       updateProject,
@@ -208,6 +266,19 @@ const projectsPlugin: BakinPlugin = {
       return json({ projects: projects.map(projectToSummary) })
     }
     ctx.registerRoute({ path: '/', method: 'GET', description: 'List projects', handler: listHandler })
+
+    // GET /:projectId/brainstorm — read durable project brainstorm session
+    const brainstormSessionHandler = async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const projectId = url.searchParams.get('projectId')
+      if (!projectId) return json({ error: 'Missing projectId parameter' }, 400)
+      const project = readProject(projectId)
+      if (!project) return json({ error: 'Project not found' }, 404)
+      const agentId = url.searchParams.get('agent') || await getRuntimeMainAgentId(ctx)
+      const session = brainstormSessions.getOrCreateSession(projectId, agentId)
+      return json({ session })
+    }
+    ctx.registerRoute({ path: '/:projectId/brainstorm', method: 'GET', description: 'Get project brainstorm session', handler: brainstormSessionHandler })
 
     // GET /:projectId — get single project
     const getHandler = async (req: Request) => {
@@ -409,39 +480,11 @@ const projectsPlugin: BakinPlugin = {
         const project = readProject(body.projectId)
         if (!project) return json({ error: 'Project not found' }, 404)
 
-        const assetLines = project.assets.length > 0
-          ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.filename}${a.label ? ` — ${a.label}` : ''}`)]
-          : []
-
-        const historyLines: string[] = []
-        if (body.history && body.history.length > 0) {
-          historyLines.push('', 'Previous conversation in this brainstorm session:')
-          for (const msg of body.history) {
-            const speaker = msg.role === 'user' ? 'User' : 'Assistant'
-            historyLines.push(`${speaker}: ${msg.content}`)
-          }
-          historyLines.push('')
-        }
-
-        const context = [
-          `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
-          `Progress: ${project.progress}% (${project.tasks.filter(t => t.checked).length}/${project.tasks.length} items checked)`,
-          '',
-          'Project spec:',
-          project.body.slice(0, 3000),
-          '',
-          'Checklist items:',
-          ...project.tasks.map(t => `- [${t.checked ? 'x' : ' '}] ${t.title}${t.taskId ? ` (linked: ${t.taskId})` : ''}`),
-          ...assetLines,
-          ...historyLines,
-          'User request:',
-          body.prompt,
-          '',
-          'Respond concisely. If suggesting tasks, format them as a numbered list.',
-        ].join('\n')
-
         const agentId = body.agent || await getRuntimeMainAgentId(ctx)
-        const sessionKey = `projects-${body.projectId}-${Date.now()}`
+        const session = brainstormSessions.getOrCreateSession(body.projectId, agentId)
+        const previousMessages = [...session.messages]
+        const context = buildProjectAskContext(project, body.prompt, previousMessages)
+        brainstormSessions.appendMessage(session, { role: 'user', content: body.prompt })
 
         const stream = new ReadableStream({
           async start(controller) {
@@ -452,13 +495,13 @@ const projectsPlugin: BakinPlugin = {
 
             let fullContent = ''
             let useStreaming = true
-            let chunks: AsyncIterable<{ type: string; content?: string }> | undefined
+            let chunks: AsyncIterable<RuntimeChatChunk> | undefined
 
             try {
               chunks = ctx.runtime.messaging.stream({
                 agentId,
                 content: context,
-                threadId: sessionKey,
+                threadId: session.runtimeThreadId,
               })
             } catch (err) {
               // Fall back to one-shot runtime messaging below. Log at warn level
@@ -478,21 +521,31 @@ const projectsPlugin: BakinPlugin = {
                     send('token', { text: chunk.content })
                   } else if (chunk.type === 'error') {
                     throw new Error(chunk.content ?? 'Runtime stream error')
+                  } else {
+                    const activityInput = runtimeActivityFromChunk(chunk)
+                    if (activityInput) {
+                      const activity = brainstormSessions.appendActivity(session, activityInput)
+                      send('activity', { activity })
+                    }
                   }
                 }
               } else {
                 const result = await ctx.runtime.messaging.send({
                   agentId,
                   content: context,
-                  threadId: sessionKey,
+                  threadId: session.runtimeThreadId,
                 })
                 fullContent = result.content ?? ''
                 if (fullContent) send('token', { text: fullContent })
               }
+              if (fullContent) brainstormSessions.appendMessage(session, { role: 'assistant', content: fullContent })
               send('done', { content: fullContent })
             } catch (err: unknown) {
               log.error('Agent ask failed', err)
-              send('error', { message: err instanceof Error ? err.message : String(err) })
+              const message = err instanceof Error ? err.message : String(err)
+              const activity = brainstormSessions.appendActivity(session, { kind: 'error', content: message })
+              send('activity', { activity })
+              send('error', { message })
             } finally {
               controller.close()
             }
@@ -514,7 +567,7 @@ const projectsPlugin: BakinPlugin = {
     // -----------------------------------------------------------------
 
     ctx.registerExecTool({
-      name: 'bakin_exec_project_list',
+      name: 'bakin_exec_projects_list',
       label: 'Listed projects',
       description: 'List all projects with optional status filter. Returns summaries with id, title, status, progress, taskCount.',
       parameters: {
@@ -530,7 +583,7 @@ const projectsPlugin: BakinPlugin = {
     })
 
     ctx.registerExecTool({
-      name: 'bakin_exec_project_get',
+      name: 'bakin_exec_projects_get',
       label: 'Read project details',
       description: 'Get a project by ID including full spec, checklist, progress, and linked board task statuses.',
       parameters: {
@@ -544,7 +597,7 @@ const projectsPlugin: BakinPlugin = {
     })
 
     ctx.registerExecTool({
-      name: 'bakin_exec_project_create',
+      name: 'bakin_exec_projects_create',
       label: 'Created a project',
       description: 'Create a new project with title, markdown body, and optional initial checklist items. Returns project ID and generated task item IDs.',
       parameters: {
@@ -566,7 +619,7 @@ const projectsPlugin: BakinPlugin = {
     })
 
     ctx.registerExecTool({
-      name: 'bakin_exec_project_update',
+      name: 'bakin_exec_projects_update',
       label: 'Updated a project',
       description: 'Update a project\'s title, status, body, or owner. Cannot set status to "completed" if unchecked items remain.',
       parameters: {
@@ -593,7 +646,7 @@ const projectsPlugin: BakinPlugin = {
     })
 
     ctx.registerExecTool({
-      name: 'bakin_exec_project_delete',
+      name: 'bakin_exec_projects_delete',
       label: 'Deleted a project',
       description: 'Delete a project by ID.',
       parameters: {
@@ -611,7 +664,7 @@ const projectsPlugin: BakinPlugin = {
     })
 
     ctx.registerExecTool({
-      name: 'bakin_exec_project_add_item',
+      name: 'bakin_exec_projects_add_item',
       label: 'Added project item',
       description: 'Add a new checklist item to a project.',
       parameters: {
@@ -626,7 +679,7 @@ const projectsPlugin: BakinPlugin = {
     })
 
     ctx.registerExecTool({
-      name: 'bakin_exec_project_mark_item',
+      name: 'bakin_exec_projects_mark_item',
       label: 'Marked project item',
       description: 'Mark a checklist item as checked (done) or unchecked. Returns updated progress percentage.',
       parameters: {
@@ -646,7 +699,7 @@ const projectsPlugin: BakinPlugin = {
     })
 
     ctx.registerExecTool({
-      name: 'bakin_exec_project_remove_item',
+      name: 'bakin_exec_projects_remove_item',
       label: 'Removed project item',
       description: 'Remove a checklist item from a project.',
       parameters: {
@@ -665,7 +718,7 @@ const projectsPlugin: BakinPlugin = {
     })
 
     ctx.registerExecTool({
-      name: 'bakin_exec_project_link_item',
+      name: 'bakin_exec_projects_link_item',
       label: 'Linked project item',
       description: 'Link an existing board task to a project checklist item. Use this when a task was created separately and should be associated with a project.',
       parameters: {
@@ -689,7 +742,7 @@ const projectsPlugin: BakinPlugin = {
     })
 
     ctx.registerExecTool({
-      name: 'bakin_exec_project_promote_item',
+      name: 'bakin_exec_projects_promote_item',
       label: 'Promoted project item',
       description: 'Create a NEW board task from a project checklist item and automatically link it. The task appears on the task board with the item title and projectId set.',
       parameters: {
@@ -713,7 +766,7 @@ const projectsPlugin: BakinPlugin = {
     })
 
     ctx.registerExecTool({
-      name: 'bakin_exec_project_attach_asset',
+      name: 'bakin_exec_projects_attach_asset',
       label: 'Attached asset to project',
       description: 'Attach an existing asset to a project by filename. Assets provide additional context (specs, designs, docs) that agents can reference. Only summaries are included in project_get — use asset tools to read full content when needed.',
       parameters: {
@@ -733,7 +786,7 @@ const projectsPlugin: BakinPlugin = {
     })
 
     ctx.registerExecTool({
-      name: 'bakin_exec_project_detach_asset',
+      name: 'bakin_exec_projects_detach_asset',
       label: 'Detached asset from project',
       description: 'Remove an asset reference from a project by filename. Does not delete the asset itself.',
       parameters: {
@@ -752,7 +805,7 @@ const projectsPlugin: BakinPlugin = {
     })
 
     ctx.registerExecTool({
-      name: 'bakin_exec_project_toggle_item',
+      name: 'bakin_exec_projects_toggle_item',
       label: 'Toggled project item',
       activityDuplicate: true,
       description: 'Toggle a checklist item checked/unchecked by item ID. Returns updated progress percentage.',
@@ -773,7 +826,7 @@ const projectsPlugin: BakinPlugin = {
     })
 
     ctx.registerExecTool({
-      name: 'bakin_exec_project_update_item',
+      name: 'bakin_exec_projects_update_item',
       label: 'Updated project item',
       activityDuplicate: true,
       description: 'Update a checklist item\'s title and/or description.',
@@ -801,7 +854,7 @@ const projectsPlugin: BakinPlugin = {
     })
 
     ctx.registerExecTool({
-      name: 'bakin_exec_project_ask',
+      name: 'bakin_exec_projects_ask',
       label: 'Asked project question',
       activityDuplicate: true,
       description: 'Ask an agent a question about a project. Sends the project context (spec, checklist, assets) along with the message to the agent for brainstorming.',
@@ -816,31 +869,15 @@ const projectsPlugin: BakinPlugin = {
         const project = readProject(projectId)
         if (!project) return { ok: false, error: `Project not found: ${projectId}` }
 
-        const assetLines = project.assets.length > 0
-          ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.filename}${a.label ? ` — ${a.label}` : ''}`)]
-          : []
-
-        const context = [
-          `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
-          `Progress: ${project.progress}% (${project.tasks.filter(t => t.checked).length}/${project.tasks.length} items checked)`,
-          '',
-          'Project spec:',
-          project.body.slice(0, 3000),
-          '',
-          'Checklist items:',
-          ...project.tasks.map(t => `- [${t.checked ? 'x' : ' '}] ${t.title}${t.taskId ? ` (linked: ${t.taskId})` : ''}`),
-          ...assetLines,
-          '',
-          'User request:',
-          message,
-          '',
-          'Respond concisely. If suggesting tasks, format them as a numbered list.',
-        ].join('\n')
-
         try {
           const agentId = (params.agent as string) || await getRuntimeMainAgentId(ctx)
-          const result = await ctx.runtime.messaging.send({ agentId, content: context })
+          const session = brainstormSessions.getOrCreateSession(projectId, agentId)
+          const previousMessages = [...session.messages]
+          const context = buildProjectAskContext(project, message, previousMessages)
+          brainstormSessions.appendMessage(session, { role: 'user', content: message })
+          const result = await ctx.runtime.messaging.send({ agentId, content: context, threadId: session.runtimeThreadId })
           const reply = result.content ?? ''
+          if (reply) brainstormSessions.appendMessage(session, { role: 'assistant', content: reply })
           ctx.activity.audit('project.asked', 'system', { projectId, agent: agentId })
           return { ok: true, reply }
         } catch (err: unknown) {

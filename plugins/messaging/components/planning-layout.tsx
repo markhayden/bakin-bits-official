@@ -319,6 +319,7 @@ export function PlanningLayout({ sessionId, onBack, onSessionUpdated }: Props) {
             sessionId={sessionId}
             agentId={agentId}
             initialMessages={session.messages}
+            initialActivities={session.activities ?? []}
             initialProposals={session.proposals}
             isCompleted={isCompleted}
             onProposalsReceived={handleProposalsReceived}

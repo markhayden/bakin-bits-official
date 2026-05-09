@@ -20,6 +20,8 @@ export interface PromptBuilderOptions {
   /** Pre-loaded agent persona markdown, or empty string. The caller is responsible
    *  for validating the agentId against the live roster before loading. */
   persona: string
+  /** Maximum prior session messages to include before the latest user message. */
+  historyMessageLimit?: number
 }
 
 /**
@@ -147,8 +149,10 @@ export function buildMessages(
     content: buildSystemPrompt(session.agentId, session, options),
   })
 
-  // Session history
-  for (const msg of session.messages) {
+  // Session history. Keep the prompt bounded; durable storage remains complete.
+  const historyLimit = options.historyMessageLimit ?? 12
+  const recentHistory = historyLimit > 0 ? session.messages.slice(-historyLimit) : []
+  for (const msg of recentHistory) {
     messages.push({
       role: msg.role,
       content: msg.content,

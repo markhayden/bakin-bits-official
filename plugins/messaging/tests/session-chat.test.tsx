@@ -59,7 +59,7 @@ mock.module('@bakin/team/hooks/use-agent-store', () => ({
 }))
 
 import { SessionChat } from '../../../plugins/messaging/components/session-chat'
-import type { SessionMessage, ProposedItem } from '../../../plugins/messaging/types'
+import type { SessionActivity, SessionMessage, ProposedItem } from '../../../plugins/messaging/types'
 
 afterEach(() => cleanup())
 
@@ -79,6 +79,21 @@ describe('SessionChat', () => {
     render(<SessionChat sessionId="s1" agentId="scout" initialMessages={messages} />)
     expect(screen.getByText('Plan next week')).toBeDefined()
     expect(screen.getByText('Here are some ideas!')).toBeDefined()
+  })
+
+  it('renders initial activity timeline entries', () => {
+    const activities: SessionActivity[] = [
+      {
+        id: 'a1',
+        kind: 'tool_call',
+        content: 'Read calendar state',
+        timestamp: '2026-04-07T00:00:30Z',
+        data: { tool: 'bakin_exec_messaging_list' },
+      },
+    ]
+
+    render(<SessionChat sessionId="s1" agentId="scout" initialActivities={activities} />)
+    expect(screen.getByText('Read calendar state')).toBeDefined()
   })
 
   it('pads the chat pane below the session frame', () => {
