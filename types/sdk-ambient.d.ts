@@ -770,12 +770,29 @@ declare module '@bakin/sdk/components' {
   export interface BrainstormMessage {
     id?: string
     agentId?: string
-    role: 'user' | 'assistant' | 'system'
+    role: 'user' | 'assistant' | 'system' | 'activity'
     content: string
+    kind?: 'runtime_status' | 'tool_call' | 'error' | string
+    data?: unknown
     createdAt?: string
+    timestamp?: string
     metadata?: Record<string, unknown>
     [key: string]: unknown
   }
+
+  export interface SendContext {
+    signal: AbortSignal
+    onToken: (text: string) => void
+    onCustom?: (name: string, data: unknown) => void
+  }
+
+  export function readBrainstormSseResponse(
+    response: Response,
+    ctx: SendContext,
+    options?: {
+      onCustomEvent?: (event: string, data: unknown) => boolean | void
+    },
+  ): Promise<{ content: string }>
 
   export const AgentAvatar: ComponentType<{ agentId?: string; agent?: AgentInfo | null; size?: string | number; className?: string }>
   export const AgentFilter: SDKComponent
@@ -855,7 +872,27 @@ declare module '@bakin/sdk/slots' {
 }
 
 declare module '@bakin/sdk/utils' {
+  import type { RuntimeChatChunk } from '@bakin/sdk/types'
+
+  export interface BrainstormActivityInput {
+    kind: string
+    content: string
+    data?: unknown
+  }
+
   export function cn(...args: Array<string | undefined | null | false>): string
   export function formatAge(date: Date | string): string
   export function formatSize(bytes: number): string
+  export function runtimeChunkToBrainstormActivity(chunk: RuntimeChatChunk): BrainstormActivityInput | null
+  export function readBrainstormSseResponse(
+    response: Response,
+    ctx: {
+      signal: AbortSignal
+      onToken: (text: string) => void
+      onCustom?: (name: string, data: unknown) => void
+    },
+    options?: {
+      onCustomEvent?: (event: string, data: unknown) => boolean | void
+    },
+  ): Promise<{ content: string }>
 }

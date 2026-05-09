@@ -129,10 +129,23 @@ async function* streamTextChunks(tokens: string[]): AsyncIterable<ChatChunk> {
   }
 }
 
+async function* streamChunks(chunks: ChatChunk[]): AsyncIterable<ChatChunk> {
+  for (const chunk of chunks) yield chunk
+}
+
 function mockRuntimeStream(tokens: string[]) {
   const streamMock = mock((args: MessageArgs) => {
     void args
     return streamTextChunks(tokens)
+  })
+  plugin.ctx.runtime.messaging.stream = streamMock
+  return streamMock
+}
+
+function mockRuntimeChunks(chunks: ChatChunk[]) {
+  const streamMock = mock((args: MessageArgs) => {
+    void args
+    return streamChunks(chunks)
   })
   plugin.ctx.runtime.messaging.stream = streamMock
   return streamMock
@@ -656,6 +669,56 @@ describe('Routes', () => {
           content: expect.stringContaining('Ask Project'),
         }),
       )
+    })
+
+    it('forwards runtime status and tool chunks as brainstorm activity events', async () => {
+      writeProjectFixture('proj-activity', { title: 'Activity Project' })
+      mockRuntimeChunks([
+        { type: 'status', content: 'Reading project context', data: { step: 'context' } },
+        {
+          type: 'tool',
+          content: 'exec: gh issue list',
+          data: {
+            phase: 'call',
+            callId: 'call-1',
+            toolName: 'exec',
+            status: 'running',
+            inputPreview: '{"command":"gh issue list"}',
+          },
+        },
+        { type: 'text', content: 'Done.' },
+      ])
+
+      const route = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      const { response } = await callRoute(route, plugin.ctx, {
+        body: { projectId: 'proj-activity', prompt: 'Check tickets' },
+        rawResponse: true,
+      })
+
+      const events = await consumeSSE(response)
+      const activities = events.filter((e) => e.event === 'activity')
+      expect(activities).toHaveLength(2)
+      expect(activities[0].data).toEqual({
+        activity: {
+          kind: 'runtime_status',
+          content: 'Reading project context',
+          data: { step: 'context' },
+        },
+      })
+      expect(activities[1].data).toEqual({
+        activity: {
+          kind: 'tool_call',
+          content: 'exec: gh issue list',
+          data: {
+            phase: 'call',
+            callId: 'call-1',
+            toolName: 'exec',
+            status: 'running',
+            inputPreview: '{"command":"gh issue list"}',
+          },
+        },
+      })
+      expect(events.find((e) => e.event === 'done')?.data).toEqual({ content: 'Done.' })
     })
 
     it('uses the custom agent and includes history in the prompt', async () => {

@@ -79,6 +79,12 @@ async function* streamRuntimeText(content: string): AsyncIterable<{ type: 'text'
   }
 }
 
+async function* streamRuntimeChunks(
+  chunks: Array<{ type: 'text' | 'tool' | 'status' | 'error'; content?: string; data?: unknown }>,
+): AsyncIterable<{ type: 'text' | 'tool' | 'status' | 'error'; content?: string; data?: unknown }> {
+  for (const chunk of chunks) yield chunk
+}
+
 function installRuntimeMessagingMocks(): void {
   plugin.ctx.runtime.messaging.send = mockRuntimeSend as RuntimeSend
   plugin.ctx.runtime.messaging.stream = mockRuntimeStream as RuntimeStream
@@ -92,6 +98,12 @@ function resetRuntimeMessagingMocks(): void {
 
 function streamRuntimeResponse(content: string): void {
   mockRuntimeStream.mockImplementationOnce(() => streamRuntimeText(content))
+}
+
+function streamRuntimeChunkResponse(
+  chunks: Array<{ type: 'text' | 'tool' | 'status' | 'error'; content?: string; data?: unknown }>,
+): void {
+  mockRuntimeStream.mockImplementationOnce(() => streamRuntimeChunks(chunks))
 }
 
 function sendRuntimeResponse(content: string): void {
@@ -195,6 +207,69 @@ describe('Streaming endpoint', () => {
     const fullText = tokenEvents.map(e => e.data.text).join('')
     expect(fullText).toContain('Here')
     expect(fullText).toContain('ideas')
+  })
+
+  it('forwards runtime tool chunks as brainstorm activity events', async () => {
+    streamRuntimeChunkResponse([
+      { type: 'text', content: 'Checking ' },
+      {
+        type: 'tool',
+        content: 'exec: gh issue list',
+        data: {
+          phase: 'call',
+          callId: 'call-1',
+          toolName: 'exec',
+          status: 'running',
+          inputPreview: '{"command":"gh issue list"}',
+        },
+      },
+      {
+        type: 'tool',
+        content: 'exec completed',
+        data: {
+          phase: 'result',
+          callId: 'call-1',
+          toolName: 'exec',
+          status: 'completed',
+          durationMs: 6605,
+          exitCode: 0,
+          outputPreview: '[]',
+        },
+      },
+      { type: 'text', content: 'done.' },
+    ])
+    const sessionId = await createTestSession()
+    const res = await sendMessage(sessionId, 'Look up issues')
+    const events = parseSSEEvents(await res.text())
+
+    const activityEvents = events.filter(e => e.event === 'activity')
+    expect(activityEvents).toHaveLength(2)
+    expect(activityEvents[0].data.activity).toEqual({
+      kind: 'tool_call',
+      content: 'exec: gh issue list',
+      data: {
+        phase: 'call',
+        callId: 'call-1',
+        toolName: 'exec',
+        status: 'running',
+        inputPreview: '{"command":"gh issue list"}',
+      },
+    })
+    expect(activityEvents[1].data.activity).toEqual({
+      kind: 'tool_call',
+      content: 'exec completed',
+      data: {
+        phase: 'result',
+        callId: 'call-1',
+        toolName: 'exec',
+        status: 'completed',
+        durationMs: 6605,
+        exitCode: 0,
+        outputPreview: '[]',
+      },
+    })
+    const fullText = events.filter(e => e.event === 'token').map(e => e.data.text).join('')
+    expect(fullText).toBe('Checking done.')
   })
 
   it('sends done event after stream completes', async () => {

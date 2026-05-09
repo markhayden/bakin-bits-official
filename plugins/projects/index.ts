@@ -4,6 +4,7 @@
  */
 import { z } from 'zod'
 import type { BakinPlugin, PluginContext, RuntimeAgent } from '@bakin/sdk/types'
+import { runtimeChunkToBrainstormActivity } from '@bakin/sdk/utils'
 import { createProjectRepository, projectToSummary } from './lib/parser'
 import { createProjectService } from './lib/project-service'
 import type { Project, ProjectStatus } from './types'
@@ -452,7 +453,7 @@ const projectsPlugin: BakinPlugin = {
 
             let fullContent = ''
             let useStreaming = true
-            let chunks: AsyncIterable<{ type: string; content?: string }> | undefined
+            let chunks: ReturnType<PluginContext['runtime']['messaging']['stream']> | undefined
 
             try {
               chunks = ctx.runtime.messaging.stream({
@@ -478,6 +479,9 @@ const projectsPlugin: BakinPlugin = {
                     send('token', { text: chunk.content })
                   } else if (chunk.type === 'error') {
                     throw new Error(chunk.content ?? 'Runtime stream error')
+                  } else {
+                    const activity = runtimeChunkToBrainstormActivity(chunk)
+                    if (activity) send('activity', { activity })
                   }
                 }
               } else {

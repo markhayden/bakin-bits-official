@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { useRouter } from '@bakin/sdk/hooks'
 import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, ChevronDown, Search, Pencil, Trash2 } from 'lucide-react'
 import { useMainAgentId } from "@bakin/sdk/hooks"
-import { AgentSelect, IntegratedBrainstorm } from "@bakin/sdk/components"
+import { AgentSelect, IntegratedBrainstorm, readBrainstormSseResponse } from "@bakin/sdk/components"
 import type { BrainstormMessage } from "@bakin/sdk/components"
 import { Slot } from '@bakin/sdk/slots'
 import { ProjectChecklist } from './project-checklist'
@@ -294,46 +294,10 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
           history: history.map((m) => ({ role: m.role, content: m.content })),
         }),
       })
-      if (!res.ok || !res.body) {
-        const text = await res.text().catch(() => '')
-        throw new Error(text || `Agent returned ${res.status}`)
-      }
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      let currentEvent = ''
-      let accumulated = ''
-      let finalContent = ''
-      let errorMessage: string | null = null
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            currentEvent = line.slice(7).trim()
-          } else if (line.startsWith('data: ') && currentEvent) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              if (currentEvent === 'token') {
-                accumulated += data.text ?? ''
-                ctx.onToken(data.text ?? '')
-              } else if (currentEvent === 'done') {
-                finalContent = data.content ?? accumulated
-              } else if (currentEvent === 'error') {
-                errorMessage = data.message ?? 'Unknown error'
-              }
-            } catch { /* skip malformed chunks */ }
-            currentEvent = ''
-          }
-        }
-      }
-      if (errorMessage) throw new Error(errorMessage)
+      const result = await readBrainstormSseResponse(res, ctx)
       // Refresh project after a reply lands — agent may have updated the spec.
       fetchProject()
-      return { content: finalContent || accumulated }
+      return result
     },
     [currentId, brainstormAgent, fetchProject],
   )

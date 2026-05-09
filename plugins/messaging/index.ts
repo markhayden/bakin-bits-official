@@ -4,6 +4,7 @@
  */
 import { z } from 'zod'
 import type { BakinPlugin, PluginContext } from '@bakin/sdk/types'
+import { runtimeChunkToBrainstormActivity } from '@bakin/sdk/utils'
 import { createMessagingStorage } from './lib/storage'
 import type { MessagingStorage } from './lib/storage'
 import type { CalendarItem, ContentStatus, ProposalStatus, MessagingSettings } from './types'
@@ -78,34 +79,16 @@ async function sendRuntimeChatCompletion(ctx: PluginContext, opts: RuntimeChatOp
   return result.content ?? ''
 }
 
-async function streamRuntimeChatCompletion(ctx: PluginContext, opts: RuntimeChatOpts): Promise<Response> {
+async function streamRuntimeChatCompletion(
+  ctx: PluginContext,
+  opts: RuntimeChatOpts,
+): Promise<ReturnType<PluginContext['runtime']['messaging']['stream']>> {
   void opts.signal
-  const chunks = ctx.runtime.messaging.stream({
+  return ctx.runtime.messaging.stream({
     agentId: opts.agentId,
     content: flattenChatMessages(opts.messages),
     threadId: opts.sessionKey,
     metadata: { model: opts.model, maxTokens: opts.maxTokens },
-  })
-  const stream = new ReadableStream({
-    async start(controller) {
-      const encoder = new TextEncoder()
-      try {
-        for await (const chunk of chunks) {
-          if (chunk.type === 'text' && chunk.content) {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: chunk.content } }] })}\n\n`))
-          } else if (chunk.type === 'error') {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: chunk.content ?? 'Runtime stream error' })}\n\n`))
-          }
-        }
-        controller.enqueue(encoder.encode('data: [DONE]\n\n'))
-        controller.close()
-      } catch (err) {
-        controller.error(err)
-      }
-    },
-  })
-  return new Response(stream, {
-    headers: { 'Content-Type': 'text/event-stream' },
   })
 }
 
@@ -744,59 +727,34 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
 
               // Try streaming first, fall back to non-streaming
               let useStreaming = true
-              let gwResponse: Response | null = null
+              let runtimeChunks: ReturnType<PluginContext['runtime']['messaging']['stream']> | null = null
 
               try {
-                gwResponse = await streamRuntimeChatCompletion(ctx, {
+                runtimeChunks = await streamRuntimeChatCompletion(ctx, {
                   messages,
                   agentId: session.agentId,
                   sessionKey,
                 })
-
-                const contentType = gwResponse.headers.get('content-type') || ''
-                if (!contentType.includes('text/event-stream')) {
-                  // Runtime returned non-streaming response
-                  useStreaming = false
-                }
               } catch {
                 // Runtime doesn't support streaming — fall back
                 useStreaming = false
-                gwResponse = null
+                runtimeChunks = null
               }
 
-              if (useStreaming && gwResponse?.body) {
-                // Stream runtime SSE chunks to client
-                const reader = gwResponse.body.getReader()
-                const decoder = new TextDecoder()
-                let buffer = ''
-
-                while (true) {
-                  const { done, value } = await reader.read()
-                  if (done) break
-
-                  buffer += decoder.decode(value, { stream: true })
-                  const lines = buffer.split('\n')
-                  buffer = lines.pop() || ''
-
-                  for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue
-                    const data = line.slice(6).trim()
-                    if (data === '[DONE]') continue
-
-                    try {
-                      const parsed = JSON.parse(data)
-                      const token = parsed.choices?.[0]?.delta?.content
-                      if (token) {
-                        fullContent += token
-                        send('token', { text: token })
-                        // Check if a ```json block just completed
-                        if (token.includes('`')) {
-                          checkForCompletedBlocks()
-                        }
-                      }
-                    } catch {
-                      // Skip malformed chunks
+              if (useStreaming && runtimeChunks) {
+                for await (const chunk of runtimeChunks) {
+                  if (chunk.type === 'text' && chunk.content) {
+                    fullContent += chunk.content
+                    send('token', { text: chunk.content })
+                    // Check if a ```json block just completed
+                    if (chunk.content.includes('`')) {
+                      checkForCompletedBlocks()
                     }
+                  } else if (chunk.type === 'error') {
+                    throw new Error(chunk.content ?? 'Runtime stream error')
+                  } else {
+                    const activity = runtimeChunkToBrainstormActivity(chunk)
+                    if (activity) send('activity', { activity })
                   }
                 }
               } else {

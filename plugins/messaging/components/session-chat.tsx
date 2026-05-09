@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { AgentAvatar, IntegratedBrainstorm } from "@bakin/sdk/components"
+import { AgentAvatar, IntegratedBrainstorm, readBrainstormSseResponse } from "@bakin/sdk/components"
 import type { BrainstormMessage } from "@bakin/sdk/components"
 import { Badge } from "@bakin/sdk/ui"
 import { useAgent } from "@bakin/sdk/hooks"
@@ -24,6 +24,10 @@ function toBrainstorm(agentId: string, sm: SessionMessage): BrainstormMessage {
     agentId: sm.role === 'assistant' ? agentId : undefined,
     timestamp: sm.timestamp,
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
 
 /**
@@ -100,10 +104,8 @@ export function SessionChat({
     setMessages(initialMessages.map((m) => toBrainstorm(agentId, m)))
   }, [initialMessages, agentId])
 
-  // Proposal forwarding + SSE parser bundled together — SessionChat is the
-  // only caller so there's no value in splitting them into separate
-  // wrappers. Component receives onCustom; we route 'proposal' and
-  // 'proposals' events to the caller's onProposalsReceived callback.
+  // Component receives opaque custom events; session chat keeps proposal
+  // side-effects plugin-owned while the SDK owns the SSE mechanics.
   const onSend = useCallback(
     async (
       prompt: string,
@@ -120,60 +122,21 @@ export function SessionChat({
         signal: ctx.signal,
         body: JSON.stringify({ message: prompt }),
       })
-      if (!res.ok || !res.body) {
-        const text = await res.text().catch(() => '')
-        throw new Error(text || `Server returned ${res.status}`)
-      }
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      let currentEvent = ''
-      let accumulated = ''
-      let finalContent = ''
-      let errorMessage: string | null = null
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            currentEvent = line.slice(7).trim()
-          } else if (line.startsWith('data: ') && currentEvent) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              switch (currentEvent) {
-                case 'token':
-                  accumulated += data.text ?? ''
-                  ctx.onToken(data.text ?? '')
-                  break
-                case 'proposal':
-                  if (data.proposal) {
-                    onProposalsReceived?.([data.proposal as ProposedItem])
-                    ctx.onCustom?.('proposal', data.proposal)
-                  }
-                  break
-                case 'proposals':
-                  if (Array.isArray(data.proposals)) {
-                    onProposalsReceived?.(data.proposals as ProposedItem[])
-                    for (const p of data.proposals) ctx.onCustom?.('proposal', p)
-                  }
-                  break
-                case 'done':
-                  finalContent = data.content ?? accumulated
-                  break
-                case 'error':
-                  errorMessage = data.message ?? 'Unknown error'
-                  break
-              }
-            } catch { /* skip malformed chunks */ }
-            currentEvent = ''
+      return readBrainstormSseResponse(res, ctx, {
+        onCustomEvent: (event, data) => {
+          if (event === 'proposal' && isRecord(data) && data.proposal) {
+            onProposalsReceived?.([data.proposal as ProposedItem])
+            ctx.onCustom?.('proposal', data.proposal)
+            return true
           }
-        }
-      }
-      if (errorMessage) throw new Error(errorMessage)
-      return { content: finalContent || accumulated }
+          if (event === 'proposals' && isRecord(data) && Array.isArray(data.proposals)) {
+            onProposalsReceived?.(data.proposals as ProposedItem[])
+            for (const p of data.proposals) ctx.onCustom?.('proposal', p)
+            return true
+          }
+          return false
+        },
+      })
     },
     [sessionId, onProposalsReceived],
   )
