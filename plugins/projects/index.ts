@@ -47,6 +47,7 @@ const PROJECT_BRAINSTORM_INSTRUCTIONS = [
   'Default toward identifying plan updates, checklist changes, open questions, and next actions that would keep the project current.',
   'Do not edit the project body or checklist until the user explicitly asks you to update it or confirms your proposed changes.',
   'When updates are warranted, propose the exact project body and checklist changes first.',
+  'After confirmation, prefer bakin_exec_projects_apply_plan for combined body and checklist updates.',
   'If the user asks for advice only, answer in chat and call out any optional plan update separately.',
   'If suggesting tasks, format them as a numbered list.',
 ].join('\n')
@@ -118,6 +119,7 @@ const projectsPlugin: BakinPlugin = {
     const {
       createProject,
       updateProject,
+      applyProjectPlan,
       deleteProject,
       addChecklistItem,
       markChecklistItem,
@@ -684,6 +686,37 @@ const projectsPlugin: BakinPlugin = {
           }, agent)
           indexProject(params.projectId as string).catch(() => {})
           return { ok: true }
+        } catch (err: unknown) {
+          return { ok: false, error: (err as Error).message }
+        }
+      },
+    })
+
+    ctx.registerExecTool({
+      name: 'bakin_exec_projects_apply_plan',
+      label: 'Applied a project plan',
+      description: 'Apply a confirmed project plan update in one operation. Use this after the user confirms exact body/checklist changes so agents do not need shell scripts or multiple low-level calls.',
+      parameters: {
+        projectId: z.string().describe('Project ID'),
+        title: z.string().optional().describe('Optional new project title'),
+        status: z.enum(['draft', 'active', 'completed', 'archived']).optional().describe('Optional new status'),
+        body: z.string().optional().describe('Replacement markdown body for the project plan'),
+        appendBody: z.string().optional().describe('Markdown to append to the existing project body; cannot be combined with body'),
+        owner: z.string().optional().describe('Optional new owner'),
+        checklistItems: z.array(z.string()).optional().describe('New unchecked checklist item titles to append'),
+      },
+      handler: async (params: Record<string, unknown>, agent: string) => {
+        try {
+          const result = await applyProjectPlan(params.projectId as string, {
+            title: params.title as string | undefined,
+            status: params.status as ProjectStatus | undefined,
+            body: params.body as string | undefined,
+            appendBody: params.appendBody as string | undefined,
+            owner: params.owner as string | undefined,
+            checklistItems: params.checklistItems as string[] | undefined,
+          }, agent)
+          indexProject(params.projectId as string).catch(() => {})
+          return { ok: true, ...result }
         } catch (err: unknown) {
           return { ok: false, error: (err as Error).message }
         }

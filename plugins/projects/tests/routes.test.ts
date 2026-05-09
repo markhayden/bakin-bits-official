@@ -697,6 +697,11 @@ describe('Routes', () => {
           content: expect.stringContaining('When updates are warranted, propose the exact project body and checklist changes first.'),
         }),
       )
+      expect(streamMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.stringContaining('After confirmation, prefer bakin_exec_projects_apply_plan for combined body and checklist updates.'),
+        }),
+      )
     })
 
     it('persists brainstorm turns and uses them as context after navigation reloads', async () => {
@@ -1018,6 +1023,55 @@ describe('Exec Tools', () => {
   })
 
   // -------------------------------------------------------------------------
+  // bakin_exec_projects_apply_plan
+  // -------------------------------------------------------------------------
+  describe('bakin_exec_projects_apply_plan', () => {
+    it('updates the project body and appends checklist items in one tool call', async () => {
+      writeProjectFixture('proj-apply-plan', {
+        title: 'Apply Plan',
+        body: '# Old Plan',
+        tasks: [{ id: 't001', title: 'Existing item', checked: false }],
+      })
+
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_apply_plan')!
+      expect(tool).toBeDefined()
+      const result = await callTool(tool, {
+        projectId: 'proj-apply-plan',
+        body: '# Release Plan\n\n## Scope\nShip the release tracker.',
+        checklistItems: ['Draft release notes', 'Confirm rollout owner'],
+      })
+
+      expect(result.ok).toBe(true)
+      expect(result.addedItems).toEqual([
+        { id: 't002', title: 'Draft release notes' },
+        { id: 't003', title: 'Confirm rollout owner' },
+      ])
+
+      const project = createProjectRepository(new MarkdownStorageAdapter(testDir)).readProject('proj-apply-plan')!
+      expect(project.body).toBe('# Release Plan\n\n## Scope\nShip the release tracker.')
+      expect(project.tasks.map((task) => ({ id: task.id, title: task.title, checked: task.checked }))).toEqual([
+        { id: 't001', title: 'Existing item', checked: false },
+        { id: 't002', title: 'Draft release notes', checked: false },
+        { id: 't003', title: 'Confirm rollout owner', checked: false },
+      ])
+    })
+
+    it('returns an error when both body and appendBody are provided', async () => {
+      writeProjectFixture('proj-apply-invalid', { title: 'Apply Invalid' })
+
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_apply_plan')!
+      const result = await callTool(tool, {
+        projectId: 'proj-apply-invalid',
+        body: '# Replacement',
+        appendBody: 'Appendix',
+      })
+
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(/body or appendBody/i)
+    })
+  })
+
+  // -------------------------------------------------------------------------
   // bakin_exec_projects_delete
   // -------------------------------------------------------------------------
   describe('bakin_exec_projects_delete', () => {
@@ -1323,6 +1377,7 @@ describe('Registration', () => {
       'bakin_exec_projects_get',
       'bakin_exec_projects_create',
       'bakin_exec_projects_update',
+      'bakin_exec_projects_apply_plan',
       'bakin_exec_projects_delete',
       'bakin_exec_projects_add_item',
       'bakin_exec_projects_mark_item',
