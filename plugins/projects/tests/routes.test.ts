@@ -671,6 +671,34 @@ describe('Routes', () => {
       )
     })
 
+    it('instructs brainstorm agents to maintain the project plan but ask before editing', async () => {
+      writeProjectFixture('proj-plan-prompt', { title: 'Plan Prompt Project' })
+      const streamMock = mockRuntimeStream(['ok'])
+
+      const route = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      const { response } = await callRoute(route, plugin.ctx, {
+        body: { projectId: 'proj-plan-prompt', prompt: 'Help me think through launch sequencing.' },
+        rawResponse: true,
+      })
+      await consumeSSE(response)
+
+      expect(streamMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.stringContaining('This brainstorm is for maintaining and improving the project plan.'),
+        }),
+      )
+      expect(streamMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.stringContaining('Do not edit the project body or checklist until the user explicitly asks you to update it or confirms your proposed changes.'),
+        }),
+      )
+      expect(streamMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.stringContaining('When updates are warranted, propose the exact project body and checklist changes first.'),
+        }),
+      )
+    })
+
     it('persists brainstorm turns and uses them as context after navigation reloads', async () => {
       writeProjectFixture('proj-persist', { title: 'Persistent Project' })
       const prompts: string[] = []

@@ -40,6 +40,17 @@ async function getRuntimeMainAgentId(ctx: PluginContext): Promise<string> {
   return main?.id ?? 'main'
 }
 
+const PROJECT_BRAINSTORM_INSTRUCTIONS = [
+  'Project brainstorm mode:',
+  'This brainstorm is for maintaining and improving the project plan.',
+  'Treat chat as the working conversation, but keep the project body and checklist as the durable source of truth.',
+  'Default toward identifying plan updates, checklist changes, open questions, and next actions that would keep the project current.',
+  'Do not edit the project body or checklist until the user explicitly asks you to update it or confirms your proposed changes.',
+  'When updates are warranted, propose the exact project body and checklist changes first.',
+  'If the user asks for advice only, answer in chat and call out any optional plan update separately.',
+  'If suggesting tasks, format them as a numbered list.',
+].join('\n')
+
 function newBrainstormMessageId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
@@ -489,10 +500,12 @@ const projectsPlugin: BakinPlugin = {
           ...project.tasks.map(t => `- [${t.checked ? 'x' : ' '}] ${t.title}${t.taskId ? ` (linked: ${t.taskId})` : ''}`),
           ...assetLines,
           ...historyLines,
+          PROJECT_BRAINSTORM_INSTRUCTIONS,
+          '',
           'User request:',
           body.prompt,
           '',
-          'Respond concisely. If suggesting tasks, format them as a numbered list.',
+          'Respond concisely.',
         ].join('\n')
 
         const sessionKey = `projects-${body.projectId}-${Date.now()}`
