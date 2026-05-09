@@ -51,6 +51,7 @@
       { "method": "POST", "path": "/:projectId/checklist/:itemId/promote", "summary": "Promote a checklist item to a task", "permissions": ["storage.write", "tasks.write"] },
       { "method": "POST", "path": "/:projectId/assets", "summary": "Attach an asset", "permissions": ["storage.write", "assets.read"] },
       { "method": "DELETE", "path": "/:projectId/assets/:filename", "summary": "Detach an asset", "permissions": ["storage.write"] },
+      { "method": "GET", "path": "/:projectId/brainstorm", "summary": "Get project brainstorm session", "permissions": ["storage.read", "runtime.agents"] },
       { "method": "POST", "path": "/:projectId/ask", "summary": "Ask an agent about a project", "permissions": ["runtime.messaging", "storage.read"] },
       { "method": "GET", "path": "/search", "summary": "Search projects", "permissions": ["search.read"] }
     ],
