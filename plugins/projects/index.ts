@@ -40,7 +40,23 @@ async function getRuntimeMainAgentId(ctx: PluginContext): Promise<string> {
   return main?.id ?? 'main'
 }
 
-function buildProjectAskContext(
+function buildProjectLookupGuidance(prompt: string): string[] {
+  const normalized = prompt.toLowerCase()
+  const wantsTickets = /\b(issue|issues|ticket|tickets)\b/.test(normalized)
+  const mentionsBakin = /\bbakin\b/.test(normalized)
+  if (!wantsTickets || !mentionsBakin) return []
+
+  return [
+    'Lookup guidance:',
+    '- For Bakin ticket lookup, use the explicit GitHub repo `markhayden/bakin` unless Mark names a different repo.',
+    '- Prefer targeted GitHub issue commands such as `gh issue list --repo markhayden/bakin --search "<terms>"` and `gh issue view <number> --repo markhayden/bakin`.',
+    '- Do not load broad GitHub workflow skills or scan the filesystem just to discover the repo.',
+    '- Keep lookups narrow: list candidates first, then inspect only the most relevant issues.',
+    '',
+  ]
+}
+
+export function buildProjectAskContext(
   project: Project,
   prompt: string,
   previousMessages: ProjectBrainstormMessage[] = [],
@@ -64,6 +80,7 @@ function buildProjectAskContext(
     `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
     `Progress: ${project.progress}% (${project.tasks.filter(t => t.checked).length}/${project.tasks.length} items checked)`,
     '',
+    ...buildProjectLookupGuidance(prompt),
     'Project spec:',
     project.body.slice(0, 3000),
     '',
