@@ -65,16 +65,15 @@ export function buildProjectAskContext(
     ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.filename}${a.label ? ` — ${a.label}` : ''}`)]
     : []
 
-  const recentMessages = previousMessages.slice(-8)
-  const historyLines: string[] = []
-  if (recentMessages.length > 0) {
-    historyLines.push('', 'Previous conversation in this brainstorm session:')
-    for (const msg of recentMessages) {
-      const speaker = msg.role === 'user' ? 'User' : 'Assistant'
-      historyLines.push(`${speaker}: ${msg.content}`)
-    }
-    historyLines.push('')
-  }
+  const continuityLines = previousMessages.length > 0
+    ? [
+        '',
+        'Conversation continuity:',
+        '- This request is sent on a stable runtime thread for this project and agent.',
+        '- Rely on the runtime thread for prior turns; the persisted Bakin transcript is UI history and is intentionally not replayed here.',
+        '',
+      ]
+    : []
 
   return [
     `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
@@ -87,7 +86,7 @@ export function buildProjectAskContext(
     'Checklist items:',
     ...project.tasks.map(t => `- [${t.checked ? 'x' : ' '}] ${t.title}${t.taskId ? ` (linked: ${t.taskId})` : ''}`),
     ...assetLines,
-    ...historyLines,
+    ...continuityLines,
     'User request:',
     prompt,
     '',

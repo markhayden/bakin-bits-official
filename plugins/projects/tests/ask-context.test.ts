@@ -35,4 +35,21 @@ describe('buildProjectAskContext', () => {
 
     expect(context).not.toContain('Lookup guidance:')
   })
+
+  it('does not replay persisted brainstorm messages into stable runtime threads', () => {
+    const context = buildProjectAskContext(
+      makeProject(),
+      'continue the plan',
+      [
+        { id: 'm1', role: 'user', content: 'old user turn that should not be pasted', timestamp: '2026-05-08T00:00:00.000Z' },
+        { id: 'm2', role: 'assistant', content: 'old assistant turn that should not be pasted', timestamp: '2026-05-08T00:00:01.000Z' },
+      ],
+    )
+
+    expect(context).toContain('Conversation continuity:')
+    expect(context).toContain('stable runtime thread')
+    expect(context).not.toContain('Previous conversation in this brainstorm session')
+    expect(context).not.toContain('old user turn that should not be pasted')
+    expect(context).not.toContain('old assistant turn that should not be pasted')
+  })
 })
