@@ -7,7 +7,7 @@ import type { BakinPlugin, PluginContext, RuntimeAgent } from '@bakin/sdk/types'
 import { runtimeChunkToBrainstormActivity } from '@bakin/sdk/utils'
 import { createProjectRepository, projectToSummary } from './lib/parser'
 import { createProjectService } from './lib/project-service'
-import type { Project, ProjectStatus } from './types'
+import type { Project, ProjectBrainstormMessage, ProjectStatus } from './types'
 
 const log = {
   info: (...args: unknown[]) => console.info('[projects]', ...args),
@@ -38,6 +38,46 @@ async function getRuntimeMainAgentId(ctx: PluginContext): Promise<string> {
     ?? agents.find((agent: RuntimeAgent) => agent.id === 'main')
     ?? agents[0]
   return main?.id ?? 'main'
+}
+
+function newBrainstormMessageId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function toPromptHistory(
+  existing: ProjectBrainstormMessage[],
+  requestHistory: Array<{ role: 'user' | 'agent' | 'assistant' | 'activity'; content: string }> | undefined,
+  agentId: string,
+): ProjectBrainstormMessage[] {
+  if (existing.length > 0) return existing
+  if (!Array.isArray(requestHistory)) return []
+  return requestHistory
+    .filter((message) => message.role === 'user' || message.role === 'assistant' || message.role === 'agent')
+    .map((message): ProjectBrainstormMessage => ({
+      id: newBrainstormMessageId('history'),
+      role: message.role === 'user' ? 'user' : 'assistant',
+      content: message.content,
+      ...(message.role === 'user' ? {} : { agentId }),
+      timestamp: new Date().toISOString(),
+    }))
+}
+
+function createBrainstormMessage(input: {
+  role: ProjectBrainstormMessage['role']
+  content: string
+  agentId?: string
+  kind?: ProjectBrainstormMessage['kind']
+  data?: unknown
+}): ProjectBrainstormMessage {
+  return {
+    id: newBrainstormMessageId(input.role),
+    role: input.role,
+    content: input.content,
+    ...(input.agentId ? { agentId: input.agentId } : {}),
+    ...(input.kind ? { kind: input.kind } : {}),
+    ...(input.data !== undefined ? { data: input.data } : {}),
+    timestamp: new Date().toISOString(),
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +122,8 @@ const projectsPlugin: BakinPlugin = {
     } = projectService
     const readProject = repo.readProject
     const readAllProjects = repo.readAllProjects
+    const readBrainstormMessages = repo.readBrainstormMessages
+    const writeBrainstormMessages = repo.writeBrainstormMessages
 
     // ─── Search Content Type Registration ─────────────────────────────
 
@@ -217,7 +259,12 @@ const projectsPlugin: BakinPlugin = {
       if (!id) return json({ error: 'Missing id parameter' }, 400)
       const project = readProject(id)
       if (!project) return json({ error: 'Project not found' }, 404)
-      return json({ project: await resolveLinkedTaskStatuses(project) })
+      return json({
+        project: {
+          ...(await resolveLinkedTaskStatuses(project)),
+          brainstormMessages: readBrainstormMessages(id),
+        },
+      })
     }
     ctx.registerRoute({ path: '/:projectId', method: 'GET', description: 'Get project by ID', handler: getHandler })
 
@@ -404,20 +451,27 @@ const projectsPlugin: BakinPlugin = {
           projectId: string
           prompt: string
           agent?: string
-          history?: Array<{ role: 'user' | 'agent' | 'assistant'; content: string }>
+          history?: Array<{ role: 'user' | 'agent' | 'assistant' | 'activity'; content: string }>
         }>(req)
         if (!body.projectId || !body.prompt) return json({ error: 'Missing projectId or prompt' }, 400)
         const project = readProject(body.projectId)
         if (!project) return json({ error: 'Project not found' }, 404)
+        const agentId = body.agent || await getRuntimeMainAgentId(ctx)
+        let persistedMessages = toPromptHistory(
+          readBrainstormMessages(body.projectId),
+          body.history,
+          agentId,
+        )
 
         const assetLines = project.assets.length > 0
           ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.filename}${a.label ? ` — ${a.label}` : ''}`)]
           : []
 
         const historyLines: string[] = []
-        if (body.history && body.history.length > 0) {
+        const promptHistory = persistedMessages.filter((message) => message.role === 'user' || message.role === 'assistant')
+        if (promptHistory.length > 0) {
           historyLines.push('', 'Previous conversation in this brainstorm session:')
-          for (const msg of body.history) {
+          for (const msg of promptHistory) {
             const speaker = msg.role === 'user' ? 'User' : 'Assistant'
             historyLines.push(`${speaker}: ${msg.content}`)
           }
@@ -441,14 +495,20 @@ const projectsPlugin: BakinPlugin = {
           'Respond concisely. If suggesting tasks, format them as a numbered list.',
         ].join('\n')
 
-        const agentId = body.agent || await getRuntimeMainAgentId(ctx)
         const sessionKey = `projects-${body.projectId}-${Date.now()}`
+        const userMessage = createBrainstormMessage({ role: 'user', content: body.prompt })
+        persistedMessages = [...persistedMessages, userMessage]
+        writeBrainstormMessages(body.projectId, persistedMessages)
 
         const stream = new ReadableStream({
           async start(controller) {
             const encoder = new TextEncoder()
             function send(event: string, data: unknown): void {
               controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+            }
+            function appendBrainstormMessage(message: ProjectBrainstormMessage): void {
+              persistedMessages = [...persistedMessages, message]
+              writeBrainstormMessages(body.projectId, persistedMessages)
             }
 
             let fullContent = ''
@@ -481,7 +541,15 @@ const projectsPlugin: BakinPlugin = {
                     throw new Error(chunk.content ?? 'Runtime stream error')
                   } else {
                     const activity = runtimeChunkToBrainstormActivity(chunk)
-                    if (activity) send('activity', { activity })
+                    if (activity) {
+                      send('activity', { activity })
+                      appendBrainstormMessage(createBrainstormMessage({
+                        role: 'activity',
+                        content: activity.content,
+                        kind: activity.kind,
+                        data: activity.data,
+                      }))
+                    }
                   }
                 }
               } else {
@@ -493,10 +561,23 @@ const projectsPlugin: BakinPlugin = {
                 fullContent = result.content ?? ''
                 if (fullContent) send('token', { text: fullContent })
               }
-              send('done', { content: fullContent })
+              const assistantMessage = createBrainstormMessage({
+                role: 'assistant',
+                content: fullContent,
+                agentId,
+              })
+              appendBrainstormMessage(assistantMessage)
+              send('done', { content: fullContent, messageId: assistantMessage.id })
             } catch (err: unknown) {
               log.error('Agent ask failed', err)
-              send('error', { message: err instanceof Error ? err.message : String(err) })
+              const message = err instanceof Error ? err.message : String(err)
+              appendBrainstormMessage(createBrainstormMessage({
+                role: 'activity',
+                content: message,
+                kind: 'error',
+                data: { message },
+              }))
+              send('error', { message })
             } finally {
               controller.close()
             }

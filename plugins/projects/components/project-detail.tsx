@@ -37,6 +37,7 @@ interface ProjectData {
   updated: string
   resolvedTasks: Record<string, { column: string; title: string } | null>
   resolvedAssets: ResolvedAsset[]
+  brainstormMessages?: BrainstormMessage[]
 }
 
 // ---------------------------------------------------------------------------
@@ -154,6 +155,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
         setEditOwner(data.project.owner)
         setEditStatus(data.project.status)
         setEditBody(data.project.body)
+        setBrainstormMessages(Array.isArray(data.project.brainstormMessages) ? data.project.brainstormMessages : [])
         const shouldEdit = enterEdit ?? false
         setEditing(shouldEdit)
         onEditChange?.(shouldEdit)
@@ -291,7 +293,9 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
           projectId: currentId,
           prompt,
           agent: brainstormAgent,
-          history: history.map((m) => ({ role: m.role, content: m.content })),
+          history: history
+            .filter((m) => m.role === 'user' || m.role === 'assistant')
+            .map((m) => ({ role: m.role, content: m.content })),
         }),
       })
       const result = await readBrainstormSseResponse(res, ctx)

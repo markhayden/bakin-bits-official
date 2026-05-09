@@ -671,6 +671,43 @@ describe('Routes', () => {
       )
     })
 
+    it('persists brainstorm turns and uses them as context after navigation reloads', async () => {
+      writeProjectFixture('proj-persist', { title: 'Persistent Project' })
+      const prompts: string[] = []
+      const streamMock = mock((args: MessageArgs) => {
+        prompts.push(args.content)
+        return streamTextChunks(prompts.length === 1 ? ['First answer'] : ['Second answer'])
+      })
+      plugin.ctx.runtime.messaging.stream = streamMock
+
+      const askRoute = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      const first = await callRoute(askRoute, plugin.ctx, {
+        body: { projectId: 'proj-persist', prompt: 'First question?' },
+        rawResponse: true,
+      })
+      await consumeSSE(first.response)
+
+      const getRoute = findRoute(plugin.routes, 'GET', '/:projectId')!
+      const hydrated = await callRoute(getRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-persist' },
+      })
+      expect(hydrated.body.project.brainstormMessages).toMatchObject([
+        { role: 'user', content: 'First question?' },
+        { role: 'assistant', content: 'First answer', agentId: 'main' },
+      ])
+
+      const second = await callRoute(askRoute, plugin.ctx, {
+        body: { projectId: 'proj-persist', prompt: 'Second question?' },
+        rawResponse: true,
+      })
+      await consumeSSE(second.response)
+
+      expect(streamMock).toHaveBeenCalledTimes(2)
+      expect(prompts[1]).toContain('Previous conversation in this brainstorm session:')
+      expect(prompts[1]).toContain('User: First question?')
+      expect(prompts[1]).toContain('Assistant: First answer')
+    })
+
     it('forwards runtime status and tool chunks as brainstorm activity events', async () => {
       writeProjectFixture('proj-activity', { title: 'Activity Project' })
       mockRuntimeChunks([
@@ -718,7 +755,18 @@ describe('Routes', () => {
           },
         },
       })
-      expect(events.find((e) => e.event === 'done')?.data).toEqual({ content: 'Done.' })
+      expect(events.find((e) => e.event === 'done')?.data).toMatchObject({ content: 'Done.' })
+
+      const getRoute = findRoute(plugin.routes, 'GET', '/:projectId')!
+      const hydrated = await callRoute(getRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-activity' },
+      })
+      expect(hydrated.body.project.brainstormMessages).toMatchObject([
+        { role: 'user', content: 'Check tickets' },
+        { role: 'activity', kind: 'runtime_status', content: 'Reading project context' },
+        { role: 'activity', kind: 'tool_call', content: 'exec: gh issue list' },
+        { role: 'assistant', content: 'Done.', agentId: 'main' },
+      ])
     })
 
     it('uses the custom agent and includes history in the prompt', async () => {
