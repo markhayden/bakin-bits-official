@@ -163,7 +163,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
         owner: opts.owner || 'main',
         tasks: taskItems,
         assets: [],
-        body: opts.body || (opts.title ? `# ${opts.title}\n` : ''),
+        body: opts.body ?? '',
         progress: 0,
       }
 
