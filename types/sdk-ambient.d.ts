@@ -780,6 +780,20 @@ declare module '@bakin/sdk/components' {
     [key: string]: unknown
   }
 
+  export interface BrainstormActivityStorageInput {
+    id?: string
+    kind?: string
+    content?: string
+    data?: unknown
+    timestamp?: string
+  }
+
+  export interface BrainstormActivityStorageRecord {
+    kind: string
+    content: string
+    data?: unknown
+  }
+
   export interface SendContext {
     signal: AbortSignal
     onToken: (text: string) => void
@@ -793,6 +807,9 @@ declare module '@bakin/sdk/components' {
       onCustomEvent?: (event: string, data: unknown) => boolean | void
     },
   ): Promise<{ content: string }>
+  export function brainstormThreadId(scope: string, entityId: string, agentId: string): string
+  export function normalizeBrainstormActivityForStorage(activity: BrainstormActivityStorageInput): BrainstormActivityStorageRecord | null
+  export function normalizeBrainstormActivityMessageForStorage(activity: BrainstormActivityStorageInput): Pick<BrainstormMessage, 'role' | 'kind' | 'content' | 'data'> | null
 
   export const AgentAvatar: ComponentType<{ agentId?: string; agent?: AgentInfo | null; size?: string | number; className?: string }>
   export const AgentFilter: SDKComponent
@@ -880,9 +897,31 @@ declare module '@bakin/sdk/utils' {
     data?: unknown
   }
 
+  export interface BrainstormActivityStorageInput {
+    id?: string
+    kind?: string
+    content?: string
+    data?: unknown
+    timestamp?: string
+  }
+
+  export interface BrainstormActivityStorageRecord {
+    kind: string
+    content: string
+    data?: unknown
+  }
+
   export function cn(...args: Array<string | undefined | null | false>): string
   export function formatAge(date: Date | string): string
   export function formatSize(bytes: number): string
+  export function brainstormThreadId(scope: string, entityId: string, agentId: string): string
+  export function normalizeBrainstormActivityForStorage(activity: BrainstormActivityStorageInput): BrainstormActivityStorageRecord | null
+  export function normalizeBrainstormActivityMessageForStorage(activity: BrainstormActivityStorageInput): {
+    role: 'activity'
+    kind: string
+    content: string
+    data?: unknown
+  } | null
   export function runtimeChunkToBrainstormActivity(chunk: RuntimeChatChunk): BrainstormActivityInput | null
   export function readBrainstormSseResponse(
     response: Response,

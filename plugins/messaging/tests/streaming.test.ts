@@ -270,6 +270,35 @@ describe('Streaming endpoint', () => {
     })
     const fullText = events.filter(e => e.event === 'token').map(e => e.data.text).join('')
     expect(fullText).toBe('Checking done.')
+
+    const sessionPath = join(testDir, 'messaging', 'sessions', `${sessionId}.json`)
+    const session = JSON.parse(readFileSync(sessionPath, 'utf-8'))
+    expect(session.messages).toMatchObject([
+      { role: 'user', content: 'Look up issues' },
+      { role: 'activity', kind: 'tool_call', content: 'exec: gh issue list', agentId: 'basil' },
+      { role: 'activity', kind: 'tool_call', content: 'exec completed', agentId: 'basil' },
+      { role: 'assistant', content: 'Checking done.' },
+    ])
+  })
+
+  it('uses a stable runtime thread id across messages in the same session', async () => {
+    streamRuntimeResponse('First answer.')
+    streamRuntimeResponse('Second answer.')
+    const sessionId = await createTestSession('nemo')
+
+    await (await sendMessage(sessionId, 'First question')).text()
+    await (await sendMessage(sessionId, 'Second question')).text()
+
+    const threadIds = mockRuntimeStream.mock.calls.map((call) => call[0]?.threadId)
+    expect(threadIds).toEqual([
+      `messaging:${sessionId}:nemo`,
+      `messaging:${sessionId}:nemo`,
+    ])
+
+    const secondPrompt = mockRuntimeStream.mock.calls[1]?.[0]?.content as string
+    expect(secondPrompt).toContain('USER:\nSecond question')
+    expect(secondPrompt).not.toContain('First question')
+    expect(secondPrompt).not.toContain('First answer')
   })
 
   it('sends done event after stream completes', async () => {
@@ -430,6 +459,28 @@ describe('Session message exec tool (non-streaming)', () => {
     expect(result.response).toBe('Here are my ideas for you.')
     expect(result.messageId).toBeDefined()
     expect(mockRuntimeSend).toHaveBeenCalled()
+  })
+
+  it('uses a stable runtime thread id for non-streaming session messages', async () => {
+    sendRuntimeResponse('First response.')
+    sendRuntimeResponse('Second response.')
+
+    const createTool = findTool(plugin.execTools, 'bakin_exec_messaging_session_create')!
+    const created = await createTool.handler({ agentId: 'basil' }, 'test')
+    const sessionId = (created.session as Record<string, unknown>).id as string
+
+    const tool = findTool(plugin.execTools, 'bakin_exec_messaging_session_message')!
+    await tool.handler({ sessionId, message: 'First' }, 'test')
+    await tool.handler({ sessionId, message: 'Second' }, 'test')
+
+    const threadIds = mockRuntimeSend.mock.calls.map((call) => call[0]?.threadId)
+    expect(threadIds).toEqual([
+      `messaging:${sessionId}:basil`,
+      `messaging:${sessionId}:basil`,
+    ])
+    const secondPrompt = mockRuntimeSend.mock.calls[1]?.[0]?.content as string
+    expect(secondPrompt).toContain('USER:\nSecond')
+    expect(secondPrompt).not.toContain('First response')
   })
 
   it('returns error when runtime completion fails', async () => {

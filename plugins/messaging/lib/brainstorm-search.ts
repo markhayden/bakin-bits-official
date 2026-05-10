@@ -21,7 +21,7 @@ export const SESSION_FILE_PATTERN = 'messaging/sessions/*.json'
 
 /**
  * Derive a search document from a loaded planning session. Concatenates
- * all message contents into `message_body` and all proposal briefs
+ * user/assistant message contents into `message_body` and all proposal briefs
  * (labeled with their titles) into `proposal_summaries` so the vector
  * index has something meaningful to embed even for sparse sessions.
  *
@@ -30,6 +30,7 @@ export const SESSION_FILE_PATTERN = 'messaging/sessions/*.json'
  */
 export function buildDoc(session: PlanningSession): Record<string, unknown> {
   const messageBody = session.messages
+    .filter(m => m.role !== 'activity')
     .map(m => m.content)
     .filter(s => typeof s === 'string' && s.length > 0)
     .join('\n\n')

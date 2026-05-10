@@ -21,7 +21,9 @@ function toBrainstorm(agentId: string, sm: SessionMessage): BrainstormMessage {
     id: sm.id,
     role: sm.role,
     content: sm.content,
-    agentId: sm.role === 'assistant' ? agentId : undefined,
+    kind: sm.role === 'activity' ? sm.kind : undefined,
+    data: sm.role === 'activity' ? sm.data : undefined,
+    agentId: sm.role === 'assistant' ? agentId : sm.agentId,
     timestamp: sm.timestamp,
   }
 }

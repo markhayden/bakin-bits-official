@@ -4,7 +4,11 @@
  */
 import { z } from 'zod'
 import type { BakinPlugin, PluginContext } from '@bakin/sdk/types'
-import { runtimeChunkToBrainstormActivity } from '@bakin/sdk/utils'
+import {
+  brainstormThreadId,
+  normalizeBrainstormActivityForStorage,
+  runtimeChunkToBrainstormActivity,
+} from '@bakin/sdk/utils'
 import { createMessagingStorage } from './lib/storage'
 import type { MessagingStorage } from './lib/storage'
 import type { CalendarItem, ContentStatus, ProposalStatus, MessagingSettings } from './types'
@@ -677,10 +681,11 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         // Append user message
         appendMessage(id, { role: 'user', content: body.message })
 
-        // Build messages array with full session history
+        // Build current-turn prompt; durable history is held by the runtime
+        // adapter through the stable threadId.
         const promptOptions = await resolvePromptOptions(ctx, session.agentId)
         const messages = buildMessages(session, body.message, promptOptions)
-        const sessionKey = `session-${id}-${Date.now()}`
+        const sessionKey = brainstormThreadId('messaging', id, session.agentId)
 
         // Create a ReadableStream that pipes runtime SSE to the client
         const stream = new ReadableStream({
@@ -754,7 +759,17 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
                     throw new Error(chunk.content ?? 'Runtime stream error')
                   } else {
                     const activity = runtimeChunkToBrainstormActivity(chunk)
-                    if (activity) send('activity', { activity })
+                    const normalized = activity ? normalizeBrainstormActivityForStorage(activity) : null
+                    if (normalized) {
+                      appendMessage(sessionId, {
+                        role: 'activity',
+                        content: normalized.content,
+                        kind: normalized.kind,
+                        data: normalized.data,
+                        agentId: session.agentId,
+                      })
+                      send('activity', { activity: normalized })
+                    }
                   }
                 }
               } else {
@@ -1201,10 +1216,11 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
           content: params.message as string,
         })
 
-        // Non-streaming: call runtime synchronously and collect full response
+        // Non-streaming: call runtime synchronously and collect full response.
+        // Durable history is held by the runtime adapter through the stable threadId.
         const promptOptions = await resolvePromptOptions(ctx, session.agentId)
         const messages = buildMessages(session, params.message as string, promptOptions)
-        const sessionKey = `session-${params.sessionId}-${Date.now()}`
+        const sessionKey = brainstormThreadId('messaging', params.sessionId as string, session.agentId)
 
         let fullContent: string
         try {

@@ -714,11 +714,13 @@ describe('Routes', () => {
       )
     })
 
-    it('persists brainstorm turns and uses them as context after navigation reloads', async () => {
+    it('persists brainstorm turns without replaying them into durable runtime prompts', async () => {
       writeProjectFixture('proj-persist', { title: 'Persistent Project' })
       const prompts: string[] = []
+      const threadIds: Array<string | undefined> = []
       const streamMock = mock((args: MessageArgs) => {
         prompts.push(args.content)
+        threadIds.push(args.threadId)
         return streamTextChunks(prompts.length === 1 ? ['First answer'] : ['Second answer'])
       })
       plugin.ctx.runtime.messaging.stream = streamMock
@@ -746,9 +748,11 @@ describe('Routes', () => {
       await consumeSSE(second.response)
 
       expect(streamMock).toHaveBeenCalledTimes(2)
-      expect(prompts[1]).toContain('Previous conversation in this brainstorm session:')
-      expect(prompts[1]).toContain('User: First question?')
-      expect(prompts[1]).toContain('Assistant: First answer')
+      expect(threadIds).toEqual(['projects:proj-persist:main', 'projects:proj-persist:main'])
+      expect(prompts[1]).not.toContain('Previous conversation in this brainstorm session:')
+      expect(prompts[1]).not.toContain('User: First question?')
+      expect(prompts[1]).not.toContain('Assistant: First answer')
+      expect(prompts[1]).toContain('User request:\nSecond question?')
     })
 
     it('forwards runtime status and tool chunks as brainstorm activity events', async () => {
@@ -812,7 +816,7 @@ describe('Routes', () => {
       ])
     })
 
-    it('uses the custom agent and includes history in the prompt', async () => {
+    it('uses the custom agent while storing client history outside the durable runtime prompt', async () => {
       writeProjectFixture('proj-ask2', { title: 'Ask 2' })
       const streamMock = mockRuntimeStream(['ok'])
 
@@ -830,9 +834,14 @@ describe('Routes', () => {
       expect(streamMock).toHaveBeenCalledWith(
         expect.objectContaining({
           agentId: 'pixel',
-          content: expect.stringContaining('Previous conversation'),
+          threadId: 'projects:proj-ask2:pixel',
+          content: expect.stringContaining('User request:\nContinue'),
         }),
       )
+      const call = streamMock.mock.calls[0]?.[0]
+      expect(call?.content).not.toContain('Previous conversation')
+      expect(call?.content).not.toContain('Start')
+      expect(call?.content).not.toContain('OK')
     })
 
     it('falls back to one-shot runtime send when streaming is unavailable', async () => {

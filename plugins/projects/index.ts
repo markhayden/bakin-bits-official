@@ -4,7 +4,11 @@
  */
 import { z } from 'zod'
 import type { BakinPlugin, PluginContext, RuntimeAgent } from '@bakin/sdk/types'
-import { runtimeChunkToBrainstormActivity } from '@bakin/sdk/utils'
+import {
+  brainstormThreadId,
+  normalizeBrainstormActivityForStorage,
+  runtimeChunkToBrainstormActivity,
+} from '@bakin/sdk/utils'
 import { createProjectRepository, projectToSummary } from './lib/parser'
 import { createProjectService } from './lib/project-service'
 import type { Project, ProjectBrainstormMessage, ProjectStatus } from './types'
@@ -58,7 +62,7 @@ function newBrainstormMessageId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-function toPromptHistory(
+function hydrateBrainstormMessages(
   existing: ProjectBrainstormMessage[],
   requestHistory: Array<{ role: 'user' | 'agent' | 'assistant' | 'activity'; content: string }> | undefined,
   agentId: string,
@@ -472,7 +476,7 @@ const projectsPlugin: BakinPlugin = {
         const project = readProject(body.projectId)
         if (!project) return json({ error: 'Project not found' }, 404)
         const agentId = body.agent || await getRuntimeMainAgentId(ctx)
-        let persistedMessages = toPromptHistory(
+        let persistedMessages = hydrateBrainstormMessages(
           readBrainstormMessages(body.projectId),
           body.history,
           agentId,
@@ -481,17 +485,6 @@ const projectsPlugin: BakinPlugin = {
         const assetLines = project.assets.length > 0
           ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.filename}${a.label ? ` — ${a.label}` : ''}`)]
           : []
-
-        const historyLines: string[] = []
-        const promptHistory = persistedMessages.filter((message) => message.role === 'user' || message.role === 'assistant')
-        if (promptHistory.length > 0) {
-          historyLines.push('', 'Previous conversation in this brainstorm session:')
-          for (const msg of promptHistory) {
-            const speaker = msg.role === 'user' ? 'User' : 'Assistant'
-            historyLines.push(`${speaker}: ${msg.content}`)
-          }
-          historyLines.push('')
-        }
 
         const context = [
           `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
@@ -503,7 +496,6 @@ const projectsPlugin: BakinPlugin = {
           'Checklist items:',
           ...project.tasks.map(t => `- [${t.checked ? 'x' : ' '}] ${t.title}${t.taskId ? ` (linked: ${t.taskId})` : ''}`),
           ...assetLines,
-          ...historyLines,
           PROJECT_BRAINSTORM_INSTRUCTIONS,
           '',
           'User request:',
@@ -512,7 +504,7 @@ const projectsPlugin: BakinPlugin = {
           'Respond concisely.',
         ].join('\n')
 
-        const sessionKey = `projects-${body.projectId}-${Date.now()}`
+        const sessionKey = brainstormThreadId('projects', body.projectId, agentId)
         const userMessage = createBrainstormMessage({ role: 'user', content: body.prompt })
         persistedMessages = [...persistedMessages, userMessage]
         writeBrainstormMessages(body.projectId, persistedMessages)
@@ -558,13 +550,14 @@ const projectsPlugin: BakinPlugin = {
                     throw new Error(chunk.content ?? 'Runtime stream error')
                   } else {
                     const activity = runtimeChunkToBrainstormActivity(chunk)
-                    if (activity) {
-                      send('activity', { activity })
+                    const normalized = activity ? normalizeBrainstormActivityForStorage(activity) : null
+                    if (normalized) {
+                      send('activity', { activity: normalized })
                       appendBrainstormMessage(createBrainstormMessage({
                         role: 'activity',
-                        content: activity.content,
-                        kind: activity.kind,
-                        data: activity.data,
+                        content: normalized.content,
+                        kind: normalized.kind,
+                        data: normalized.data,
                       }))
                     }
                   }
