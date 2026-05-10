@@ -7,6 +7,11 @@ const textFilePattern = /\.(json|md|txt|yaml|yml)$/i;
 const disallowedPersonalPatterns = [
   /~\/go\/src\/github\.com\/markhayden/i,
   /roscoe/i,
+  /\bbasil\b/i,
+  /\bnemo\b/i,
+  /\bscout\b/i,
+  /\bzen\b/i,
+  /\bbetterfit\b/i,
   /profile="user"/i,
   /Chrome "Work" profile/i,
   /Work profile/i,
@@ -20,6 +25,11 @@ type AgentManifest = {
   name?: string;
   version?: string;
   description?: string;
+  secrets?: Array<{
+    name?: string;
+    description?: string;
+    required?: boolean;
+  }>;
   agent?: {
     identity?: { name?: string; emoji?: string };
     defaultModel?: string;
@@ -90,6 +100,12 @@ describe("agent package contracts", () => {
       expect(manifest.install).toBeTruthy();
       expect(manifest.contributions).toBeTruthy();
 
+      for (const secret of manifest.secrets ?? []) {
+        expect(secret.name).toMatch(/^[A-Z_][A-Z0-9_]*$/);
+        expect(secret.description).toBeTruthy();
+        expect(typeof secret.required).toBe("boolean");
+      }
+
       for (const filePath of manifest.contributions?.workspaceFiles ?? []) {
         expectPath(agentId, filePath);
       }
@@ -130,6 +146,24 @@ describe("agent package contracts", () => {
     expect(manifest.contributions?.skills ?? []).toContain(
       "skills/git-isolation",
     );
+  });
+
+  it("rolo declares required runtime secrets without values", () => {
+    const manifest = readManifest("rolo");
+
+    expect(manifest.secrets).toEqual([
+      {
+        name: "RUNWAY_API_KEY",
+        description: "Runway API key used for video generation workflows.",
+        required: true,
+      },
+      {
+        name: "ELEVENLABS_API_KEY",
+        description:
+          "ElevenLabs API key used for sound effects, music, and voice generation.",
+        required: true,
+      },
+    ]);
   });
 
   it("agent package text does not include local machine assumptions", () => {
