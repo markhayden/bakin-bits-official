@@ -702,6 +702,16 @@ describe('Routes', () => {
           content: expect.stringContaining('After confirmation, prefer bakin_exec_projects_apply_plan for combined body and checklist updates.'),
         }),
       )
+      expect(streamMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.stringContaining('When using mcporter from shell, pass JSON as one quoted --args value; do not use --args @-, heredocs, or stdin JSON.'),
+        }),
+      )
+      expect(streamMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.stringContaining('If filtering mcporter schema output, use portable grep/sed/head commands; do not assume rg is installed.'),
+        }),
+      )
     })
 
     it('persists brainstorm turns and uses them as context after navigation reloads', async () => {

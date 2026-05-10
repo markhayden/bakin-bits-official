@@ -48,6 +48,8 @@ const PROJECT_BRAINSTORM_INSTRUCTIONS = [
   'Do not edit the project body or checklist until the user explicitly asks you to update it or confirms your proposed changes.',
   'When updates are warranted, propose the exact project body and checklist changes first.',
   'After confirmation, prefer bakin_exec_projects_apply_plan for combined body and checklist updates.',
+  'When using mcporter from shell, pass JSON as one quoted --args value; do not use --args @-, heredocs, or stdin JSON.',
+  'If filtering mcporter schema output, use portable grep/sed/head commands; do not assume rg is installed.',
   'If the user asks for advice only, answer in chat and call out any optional plan update separately.',
   'If suggesting tasks, format them as a numbered list.',
 ].join('\n')
