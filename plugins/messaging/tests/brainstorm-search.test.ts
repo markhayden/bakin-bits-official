@@ -161,6 +161,28 @@ describe('buildDoc', () => {
     expect(doc.message_body).toBe('real content')
   })
 
+  it('excludes tool activity from searchable message body', () => {
+    const session = makeSession({
+      messages: [
+        { id: 'm1', role: 'user', content: 'Plan the launch', timestamp: '2026-04-01T00:00:00Z' },
+        {
+          id: 'm2',
+          role: 'activity',
+          kind: 'tool_call',
+          content: 'exec: gh issue list',
+          timestamp: '2026-04-01T00:01:00Z',
+          data: { outputPreview: 'internal command output' },
+        },
+        { id: 'm3', role: 'assistant', content: 'Here is the launch plan', timestamp: '2026-04-01T00:02:00Z' },
+      ],
+    })
+    const doc = buildDoc(session)
+    expect(doc.message_body).toContain('Plan the launch')
+    expect(doc.message_body).toContain('Here is the launch plan')
+    expect(doc.message_body).not.toContain('gh issue list')
+    expect(doc.message_body).not.toContain('internal command output')
+  })
+
   it('falls back to title-only or brief-only when proposals have a missing field', () => {
     const session = makeSession({
       proposals: [

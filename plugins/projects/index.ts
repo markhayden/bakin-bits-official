@@ -4,9 +4,14 @@
  */
 import { z } from 'zod'
 import type { BakinPlugin, PluginContext, RuntimeAgent } from '@bakin/sdk/types'
+import {
+  brainstormThreadId,
+  normalizeBrainstormActivityForStorage,
+  runtimeChunkToBrainstormActivity,
+} from '@bakin/sdk/utils'
 import { createProjectRepository, projectToSummary } from './lib/parser'
 import { createProjectService } from './lib/project-service'
-import type { Project, ProjectStatus } from './types'
+import type { Project, ProjectBrainstormMessage, ProjectStatus } from './types'
 
 const log = {
   info: (...args: unknown[]) => console.info('[projects]', ...args),
@@ -39,6 +44,60 @@ async function getRuntimeMainAgentId(ctx: PluginContext): Promise<string> {
   return main?.id ?? 'main'
 }
 
+const PROJECT_BRAINSTORM_INSTRUCTIONS = [
+  'Project brainstorm mode:',
+  'This brainstorm is for maintaining and improving the project plan.',
+  'Treat chat as the working conversation, but keep the project body and checklist as the durable source of truth.',
+  'Default toward identifying plan updates, checklist changes, open questions, and next actions that would keep the project current.',
+  'Do not edit the project body or checklist until the user explicitly asks you to update it or confirms your proposed changes.',
+  'When updates are warranted, propose the exact project body and checklist changes first.',
+  'After confirmation, prefer bakin_exec_projects_apply_plan for combined body and checklist updates.',
+  'When using mcporter from shell, pass JSON as one quoted --args value; do not use --args @-, heredocs, or stdin JSON.',
+  'If filtering mcporter schema output, use portable grep/sed/head commands; do not assume rg is installed.',
+  'If the user asks for advice only, answer in chat and call out any optional plan update separately.',
+  'If suggesting tasks, format them as a numbered list.',
+].join('\n')
+
+function newBrainstormMessageId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function hydrateBrainstormMessages(
+  existing: ProjectBrainstormMessage[],
+  requestHistory: Array<{ role: 'user' | 'agent' | 'assistant' | 'activity'; content: string }> | undefined,
+  agentId: string,
+): ProjectBrainstormMessage[] {
+  if (existing.length > 0) return existing
+  if (!Array.isArray(requestHistory)) return []
+  return requestHistory
+    .filter((message) => message.role === 'user' || message.role === 'assistant' || message.role === 'agent')
+    .map((message): ProjectBrainstormMessage => ({
+      id: newBrainstormMessageId('history'),
+      role: message.role === 'user' ? 'user' : 'assistant',
+      content: message.content,
+      ...(message.role === 'user' ? {} : { agentId }),
+      timestamp: new Date().toISOString(),
+    }))
+}
+
+function createBrainstormMessage(input: {
+  role: ProjectBrainstormMessage['role']
+  content: string
+  agentId?: string
+  kind?: ProjectBrainstormMessage['kind']
+  data?: unknown
+}): ProjectBrainstormMessage {
+  return {
+    id: newBrainstormMessageId(input.role),
+    role: input.role,
+    content: input.content,
+    ...(input.agentId ? { agentId: input.agentId } : {}),
+    ...(input.kind ? { kind: input.kind } : {}),
+    ...(input.data !== undefined ? { data: input.data } : {}),
+    timestamp: new Date().toISOString(),
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Plugin
 // ---------------------------------------------------------------------------
@@ -66,6 +125,7 @@ const projectsPlugin: BakinPlugin = {
     const {
       createProject,
       updateProject,
+      applyProjectPlan,
       deleteProject,
       addChecklistItem,
       markChecklistItem,
@@ -81,6 +141,8 @@ const projectsPlugin: BakinPlugin = {
     } = projectService
     const readProject = repo.readProject
     const readAllProjects = repo.readAllProjects
+    const readBrainstormMessages = repo.readBrainstormMessages
+    const writeBrainstormMessages = repo.writeBrainstormMessages
 
     // ─── Search Content Type Registration ─────────────────────────────
 
@@ -216,7 +278,12 @@ const projectsPlugin: BakinPlugin = {
       if (!id) return json({ error: 'Missing id parameter' }, 400)
       const project = readProject(id)
       if (!project) return json({ error: 'Project not found' }, 404)
-      return json({ project: await resolveLinkedTaskStatuses(project) })
+      return json({
+        project: {
+          ...(await resolveLinkedTaskStatuses(project)),
+          brainstormMessages: readBrainstormMessages(id),
+        },
+      })
     }
     ctx.registerRoute({ path: '/:projectId', method: 'GET', description: 'Get project by ID', handler: getHandler })
 
@@ -403,25 +470,21 @@ const projectsPlugin: BakinPlugin = {
           projectId: string
           prompt: string
           agent?: string
-          history?: Array<{ role: 'user' | 'agent' | 'assistant'; content: string }>
+          history?: Array<{ role: 'user' | 'agent' | 'assistant' | 'activity'; content: string }>
         }>(req)
         if (!body.projectId || !body.prompt) return json({ error: 'Missing projectId or prompt' }, 400)
         const project = readProject(body.projectId)
         if (!project) return json({ error: 'Project not found' }, 404)
+        const agentId = body.agent || await getRuntimeMainAgentId(ctx)
+        let persistedMessages = hydrateBrainstormMessages(
+          readBrainstormMessages(body.projectId),
+          body.history,
+          agentId,
+        )
 
         const assetLines = project.assets.length > 0
           ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.filename}${a.label ? ` — ${a.label}` : ''}`)]
           : []
-
-        const historyLines: string[] = []
-        if (body.history && body.history.length > 0) {
-          historyLines.push('', 'Previous conversation in this brainstorm session:')
-          for (const msg of body.history) {
-            const speaker = msg.role === 'user' ? 'User' : 'Assistant'
-            historyLines.push(`${speaker}: ${msg.content}`)
-          }
-          historyLines.push('')
-        }
 
         const context = [
           `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
@@ -433,15 +496,18 @@ const projectsPlugin: BakinPlugin = {
           'Checklist items:',
           ...project.tasks.map(t => `- [${t.checked ? 'x' : ' '}] ${t.title}${t.taskId ? ` (linked: ${t.taskId})` : ''}`),
           ...assetLines,
-          ...historyLines,
+          PROJECT_BRAINSTORM_INSTRUCTIONS,
+          '',
           'User request:',
           body.prompt,
           '',
-          'Respond concisely. If suggesting tasks, format them as a numbered list.',
+          'Respond concisely.',
         ].join('\n')
 
-        const agentId = body.agent || await getRuntimeMainAgentId(ctx)
-        const sessionKey = `projects-${body.projectId}-${Date.now()}`
+        const sessionKey = brainstormThreadId('projects', body.projectId, agentId)
+        const userMessage = createBrainstormMessage({ role: 'user', content: body.prompt })
+        persistedMessages = [...persistedMessages, userMessage]
+        writeBrainstormMessages(body.projectId, persistedMessages)
 
         const stream = new ReadableStream({
           async start(controller) {
@@ -449,10 +515,14 @@ const projectsPlugin: BakinPlugin = {
             function send(event: string, data: unknown): void {
               controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
             }
+            function appendBrainstormMessage(message: ProjectBrainstormMessage): void {
+              persistedMessages = [...persistedMessages, message]
+              writeBrainstormMessages(body.projectId, persistedMessages)
+            }
 
             let fullContent = ''
             let useStreaming = true
-            let chunks: AsyncIterable<{ type: string; content?: string }> | undefined
+            let chunks: ReturnType<PluginContext['runtime']['messaging']['stream']> | undefined
 
             try {
               chunks = ctx.runtime.messaging.stream({
@@ -478,6 +548,18 @@ const projectsPlugin: BakinPlugin = {
                     send('token', { text: chunk.content })
                   } else if (chunk.type === 'error') {
                     throw new Error(chunk.content ?? 'Runtime stream error')
+                  } else {
+                    const activity = runtimeChunkToBrainstormActivity(chunk)
+                    const normalized = activity ? normalizeBrainstormActivityForStorage(activity) : null
+                    if (normalized) {
+                      send('activity', { activity: normalized })
+                      appendBrainstormMessage(createBrainstormMessage({
+                        role: 'activity',
+                        content: normalized.content,
+                        kind: normalized.kind,
+                        data: normalized.data,
+                      }))
+                    }
                   }
                 }
               } else {
@@ -489,10 +571,23 @@ const projectsPlugin: BakinPlugin = {
                 fullContent = result.content ?? ''
                 if (fullContent) send('token', { text: fullContent })
               }
-              send('done', { content: fullContent })
+              const assistantMessage = createBrainstormMessage({
+                role: 'assistant',
+                content: fullContent,
+                agentId,
+              })
+              appendBrainstormMessage(assistantMessage)
+              send('done', { content: fullContent, messageId: assistantMessage.id })
             } catch (err: unknown) {
               log.error('Agent ask failed', err)
-              send('error', { message: err instanceof Error ? err.message : String(err) })
+              const message = err instanceof Error ? err.message : String(err)
+              appendBrainstormMessage(createBrainstormMessage({
+                role: 'activity',
+                content: message,
+                kind: 'error',
+                data: { message },
+              }))
+              send('error', { message })
             } finally {
               controller.close()
             }
@@ -586,6 +681,37 @@ const projectsPlugin: BakinPlugin = {
           }, agent)
           indexProject(params.projectId as string).catch(() => {})
           return { ok: true }
+        } catch (err: unknown) {
+          return { ok: false, error: (err as Error).message }
+        }
+      },
+    })
+
+    ctx.registerExecTool({
+      name: 'bakin_exec_projects_apply_plan',
+      label: 'Applied a project plan',
+      description: 'Apply a confirmed project plan update in one operation. Use this after the user confirms exact body/checklist changes so agents do not need shell scripts or multiple low-level calls.',
+      parameters: {
+        projectId: z.string().describe('Project ID'),
+        title: z.string().optional().describe('Optional new project title'),
+        status: z.enum(['draft', 'active', 'completed', 'archived']).optional().describe('Optional new status'),
+        body: z.string().optional().describe('Replacement markdown body for the project plan'),
+        appendBody: z.string().optional().describe('Markdown to append to the existing project body; cannot be combined with body'),
+        owner: z.string().optional().describe('Optional new owner'),
+        checklistItems: z.array(z.string()).optional().describe('New unchecked checklist item titles to append'),
+      },
+      handler: async (params: Record<string, unknown>, agent: string) => {
+        try {
+          const result = await applyProjectPlan(params.projectId as string, {
+            title: params.title as string | undefined,
+            status: params.status as ProjectStatus | undefined,
+            body: params.body as string | undefined,
+            appendBody: params.appendBody as string | undefined,
+            owner: params.owner as string | undefined,
+            checklistItems: params.checklistItems as string[] | undefined,
+          }, agent)
+          indexProject(params.projectId as string).catch(() => {})
+          return { ok: true, ...result }
         } catch (err: unknown) {
           return { ok: false, error: (err as Error).message }
         }

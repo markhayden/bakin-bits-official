@@ -59,7 +59,13 @@ export interface MessagingSessionStore {
   listSessions(opts?: { status?: string; agentId?: string }): SessionSummary[]
   updateSession(sessionId: string, updates: { title?: string; status?: 'active' | 'completed' }): PlanningSession
   deleteSession(sessionId: string): void
-  appendMessage(sessionId: string, message: { role: 'user' | 'assistant'; content: string }, proposalIds?: string[]): SessionMessage
+  appendMessage(sessionId: string, message: {
+    role: 'user' | 'assistant' | 'activity'
+    content: string
+    kind?: string
+    data?: unknown
+    agentId?: string
+  }, proposalIds?: string[]): SessionMessage
   addProposals(sessionId: string, messageId: string, items: Array<{
     title: string
     scheduledAt: string
@@ -160,7 +166,13 @@ export function createMessagingSessionStore(
 
   function appendMessage(
     sessionId: string,
-    message: { role: 'user' | 'assistant'; content: string },
+    message: {
+      role: 'user' | 'assistant' | 'activity'
+      content: string
+      kind?: string
+      data?: unknown
+      agentId?: string
+    },
     proposalIds?: string[],
   ): SessionMessage {
     const session = loadSession(sessionId)
@@ -172,6 +184,9 @@ export function createMessagingSessionStore(
       timestamp: new Date().toISOString(),
       proposalIds,
     }
+    if (message.kind !== undefined) msg.kind = message.kind
+    if (message.data !== undefined) msg.data = message.data
+    if (message.agentId !== undefined) msg.agentId = message.agentId
     session.messages.push(msg)
     session.updatedAt = new Date().toISOString()
     writeJson(storage, sessionPath(sessionId), session)

@@ -87,6 +87,19 @@ Before opening a PR, run the same gates CI runs:
 bun typecheck && bun test --isolate && bun lint
 ```
 
+## Plugin architecture notes
+
+Official plugins should stay on the public SDK surface: `@bakin/sdk`,
+`@bakin/sdk/types`, `@bakin/sdk/components`, `@bakin/sdk/hooks`,
+`@bakin/sdk/ui`, and `@bakin/sdk/utils`. Do not import Bakin host internals
+or a specific runtime adapter from plugin source. Runtime work goes through
+`ctx.runtime`; UI primitives and brainstorm helpers come from the SDK.
+
+For durable agent chat surfaces, use stable adapter-neutral thread IDs via
+`brainstormThreadId(scope, entityId, agentId)`. Store plugin-owned messages
+and tool activity for UI hydration, but let the runtime adapter maintain
+conversation continuity for repeated `agentId + threadId` calls.
+
 ## Repository layout
 
 ```

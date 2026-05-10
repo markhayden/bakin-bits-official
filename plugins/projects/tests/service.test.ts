@@ -145,6 +145,7 @@ describe('createProject', () => {
     expect(project!.title).toBe('New Project')
     expect(project!.status).toBe('draft')
     expect(project!.owner).toBe('main')
+    expect(project!.body).toBe('')
   })
 
   it('creates initial checklist items', async () => {

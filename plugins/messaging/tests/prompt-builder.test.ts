@@ -142,23 +142,23 @@ describe('buildMessages', () => {
     expect(messages[1].content).toBe('Plan next week')
   })
 
-  it('includes session history as individual messages', () => {
+  it('does not replay stored session history into durable runtime prompts', () => {
     const session = makeSession({
       messages: [
         { id: 'm1', role: 'user', content: 'Plan Monday', timestamp: '2026-04-07T01:00:00Z' },
         { id: 'm2', role: 'assistant', content: 'Here are ideas...', timestamp: '2026-04-07T01:01:00Z' },
+        { id: 'm3', role: 'activity', kind: 'tool_call', content: 'exec completed', timestamp: '2026-04-07T01:02:00Z' },
       ],
     })
 
     const messages = buildMessages(session, 'Now plan Tuesday', opts())
-    expect(messages.length).toBe(4)
+    expect(messages.length).toBe(2)
     expect(messages[0].role).toBe('system')
     expect(messages[1].role).toBe('user')
-    expect(messages[1].content).toBe('Plan Monday')
-    expect(messages[2].role).toBe('assistant')
-    expect(messages[2].content).toBe('Here are ideas...')
-    expect(messages[3].role).toBe('user')
-    expect(messages[3].content).toBe('Now plan Tuesday')
+    expect(messages[1].content).toBe('Now plan Tuesday')
+    expect(JSON.stringify(messages)).not.toContain('Plan Monday')
+    expect(JSON.stringify(messages)).not.toContain('Here are ideas')
+    expect(JSON.stringify(messages)).not.toContain('exec completed')
   })
 
   it('includes plan state in system prompt when proposals exist', () => {

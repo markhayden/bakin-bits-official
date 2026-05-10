@@ -770,12 +770,46 @@ declare module '@bakin/sdk/components' {
   export interface BrainstormMessage {
     id?: string
     agentId?: string
-    role: 'user' | 'assistant' | 'system'
+    role: 'user' | 'assistant' | 'system' | 'activity'
     content: string
+    kind?: 'runtime_status' | 'tool_call' | 'error' | string
+    data?: unknown
     createdAt?: string
+    timestamp?: string
     metadata?: Record<string, unknown>
     [key: string]: unknown
   }
+
+  export interface BrainstormActivityStorageInput {
+    id?: string
+    kind?: string
+    content?: string
+    data?: unknown
+    timestamp?: string
+  }
+
+  export interface BrainstormActivityStorageRecord {
+    kind: string
+    content: string
+    data?: unknown
+  }
+
+  export interface SendContext {
+    signal: AbortSignal
+    onToken: (text: string) => void
+    onCustom?: (name: string, data: unknown) => void
+  }
+
+  export function readBrainstormSseResponse(
+    response: Response,
+    ctx: SendContext,
+    options?: {
+      onCustomEvent?: (event: string, data: unknown) => boolean | void
+    },
+  ): Promise<{ content: string }>
+  export function brainstormThreadId(scope: string, entityId: string, agentId: string): string
+  export function normalizeBrainstormActivityForStorage(activity: BrainstormActivityStorageInput): BrainstormActivityStorageRecord | null
+  export function normalizeBrainstormActivityMessageForStorage(activity: BrainstormActivityStorageInput): Pick<BrainstormMessage, 'role' | 'kind' | 'content' | 'data'> | null
 
   export const AgentAvatar: ComponentType<{ agentId?: string; agent?: AgentInfo | null; size?: string | number; className?: string }>
   export const AgentFilter: SDKComponent
@@ -855,7 +889,49 @@ declare module '@bakin/sdk/slots' {
 }
 
 declare module '@bakin/sdk/utils' {
+  import type { RuntimeChatChunk } from '@bakin/sdk/types'
+
+  export interface BrainstormActivityInput {
+    kind: string
+    content: string
+    data?: unknown
+  }
+
+  export interface BrainstormActivityStorageInput {
+    id?: string
+    kind?: string
+    content?: string
+    data?: unknown
+    timestamp?: string
+  }
+
+  export interface BrainstormActivityStorageRecord {
+    kind: string
+    content: string
+    data?: unknown
+  }
+
   export function cn(...args: Array<string | undefined | null | false>): string
   export function formatAge(date: Date | string): string
   export function formatSize(bytes: number): string
+  export function brainstormThreadId(scope: string, entityId: string, agentId: string): string
+  export function normalizeBrainstormActivityForStorage(activity: BrainstormActivityStorageInput): BrainstormActivityStorageRecord | null
+  export function normalizeBrainstormActivityMessageForStorage(activity: BrainstormActivityStorageInput): {
+    role: 'activity'
+    kind: string
+    content: string
+    data?: unknown
+  } | null
+  export function runtimeChunkToBrainstormActivity(chunk: RuntimeChatChunk): BrainstormActivityInput | null
+  export function readBrainstormSseResponse(
+    response: Response,
+    ctx: {
+      signal: AbortSignal
+      onToken: (text: string) => void
+      onCustom?: (name: string, data: unknown) => void
+    },
+    options?: {
+      onCustomEvent?: (event: string, data: unknown) => boolean | void
+    },
+  ): Promise<{ content: string }>
 }

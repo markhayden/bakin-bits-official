@@ -129,10 +129,23 @@ async function* streamTextChunks(tokens: string[]): AsyncIterable<ChatChunk> {
   }
 }
 
+async function* streamChunks(chunks: ChatChunk[]): AsyncIterable<ChatChunk> {
+  for (const chunk of chunks) yield chunk
+}
+
 function mockRuntimeStream(tokens: string[]) {
   const streamMock = mock((args: MessageArgs) => {
     void args
     return streamTextChunks(tokens)
+  })
+  plugin.ctx.runtime.messaging.stream = streamMock
+  return streamMock
+}
+
+function mockRuntimeChunks(chunks: ChatChunk[]) {
+  const streamMock = mock((args: MessageArgs) => {
+    void args
+    return streamChunks(chunks)
   })
   plugin.ctx.runtime.messaging.stream = streamMock
   return streamMock
@@ -658,7 +671,152 @@ describe('Routes', () => {
       )
     })
 
-    it('uses the custom agent and includes history in the prompt', async () => {
+    it('instructs brainstorm agents to maintain the project plan but ask before editing', async () => {
+      writeProjectFixture('proj-plan-prompt', { title: 'Plan Prompt Project' })
+      const streamMock = mockRuntimeStream(['ok'])
+
+      const route = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      const { response } = await callRoute(route, plugin.ctx, {
+        body: { projectId: 'proj-plan-prompt', prompt: 'Help me think through launch sequencing.' },
+        rawResponse: true,
+      })
+      await consumeSSE(response)
+
+      expect(streamMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.stringContaining('This brainstorm is for maintaining and improving the project plan.'),
+        }),
+      )
+      expect(streamMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.stringContaining('Do not edit the project body or checklist until the user explicitly asks you to update it or confirms your proposed changes.'),
+        }),
+      )
+      expect(streamMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.stringContaining('When updates are warranted, propose the exact project body and checklist changes first.'),
+        }),
+      )
+      expect(streamMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.stringContaining('After confirmation, prefer bakin_exec_projects_apply_plan for combined body and checklist updates.'),
+        }),
+      )
+      expect(streamMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.stringContaining('When using mcporter from shell, pass JSON as one quoted --args value; do not use --args @-, heredocs, or stdin JSON.'),
+        }),
+      )
+      expect(streamMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.stringContaining('If filtering mcporter schema output, use portable grep/sed/head commands; do not assume rg is installed.'),
+        }),
+      )
+    })
+
+    it('persists brainstorm turns without replaying them into durable runtime prompts', async () => {
+      writeProjectFixture('proj-persist', { title: 'Persistent Project' })
+      const prompts: string[] = []
+      const threadIds: Array<string | undefined> = []
+      const streamMock = mock((args: MessageArgs) => {
+        prompts.push(args.content)
+        threadIds.push(args.threadId)
+        return streamTextChunks(prompts.length === 1 ? ['First answer'] : ['Second answer'])
+      })
+      plugin.ctx.runtime.messaging.stream = streamMock
+
+      const askRoute = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      const first = await callRoute(askRoute, plugin.ctx, {
+        body: { projectId: 'proj-persist', prompt: 'First question?' },
+        rawResponse: true,
+      })
+      await consumeSSE(first.response)
+
+      const getRoute = findRoute(plugin.routes, 'GET', '/:projectId')!
+      const hydrated = await callRoute(getRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-persist' },
+      })
+      expect(hydrated.body.project.brainstormMessages).toMatchObject([
+        { role: 'user', content: 'First question?' },
+        { role: 'assistant', content: 'First answer', agentId: 'main' },
+      ])
+
+      const second = await callRoute(askRoute, plugin.ctx, {
+        body: { projectId: 'proj-persist', prompt: 'Second question?' },
+        rawResponse: true,
+      })
+      await consumeSSE(second.response)
+
+      expect(streamMock).toHaveBeenCalledTimes(2)
+      expect(threadIds).toEqual(['projects:proj-persist:main', 'projects:proj-persist:main'])
+      expect(prompts[1]).not.toContain('Previous conversation in this brainstorm session:')
+      expect(prompts[1]).not.toContain('User: First question?')
+      expect(prompts[1]).not.toContain('Assistant: First answer')
+      expect(prompts[1]).toContain('User request:\nSecond question?')
+    })
+
+    it('forwards runtime status and tool chunks as brainstorm activity events', async () => {
+      writeProjectFixture('proj-activity', { title: 'Activity Project' })
+      mockRuntimeChunks([
+        { type: 'status', content: 'Reading project context', data: { step: 'context' } },
+        {
+          type: 'tool',
+          content: 'exec: gh issue list',
+          data: {
+            phase: 'call',
+            callId: 'call-1',
+            toolName: 'exec',
+            status: 'running',
+            inputPreview: '{"command":"gh issue list"}',
+          },
+        },
+        { type: 'text', content: 'Done.' },
+      ])
+
+      const route = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      const { response } = await callRoute(route, plugin.ctx, {
+        body: { projectId: 'proj-activity', prompt: 'Check tickets' },
+        rawResponse: true,
+      })
+
+      const events = await consumeSSE(response)
+      const activities = events.filter((e) => e.event === 'activity')
+      expect(activities).toHaveLength(2)
+      expect(activities[0].data).toEqual({
+        activity: {
+          kind: 'runtime_status',
+          content: 'Reading project context',
+          data: { step: 'context' },
+        },
+      })
+      expect(activities[1].data).toEqual({
+        activity: {
+          kind: 'tool_call',
+          content: 'exec: gh issue list',
+          data: {
+            phase: 'call',
+            callId: 'call-1',
+            toolName: 'exec',
+            status: 'running',
+            inputPreview: '{"command":"gh issue list"}',
+          },
+        },
+      })
+      expect(events.find((e) => e.event === 'done')?.data).toMatchObject({ content: 'Done.' })
+
+      const getRoute = findRoute(plugin.routes, 'GET', '/:projectId')!
+      const hydrated = await callRoute(getRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-activity' },
+      })
+      expect(hydrated.body.project.brainstormMessages).toMatchObject([
+        { role: 'user', content: 'Check tickets' },
+        { role: 'activity', kind: 'runtime_status', content: 'Reading project context' },
+        { role: 'activity', kind: 'tool_call', content: 'exec: gh issue list' },
+        { role: 'assistant', content: 'Done.', agentId: 'main' },
+      ])
+    })
+
+    it('uses the custom agent while storing client history outside the durable runtime prompt', async () => {
       writeProjectFixture('proj-ask2', { title: 'Ask 2' })
       const streamMock = mockRuntimeStream(['ok'])
 
@@ -676,9 +834,14 @@ describe('Routes', () => {
       expect(streamMock).toHaveBeenCalledWith(
         expect.objectContaining({
           agentId: 'pixel',
-          content: expect.stringContaining('Previous conversation'),
+          threadId: 'projects:proj-ask2:pixel',
+          content: expect.stringContaining('User request:\nContinue'),
         }),
       )
+      const call = streamMock.mock.calls[0]?.[0]
+      expect(call?.content).not.toContain('Previous conversation')
+      expect(call?.content).not.toContain('Start')
+      expect(call?.content).not.toContain('OK')
     })
 
     it('falls back to one-shot runtime send when streaming is unavailable', async () => {
@@ -875,6 +1038,55 @@ describe('Exec Tools', () => {
       const result = await callTool(tool, { projectId: 'proj-incomplete', status: 'completed' })
       expect(result.ok).toBe(false)
       expect(result.error).toMatch(/unchecked/i)
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // bakin_exec_projects_apply_plan
+  // -------------------------------------------------------------------------
+  describe('bakin_exec_projects_apply_plan', () => {
+    it('updates the project body and appends checklist items in one tool call', async () => {
+      writeProjectFixture('proj-apply-plan', {
+        title: 'Apply Plan',
+        body: '# Old Plan',
+        tasks: [{ id: 't001', title: 'Existing item', checked: false }],
+      })
+
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_apply_plan')!
+      expect(tool).toBeDefined()
+      const result = await callTool(tool, {
+        projectId: 'proj-apply-plan',
+        body: '# Release Plan\n\n## Scope\nShip the release tracker.',
+        checklistItems: ['Draft release notes', 'Confirm rollout owner'],
+      })
+
+      expect(result.ok).toBe(true)
+      expect(result.addedItems).toEqual([
+        { id: 't002', title: 'Draft release notes' },
+        { id: 't003', title: 'Confirm rollout owner' },
+      ])
+
+      const project = createProjectRepository(new MarkdownStorageAdapter(testDir)).readProject('proj-apply-plan')!
+      expect(project.body).toBe('# Release Plan\n\n## Scope\nShip the release tracker.')
+      expect(project.tasks.map((task) => ({ id: task.id, title: task.title, checked: task.checked }))).toEqual([
+        { id: 't001', title: 'Existing item', checked: false },
+        { id: 't002', title: 'Draft release notes', checked: false },
+        { id: 't003', title: 'Confirm rollout owner', checked: false },
+      ])
+    })
+
+    it('returns an error when both body and appendBody are provided', async () => {
+      writeProjectFixture('proj-apply-invalid', { title: 'Apply Invalid' })
+
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_apply_plan')!
+      const result = await callTool(tool, {
+        projectId: 'proj-apply-invalid',
+        body: '# Replacement',
+        appendBody: 'Appendix',
+      })
+
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(/body or appendBody/i)
     })
   })
 
@@ -1184,6 +1396,7 @@ describe('Registration', () => {
       'bakin_exec_projects_get',
       'bakin_exec_projects_create',
       'bakin_exec_projects_update',
+      'bakin_exec_projects_apply_plan',
       'bakin_exec_projects_delete',
       'bakin_exec_projects_add_item',
       'bakin_exec_projects_mark_item',

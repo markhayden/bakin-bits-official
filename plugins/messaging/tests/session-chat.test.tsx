@@ -81,6 +81,25 @@ describe('SessionChat', () => {
     expect(screen.getByText('Here are some ideas!')).toBeDefined()
   })
 
+  it('hydrates persisted activity messages', () => {
+    const messages: SessionMessage[] = [
+      { id: 'm1', role: 'user', content: 'Check the project', timestamp: '2026-04-07T00:00:00Z' },
+      {
+        id: 'm2',
+        role: 'activity',
+        kind: 'tool_call',
+        content: 'Reading project details',
+        data: { toolName: 'exec', status: 'completed' },
+        timestamp: '2026-04-07T00:00:01Z',
+      },
+      { id: 'm3', role: 'assistant', content: 'Updated the plan.', timestamp: '2026-04-07T00:01:00Z' },
+    ]
+
+    render(<SessionChat sessionId="s1" agentId="scout" initialMessages={messages} />)
+    expect(screen.getByText('Reading project details')).toBeDefined()
+    expect(screen.getByText('Updated the plan.')).toBeDefined()
+  })
+
   it('pads the chat pane below the session frame', () => {
     render(<SessionChat sessionId="s1" agentId="scout" />)
     expect(screen.getByTestId('session-chat-shell').className).toContain('pt-5')
