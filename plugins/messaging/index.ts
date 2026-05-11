@@ -11,7 +11,7 @@ import {
 } from '@bakin/sdk/utils'
 import { createMessagingStorage } from './lib/storage'
 import type { MessagingStorage } from './lib/storage'
-import type { CalendarItem, ContentStatus, Plan, PlanStatus, ProposalStatus, MessagingSettings } from './types'
+import type { CalendarItem, ContentStatus, ContentTone, DeliverableDraft, DeliverableStatus, Plan, PlanStatus, ProposalStatus, MessagingSettings } from './types'
 import { DEFAULT_CHANNEL, DEFAULT_CONTENT_TYPES } from './types'
 import { createMessagingSessionStore } from './lib/sessions'
 import { buildMessages } from './lib/prompt-builder'
@@ -26,6 +26,7 @@ import { normalizeContentTypesForActivate } from './lib/content-types'
 import { createMessagingContentStorage } from './lib/content-storage'
 import { materializeApprovedProposals } from './lib/materialize'
 import type { MessagingContentStorage } from './lib/content-storage'
+import { recomputePlanStatus } from './lib/plan-status'
 
 const log = {
   info: (...args: unknown[]) => console.info('[messaging]', ...args),
@@ -57,6 +58,52 @@ function normalizeChannels(value: unknown): string[] {
     .map(channel => channel.trim())
     .filter(Boolean)
   return channels.length > 0 ? channels : [DEFAULT_CHANNEL]
+}
+
+function parseNullablePlanId(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined
+  if (value === null || value === '' || value === 'null') return null
+  return String(value)
+}
+
+function parseDraft(value: unknown): DeliverableDraft | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  return value as DeliverableDraft
+}
+
+function derivePrepStartAt(ctx: PluginContext, publishAt: string, contentTypeId: string): string {
+  const publishTime = Date.parse(publishAt)
+  if (Number.isNaN(publishTime)) throw new Error('publishAt must be a valid date')
+  const settings = ctx.getSettings<MessagingSettings>()
+  const contentTypes = settings.contentTypes ?? DEFAULT_CONTENT_TYPES
+  const contentType = contentTypes.find(type => type.id === contentTypeId)
+  const prepLeadHours = contentType?.prepLeadHours ?? 0
+  return new Date(publishTime - prepLeadHours * 60 * 60 * 1000).toISOString()
+}
+
+function filterDeliverablesBySearchParams(
+  deliverables: ReturnType<MessagingContentStorage['listDeliverables']>,
+  url: URL,
+) {
+  const planIdParam = url.searchParams.get('planId')
+  const status = url.searchParams.get('status')
+  const channel = url.searchParams.get('channel')
+  const publishAfter = url.searchParams.get('publishAfter') ?? url.searchParams.get('from')
+  const publishBefore = url.searchParams.get('publishBefore') ?? url.searchParams.get('to')
+  let filtered = deliverables
+  if (planIdParam !== null) {
+    const planId = parseNullablePlanId(planIdParam)
+    filtered = filtered.filter(deliverable => deliverable.planId === planId)
+  }
+  if (status) filtered = filtered.filter(deliverable => deliverable.status === status)
+  if (channel) filtered = filtered.filter(deliverable => deliverable.channel === channel)
+  if (publishAfter) filtered = filtered.filter(deliverable => Date.parse(deliverable.publishAt) >= Date.parse(publishAfter))
+  if (publishBefore) filtered = filtered.filter(deliverable => Date.parse(deliverable.publishAt) <= Date.parse(publishBefore))
+  return filtered
+}
+
+function recomputeLinkedPlan(contentStore: MessagingContentStorage, planId: string | null | undefined): void {
+  if (planId) recomputePlanStatus(contentStore, planId)
 }
 
 function buildPlanFanOutDescription(plan: Plan): string {
@@ -1153,6 +1200,131 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       },
     })
 
+    // ── Deliverable Routes ─────────────────────────────────────────────
+
+    ctx.registerRoute({
+      path: '/deliverables',
+      method: 'GET',
+      description: 'List content Deliverables',
+      handler: async (req: Request) => {
+        const url = new URL(req.url)
+        return json({ deliverables: filterDeliverablesBySearchParams(contentStore.listDeliverables(), url) })
+      },
+    })
+
+    ctx.registerRoute({
+      path: '/deliverables/:id',
+      method: 'GET',
+      description: 'Get a content Deliverable',
+      handler: async (req: Request) => {
+        const url = new URL(req.url)
+        const id = url.searchParams.get('id')
+        if (!id) return json({ error: 'id required' }, 400)
+        const deliverable = contentStore.getDeliverable(id)
+        if (!deliverable) return json({ error: 'Deliverable not found' }, 404)
+        return json({ deliverable })
+      },
+    })
+
+    ctx.registerRoute({
+      path: '/deliverables',
+      method: 'POST',
+      description: 'Create a content Deliverable',
+      handler: async (req: Request) => {
+        const body = await readBody<Record<string, unknown>>(req)
+        if (!body.title || !body.brief || !body.channel || !body.contentType || !body.tone || !body.agent || !body.publishAt) {
+          return json({ error: 'title, brief, channel, contentType, tone, agent, and publishAt required' }, 400)
+        }
+        const planId = parseNullablePlanId(body.planId) ?? null
+        if (planId && !contentStore.getPlan(planId)) return json({ error: 'Plan not found' }, 404)
+        try {
+          const contentType = body.contentType as string
+          const publishAt = body.publishAt as string
+          const deliverable = contentStore.createDeliverable({
+            planId,
+            channel: body.channel as string,
+            contentType,
+            tone: body.tone as ContentTone,
+            agent: body.agent as string,
+            title: body.title as string,
+            brief: body.brief as string,
+            publishAt,
+            prepStartAt: (body.prepStartAt as string | undefined) ?? derivePrepStartAt(ctx, publishAt, contentType),
+            prepStartAtOverride: body.prepStartAtOverride as string | undefined,
+            status: (body.status as DeliverableStatus | undefined) ?? 'planned',
+            draft: parseDraft(body.draft),
+          })
+          recomputeLinkedPlan(contentStore, planId)
+          ctx.activity.audit('deliverable.created', body.agent as string, { deliverableId: deliverable.id, planId })
+          ctx.activity.log(body.agent as string, `Created content Deliverable "${deliverable.title}"`)
+          return json({ ok: true, deliverable })
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) }, 400)
+        }
+      },
+    })
+
+    ctx.registerRoute({
+      path: '/deliverables/:id',
+      method: 'PUT',
+      description: 'Update a content Deliverable',
+      handler: async (req: Request) => {
+        const url = new URL(req.url)
+        const body = await readBody<Record<string, unknown>>(req)
+        const id = url.searchParams.get('id') || body.id as string | undefined
+        if (!id) return json({ error: 'id required' }, 400)
+        const existing = contentStore.getDeliverable(id)
+        if (!existing) return json({ error: 'Deliverable not found' }, 404)
+        const planId = parseNullablePlanId(body.planId)
+        if (planId && !contentStore.getPlan(planId)) return json({ error: 'Plan not found' }, 404)
+        const contentType = body.contentType as string | undefined
+        const publishAt = body.publishAt as string | undefined
+        const shouldDerivePrepStartAt = !body.prepStartAt && (contentType || publishAt)
+        try {
+          const deliverable = contentStore.updateDeliverable(id, {
+            planId,
+            channel: body.channel as string | undefined,
+            contentType,
+            tone: body.tone as ContentTone | undefined,
+            agent: body.agent as string | undefined,
+            title: body.title as string | undefined,
+            brief: body.brief as string | undefined,
+            publishAt,
+            prepStartAt: (body.prepStartAt as string | undefined)
+              ?? (shouldDerivePrepStartAt ? derivePrepStartAt(ctx, publishAt ?? existing.publishAt, contentType ?? existing.contentType) : undefined),
+            prepStartAtOverride: body.prepStartAtOverride as string | undefined,
+            status: body.status as DeliverableStatus | undefined,
+            draft: parseDraft(body.draft),
+            rejectionNote: body.rejectionNote as string | undefined,
+          })
+          recomputeLinkedPlan(contentStore, existing.planId)
+          if (deliverable.planId !== existing.planId) recomputeLinkedPlan(contentStore, deliverable.planId)
+          ctx.activity.audit('deliverable.updated', 'system', { deliverableId: id, planId: deliverable.planId })
+          return json({ ok: true, deliverable })
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) }, 400)
+        }
+      },
+    })
+
+    ctx.registerRoute({
+      path: '/deliverables/:id',
+      method: 'DELETE',
+      description: 'Delete a content Deliverable',
+      handler: async (req: Request) => {
+        const url = new URL(req.url)
+        const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
+        const id = url.searchParams.get('id') || body.id
+        if (!id) return json({ error: 'id required' }, 400)
+        const existing = contentStore.getDeliverable(id)
+        if (!existing) return json({ error: 'Deliverable not found' }, 404)
+        contentStore.deleteDeliverable(id)
+        recomputeLinkedPlan(contentStore, existing.planId)
+        ctx.activity.audit('deliverable.deleted', 'system', { deliverableId: id, planId: existing.planId })
+        return json({ ok: true })
+      },
+    })
+
     // ── Exec Tools (agent-facing) ─────────────────────────────────────
 
     ctx.registerExecTool({
@@ -1231,6 +1403,153 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const result = await startPlanFanOut(ctx, contentStore, params.planId as string)
         if (!result.ok) return { ok: false, error: result.error }
         return result
+      },
+    })
+
+    ctx.registerExecTool({
+      name: 'bakin_exec_messaging_deliverable_list',
+      label: 'Listed content deliverables',
+      description: 'List content Deliverables with optional filters',
+      parameters: {
+        planId: z.union([z.string(), z.null()]).optional().describe('Filter by Plan ID; null returns Quick Posts'),
+        status: z.string().optional().describe('Filter by Deliverable status'),
+        channel: z.string().optional().describe('Filter by channel'),
+        publishAfter: z.string().optional().describe('Filter by publishAt at or after this date'),
+        publishBefore: z.string().optional().describe('Filter by publishAt at or before this date'),
+      },
+      handler: async (params: Record<string, unknown>) => {
+        let deliverables = contentStore.listDeliverables()
+        const planId = parseNullablePlanId(params.planId)
+        if (planId !== undefined) deliverables = deliverables.filter(deliverable => deliverable.planId === planId)
+        if (params.status) deliverables = deliverables.filter(deliverable => deliverable.status === params.status)
+        if (params.channel) deliverables = deliverables.filter(deliverable => deliverable.channel === params.channel)
+        if (params.publishAfter) deliverables = deliverables.filter(deliverable => Date.parse(deliverable.publishAt) >= Date.parse(params.publishAfter as string))
+        if (params.publishBefore) deliverables = deliverables.filter(deliverable => Date.parse(deliverable.publishAt) <= Date.parse(params.publishBefore as string))
+        return { ok: true, count: deliverables.length, deliverables }
+      },
+    })
+
+    ctx.registerExecTool({
+      name: 'bakin_exec_messaging_deliverable_get',
+      label: 'Read content deliverable',
+      description: 'Get a content Deliverable',
+      parameters: {
+        deliverableId: z.string().describe('Deliverable ID (required)'),
+      },
+      handler: async (params: Record<string, unknown>) => {
+        if (!params.deliverableId) return { ok: false, error: 'deliverableId required' }
+        const deliverable = contentStore.getDeliverable(params.deliverableId as string)
+        if (!deliverable) return { ok: false, error: 'Deliverable not found' }
+        return { ok: true, deliverable }
+      },
+    })
+
+    ctx.registerExecTool({
+      name: 'bakin_exec_messaging_deliverable_create',
+      label: 'Created content deliverable',
+      activityDuplicate: true,
+      description: 'Create a content Deliverable. Omit planId or pass null for a Quick Post.',
+      parameters: {
+        planId: z.union([z.string(), z.null()]).optional().describe('Optional Plan ID; null creates a Quick Post'),
+        channel: z.string().describe('Runtime channel ID'),
+        contentType: z.string().describe('Messaging content type ID'),
+        tone: z.string().describe('Tone'),
+        agent: z.string().describe('Prep agent'),
+        title: z.string().describe('Deliverable title'),
+        brief: z.string().describe('Deliverable brief'),
+        publishAt: z.string().describe('Publish datetime'),
+        prepStartAt: z.string().optional().describe('Optional explicit prep start datetime'),
+        prepStartAtOverride: z.string().optional().describe('Optional prep start override datetime'),
+        status: z.string().optional().describe('Optional initial status; defaults to planned'),
+        draft: z.object({}).passthrough().optional().describe('Optional draft fields'),
+      },
+      handler: async (params: Record<string, unknown>) => {
+        if (!params.title || !params.brief || !params.channel || !params.contentType || !params.tone || !params.agent || !params.publishAt) {
+          return { ok: false, error: 'title, brief, channel, contentType, tone, agent, and publishAt required' }
+        }
+        const planId = parseNullablePlanId(params.planId) ?? null
+        if (planId && !contentStore.getPlan(planId)) return { ok: false, error: 'Plan not found' }
+        try {
+          const contentType = params.contentType as string
+          const publishAt = params.publishAt as string
+          const deliverable = contentStore.createDeliverable({
+            planId,
+            channel: params.channel as string,
+            contentType,
+            tone: params.tone as ContentTone,
+            agent: params.agent as string,
+            title: params.title as string,
+            brief: params.brief as string,
+            publishAt,
+            prepStartAt: (params.prepStartAt as string | undefined) ?? derivePrepStartAt(ctx, publishAt, contentType),
+            prepStartAtOverride: params.prepStartAtOverride as string | undefined,
+            status: (params.status as DeliverableStatus | undefined) ?? 'planned',
+            draft: parseDraft(params.draft),
+          })
+          recomputeLinkedPlan(contentStore, planId)
+          ctx.activity.audit('deliverable.created', params.agent as string, { deliverableId: deliverable.id, planId })
+          return { ok: true, deliverable }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) }
+        }
+      },
+    })
+
+    ctx.registerExecTool({
+      name: 'bakin_exec_messaging_deliverable_update',
+      label: 'Updated content deliverable',
+      activityDuplicate: true,
+      description: 'Update a content Deliverable. Draft fields are deep-merged.',
+      parameters: {
+        deliverableId: z.string().describe('Deliverable ID (required)'),
+        planId: z.union([z.string(), z.null()]).optional().describe('Optional Plan ID; null makes it a Quick Post'),
+        channel: z.string().optional().describe('Runtime channel ID'),
+        contentType: z.string().optional().describe('Messaging content type ID'),
+        tone: z.string().optional().describe('Tone'),
+        agent: z.string().optional().describe('Prep agent'),
+        title: z.string().optional().describe('Deliverable title'),
+        brief: z.string().optional().describe('Deliverable brief'),
+        publishAt: z.string().optional().describe('Publish datetime'),
+        prepStartAt: z.string().optional().describe('Optional explicit prep start datetime'),
+        prepStartAtOverride: z.string().optional().describe('Optional prep start override datetime'),
+        status: z.string().optional().describe('Deliverable status'),
+        rejectionNote: z.string().optional().describe('Optional rejection note'),
+        draft: z.object({}).passthrough().optional().describe('Draft fields to deep-merge'),
+      },
+      handler: async (params: Record<string, unknown>) => {
+        if (!params.deliverableId) return { ok: false, error: 'deliverableId required' }
+        const id = params.deliverableId as string
+        const existing = contentStore.getDeliverable(id)
+        if (!existing) return { ok: false, error: 'Deliverable not found' }
+        const planId = parseNullablePlanId(params.planId)
+        if (planId && !contentStore.getPlan(planId)) return { ok: false, error: 'Plan not found' }
+        const contentType = params.contentType as string | undefined
+        const publishAt = params.publishAt as string | undefined
+        const shouldDerivePrepStartAt = !params.prepStartAt && (contentType || publishAt)
+        try {
+          const deliverable = contentStore.updateDeliverable(id, {
+            planId,
+            channel: params.channel as string | undefined,
+            contentType,
+            tone: params.tone as ContentTone | undefined,
+            agent: params.agent as string | undefined,
+            title: params.title as string | undefined,
+            brief: params.brief as string | undefined,
+            publishAt,
+            prepStartAt: (params.prepStartAt as string | undefined)
+              ?? (shouldDerivePrepStartAt ? derivePrepStartAt(ctx, publishAt ?? existing.publishAt, contentType ?? existing.contentType) : undefined),
+            prepStartAtOverride: params.prepStartAtOverride as string | undefined,
+            status: params.status as DeliverableStatus | undefined,
+            draft: parseDraft(params.draft),
+            rejectionNote: params.rejectionNote as string | undefined,
+          })
+          recomputeLinkedPlan(contentStore, existing.planId)
+          if (deliverable.planId !== existing.planId) recomputeLinkedPlan(contentStore, deliverable.planId)
+          ctx.activity.audit('deliverable.updated', 'system', { deliverableId: id, planId: deliverable.planId })
+          return { ok: true, deliverable }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) }
+        }
       },
     })
 
