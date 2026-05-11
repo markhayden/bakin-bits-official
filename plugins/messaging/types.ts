@@ -15,7 +15,6 @@ export type ContentAgent = string
 export type ContentChannel = string
 export type ContentType = string
 export type ContentTone = 'energetic' | 'calm' | 'educational' | 'humorous' | 'inspiring' | 'conversational'
-export type ContentStatus = 'draft' | 'scheduled' | 'executing' | 'waiting' | 'review' | 'published' | 'failed'
 
 export type AssetRequirement = 'none' | 'optional-image' | 'image' | 'optional-video' | 'video'
 export type PlanStatus =
@@ -41,33 +40,6 @@ export type DeliverableStatus =
   | 'cancelled'
   | 'failed'
 
-export interface CalendarItem {
-  id: string
-  createdAt: string
-  updatedAt: string
-  scheduledAt: string
-  agent: ContentAgent
-  contentType: ContentType
-  title: string
-  brief: string
-  tone: ContentTone
-  status: ContentStatus
-  channels: ContentChannel[]
-  draft?: {
-    caption: string
-    imagePrompt?: string
-    videoPrompt?: string
-    imageFilename?: string
-    videoFilename?: string
-    agentNotes?: string
-  }
-  publishedAt?: string
-  publishedMessageId?: string
-  taskId?: string
-  rejectionNote?: string
-  sessionId?: string
-}
-
 // ---------------------------------------------------------------------------
 // Content planning domain
 // ---------------------------------------------------------------------------
@@ -88,25 +60,6 @@ export interface PlanProposal {
   rejectionNote?: string
 }
 
-export interface ProposedItem {
-  id: string
-  messageId: string
-  revision: number
-  agentId: string
-  title: string
-  scheduledAt: string
-  targetDate?: string
-  contentType: string
-  tone: string
-  brief: string
-  channels?: ContentChannel[]
-  suggestedChannels?: ContentChannel[]
-  status: ProposalStatus
-  calendarItemId?: string
-  planId?: string
-  rejectionNote?: string
-}
-
 export interface SessionMessage {
   id: string
   role: 'user' | 'assistant' | 'activity'
@@ -116,20 +69,6 @@ export interface SessionMessage {
   kind?: string
   data?: unknown
   agentId?: string
-}
-
-export interface PlanningSession {
-  id: string
-  agentId: string
-  title: string
-  scope?: string
-  status: 'active' | 'completed'
-  createdAtPlanIds?: string[]
-  createdAt: string
-  updatedAt: string
-  messages: SessionMessage[]
-  proposals: ProposedItem[]
-  participants?: string[]
 }
 
 export interface BrainstormSession {

@@ -29,7 +29,7 @@ mock.module('../../../src/core/logger', () => ({
 }))
 
 import { buildSystemPrompt, buildMessages } from '../../../plugins/messaging/lib/prompt-builder'
-import type { PlanningSession, ContentTypeOption } from '../../../plugins/messaging/types'
+import type { BrainstormSession, ContentTypeOption } from '../../../plugins/messaging/types'
 
 const DEFAULT_TYPES: ContentTypeOption[] = [
   { id: 'post',    label: 'Post' },
@@ -45,7 +45,7 @@ function opts(overrides: { agentName?: string; contentTypes?: ContentTypeOption[
   }
 }
 
-function makeSession(overrides: Partial<PlanningSession> = {}): PlanningSession {
+function makeSession(overrides: Partial<BrainstormSession> = {}): BrainstormSession {
   return {
     id: 'sess-1',
     agentId: 'basil',
@@ -55,6 +55,7 @@ function makeSession(overrides: Partial<PlanningSession> = {}): PlanningSession 
     updatedAt: '2026-04-07T00:00:00Z',
     messages: [],
     proposals: [],
+    createdAtPlanIds: [],
     ...overrides,
   }
 }
@@ -115,14 +116,14 @@ describe('buildSystemPrompt', () => {
       proposals: [
         {
           id: 'p1', messageId: 'm1', revision: 1, agentId: 'basil',
-          title: 'Monday Post', scheduledAt: '2026-04-13T10:00:00Z',
-          contentType: 'post', tone: 'energetic', brief: 'Intro',
+          title: 'Monday Post', targetDate: '2026-04-13',
+          brief: 'Intro', suggestedChannels: ['blog'],
           status: 'approved',
         },
         {
           id: 'p2', messageId: 'm1', revision: 1, agentId: 'basil',
-          title: 'Wednesday Article', scheduledAt: '2026-04-15T10:00:00Z',
-          contentType: 'article', tone: 'calm', brief: 'Deep dive',
+          title: 'Wednesday Article', targetDate: '2026-04-15',
+          brief: 'Deep dive', suggestedChannels: ['newsletter'],
           status: 'rejected', rejectionNote: 'Too similar to last week',
         },
       ],
@@ -176,8 +177,8 @@ describe('buildMessages', () => {
       proposals: [
         {
           id: 'p1', messageId: 'm1', revision: 1, agentId: 'basil',
-          title: 'Test Item', scheduledAt: '2026-04-13T10:00:00Z',
-          contentType: 'post', tone: 'energetic', brief: 'Test',
+          title: 'Test Item', targetDate: '2026-04-13',
+          brief: 'Test', suggestedChannels: ['blog'],
           status: 'proposed',
         },
       ],

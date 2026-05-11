@@ -1,90 +1,348 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
-import { useSearchParams, useRouter, usePathname } from '@bakin/sdk/hooks'
-import { Button } from "@bakin/sdk/ui"
-import { Plus } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-} from "@bakin/sdk/ui"
-import { PluginHeader } from "@bakin/sdk/components"
-import { AgentAvatar } from "@bakin/sdk/components"
-import { AgentFilter } from "@bakin/sdk/components"
-import { useQueryState } from "@bakin/sdk/hooks"
-import { useSearch } from "@bakin/sdk/hooks"
-import { useAgentList, useAgentIds } from "@bakin/sdk/hooks"
-import { SessionList } from './session-list'
-import { PlanningLayout } from './planning-layout'
-import { NewSessionDialog } from './new-session-dialog'
+  AgentAvatar,
+  AgentFilter,
+  EmptyState,
+  IntegratedBrainstorm,
+  PluginHeader,
+  readBrainstormSseResponse,
+} from "@bakin/sdk/components"
+import type { BrainstormMessage } from "@bakin/sdk/components"
+import { useAgentIds, useAgentList, usePathname, useQueryState, useRouter, useSearch, useSearchParams } from "@bakin/sdk/hooks"
+import { Badge } from "@bakin/sdk/ui"
+import { Button } from "@bakin/sdk/ui"
+import { Input } from "@bakin/sdk/ui"
+import { ArrowLeft, CalendarDays, Check, ClipboardList, Plus, X } from 'lucide-react'
+import type { BrainstormSession, PlanProposal, SessionMessage } from '../types'
+
+interface SessionSummary {
+  id: string
+  agentId: string
+  title: string
+  status: BrainstormSession['status']
+  createdAt: string
+  updatedAt: string
+  proposalCount: number
+  approvedCount: number
+}
+
+function toBrainstorm(agentId: string, message: SessionMessage): BrainstormMessage {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    kind: message.role === 'activity' ? message.kind : undefined,
+    data: message.role === 'activity' ? message.data : undefined,
+    agentId: message.role === 'assistant' ? agentId : message.agentId,
+    timestamp: message.timestamp,
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function transformAssistantReply(raw: string): { text: string; extras?: ReactNode } {
+  let proposalCount = 0
+  const complete = raw.match(/```json\s*\n[\s\S]*?```/g)
+  if (complete) {
+    for (const block of complete) {
+      try {
+        const jsonStr = block.replace(/^```json\s*\n/, '').replace(/```$/, '').trim()
+        const parsed = JSON.parse(jsonStr)
+        proposalCount += Array.isArray(parsed) ? parsed.length : 1
+      } catch {
+        proposalCount += 1
+      }
+    }
+  }
+  const text = raw
+    .split(/```json[\s\S]*?```/)
+    .map(value => value.trim())
+    .filter(Boolean)
+    .join('\n\n')
+  return {
+    text,
+    extras: proposalCount > 0 ? (
+      <Badge variant="outline" className="mt-2 text-[10px]">
+        {proposalCount} {proposalCount === 1 ? 'Plan' : 'Plans'} proposed
+      </Badge>
+    ) : undefined,
+  }
+}
+
+function formatDate(value: string): string {
+  const date = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function mergeProposal(proposals: PlanProposal[], incoming: PlanProposal): PlanProposal[] {
+  const existing = proposals.findIndex(proposal => proposal.id === incoming.id)
+  if (existing === -1) return [...proposals, incoming]
+  return proposals.map(proposal => proposal.id === incoming.id ? incoming : proposal)
+}
 
 export function BrainstormView() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const pathname = usePathname()
-
-  const sessionId = searchParams.get('session') ?? ''
-  const [search, setSearch] = useQueryState('q', '')
-  const [agentFilter, setAgentFilter] = useQueryState('agent', 'all')
-  const [creating, setCreating] = useState(false)
-  const [sessionCount, setSessionCount] = useState<number | undefined>(undefined)
-  const [pendingAgent, setPendingAgent] = useState<string | null>(null)
   const agentList = useAgentList()
   const agentIds = useAgentIds()
+  const sessionId = searchParams.get('session') ?? ''
 
+  const [search, setSearch] = useQueryState('q', '')
+  const [agentFilter, setAgentFilter] = useQueryState('agent', 'all')
+  const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [sessionsLoading, setSessionsLoading] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [newTitle, setNewTitle] = useState('')
+  const [newAgent, setNewAgent] = useState('')
+  const [activeSession, setActiveSession] = useState<BrainstormSession | null>(null)
+  const [messages, setMessages] = useState<BrainstormMessage[]>([])
+  const [materializing, setMaterializing] = useState(false)
   const searchHook = useSearch({ plugin: 'messaging', facets: ['status', 'agent_id'], debounce: 300 })
+
   useEffect(() => {
     if (search) searchHook.search(search)
     else searchHook.clear()
-    // searchHook is a fresh object each render; only the query string change
-    // should re-run this effect.
   }, [search])
+
+  useEffect(() => {
+    setNewAgent(current => current || agentIds[0] || agentList[0]?.id || 'main')
+  }, [agentIds, agentList])
 
   const pushSessionId = useCallback((id: string) => {
     const params = new URLSearchParams(searchParams.toString())
-    if (id) {
-      params.set('session', id)
-    } else {
-      params.delete('session')
-    }
+    if (id) params.set('session', id)
+    else params.delete('session')
     router.push(`${pathname}?${params.toString()}`)
-  }, [searchParams, router, pathname])
+  }, [pathname, router, searchParams])
 
-  // Open the naming dialog for a given agent
-  const handleStartCreate = (agentId: string) => {
-    setPendingAgent(agentId)
+  const loadSessions = useCallback(async () => {
+    setSessionsLoading(true)
+    try {
+      const response = await fetch('/api/plugins/messaging/sessions')
+      if (!response.ok) return
+      const data = await response.json() as { sessions?: SessionSummary[] }
+      setSessions(Array.isArray(data.sessions) ? data.sessions : [])
+    } finally {
+      setSessionsLoading(false)
+    }
+  }, [])
+
+  const loadSession = useCallback(async (id: string) => {
+    const encoded = encodeURIComponent(id)
+    const response = await fetch(`/api/plugins/messaging/sessions/${encoded}?id=${encoded}`)
+    if (!response.ok) {
+      setActiveSession(null)
+      setMessages([])
+      return
+    }
+    const data = await response.json() as { session?: BrainstormSession }
+    if (!data.session) return
+    setActiveSession(data.session)
+    setMessages(data.session.messages.map(message => toBrainstorm(data.session!.agentId, message)))
+  }, [])
+
+  useEffect(() => {
+    loadSessions()
+  }, [loadSessions])
+
+  useEffect(() => {
+    if (sessionId) loadSession(sessionId)
+    else {
+      setActiveSession(null)
+      setMessages([])
+    }
+  }, [loadSession, sessionId])
+
+  const visibleSessions = useMemo(() => {
+    let rows = sessions
+    if (agentFilter !== 'all') rows = rows.filter(session => session.agentId === agentFilter)
+    if (search.trim()) {
+      if (searchHook.results.length > 0) {
+        const ids = new Set(searchHook.results.map(result => result.id.replace(/^brainstorm-/, '')))
+        rows = rows.filter(session => ids.has(session.id))
+      } else if (!searchHook.loading) {
+        const query = search.toLowerCase()
+        rows = rows.filter(session =>
+          session.title.toLowerCase().includes(query) ||
+          session.agentId.toLowerCase().includes(query)
+        )
+      }
+    }
+    return rows
+  }, [agentFilter, search, searchHook.loading, searchHook.results, sessions])
+
+  const createSession = async () => {
+    const agentId = newAgent || agentIds[0] || agentList[0]?.id || 'main'
+    const title = newTitle.trim() || 'New brainstorm session'
+    const response = await fetch('/api/plugins/messaging/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId, title }),
+    })
+    if (!response.ok) return
+    const data = await response.json() as { session?: BrainstormSession }
+    setCreating(false)
+    setNewTitle('')
+    await loadSessions()
+    if (data.session) pushSessionId(data.session.id)
   }
 
-  // Actually create the session with a name
-  const handleCreateSession = async (agentId: string, title: string) => {
-    setPendingAgent(null)
-    setCreating(true)
+  const updateProposal = async (proposal: PlanProposal, patch: Partial<PlanProposal>) => {
+    if (!activeSession) return
+    const sessionEncoded = encodeURIComponent(activeSession.id)
+    const proposalEncoded = encodeURIComponent(proposal.id)
+    const response = await fetch(`/api/plugins/messaging/sessions/${sessionEncoded}/proposals/${proposalEncoded}?id=${sessionEncoded}&proposalId=${proposalEncoded}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    if (!response.ok) return
+    const data = await response.json() as { proposal?: PlanProposal }
+    if (data.proposal) {
+      setActiveSession(current => current ? {
+        ...current,
+        proposals: mergeProposal(current.proposals, data.proposal!),
+      } : current)
+    }
+  }
+
+  const materialize = async () => {
+    if (!activeSession) return
+    setMaterializing(true)
     try {
-      const res = await fetch('/api/plugins/messaging/sessions', {
+      const encoded = encodeURIComponent(activeSession.id)
+      await fetch(`/api/plugins/messaging/sessions/${encoded}/materialize?id=${encoded}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agentId, title }),
       })
-      if (res.ok) {
-        const data = await res.json()
-        pushSessionId(data.session.id)
-      }
-    } catch {
-      // Silently fail
+      await loadSession(activeSession.id)
+      await loadSessions()
     } finally {
-      setCreating(false)
+      setMaterializing(false)
     }
   }
 
-  if (sessionId) {
+  const onSend = useCallback(async (
+    prompt: string,
+    _history: BrainstormMessage[],
+    ctx: { signal: AbortSignal; onToken: (text: string) => void; onCustom?: (name: string, data: unknown) => void },
+  ): Promise<{ content: string }> => {
+    if (!activeSession) return { content: '' }
+    const encoded = encodeURIComponent(activeSession.id)
+    const response = await fetch(`/api/plugins/messaging/sessions/${encoded}/messages?id=${encoded}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: ctx.signal,
+      body: JSON.stringify({ message: prompt }),
+    })
+    const result = await readBrainstormSseResponse(response, ctx, {
+      onCustomEvent: (event, data) => {
+        if (event === 'proposal' && isRecord(data) && data.proposal) {
+          const proposal = data.proposal as PlanProposal
+          setActiveSession(current => current ? {
+            ...current,
+            proposals: mergeProposal(current.proposals, proposal),
+          } : current)
+          ctx.onCustom?.('proposal', proposal)
+          return true
+        }
+        return false
+      },
+    })
+    await loadSession(activeSession.id)
+    await loadSessions()
+    return result
+  }, [activeSession, loadSession, loadSessions])
+
+  if (sessionId && activeSession) {
+    const approvedCount = activeSession.proposals.filter(proposal => proposal.status === 'approved' && !proposal.planId).length
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <PlanningLayout
-          sessionId={sessionId}
-          onBack={() => pushSessionId('')}
+        <PluginHeader
+          title={activeSession.title}
+          count={activeSession.proposals.length}
+          actions={
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={() => pushSessionId('')}>
+                <ArrowLeft className="size-3.5" data-icon="inline-start" />
+                Sessions
+              </Button>
+              <Button size="sm" disabled={approvedCount === 0 || materializing} onClick={materialize}>
+                <ClipboardList className="size-3.5" data-icon="inline-start" />
+                Materialize
+              </Button>
+            </div>
+          }
         />
+
+        <div className="mt-4 grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="min-h-0">
+            <IntegratedBrainstorm
+              messages={messages}
+              onMessagesChange={setMessages}
+              onSend={onSend}
+              agentId={activeSession.agentId}
+              placeholder="Ask for content topics, campaign ideas, or revisions..."
+              transformAssistantMessage={transformAssistantReply}
+              readOnly={activeSession.status === 'archived'}
+              readOnlyNotice={<Badge variant="outline">Archived session</Badge>}
+              fitParent
+              showHeader={false}
+            />
+          </div>
+
+          <aside className="min-h-0 overflow-auto border-l border-border pl-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">Plan proposals</h2>
+              <Badge variant="outline" className="text-[11px]">{activeSession.proposals.length}</Badge>
+            </div>
+            {activeSession.proposals.length === 0 ? (
+              <EmptyState icon={ClipboardList} title="No proposals yet" />
+            ) : (
+              <div className="grid gap-2">
+                {activeSession.proposals.map(proposal => (
+                  <div key={proposal.id} className="rounded-md border border-border bg-card p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h3 className="truncate text-sm font-medium">{proposal.title}</h3>
+                        <p className="mt-1 text-xs text-muted-foreground">{formatDate(proposal.targetDate)}</p>
+                      </div>
+                      <Badge className="capitalize">{proposal.status.replaceAll('_', ' ')}</Badge>
+                    </div>
+                    <p className="mt-2 line-clamp-3 text-sm text-muted-foreground">{proposal.brief}</p>
+                    {proposal.suggestedChannels && proposal.suggestedChannels.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {proposal.suggestedChannels.map(channel => (
+                          <Badge key={channel} variant="outline" className="text-[10px]">{channel}</Badge>
+                        ))}
+                      </div>
+                    )}
+                    {proposal.planId ? (
+                      <Badge variant="outline" className="mt-3 text-[10px]">Plan created</Badge>
+                    ) : (
+                      <div className="mt-3 flex gap-2">
+                        <Button size="sm" variant="outline" onClick={() => updateProposal(proposal, { status: 'approved' })}>
+                          <Check className="size-3.5" data-icon="inline-start" />
+                          Approve
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => updateProposal(proposal, { status: 'rejected' })}>
+                          <X className="size-3.5" data-icon="inline-start" />
+                          Reject
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </aside>
+        </div>
       </div>
     )
   }
@@ -93,63 +351,77 @@ export function BrainstormView() {
     <div className="flex h-full min-h-0 flex-col">
       <PluginHeader
         title="Brainstorm"
-        count={sessionCount}
+        count={visibleSessions.length}
         search={{
           value: search,
           onChange: setSearch,
           placeholder: 'Search sessions...',
         }}
         actions={
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              disabled={creating}
-              render={
-                <Button size="sm" disabled={creating}>
-                  <Plus className="size-3.5" data-icon="inline-start" />
-                  New Session
-                </Button>
-              }
-            />
-            <DropdownMenuContent align="end" className="min-w-[200px]">
-              {agentList.map(agent => (
-                <DropdownMenuItem
-                  key={agent.id}
-                  onClick={() => handleStartCreate(agent.id)}
-                  data-testid={`agent-option-${agent.id}`}
-                >
-                  <AgentAvatar agentId={agent.id} size="xs" />
-                  <span>{agent.name}</span>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <Button size="sm" onClick={() => setCreating(value => !value)}>
+            <Plus className="size-3.5" data-icon="inline-start" />
+            New Session
+          </Button>
         }
       />
 
-      <div className="mt-4 flex flex-1 min-h-0 flex-col gap-4">
-        <AgentFilter
-          agentIds={agentIds}
-          value={agentFilter}
-          onChange={setAgentFilter}
-        />
-        <SessionList
-          onSelectSession={pushSessionId}
-          search={search}
-          searchResults={searchHook.results}
-          searchLoading={searchHook.loading}
-          agentFilter={agentFilter}
-          onCountChange={setSessionCount}
-          onCreateSession={handleStartCreate}
-          creating={creating}
-        />
+      {creating && (
+        <div className="mt-4 grid gap-3 rounded-md border border-border bg-card p-3 md:grid-cols-[180px_minmax(0,1fr)_auto]">
+          <select
+            value={newAgent}
+            onChange={(event) => setNewAgent(event.target.value)}
+            className="h-9 rounded-md border border-border bg-surface px-3 text-sm"
+            aria-label="Brainstorm agent"
+          >
+            {(agentList.length > 0 ? agentList : agentIds.map(id => ({ id, name: id }))).map(agent => (
+              <option key={agent.id} value={agent.id}>{agent.name ?? agent.id}</option>
+            ))}
+          </select>
+          <Input
+            value={newTitle}
+            onChange={(event) => setNewTitle(event.target.value)}
+            placeholder="Session title"
+            aria-label="Brainstorm session title"
+          />
+          <Button onClick={createSession}>Create</Button>
+        </div>
+      )}
+
+      <div className="mt-4 flex items-center gap-3">
+        <AgentFilter agentIds={agentIds} value={agentFilter} onChange={setAgentFilter} />
       </div>
 
-      <NewSessionDialog
-        open={!!pendingAgent}
-        agentId={pendingAgent}
-        onConfirm={handleCreateSession}
-        onCancel={() => setPendingAgent(null)}
-      />
+      <div className="mt-4 min-h-0 flex-1 overflow-auto">
+        {sessionsLoading ? (
+          <p className="text-sm text-muted-foreground">Loading sessions...</p>
+        ) : visibleSessions.length === 0 ? (
+          <EmptyState icon={CalendarDays} title="No brainstorm sessions" />
+        ) : (
+          <div className="grid gap-2">
+            {visibleSessions.map(session => (
+              <button
+                key={session.id}
+                type="button"
+                onClick={() => pushSessionId(session.id)}
+                className="w-full rounded-md border border-border bg-card p-3 text-left transition-colors hover:bg-muted/40"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <AgentAvatar agentId={session.agentId} size="xs" />
+                      <h2 className="truncate text-sm font-medium">{session.title}</h2>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {session.proposalCount} proposals, {session.approvedCount} approved
+                    </p>
+                  </div>
+                  <Badge className="capitalize">{session.status}</Badge>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

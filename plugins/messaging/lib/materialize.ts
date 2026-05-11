@@ -1,4 +1,4 @@
-import type { PlanningSession } from '../types'
+import type { BrainstormSession } from '../types'
 import type { MessagingContentStorage } from './content-storage'
 
 export interface MaterializeResult {
@@ -6,7 +6,7 @@ export interface MaterializeResult {
 }
 
 export function materializeApprovedProposals(
-  session: PlanningSession,
+  session: BrainstormSession,
   contentStore: MessagingContentStorage,
 ): MaterializeResult {
   const planIds: string[] = []
@@ -18,10 +18,10 @@ export function materializeApprovedProposals(
     const plan = contentStore.createPlan({
       title: proposal.title,
       brief: proposal.brief,
-      targetDate: proposal.targetDate ?? proposal.scheduledAt.slice(0, 10),
+      targetDate: proposal.targetDate,
       agent: proposal.agentId,
       sourceSessionId: session.id,
-      suggestedChannels: proposal.suggestedChannels ?? proposal.channels,
+      suggestedChannels: proposal.suggestedChannels,
     })
     proposal.planId = plan.id
     planIds.push(plan.id)

@@ -11,7 +11,7 @@
  * roster validation + user settings) and passed in via options. No
  * filesystem access here.
  */
-import type { PlanningSession, ContentTypeOption } from '../types'
+import type { BrainstormSession, ContentTypeOption } from '../types'
 
 export interface PromptBuilderOptions {
   /** Display name for the agent. Falls back to agentId when omitted (orphaned reference). */
@@ -26,14 +26,14 @@ export interface PromptBuilderOptions {
 /**
  * Build a summary of the current plan state (proposals with statuses).
  */
-function buildPlanState(session: PlanningSession): string {
+function buildPlanState(session: BrainstormSession): string {
   if (session.proposals.length === 0) return ''
 
   const lines = ['## Current Session State\n']
   for (const p of session.proposals) {
     const statusTag = p.status.toUpperCase()
-    const targetDate = p.targetDate ?? p.scheduledAt.slice(0, 10)
-    const channels = p.suggestedChannels ?? p.channels ?? []
+    const targetDate = p.targetDate
+    const channels = p.suggestedChannels ?? []
     let line = `- [${statusTag}] (${p.id}) "${p.title}" — ${targetDate}`
     if (channels.length > 0) line += `; suggestedChannels: ${channels.join(', ')}`
     if (p.rejectionNote) {
@@ -55,7 +55,7 @@ function buildPlanState(session: PlanningSession): string {
  */
 export function buildSystemPrompt(
   agentId: string,
-  session: PlanningSession,
+  session: BrainstormSession,
   options: PromptBuilderOptions,
 ): string {
   const agentName = options.agentName || agentId
@@ -177,7 +177,7 @@ Rules for revisions:
  * Returns an array suitable for the OpenAI-compatible chat completions API.
  */
 export function buildMessages(
-  session: PlanningSession,
+  session: BrainstormSession,
   newMessage: string,
   options: PromptBuilderOptions,
 ): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {

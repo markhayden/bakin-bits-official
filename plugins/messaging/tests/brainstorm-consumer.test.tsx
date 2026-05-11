@@ -4,10 +4,9 @@
  * Brainstorm search consumer smoke tests.
  *
  * Covers the C13 wiring: BrainstormView consumes `useSearch({ plugin:
- * 'messaging' })` and feeds `searchResults` into `SessionList`, which
- * filters its locally-fetched sessions by search hits (stripping the
- * `brainstorm-` key prefix) and falls back to a local title/agentId
- * substring filter when the hook returns nothing.
+ * 'messaging' })`, filters locally-fetched sessions by search hits
+ * (stripping the `brainstorm-` key prefix), and falls back to a local
+ * title/agentId substring filter when the hook returns nothing.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react'
@@ -129,8 +128,7 @@ mock.module('@/components/ui/dropdown-menu', () => ({
   ),
 }))
 
-// Stub every lucide icon with a noop span. List names imported by
-// brainstorm-view + session-list so destructured imports resolve.
+// Stub table components used by BrainstormView.
 mock.module('@/components/ui/table', () => ({
   Table: ({ children }: { children: React.ReactNode }) => <table>{children}</table>,
   TableHeader: ({ children }: { children: React.ReactNode }) => <thead>{children}</thead>,
@@ -142,20 +140,8 @@ mock.module('@/components/ui/table', () => ({
   TableCell: ({ children }: { children: React.ReactNode }) => <td>{children}</td>,
 }))
 
-mock.module('../../../plugins/messaging/components/planning-layout', () => ({
-  PlanningLayout: () => <div data-testid="planning-layout" />,
-}))
-
-mock.module('../../../plugins/messaging/components/new-session-dialog', () => ({
-  NewSessionDialog: () => null,
-}))
-
-mock.module('../../../plugins/messaging/components/delete-session-dialog', () => ({
-  DeleteSessionDialog: () => null,
-}))
-
 // ---------------------------------------------------------------------------
-// Imports — real BrainstormView + real SessionList
+// Imports — real BrainstormView
 // ---------------------------------------------------------------------------
 import { BrainstormView } from '../../../plugins/messaging/components/brainstorm-view'
 

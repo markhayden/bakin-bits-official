@@ -2,12 +2,12 @@ import { describe, expect, it } from 'bun:test'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import type { PlanningSession } from '../types'
+import type { BrainstormSession } from '../types'
 import { MarkdownStorageAdapter } from '../test-helpers'
 import { createMessagingContentStorage } from '../lib/content-storage'
 import { materializeApprovedProposals } from '../lib/materialize'
 
-function makeSession(): PlanningSession {
+function makeSession(): BrainstormSession {
   return {
     id: 'session-1',
     agentId: 'basil',
@@ -24,9 +24,6 @@ function makeSession(): PlanningSession {
         agentId: 'basil',
         title: 'Taco Tuesday',
         targetDate: '2026-05-19',
-        scheduledAt: '2026-05-19T09:00:00-06:00',
-        contentType: 'post',
-        tone: 'conversational',
         brief: 'A taco topic.',
         suggestedChannels: ['blog', 'x'],
         status: 'approved',
@@ -37,9 +34,7 @@ function makeSession(): PlanningSession {
         revision: 1,
         agentId: 'basil',
         title: 'Rejected',
-        scheduledAt: '2026-05-20T09:00:00-06:00',
-        contentType: 'post',
-        tone: 'conversational',
+        targetDate: '2026-05-20',
         brief: 'Skip this.',
         status: 'rejected',
       },

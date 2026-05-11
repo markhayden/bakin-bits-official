@@ -55,9 +55,8 @@ mock.module('../../../src/core/audit', () => ({
 
 ;(globalThis as any).__bakinBroadcast = mock()
 
-// Dynamic require — ES imports are hoisted above mock.module registrations, so
-// plugins/messaging/lib/storage.ts would evaluate getContentDir before the mock
-// takes effect. Using require() defers the load until after mocks are set.
+// Dynamic require — ES imports are hoisted above mock.module registrations.
+// Using require() defers the plugin load until after mocks are set.
 const messagingPlugin = require('../../../plugins/messaging/index').default as typeof import('../../../plugins/messaging/index').default
 const { DEFAULT_CONTENT_TYPES } = require('../../../plugins/messaging/types') as typeof import('../../../plugins/messaging/types')
 import type messagingPluginType from '../../../plugins/messaging/index'

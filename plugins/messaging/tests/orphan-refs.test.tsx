@@ -50,19 +50,20 @@ import {
   __resetContentTypesCache,
 } from '../../../plugins/messaging/hooks/use-content-types'
 import { buildSystemPrompt } from '../../../plugins/messaging/lib/prompt-builder'
-import type { PlanningSession } from '../../../plugins/messaging/types'
+import type { BrainstormSession } from '../../../plugins/messaging/types'
 
 afterEach(() => {
   cleanup()
   __resetContentTypesCache()
 })
 
-function makeSession(overrides: Partial<PlanningSession> = {}): PlanningSession {
+function makeSession(overrides: Partial<BrainstormSession> = {}): BrainstormSession {
   return {
     id: 'sess-1',
     agentId: 'orphaned-agent',
     title: 'Orphan Session',
     status: 'active',
+    createdAtPlanIds: [],
     createdAt: '2026-04-20T00:00:00Z',
     updatedAt: '2026-04-20T00:00:00Z',
     messages: [],

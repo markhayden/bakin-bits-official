@@ -318,7 +318,7 @@ describe('Streaming endpoint', () => {
     const responseWithProposals = `Great ideas for next week!
 
 \`\`\`json
-[{"title":"Monday Recipe","scheduledAt":"2026-04-13T10:00:00Z","contentType":"recipe","tone":"energetic","brief":"A quick pasta dish"}]
+[{"title":"Monday Recipe","targetDate":"2026-04-13","brief":"A quick pasta dish","suggestedChannels":["blog"]}]
 \`\`\``
 
     streamRuntimeResponse(responseWithProposals)
@@ -351,7 +351,7 @@ describe('Streaming endpoint', () => {
   })
 
   it('persists proposals to session file', async () => {
-    const responseWithProposals = `Ideas:\n\`\`\`json\n[{"title":"Test","scheduledAt":"2026-04-13T10:00:00Z","contentType":"tip","tone":"calm","brief":"A tip"}]\n\`\`\``
+    const responseWithProposals = `Ideas:\n\`\`\`json\n[{"title":"Test","targetDate":"2026-04-13","brief":"A tip","suggestedChannels":["x"]}]\n\`\`\``
     streamRuntimeResponse(responseWithProposals)
     const sessionId = await createTestSession()
     const res = await sendMessage(sessionId, 'Suggest something')
@@ -365,7 +365,7 @@ describe('Streaming endpoint', () => {
   })
 
   it('links proposals to their message via proposalIds', async () => {
-    const responseWithProposals = `Here:\n\`\`\`json\n[{"title":"Linked","scheduledAt":"2026-04-13T10:00:00Z","contentType":"tip","tone":"calm","brief":"A tip"}]\n\`\`\``
+    const responseWithProposals = `Here:\n\`\`\`json\n[{"title":"Linked","targetDate":"2026-04-13","brief":"A tip","suggestedChannels":["x"]}]\n\`\`\``
     streamRuntimeResponse(responseWithProposals)
     const sessionId = await createTestSession()
     const res = await sendMessage(sessionId, 'Ideas')
@@ -430,7 +430,7 @@ describe('Streaming endpoint', () => {
   })
 
   it('strips JSON block from stored assistant message content', async () => {
-    const responseWithJson = `Great plan!\n\`\`\`json\n[{"title":"X","scheduledAt":"2026-04-13T10:00:00Z","contentType":"tip","tone":"calm","brief":"Y"}]\n\`\`\``
+    const responseWithJson = `Great plan!\n\`\`\`json\n[{"title":"X","targetDate":"2026-04-13","brief":"Y","suggestedChannels":["x"]}]\n\`\`\``
     streamRuntimeResponse(responseWithJson)
     const sessionId = await createTestSession()
     const res = await sendMessage(sessionId, 'Plan')

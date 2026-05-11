@@ -39,5 +39,5 @@ Relevant coverage:
 - `tests/streaming.test.ts` — SSE tokens, activity streaming/persistence,
   stable runtime thread IDs
 - `tests/prompt-builder.test.ts` — no stored-history prompt replay
-- `tests/session-chat.test.tsx` — persisted activity hydration
+- `tests/streaming.test.ts` — persisted activity hydration
 - `tests/brainstorm-search.test.ts` — activity excluded from search body

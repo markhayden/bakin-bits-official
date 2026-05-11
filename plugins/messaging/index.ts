@@ -1,6 +1,6 @@
 /**
  * Messaging plugin — server entry point.
- * Manages content pipeline: draft → scheduled → executing → waiting → review → published
+ * Manages content Plans, Deliverables, brainstorm sessions, prep tasks, and publishing.
  */
 import { z } from 'zod'
 import type { BakinPlugin, PluginContext } from '@bakin/sdk/types'
@@ -9,18 +9,25 @@ import {
   normalizeBrainstormActivityForStorage,
   runtimeChunkToBrainstormActivity,
 } from '@bakin/sdk/utils'
-import { createMessagingStorage } from './lib/storage'
-import type { MessagingStorage } from './lib/storage'
-import type { CalendarItem, ContentStatus, ContentTone, DeliverableDraft, DeliverableStatus, Plan, PlanStatus, ProposalStatus, MessagingSettings } from './types'
+import type {
+  BrainstormSession,
+  ContentTone,
+  DeliverableDraft,
+  DeliverableStatus,
+  Plan,
+  PlanProposal,
+  PlanStatus,
+  ProposalStatus,
+  SessionMessage,
+  MessagingSettings,
+} from './types'
 import { DEFAULT_CHANNEL, DEFAULT_CONTENT_TYPES } from './types'
-import { createMessagingSessionStore } from './lib/sessions'
 import { buildMessages } from './lib/prompt-builder'
 import {
   buildDoc as buildBrainstormDoc,
   sessionKey,
   SESSION_FILE_PATTERN,
 } from './lib/brainstorm-search'
-import type { PlanningSession } from './types'
 import { archiveLegacyMessagingFile } from './lib/legacy-archive'
 import { normalizeContentTypesForActivate } from './lib/content-types'
 import { createMessagingContentStorage } from './lib/content-storage'
@@ -36,6 +43,7 @@ import type { MessagingContentStorage } from './lib/content-storage'
 import { recomputePlanStatus } from './lib/plan-status'
 import { runMessagingContentSweep } from './lib/sweep'
 import { registerMessagingWorkflowBridge } from './lib/workflow-bridge'
+import { generateId } from './lib/ids'
 
 const log = {
   info: (...args: unknown[]) => console.info('[messaging]', ...args),
@@ -46,8 +54,6 @@ const log = {
 const SWEEP_CRON_ID = 'messaging-content-sweep'
 const SWEEP_CRON_COMMAND = 'bakin:messaging:sweep'
 const DEFAULT_SWEEP_CRON_SCHEDULE = '*/5 * * * *'
-
-let activeMessagingStorage: MessagingStorage | null = null
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -62,15 +68,6 @@ function json(data: unknown, status = 200): Response {
 
 async function readBody<T>(req: Request): Promise<T> {
   return req.json() as Promise<T>
-}
-
-function normalizeChannels(value: unknown): string[] {
-  if (!Array.isArray(value)) return [DEFAULT_CHANNEL]
-  const channels = value
-    .filter((channel): channel is string => typeof channel === 'string')
-    .map(channel => channel.trim())
-    .filter(Boolean)
-  return channels.length > 0 ? channels : [DEFAULT_CHANNEL]
 }
 
 function parseNullablePlanId(value: unknown): string | null | undefined {
@@ -196,6 +193,180 @@ async function startPlanFanOut(
   return { ok: true, plan: updated, task, taskId: task.id, alreadyStarted: false }
 }
 
+interface BrainstormSessionSummary {
+  id: string
+  agentId: string
+  title: string
+  status: BrainstormSession['status']
+  createdAt: string
+  updatedAt: string
+  proposalCount: number
+  approvedCount: number
+}
+
+interface NormalizedProposalInput {
+  id?: string
+  title: string
+  targetDate: string
+  brief: string
+  suggestedChannels?: string[]
+}
+
+function normalizeOptionalChannels(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const channels = value
+    .filter((channel): channel is string => typeof channel === 'string')
+    .map(channel => channel.trim())
+    .filter(Boolean)
+  return channels.length > 0 ? channels : undefined
+}
+
+function normalizeProposalInput(item: unknown): NormalizedProposalInput | null {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return null
+  const record = item as Record<string, unknown>
+  if (typeof record.title !== 'string' || typeof record.targetDate !== 'string') return null
+  return {
+    id: typeof record.id === 'string' ? record.id : undefined,
+    title: record.title,
+    targetDate: record.targetDate,
+    brief: typeof record.brief === 'string' ? record.brief : '',
+    suggestedChannels: normalizeOptionalChannels(record.suggestedChannels),
+  }
+}
+
+function normalizeProposalInputs(items: unknown[]): NormalizedProposalInput[] {
+  return items
+    .map(normalizeProposalInput)
+    .filter((item): item is NormalizedProposalInput => item !== null)
+}
+
+function listBrainstormSessionSummaries(
+  contentStore: MessagingContentStorage,
+  opts: { status?: string; agentId?: string } = {},
+): BrainstormSessionSummary[] {
+  return contentStore.listBrainstormSessions()
+    .filter(session => !opts.status || session.status === opts.status)
+    .filter(session => !opts.agentId || session.agentId === opts.agentId)
+    .map(session => ({
+      id: session.id,
+      agentId: session.agentId,
+      title: session.title,
+      status: session.status,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      proposalCount: session.proposals.length,
+      approvedCount: session.proposals.filter(proposal => proposal.status === 'approved').length,
+    }))
+}
+
+function appendBrainstormMessage(
+  contentStore: MessagingContentStorage,
+  sessionId: string,
+  message: {
+    role: SessionMessage['role']
+    content: string
+    kind?: string
+    data?: unknown
+    agentId?: string
+  },
+  proposalIds?: string[],
+): SessionMessage {
+  const session = contentStore.getBrainstormSession(sessionId)
+  if (!session) throw new Error(`Session ${sessionId} not found`)
+  const nextMessage: SessionMessage = {
+    id: generateId(),
+    role: message.role,
+    content: message.content,
+    timestamp: new Date().toISOString(),
+    proposalIds,
+  }
+  if (message.kind !== undefined) nextMessage.kind = message.kind
+  if (message.data !== undefined) nextMessage.data = message.data
+  if (message.agentId !== undefined) nextMessage.agentId = message.agentId
+  contentStore.updateBrainstormSession(sessionId, {
+    messages: [...session.messages, nextMessage],
+  })
+  return nextMessage
+}
+
+function upsertBrainstormProposals(
+  contentStore: MessagingContentStorage,
+  sessionId: string,
+  messageId: string,
+  rawItems: unknown[],
+): PlanProposal[] {
+  const session = contentStore.getBrainstormSession(sessionId)
+  if (!session) throw new Error(`Session ${sessionId} not found`)
+  const proposals = [...session.proposals]
+  const result: PlanProposal[] = []
+
+  for (const item of normalizeProposalInputs(rawItems)) {
+    let existing = item.id ? proposals.find(proposal => proposal.id === item.id) : undefined
+    if (!existing) {
+      const titleLower = item.title.toLowerCase().trim()
+      existing = proposals.find(proposal => proposal.title.toLowerCase().trim() === titleLower && proposal.status !== 'approved')
+    }
+
+    if (existing) {
+      existing.title = item.title
+      existing.targetDate = item.targetDate
+      existing.brief = item.brief
+      if (item.suggestedChannels !== undefined) existing.suggestedChannels = item.suggestedChannels
+      existing.messageId = messageId
+      existing.revision += 1
+      if (existing.status === 'rejected') existing.status = 'revised'
+      result.push(existing)
+    } else {
+      const proposal: PlanProposal = {
+        id: generateId(),
+        messageId,
+        revision: 1,
+        agentId: session.agentId,
+        title: item.title,
+        targetDate: item.targetDate,
+        brief: item.brief,
+        ...(item.suggestedChannels !== undefined ? { suggestedChannels: item.suggestedChannels } : {}),
+        status: 'proposed',
+      }
+      proposals.push(proposal)
+      result.push(proposal)
+    }
+  }
+
+  if (result.length > 0) {
+    contentStore.updateBrainstormSession(sessionId, { proposals })
+  }
+  return result
+}
+
+function updateBrainstormProposal(
+  contentStore: MessagingContentStorage,
+  sessionId: string,
+  proposalId: string,
+  updates: {
+    status?: ProposalStatus
+    title?: string
+    brief?: string
+    targetDate?: string
+    suggestedChannels?: string[]
+    rejectionNote?: string
+  },
+): PlanProposal {
+  const session = contentStore.getBrainstormSession(sessionId)
+  if (!session) throw new Error(`Session ${sessionId} not found`)
+  const proposals = [...session.proposals]
+  const proposal = proposals.find(item => item.id === proposalId)
+  if (!proposal) throw new Error(`Proposal ${proposalId} not found`)
+  if (updates.status !== undefined) proposal.status = updates.status
+  if (updates.title !== undefined) proposal.title = updates.title
+  if (updates.brief !== undefined) proposal.brief = updates.brief
+  if (updates.targetDate !== undefined) proposal.targetDate = updates.targetDate
+  if (updates.suggestedChannels !== undefined) proposal.suggestedChannels = updates.suggestedChannels
+  if (updates.rejectionNote !== undefined) proposal.rejectionNote = updates.rejectionNote
+  contentStore.updateBrainstormSession(sessionId, { proposals })
+  return proposal
+}
+
 interface AgentMetaLike { id: string; name?: string }
 
 const AGENT_ID_SHAPE = /^[a-z0-9-]+$/
@@ -297,70 +468,6 @@ async function resolvePromptOptions(ctx: PluginContext, agentId: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Approve logic (shared by route + exec tool)
-// ---------------------------------------------------------------------------
-
-async function approveItem(
-  item: CalendarItem,
-  ctx: PluginContext,
-  messaging: MessagingStorage,
-): Promise<{ item: CalendarItem; newStatus: ContentStatus } | { error: string; status: number }> {
-  let newStatus: ContentStatus
-  if (item.status === 'draft') {
-    newStatus = 'scheduled'
-  } else if (item.status === 'review') {
-    newStatus = 'published'
-
-    // Post through the active runtime channel adapter.
-    try {
-      const caption = item.draft?.caption || item.title
-      const channels = normalizeChannels(item.channels)
-
-      let media = null as Awaited<ReturnType<PluginContext['assets']['fileRef']>> | null
-      const mediaFilename = item.draft?.imageFilename || item.draft?.videoFilename
-      if (mediaFilename) {
-        try {
-          media = await ctx.assets.fileRef(mediaFilename)
-        } catch (err) {
-          log.warn('Asset reference unavailable on approve', { itemId: item.id, filename: mediaFilename, err: err instanceof Error ? err.message : String(err) })
-        }
-      }
-
-      if (media) {
-        await ctx.runtime.channels.deliverContent({
-          channels,
-          content: {
-            title: item.title,
-            body: caption,
-            files: [media],
-          },
-        })
-      } else {
-        await ctx.runtime.channels.sendMessage({
-          channels,
-          message: {
-            body: caption,
-          },
-        })
-      }
-    } catch (err) {
-      log.error('Channel post failed', err)
-    }
-  } else {
-    return { error: `Cannot approve item in status: ${item.status}`, status: 400 }
-  }
-
-  const updated = messaging.updateItem(item.id, {
-    status: newStatus,
-    ...(newStatus === 'published' ? { publishedAt: new Date().toISOString() } : {}),
-  })
-
-  ctx.activity.audit('item.approved', 'system', { itemId: item.id, from: item.status, to: newStatus })
-  ctx.activity.log('system', `Messaging item "${item.title}" approved → ${newStatus}`)
-  return { item: updated, newStatus }
-}
-
-// ---------------------------------------------------------------------------
 // Plugin
 // ---------------------------------------------------------------------------
 
@@ -420,29 +527,7 @@ const messagingPlugin: BakinPlugin = {
       log.info('Archived legacy messaging.json', legacyArchive)
     }
 
-    const messaging = createMessagingStorage(ctx.storage)
     const contentStore = createMessagingContentStorage(ctx.storage)
-    activeMessagingStorage = messaging
-    const sessions = createMessagingSessionStore(ctx.storage, messaging)
-    const {
-      loadMessagingItems,
-      createItem,
-      updateItem,
-      deleteItem,
-      getItem,
-    } = messaging
-    const {
-      createSession,
-      loadSession,
-      saveSession,
-      listSessions,
-      updateSession: updateSessionFn,
-      deleteSession: deleteSessionFn,
-      appendMessage,
-      upsertProposals,
-      updateProposal,
-      confirmSession,
-    } = sessions
 
     const defaultWorkflows = registerMessagingDefaultWorkflows(ctx, undefined, log)
     if (defaultWorkflows.registered.length > 0) {
@@ -501,7 +586,7 @@ const messagingPlugin: BakinPlugin = {
           },
           fileToDoc: async (_rel, content) => {
             try {
-              const parsed = JSON.parse(content) as PlanningSession
+              const parsed = JSON.parse(content) as BrainstormSession
               if (!parsed || typeof parsed.id !== 'string') return null
               if (!Array.isArray(parsed.messages)) parsed.messages = []
               if (!Array.isArray(parsed.proposals)) parsed.proposals = []
@@ -513,12 +598,8 @@ const messagingPlugin: BakinPlugin = {
         },
       ],
       reindex: async function* () {
-        for (const file of (ctx.storage.list?.('messaging/sessions') ?? []).filter(f => f.endsWith('.json'))) {
-          const id = file.replace(/\.json$/, '')
-          const session = loadSession(id)
-          if (session) {
-            yield { key: sessionKey(session.id), doc: buildBrainstormDoc(session) }
-          }
+        for (const session of contentStore.listBrainstormSessions()) {
+          yield { key: sessionKey(session.id), doc: buildBrainstormDoc(session) }
         }
       },
       verifyExists: async (key: string) => {
@@ -529,156 +610,6 @@ const messagingPlugin: BakinPlugin = {
     })
 
     // ── API Routes ─────────────────────────────────────────────────────
-
-    // GET / — list items (optional ?month=YYYY-MM&channel=general filter)
-    const listHandler = async (req: Request) => {
-      const url = new URL(req.url)
-      const month = url.searchParams.get('month')
-      const channel = url.searchParams.get('channel')
-      let items = loadMessagingItems()
-      if (month) items = items.filter(i => i.scheduledAt.startsWith(month))
-      if (channel) items = items.filter(i => i.channels.includes(channel))
-      items.sort((a, b) => new Date(b.scheduledAt).getTime() - new Date(a.scheduledAt).getTime())
-      return json({ items })
-    }
-    ctx.registerRoute({ path: '/', method: 'GET', description: 'List messaging items', handler: listHandler })
-
-    // GET /:itemId — get single item
-    const getHandler = async (req: Request) => {
-      const url = new URL(req.url)
-      const id = url.searchParams.get('itemId')
-      if (!id) return json({ error: 'itemId required' }, 400)
-      const item = getItem(id)
-      if (!item) return json({ error: 'Item not found' }, 404)
-      return json({ item })
-    }
-    ctx.registerRoute({ path: '/:itemId', method: 'GET', description: 'Get single messaging item', handler: getHandler })
-
-    // POST / — create item
-    const createHandler = async (req: Request) => {
-      const body = await readBody<Record<string, unknown>>(req)
-      const { title, agent, contentType, tone, scheduledAt, brief, status, channels } = body as Record<string, unknown>
-
-      if (!title || !agent || !scheduledAt) {
-        return json({ error: 'title, agent, and scheduledAt required' }, 400)
-      }
-
-      const resolvedChannels = normalizeChannels(channels)
-      const item = createItem({
-        title: title as string,
-        agent: (agent as string) as CalendarItem['agent'],
-        contentType: ((contentType as string) || 'post') as CalendarItem['contentType'],
-        tone: ((tone as string) || 'conversational') as CalendarItem['tone'],
-        scheduledAt: scheduledAt as string,
-        brief: (brief as string) || '',
-        status: ((status as string) as ContentStatus) || 'draft',
-        channels: resolvedChannels,
-      })
-
-      ctx.activity.audit('item.created', agent as string, { itemId: item.id, title })
-      ctx.activity.log(agent as string, `Created messaging item "${title}"`)
-      return json({ ok: true, item })
-    }
-    ctx.registerRoute({ path: '/', method: 'POST', description: 'Create messaging item', handler: createHandler })
-
-    // PUT /:itemId — update item
-    const updateHandler = async (req: Request) => {
-      const url = new URL(req.url)
-      const body = await readBody<Record<string, unknown>>(req)
-      const id = url.searchParams.get('itemId') || (body.id as string)
-
-      if (!id) return json({ error: 'id required' }, 400)
-
-      try {
-        const item = updateItem(id, body as Partial<CalendarItem>)
-        ctx.activity.audit('item.updated', 'system')
-        ctx.activity.log('system', `Updated messaging item "${item.title}"`)
-        return json({ ok: true, item })
-      } catch (e: unknown) {
-        return json({ error: (e as Error).message || String(e) }, 404)
-      }
-    }
-    ctx.registerRoute({ path: '/:itemId', method: 'PUT', description: 'Update messaging item', handler: updateHandler })
-
-    // DELETE /:itemId — delete item
-    const deleteHandler = async (req: Request) => {
-      const url = new URL(req.url)
-      const body = await readBody<{ id?: string }>(req).catch(() => ({} as { id?: string }))
-      const id = url.searchParams.get('itemId') || body.id
-
-      if (!id) return json({ error: 'id required' }, 400)
-
-      deleteItem(id)
-      ctx.activity.audit('item.deleted', 'system', { itemId: id })
-      ctx.activity.log('system', `Deleted messaging item ${id}`)
-      return json({ ok: true })
-    }
-    ctx.registerRoute({ path: '/:itemId', method: 'DELETE', description: 'Delete messaging item', handler: deleteHandler })
-
-    // POST /:itemId/approve — approve item
-    const approveHandler = async (req: Request) => {
-      const url = new URL(req.url)
-      const body = await readBody<{ id?: string }>(req).catch(() => ({} as { id?: string }))
-      const id = url.searchParams.get('itemId') || body.id
-
-      if (!id) return json({ error: 'id required' }, 400)
-
-      const item = getItem(id)
-      if (!item) return json({ error: 'Item not found' }, 404)
-
-      const result = await approveItem(item, ctx, messaging)
-      if ('error' in result) return json({ error: result.error }, result.status)
-      return json({ ok: true, item: result.item })
-    }
-    ctx.registerRoute({ path: '/:itemId/approve', method: 'POST', description: 'Approve messaging item', handler: approveHandler })
-
-    // POST /:itemId/unapprove — revert scheduled item back to draft
-    const unapproveHandler = async (req: Request) => {
-      const url = new URL(req.url)
-      const body = await readBody<{ id?: string }>(req).catch(() => ({} as { id?: string }))
-      const id = url.searchParams.get('itemId') || body.id
-
-      if (!id) return json({ error: 'id required' }, 400)
-
-      const item = getItem(id)
-      if (!item) return json({ error: 'Item not found' }, 404)
-
-      if (item.status !== 'scheduled') {
-        return json({ error: `Can only unapprove items in scheduled status (got: ${item.status})` }, 400)
-      }
-
-      const updated = updateItem(id, { status: 'draft' })
-      ctx.activity.audit('item.unapproved', 'system', { itemId: id, from: 'scheduled', to: 'draft' })
-      ctx.activity.log('system', `Messaging item "${item.title}" unapproved → draft`)
-      return json({ ok: true, item: updated })
-    }
-    ctx.registerRoute({ path: '/:itemId/unapprove', method: 'POST', description: 'Unapprove messaging item', handler: unapproveHandler })
-
-    // POST /:itemId/reject — reject item back to draft
-    const rejectHandler = async (req: Request) => {
-      const url = new URL(req.url)
-      const body = await readBody<{ id?: string; note?: string }>(req)
-      const id = url.searchParams.get('itemId') || body.id
-
-      if (!id) return json({ error: 'id required' }, 400)
-
-      const item = getItem(id)
-      if (!item) return json({ error: 'Item not found' }, 404)
-
-      if (item.status !== 'review') {
-        return json({ error: 'Can only reject items in review status' }, 400)
-      }
-
-      const updated = updateItem(id, {
-        status: 'draft',
-        rejectionNote: body.note || undefined,
-      })
-
-      ctx.activity.audit('item.rejected', 'system', { itemId: id, note: body.note })
-      ctx.activity.log('system', `Messaging item "${item.title}" rejected → draft`)
-      return json({ ok: true, item: updated })
-    }
-    ctx.registerRoute({ path: '/:itemId/reject', method: 'POST', description: 'Reject messaging item', handler: rejectHandler })
 
     // POST /brainstorm — one-shot Plan brainstorming
     ctx.registerRoute({
@@ -775,7 +706,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const url = new URL(req.url)
         const status = url.searchParams.get('status') || undefined
         const agentId = url.searchParams.get('agentId') || undefined
-        const sessions = listSessions({ status, agentId })
+        const sessions = listBrainstormSessionSummaries(contentStore, { status, agentId })
         return json({ sessions })
       },
     })
@@ -789,7 +720,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const url = new URL(req.url)
         const id = url.searchParams.get('id')
         if (!id) return json({ error: 'id required' }, 400)
-        const session = loadSession(id)
+        const session = contentStore.getBrainstormSession(id)
         if (!session) return json({ error: 'Session not found' }, 404)
         return json({ session })
       },
@@ -803,7 +734,14 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       handler: async (req: Request) => {
         const body = await readBody<{ agentId?: string; title?: string; scope?: string }>(req)
         if (!body.agentId) return json({ error: 'agentId required' }, 400)
-        const session = createSession({ agentId: body.agentId, title: body.title, scope: body.scope })
+        if (!(await validateAgentId(ctx, body.agentId))) {
+          return json({ error: 'invalid agentId' }, 400)
+        }
+        const session = contentStore.createBrainstormSession({
+          agentId: body.agentId,
+          title: body.title || 'New brainstorm session',
+          scope: body.scope,
+        })
         ctx.activity.audit('session.created', body.agentId, { sessionId: session.id })
         ctx.activity.log(body.agentId, `Created planning session "${session.title}"`)
         return json({ ok: true, session })
@@ -817,11 +755,11 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       description: 'Update a planning session',
       handler: async (req: Request) => {
         const url = new URL(req.url)
-        const body = await readBody<{ id?: string; title?: string; status?: 'active' | 'completed' }>(req)
+        const body = await readBody<{ id?: string; title?: string; status?: BrainstormSession['status'] }>(req)
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
         try {
-          const session = updateSessionFn(id, { title: body.title, status: body.status })
+          const session = contentStore.updateBrainstormSession(id, { title: body.title, status: body.status })
           return json({ ok: true, session })
         } catch (e: unknown) {
           return json({ error: (e as Error).message }, 404)
@@ -839,14 +777,11 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const body = await readBody<{ id?: string }>(req).catch(() => ({} as { id?: string }))
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
-        try {
-          deleteSessionFn(id)
-          ctx.activity.audit('session.deleted', 'system', { sessionId: id })
-          ctx.activity.log('system', `Deleted planning session ${id}`)
-          return json({ ok: true })
-        } catch (e: unknown) {
-          return json({ error: (e as Error).message }, 404)
-        }
+        if (!contentStore.getBrainstormSession(id)) return json({ error: 'Session not found' }, 404)
+        contentStore.deleteBrainstormSession(id)
+        ctx.activity.audit('session.deleted', 'system', { sessionId: id })
+        ctx.activity.log('system', `Deleted planning session ${id}`)
+        return json({ ok: true })
       },
     })
 
@@ -862,12 +797,12 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         if (!id) return json({ error: 'id required' }, 400)
         if (!body.message) return json({ error: 'message required' }, 400)
 
-        const session = loadSession(id)
+        const session = contentStore.getBrainstormSession(id)
         if (!session) return json({ error: 'Session not found' }, 404)
-        if (session.status === 'completed') return json({ error: 'Session is completed' }, 400)
+        if (session.status === 'archived') return json({ error: 'Session is archived' }, 400)
 
         // Append user message
-        appendMessage(id, { role: 'user', content: body.message })
+        appendBrainstormMessage(contentStore, id, { role: 'user', content: body.message })
 
         // Build current-turn prompt; durable history is held by the runtime
         // adapter through the stable threadId.
@@ -906,7 +841,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
                   try {
                     const parsed = JSON.parse(match[1].trim())
                     const items = Array.isArray(parsed) ? parsed : [parsed]
-                    const saved = upsertProposals(sessionId, `streaming-${Date.now()}`, items)
+                    const saved = upsertBrainstormProposals(contentStore, sessionId, `streaming-${Date.now()}`, items)
                     for (const p of saved) {
                       streamedProposalIds.push(p.id)
                       send('proposal', { proposal: p })
@@ -949,7 +884,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
                     const activity = runtimeChunkToBrainstormActivity(chunk)
                     const normalized = activity ? normalizeBrainstormActivityForStorage(activity) : null
                     if (normalized) {
-                      appendMessage(sessionId, {
+                      appendBrainstormMessage(contentStore, sessionId, {
                         role: 'activity',
                         content: normalized.content,
                         kind: normalized.kind,
@@ -987,7 +922,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
                   try {
                     const parsed = JSON.parse(jsonMatch[1].trim())
                     const items = Array.isArray(parsed) ? parsed : [parsed]
-                    const saved = upsertProposals(sessionId, `final-${Date.now()}`, items)
+                    const saved = upsertBrainstormProposals(contentStore, sessionId, `final-${Date.now()}`, items)
                     for (const p of saved) {
                       streamedProposalIds.push(p.id)
                       send('proposal', { proposal: p })
@@ -1006,7 +941,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
 
               const messageIds: string[] = []
               for (const segment of segments) {
-                const msg = appendMessage(sessionId, {
+                const msg = appendBrainstormMessage(contentStore, sessionId, {
                   role: 'assistant',
                   content: segment,
                 })
@@ -1015,7 +950,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
 
               // If no text segments (pure JSON response), save a placeholder
               if (messageIds.length === 0) {
-                const msg = appendMessage(sessionId, {
+                const msg = appendBrainstormMessage(contentStore, sessionId, {
                   role: 'assistant',
                   content: '',
                 }, streamedProposalIds)
@@ -1024,7 +959,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
 
               // Link proposals to the first message and patch messageIds on proposals
               if (streamedProposalIds.length > 0) {
-                const reloadedSession = loadSession(sessionId)
+                const reloadedSession = contentStore.getBrainstormSession(sessionId)
                 if (reloadedSession) {
                   // Attach proposalIds to the first assistant message
                   const firstMsg = reloadedSession.messages.find(m => m.id === messageIds[0])
@@ -1036,7 +971,10 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
                       p.messageId = messageIds[0]
                     }
                   }
-                  saveSession(reloadedSession)
+                  contentStore.updateBrainstormSession(sessionId, {
+                    messages: reloadedSession.messages,
+                    proposals: reloadedSession.proposals,
+                  })
                 }
               }
 
@@ -1078,41 +1016,17 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const proposalId = url.searchParams.get('proposalId')
         if (!sessionId || !proposalId) return json({ error: 'sessionId and proposalId required' }, 400)
         try {
-          const proposal = updateProposal(sessionId, proposalId, {
+          const proposal = updateBrainstormProposal(contentStore, sessionId, proposalId, {
             status: body.status as ProposalStatus | undefined,
             title: body.title as string | undefined,
             brief: body.brief as string | undefined,
-            tone: body.tone as string | undefined,
-            scheduledAt: body.scheduledAt as string | undefined,
             targetDate: body.targetDate as string | undefined,
-            channels: body.channels as string[] | undefined,
             suggestedChannels: body.suggestedChannels as string[] | undefined,
             rejectionNote: body.rejectionNote as string | undefined,
           })
           return json({ ok: true, proposal })
         } catch (e: unknown) {
           return json({ error: (e as Error).message }, 404)
-        }
-      },
-    })
-
-    // POST /sessions/:id/confirm — confirm plan
-    ctx.registerRoute({
-      path: '/sessions/:id/confirm',
-      method: 'POST',
-      description: 'Confirm plan and create messaging items',
-      handler: async (req: Request) => {
-        const url = new URL(req.url)
-        const body = await readBody<{ id?: string; autoApprove?: boolean }>(req).catch(() => ({} as { id?: string; autoApprove?: boolean }))
-        const id = url.searchParams.get('id') || body.id
-        if (!id) return json({ error: 'id required' }, 400)
-        try {
-          const result = confirmSession(id, { autoApprove: !!body.autoApprove })
-          ctx.activity.audit('session.confirmed', 'system', { sessionId: id, itemsCreated: result.itemsCreated, autoApprove: !!body.autoApprove })
-          ctx.activity.log('system', `Confirmed planning session — ${result.itemsCreated} items created (${body.autoApprove ? 'scheduled' : 'draft'})`)
-          return json({ ok: true, ...result })
-        } catch (e: unknown) {
-          return json({ error: (e as Error).message }, 400)
         }
       },
     })
@@ -1126,10 +1040,13 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const body = await readBody<{ id?: string }>(req).catch(() => ({} as { id?: string }))
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
-        const session = loadSession(id)
+        const session = contentStore.getBrainstormSession(id)
         if (!session) return json({ error: 'Session not found' }, 404)
         const result = materializeApprovedProposals(session, contentStore)
-        saveSession(session)
+        contentStore.updateBrainstormSession(session.id, {
+          proposals: session.proposals,
+          createdAtPlanIds: session.createdAtPlanIds,
+        })
         ctx.activity.audit('session.materialized', 'system', { sessionId: id, planIds: result.planIds })
         ctx.activity.log('system', `Materialized ${result.planIds.length} Plan(s) from "${session.title}"`)
         return json({ ok: true, ...result })
@@ -1749,177 +1666,6 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       },
     })
 
-    ctx.registerExecTool({
-      name: 'bakin_exec_messaging_list',
-      label: 'Listed messages',
-      description: 'List messaging items with optional filters',
-      parameters: {
-        month: z.string().optional().describe('Filter by month (YYYY-MM)'),
-        status: z.string().optional().describe('Filter by status (draft, scheduled, review, published, etc.)'),
-        agent: z.string().optional().describe('Filter by assigned agent'),
-        channel: z.string().optional().describe('Filter by runtime channel ID (e.g. general, announcements)'),
-      },
-      handler: async (params: Record<string, unknown>) => {
-        let items = loadMessagingItems()
-        if (params.month) items = items.filter(i => i.scheduledAt.startsWith(params.month as string))
-        if (params.status) items = items.filter(i => i.status === params.status)
-        if (params.agent) items = items.filter(i => i.agent === params.agent)
-        if (params.channel) {
-          const ch = params.channel as string
-          items = items.filter(i => i.channels.includes(ch))
-        }
-        items.sort((a, b) => new Date(b.scheduledAt).getTime() - new Date(a.scheduledAt).getTime())
-        return {
-          ok: true,
-          count: items.length,
-          items: items.map(i => ({
-            id: i.id,
-            title: i.title,
-            agent: i.agent,
-            status: i.status,
-            scheduledAt: i.scheduledAt,
-            channels: i.channels,
-            contentType: i.contentType,
-          })),
-        }
-      },
-    })
-
-    ctx.registerExecTool({
-      name: 'bakin_exec_messaging_get',
-      label: 'Read message details',
-      description: 'Get details for a single messaging item',
-      parameters: {
-        itemId: z.string().describe('Item ID (required)'),
-      },
-      handler: async (params: Record<string, unknown>) => {
-        if (!params.itemId) return { ok: false, error: 'itemId required' }
-        const item = getItem(params.itemId as string)
-        if (!item) return { ok: false, error: 'Item not found' }
-        return { ok: true, item }
-      },
-    })
-
-    ctx.registerExecTool({
-      name: 'bakin_exec_messaging_create',
-      label: 'Created a message',
-      activityDuplicate: true,
-      description: 'Create a new messaging item',
-      parameters: {
-        title: z.string().describe('Item title (required)'),
-        agent: z.string().describe('Assigned agent (required)'),
-        scheduledAt: z.string().describe('ISO datetime for scheduling (required)'),
-        channels: z.array(z.string()).optional().describe('Runtime channel IDs (default: ["general"])'),
-        contentType: z.string().optional().describe('Content type id from the messaging contentTypes setting (e.g. post, article, video)'),
-        tone: z.string().optional().describe('Content tone (energetic, calm, educational, etc.)'),
-        brief: z.string().optional().describe('Content brief'),
-        status: z.string().optional().describe('Initial status (default: draft)'),
-      },
-      handler: async (params: Record<string, unknown>) => {
-        if (!params.title || !params.agent || !params.scheduledAt) {
-          return { ok: false, error: 'title, agent, and scheduledAt required' }
-        }
-        const channels = normalizeChannels(params.channels)
-        const item = createItem({
-          title: params.title as string,
-          agent: params.agent as CalendarItem['agent'],
-          scheduledAt: params.scheduledAt as string,
-          channels,
-          contentType: ((params.contentType as string) || 'post') as CalendarItem['contentType'],
-          tone: ((params.tone as string) || 'conversational') as CalendarItem['tone'],
-          brief: (params.brief as string) || '',
-          status: (params.status as ContentStatus) || 'draft',
-        })
-        ctx.activity.audit('item.created', params.agent as string, { itemId: item.id, title: params.title })
-        return { ok: true, item }
-      },
-    })
-
-    ctx.registerExecTool({
-      name: 'bakin_exec_messaging_update',
-      label: 'Updated a message',
-      activityDuplicate: true,
-      description: 'Update a messaging item',
-      parameters: {
-        itemId: z.string().describe('Item ID (required)'),
-        title: z.string().optional().describe('New title'),
-        scheduledAt: z.string().optional().describe('New schedule datetime'),
-        status: z.string().optional().describe('New status'),
-        brief: z.string().optional().describe('Updated brief'),
-        tone: z.string().optional().describe('Updated tone'),
-      },
-      handler: async (params: Record<string, unknown>) => {
-        if (!params.itemId) return { ok: false, error: 'itemId required' }
-        const { itemId, ...updates } = params
-        try {
-          const item = updateItem(itemId as string, updates as Partial<CalendarItem>)
-          ctx.activity.audit('item.updated', 'system', { itemId })
-          return { ok: true, item }
-        } catch (e: unknown) {
-          return { ok: false, error: String(e) }
-        }
-      },
-    })
-
-    ctx.registerExecTool({
-      name: 'bakin_exec_messaging_approve',
-      label: 'Approved a message',
-      activityDuplicate: true,
-      description: 'Approve a messaging item (draft → scheduled, review → published)',
-      parameters: {
-        itemId: z.string().describe('Item ID (required)'),
-      },
-      handler: async (params: Record<string, unknown>) => {
-        if (!params.itemId) return { ok: false, error: 'itemId required' }
-        const item = getItem(params.itemId as string)
-        if (!item) return { ok: false, error: 'Item not found' }
-        const result = await approveItem(item, ctx, messaging)
-        if ('error' in result) return { ok: false, error: result.error }
-        return { ok: true, item: result.item, newStatus: result.newStatus }
-      },
-    })
-
-    ctx.registerExecTool({
-      name: 'bakin_exec_messaging_reject',
-      label: 'Rejected a message',
-      activityDuplicate: true,
-      description: 'Reject a messaging item back to draft status',
-      parameters: {
-        itemId: z.string().describe('Item ID (required)'),
-        note: z.string().optional().describe('Rejection note / feedback'),
-      },
-      handler: async (params: Record<string, unknown>) => {
-        if (!params.itemId) return { ok: false, error: 'itemId required' }
-        const item = getItem(params.itemId as string)
-        if (!item) return { ok: false, error: 'Item not found' }
-        if (item.status !== 'review') return { ok: false, error: 'Can only reject items in review status' }
-        const updated = updateItem(params.itemId as string, {
-          status: 'draft',
-          rejectionNote: (params.note as string) || undefined,
-        })
-        ctx.activity.audit('item.rejected', 'system', { itemId: params.itemId, note: params.note })
-        return { ok: true, item: updated }
-      },
-    })
-
-    ctx.registerExecTool({
-      name: 'bakin_exec_messaging_delete',
-      label: 'Deleted a message',
-      activityDuplicate: true,
-      description: 'Delete a messaging item',
-      parameters: {
-        itemId: z.string().describe('Item ID (required)'),
-      },
-      handler: async (params: Record<string, unknown>) => {
-        if (!params.itemId) return { ok: false, error: 'itemId required' }
-        const item = getItem(params.itemId as string)
-        if (!item) return { ok: false, error: 'Item not found' }
-        deleteItem(params.itemId as string)
-        ctx.activity.audit('item.deleted', 'system', { itemId: params.itemId })
-        return { ok: true }
-      },
-    })
-
     // ── Session Exec Tools (agent-facing) ─────────────────────────────
 
     ctx.registerExecTool({
@@ -1927,11 +1673,11 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       label: 'Listed brainstorm sessions',
       description: 'List planning sessions with optional filters',
       parameters: {
-        status: z.string().optional().describe('Filter by status (active, completed)'),
+        status: z.string().optional().describe('Filter by status (active, archived)'),
         agentId: z.string().optional().describe('Filter by agent ID'),
       },
       handler: async (params: Record<string, unknown>) => {
-        const sessions = listSessions({
+        const sessions = listBrainstormSessionSummaries(contentStore, {
           status: params.status as string | undefined,
           agentId: params.agentId as string | undefined,
         })
@@ -1948,7 +1694,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       },
       handler: async (params: Record<string, unknown>) => {
         if (!params.sessionId) return { ok: false, error: 'sessionId required' }
-        const session = loadSession(params.sessionId as string)
+        const session = contentStore.getBrainstormSession(params.sessionId as string)
         if (!session) return { ok: false, error: 'Session not found' }
         return { ok: true, session }
       },
@@ -1964,13 +1710,14 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
           title: z.string().optional().describe('Session title'),
           scope: z.string().optional().describe('Optional brainstorm scope'),
         },
-        handler: async (params: Record<string, unknown>) => {
-          if (!params.agentId) return { ok: false, error: 'agentId required' }
-          const session = createSession({
-            agentId: params.agentId as string,
-            title: params.title as string | undefined,
-            scope: params.scope as string | undefined,
-          })
+      handler: async (params: Record<string, unknown>) => {
+        if (!params.agentId) return { ok: false, error: 'agentId required' }
+        if (!(await validateAgentId(ctx, params.agentId as string))) return { ok: false, error: 'invalid agentId' }
+        const session = contentStore.createBrainstormSession({
+          agentId: params.agentId as string,
+          title: (params.title as string | undefined) || 'New brainstorm session',
+          scope: params.scope as string | undefined,
+        })
         ctx.activity.audit('session.created', params.agentId as string, { sessionId: session.id })
         return { ok: true, session }
       },
@@ -1983,14 +1730,14 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       parameters: {
         sessionId: z.string().describe('Session ID (required)'),
         title: z.string().optional().describe('New title'),
-        status: z.string().optional().describe('New status (active, completed)'),
+        status: z.string().optional().describe('New status (active, archived)'),
       },
       handler: async (params: Record<string, unknown>) => {
         if (!params.sessionId) return { ok: false, error: 'sessionId required' }
         try {
-          const session = updateSessionFn(params.sessionId as string, {
+          const session = contentStore.updateBrainstormSession(params.sessionId as string, {
             title: params.title as string | undefined,
-            status: params.status as 'active' | 'completed' | undefined,
+            status: params.status as BrainstormSession['status'] | undefined,
           })
           return { ok: true, session }
         } catch (e: unknown) {
@@ -2009,13 +1756,10 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       },
       handler: async (params: Record<string, unknown>) => {
         if (!params.sessionId) return { ok: false, error: 'sessionId required' }
-        try {
-          deleteSessionFn(params.sessionId as string)
-          ctx.activity.audit('session.deleted', 'system', { sessionId: params.sessionId })
-          return { ok: true }
-        } catch (e: unknown) {
-          return { ok: false, error: (e as Error).message }
-        }
+        if (!contentStore.getBrainstormSession(params.sessionId as string)) return { ok: false, error: 'Session not found' }
+        contentStore.deleteBrainstormSession(params.sessionId as string)
+        ctx.activity.audit('session.deleted', 'system', { sessionId: params.sessionId })
+        return { ok: true }
       },
     })
 
@@ -2029,11 +1773,11 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       },
       handler: async (params: Record<string, unknown>) => {
         if (!params.sessionId || !params.message) return { ok: false, error: 'sessionId and message required' }
-        const session = loadSession(params.sessionId as string)
+        const session = contentStore.getBrainstormSession(params.sessionId as string)
         if (!session) return { ok: false, error: 'Session not found' }
-        if (session.status === 'completed') return { ok: false, error: 'Session is completed' }
+        if (session.status === 'archived') return { ok: false, error: 'Session is archived' }
 
-        const userMsg = appendMessage(params.sessionId as string, {
+        const userMsg = appendBrainstormMessage(contentStore, params.sessionId as string, {
           role: 'user',
           content: params.message as string,
         })
@@ -2055,25 +1799,25 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
           return { ok: false, error: err instanceof Error ? err.message : String(err) }
         }
 
-        // Parse proposals
-        let proposals: Array<{
-          id?: string; title: string; scheduledAt: string; contentType: string;
-          tone: string; brief: string; channels?: string[]
-        }> = []
-        const jsonMatch = fullContent.match(/```json\s*([\s\S]*?)\s*```/)
-        if (jsonMatch) {
-          try { proposals = JSON.parse(jsonMatch[1]) } catch { /* ignore */ }
+        const proposals: unknown[] = []
+        const blockRegex = /```json\s*([\s\S]*?)\s*```/g
+        let match: RegExpExecArray | null
+        while ((match = blockRegex.exec(fullContent)) !== null) {
+          try {
+            const parsed = JSON.parse(match[1])
+            proposals.push(...(Array.isArray(parsed) ? parsed : [parsed]))
+          } catch { /* ignore */ }
         }
 
         const cleanContent = fullContent.replace(/```json[\s\S]*?```/g, '').trim()
-        const assistantMsg = appendMessage(params.sessionId as string, {
+        const assistantMsg = appendBrainstormMessage(contentStore, params.sessionId as string, {
           role: 'assistant',
           content: cleanContent,
         })
 
         let savedProposals: unknown[] = []
         if (proposals.length > 0) {
-          savedProposals = upsertProposals(params.sessionId as string, assistantMsg.id, proposals)
+          savedProposals = upsertBrainstormProposals(contentStore, params.sessionId as string, assistantMsg.id, proposals)
         }
 
         return {
@@ -2096,53 +1840,22 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         status: z.string().optional().describe('New status (proposed, approved, rejected, revised)'),
         title: z.string().optional().describe('Updated title'),
         brief: z.string().optional().describe('Updated brief'),
-        tone: z.string().optional().describe('Updated tone'),
-        scheduledAt: z.string().optional().describe('Updated schedule datetime'),
         targetDate: z.string().optional().describe('Updated Plan target date'),
-        channels: z.array(z.string()).optional().describe('Updated channels'),
         suggestedChannels: z.array(z.string()).optional().describe('Updated suggested channels'),
         rejectionNote: z.string().optional().describe('Note explaining rejection'),
       },
       handler: async (params: Record<string, unknown>) => {
         if (!params.sessionId || !params.proposalId) return { ok: false, error: 'sessionId and proposalId required' }
         try {
-          const proposal = updateProposal(params.sessionId as string, params.proposalId as string, {
+          const proposal = updateBrainstormProposal(contentStore, params.sessionId as string, params.proposalId as string, {
             status: params.status as ProposalStatus | undefined,
             title: params.title as string | undefined,
             brief: params.brief as string | undefined,
-            tone: params.tone as string | undefined,
-            scheduledAt: params.scheduledAt as string | undefined,
             targetDate: params.targetDate as string | undefined,
-            channels: params.channels as string[] | undefined,
             suggestedChannels: params.suggestedChannels as string[] | undefined,
             rejectionNote: params.rejectionNote as string | undefined,
           })
           return { ok: true, proposal }
-        } catch (e: unknown) {
-          return { ok: false, error: (e as Error).message }
-        }
-      },
-    })
-
-    ctx.registerExecTool({
-      name: 'bakin_exec_messaging_session_confirm',
-      label: 'Confirmed brainstorm proposal',
-      activityDuplicate: true,
-      description: 'Confirm a planning session — creates messaging items from approved proposals',
-      parameters: {
-        sessionId: z.string().describe('Session ID (required)'),
-        autoApprove: z.boolean().optional().describe('Auto-approve: create items in scheduled status instead of draft'),
-      },
-      handler: async (params: Record<string, unknown>) => {
-        if (!params.sessionId) return { ok: false, error: 'sessionId required' }
-        try {
-          const result = confirmSession(params.sessionId as string, { autoApprove: !!params.autoApprove })
-          ctx.activity.audit('session.confirmed', 'system', {
-            sessionId: params.sessionId,
-            itemsCreated: result.itemsCreated,
-            autoApprove: !!params.autoApprove,
-          })
-          return { ok: true, ...result }
         } catch (e: unknown) {
           return { ok: false, error: (e as Error).message }
         }
@@ -2159,33 +1872,29 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       },
       handler: async (params: Record<string, unknown>) => {
         if (!params.sessionId) return { ok: false, error: 'sessionId required' }
-        const session = loadSession(params.sessionId as string)
+        const session = contentStore.getBrainstormSession(params.sessionId as string)
         if (!session) return { ok: false, error: 'Session not found' }
         const result = materializeApprovedProposals(session, contentStore)
-        saveSession(session)
+        contentStore.updateBrainstormSession(session.id, {
+          proposals: session.proposals,
+          createdAtPlanIds: session.createdAtPlanIds,
+        })
         ctx.activity.audit('session.materialized', 'system', { sessionId: params.sessionId, planIds: result.planIds })
         return { ok: true, ...result }
       },
     })
 
     ctx.watchFiles([
-      ctx.storage.searchPath?.('messaging.json') ?? 'messaging.json',
       ctx.storage.searchPath?.(SESSION_FILE_PATTERN) ?? SESSION_FILE_PATTERN,
     ])
     log.info('Messaging plugin activated')
   },
 
   onReady() {
-    const items = activeMessagingStorage?.loadMessagingItems() ?? []
-    const byStatus: Record<string, number> = {}
-    for (const item of items) {
-      byStatus[item.status] = (byStatus[item.status] || 0) + 1
-    }
-    log.info(`Ready — ${items.length} items`, byStatus)
+    log.info('Ready')
   },
 
   onShutdown() {
-    activeMessagingStorage = null
     log.info('Messaging plugin shutting down')
   },
 }

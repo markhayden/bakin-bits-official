@@ -8,7 +8,7 @@
     "server": "index.ts",
     "client": "client.tsx"
   },
-  "contentFiles": ["messaging.json"],
+  "contentFiles": [],
   "tests": "tests/",
   "dependencies": ["team", "workflows", "schedule"],
   "permissions": [
@@ -37,14 +37,6 @@
       { "path": "/messaging/brainstorm", "summary": "Messaging brainstorming sessions" }
     ],
     "apiRoutes": [
-      { "method": "GET", "path": "/", "summary": "List messaging items", "permissions": ["storage.read"] },
-      { "method": "GET", "path": "/:itemId", "summary": "Get a messaging item", "permissions": ["storage.read"] },
-      { "method": "POST", "path": "/", "summary": "Create a messaging item", "permissions": ["storage.write"] },
-      { "method": "PUT", "path": "/:itemId", "summary": "Update a messaging item", "permissions": ["storage.write"] },
-      { "method": "DELETE", "path": "/:itemId", "summary": "Delete a messaging item", "permissions": ["storage.write"] },
-      { "method": "POST", "path": "/:itemId/approve", "summary": "Approve and optionally publish a messaging item", "permissions": ["storage.write", "runtime.channels", "assets.read"] },
-      { "method": "POST", "path": "/:itemId/unapprove", "summary": "Move an approved messaging item back to draft", "permissions": ["storage.write"] },
-      { "method": "POST", "path": "/:itemId/reject", "summary": "Reject a messaging item", "permissions": ["storage.write"] },
       { "method": "POST", "path": "/brainstorm", "summary": "Send a one-shot brainstorm prompt", "permissions": ["runtime.messaging"] },
       { "method": "GET", "path": "/sessions", "summary": "List planning sessions", "permissions": ["storage.read"] },
       { "method": "GET", "path": "/sessions/:id", "summary": "Get a planning session", "permissions": ["storage.read"] },
@@ -53,7 +45,6 @@
       { "method": "DELETE", "path": "/sessions/:id", "summary": "Delete a planning session", "permissions": ["storage.write"] },
       { "method": "POST", "path": "/sessions/:id/messages", "summary": "Send a message to a planning session", "permissions": ["runtime.messaging", "storage.write"] },
       { "method": "PUT", "path": "/sessions/:id/proposals/:proposalId", "summary": "Update a planning-session proposal", "permissions": ["storage.write"] },
-      { "method": "POST", "path": "/sessions/:id/confirm", "summary": "Confirm planning-session proposals into calendar items", "permissions": ["storage.write", "runtime.channels", "assets.read"] },
       { "method": "POST", "path": "/sessions/:id/materialize", "summary": "Materialize approved Plan proposals into Plans", "permissions": ["storage.write"] },
       { "method": "GET", "path": "/plans", "summary": "List content Plans", "permissions": ["storage.read"] },
       { "method": "GET", "path": "/plans/:id", "summary": "Get content Plan", "permissions": ["storage.read"] },
@@ -72,13 +63,6 @@
       { "method": "GET", "path": "/search", "summary": "Search messaging brainstorm sessions", "permissions": ["search.read"] }
     ],
     "execTools": [
-      { "name": "bakin_exec_messaging_list", "summary": "List messaging items", "permissions": ["storage.read"] },
-      { "name": "bakin_exec_messaging_get", "summary": "Get a messaging item", "permissions": ["storage.read"] },
-      { "name": "bakin_exec_messaging_create", "summary": "Create a messaging item", "permissions": ["storage.write"] },
-      { "name": "bakin_exec_messaging_update", "summary": "Update a messaging item", "permissions": ["storage.write"] },
-      { "name": "bakin_exec_messaging_approve", "summary": "Approve a messaging item", "permissions": ["storage.write", "runtime.channels"] },
-      { "name": "bakin_exec_messaging_reject", "summary": "Reject a messaging item", "permissions": ["storage.write"] },
-      { "name": "bakin_exec_messaging_delete", "summary": "Delete a messaging item", "permissions": ["storage.write"] },
       { "name": "bakin_exec_messaging_session_list", "summary": "List planning sessions", "permissions": ["storage.read"] },
       { "name": "bakin_exec_messaging_session_get", "summary": "Get a planning session", "permissions": ["storage.read"] },
       { "name": "bakin_exec_messaging_session_create", "summary": "Create a planning session", "permissions": ["storage.write"] },
@@ -86,7 +70,6 @@
       { "name": "bakin_exec_messaging_session_delete", "summary": "Delete a planning session", "permissions": ["storage.write"] },
       { "name": "bakin_exec_messaging_session_message", "summary": "Message a planning session", "permissions": ["runtime.messaging", "storage.write"] },
       { "name": "bakin_exec_messaging_proposal_update", "summary": "Update a planning-session proposal", "permissions": ["storage.write"] },
-      { "name": "bakin_exec_messaging_session_confirm", "summary": "Confirm planning-session proposals", "permissions": ["storage.write", "runtime.channels"] },
       { "name": "bakin_exec_messaging_session_materialize", "summary": "Materialize approved Plan proposals into Plans", "permissions": ["storage.write"] },
       { "name": "bakin_exec_messaging_plan_list", "summary": "List content Plans", "permissions": ["storage.read"] },
       { "name": "bakin_exec_messaging_plan_get", "summary": "Get content Plan", "permissions": ["storage.read"] },
@@ -102,20 +85,13 @@
       { "name": "bakin_exec_messaging_deliverable_reject", "summary": "Request changes for content Deliverable", "permissions": ["storage.write", "tasks.write"] }
     ],
     "cliCommands": [
-      { "name": "messaging:list", "usage": "bakin messaging list", "summary": "List messaging items", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_list" } },
-      { "name": "messaging:get", "usage": "bakin messaging get <itemId>", "summary": "Get a messaging item", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_get" } },
-      { "name": "messaging:create", "usage": "bakin messaging create <title> <agent> <scheduledAt>", "summary": "Create a messaging item", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_create" } },
-      { "name": "messaging:update", "usage": "bakin messaging update <itemId>", "summary": "Update a messaging item", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_update" } },
-      { "name": "messaging:delete", "usage": "bakin messaging delete <itemId>", "summary": "Delete a messaging item", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_delete" } },
-      { "name": "messaging:approve", "usage": "bakin messaging approve <itemId>", "summary": "Approve a messaging item", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_approve" } },
-      { "name": "messaging:reject", "usage": "bakin messaging reject <itemId>", "summary": "Reject a messaging item", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_reject" } },
       { "name": "messaging:sessions", "usage": "bakin messaging sessions", "summary": "List planning sessions", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_list" } },
       { "name": "messaging:session", "usage": "bakin messaging session <sessionId>", "summary": "Get a planning session", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_get" } },
       { "name": "messaging:session-create", "usage": "bakin messaging session-create <agentId>", "summary": "Create a planning session", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_create" } },
       { "name": "messaging:session-update", "usage": "bakin messaging session-update <sessionId>", "summary": "Update a planning session", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_update" } },
       { "name": "messaging:session-delete", "usage": "bakin messaging session-delete <sessionId>", "summary": "Delete a planning session", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_delete" } },
       { "name": "messaging:message", "usage": "bakin messaging message <sessionId> <message>", "summary": "Message a planning session", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_message" } },
-      { "name": "messaging:confirm", "usage": "bakin messaging confirm <sessionId>", "summary": "Confirm planning-session proposals", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_confirm" } },
+      { "name": "messaging:materialize", "usage": "bakin messaging materialize <sessionId>", "summary": "Materialize planning-session proposals", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_materialize" } },
       { "name": "messaging:proposal", "usage": "bakin messaging proposal <sessionId> <proposalId>", "summary": "Update a planning-session proposal", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_proposal_update" } }
     ],
     "settings": [
