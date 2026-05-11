@@ -64,6 +64,9 @@
       { "method": "GET", "path": "/deliverables/:id", "summary": "Get content Deliverable", "permissions": ["storage.read"] },
       { "method": "POST", "path": "/deliverables", "summary": "Create content Deliverable", "permissions": ["storage.write"] },
       { "method": "PUT", "path": "/deliverables/:id", "summary": "Update content Deliverable", "permissions": ["storage.write"] },
+      { "method": "POST", "path": "/deliverables/:id/approve", "summary": "Approve content Deliverable", "permissions": ["storage.write", "assets.read"] },
+      { "method": "POST", "path": "/deliverables/:id/reject", "summary": "Request changes for content Deliverable", "permissions": ["storage.write", "tasks.write"] },
+      { "method": "POST", "path": "/deliverables/:id/approve-and-publish-now", "summary": "Approve and immediately publish a bare-task Deliverable", "permissions": ["storage.write", "runtime.channels", "assets.read"] },
       { "method": "DELETE", "path": "/deliverables/:id", "summary": "Delete content Deliverable", "permissions": ["storage.write"] },
       { "method": "GET", "path": "/search", "summary": "Search messaging brainstorm sessions", "permissions": ["search.read"] }
     ],
@@ -91,7 +94,10 @@
       { "name": "bakin_exec_messaging_deliverable_list", "summary": "List content Deliverables", "permissions": ["storage.read"] },
       { "name": "bakin_exec_messaging_deliverable_get", "summary": "Get content Deliverable", "permissions": ["storage.read"] },
       { "name": "bakin_exec_messaging_deliverable_create", "summary": "Create content Deliverable", "permissions": ["storage.write"] },
-      { "name": "bakin_exec_messaging_deliverable_update", "summary": "Update content Deliverable", "permissions": ["storage.write"] }
+      { "name": "bakin_exec_messaging_deliverable_update", "summary": "Update content Deliverable", "permissions": ["storage.write"] },
+      { "name": "bakin_exec_messaging_deliverable_ready_for_review", "summary": "Mark content Deliverable ready for review", "permissions": ["storage.write", "assets.read"] },
+      { "name": "bakin_exec_messaging_deliverable_approve", "summary": "Approve content Deliverable", "permissions": ["storage.write", "assets.read"] },
+      { "name": "bakin_exec_messaging_deliverable_reject", "summary": "Request changes for content Deliverable", "permissions": ["storage.write", "tasks.write"] }
     ],
     "cliCommands": [
       { "name": "messaging:list", "usage": "bakin messaging list", "summary": "List messaging items", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_list" } },

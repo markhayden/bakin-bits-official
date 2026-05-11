@@ -25,6 +25,7 @@ import {
   findTool,
 } from '../test-helpers'
 import type { ActivatedPlugin } from '../test-helpers'
+import { createMessagingContentStorage } from '../lib/content-storage'
 
 let plugin: ActivatedPlugin
 
@@ -56,6 +57,25 @@ async function createPlan(title = 'Taco Tuesday'): Promise<Record<string, unknow
     },
   })
   return created.body.plan as Record<string, unknown>
+}
+
+async function createDeliverable(overrides: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  const route = findRoute(plugin.routes, 'POST', '/deliverables')!
+  const created = await callRoute(route, plugin.ctx, {
+    body: {
+      planId: null,
+      channel: 'general',
+      contentType: 'blog',
+      tone: 'conversational',
+      agent: 'basil',
+      title: 'Taco blog',
+      brief: 'Write the taco blog.',
+      publishAt: '2026-05-25T16:00:00Z',
+      ...overrides,
+    },
+  })
+  expect(created.status).toBe(200)
+  return created.body.deliverable as Record<string, unknown>
 }
 
 describe('Deliverable routes', () => {
@@ -162,6 +182,94 @@ describe('Deliverable routes', () => {
     expect(status).toBe(404)
     expect(body.error).toBe('Plan not found')
   })
+
+  it('approves reviewed Deliverables only after required assets validate', async () => {
+    const deliverable = await createDeliverable({
+      contentType: 'image',
+      status: 'in_review',
+    })
+    const approveRoute = findRoute(plugin.routes, 'POST', '/deliverables/:id/approve')!
+
+    const missingAsset = await callRoute(approveRoute, plugin.ctx, { searchParams: { id: deliverable.id as string } })
+
+    expect(missingAsset.status).toBe(400)
+    expect(missingAsset.body.error).toBe('Required image asset missing on Deliverable')
+
+    const updateRoute = findRoute(plugin.routes, 'PUT', '/deliverables/:id')!
+    await callRoute(updateRoute, plugin.ctx, {
+      searchParams: { id: deliverable.id as string },
+      body: { draft: { imageFilename: 'hero.png' } },
+    })
+    const approved = await callRoute(approveRoute, plugin.ctx, { searchParams: { id: deliverable.id as string } })
+
+    expect(approved.status).toBe(200)
+    expect((approved.body.deliverable as Record<string, unknown>).status).toBe('approved')
+  })
+
+  it('approves and immediately publishes bare-task Deliverables', async () => {
+    const deliverable = await createDeliverable({
+      status: 'overdue',
+      draft: { caption: 'Publish this now.' },
+    })
+    const route = findRoute(plugin.routes, 'POST', '/deliverables/:id/approve-and-publish-now')!
+
+    const result = await callRoute(route, plugin.ctx, { searchParams: { id: deliverable.id as string } })
+
+    expect(result.status).toBe(200)
+    expect(result.body.published).toBe(true)
+    expect(plugin.ctx.runtime.channels.deliverContent).toHaveBeenCalledWith(expect.objectContaining({
+      channels: ['general'],
+      content: expect.objectContaining({ body: 'Publish this now.' }),
+    }))
+    expect((result.body.deliverable as Record<string, unknown>).status).toBe('published')
+  })
+
+  it('returns 409 for approve-and-publish-now on workflow-backed Deliverables', async () => {
+    const store = createMessagingContentStorage(plugin.ctx.storage)
+    const deliverable = store.createDeliverable({
+      id: 'workflow-deliverable',
+      planId: null,
+      channel: 'general',
+      contentType: 'blog',
+      tone: 'conversational',
+      agent: 'basil',
+      title: 'Workflow blog',
+      brief: 'Write it.',
+      publishAt: '2026-05-25T16:00:00Z',
+      prepStartAt: '2026-05-25T12:00:00Z',
+      status: 'approved',
+      taskId: 'task-1',
+      workflowInstanceId: 'workflow-instance-1',
+      pendingGateStepId: 'review',
+    })
+    const route = findRoute(plugin.routes, 'POST', '/deliverables/:id/approve-and-publish-now')!
+
+    const result = await callRoute(route, plugin.ctx, { searchParams: { id: deliverable.id } })
+
+    expect(result.status).toBe(409)
+    expect(result.body.error).toBe('Workflow-backed Deliverables must be approved through the workflow gate')
+    expect(plugin.ctx.runtime.channels.deliverContent).not.toHaveBeenCalled()
+  })
+
+  it('marks approve-and-publish-now failures on the Deliverable', async () => {
+    const deliverable = await createDeliverable({
+      status: 'overdue',
+      draft: { caption: 'Publish this now.' },
+    })
+    const originalDeliverContent = plugin.ctx.runtime.channels.deliverContent
+    plugin.ctx.runtime.channels.deliverContent = mock(async () => { throw new Error('channel offline') }) as typeof plugin.ctx.runtime.channels.deliverContent
+    const route = findRoute(plugin.routes, 'POST', '/deliverables/:id/approve-and-publish-now')!
+    try {
+      const result = await callRoute(route, plugin.ctx, { searchParams: { id: deliverable.id as string } })
+
+      expect(result.status).toBe(502)
+      expect(result.body.error).toBe('Channel delivery failed: channel offline')
+      expect((result.body.deliverable as Record<string, unknown>).status).toBe('failed')
+      expect((result.body.deliverable as Record<string, unknown>).failureReason).toBe('Channel delivery failed: channel offline')
+    } finally {
+      plugin.ctx.runtime.channels.deliverContent = originalDeliverContent
+    }
+  })
 })
 
 describe('Deliverable exec tools', () => {
@@ -198,5 +306,63 @@ describe('Deliverable exec tools', () => {
       caption: 'first',
       imageFilename: 'quick.png',
     })
+  })
+
+  it('moves bare-task Deliverables through ready, reject, and approve tools', async () => {
+    const create = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_create')!
+    const created = await callTool(create, {
+      planId: null,
+      channel: 'general',
+      contentType: 'image',
+      tone: 'conversational',
+      agent: 'basil',
+      title: 'Image post',
+      brief: 'Needs an image.',
+      publishAt: '2026-05-25T16:00:00Z',
+      status: 'in_prep',
+    })
+    const deliverableId = (created.deliverable as Record<string, unknown>).id as string
+    const ready = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_ready_for_review')!
+
+    const missingAsset = await callTool(ready, { deliverableId })
+    expect(missingAsset.ok).toBe(false)
+    expect(missingAsset.error).toBe('Required image asset missing on Deliverable')
+
+    const update = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_update')!
+    await callTool(update, { deliverableId, draft: { imageFilename: 'image.png' } })
+
+    const readyResult = await callTool(ready, { deliverableId })
+    expect((readyResult.deliverable as Record<string, unknown>).status).toBe('in_review')
+
+    const reject = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_reject')!
+    const rejected = await callTool(reject, { deliverableId, note: 'Try a stronger opener.' })
+    expect((rejected.deliverable as Record<string, unknown>).status).toBe('changes_requested')
+
+    const readyAgain = await callTool(ready, { deliverableId })
+    expect((readyAgain.deliverable as Record<string, unknown>).status).toBe('in_review')
+
+    const approve = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_approve')!
+    const approved = await callTool(approve, { deliverableId })
+    expect((approved.deliverable as Record<string, unknown>).status).toBe('approved')
+  })
+
+  it('auto-approves ready Deliverables when approval is not required', async () => {
+    const create = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_create')!
+    const created = await callTool(create, {
+      planId: null,
+      channel: 'general',
+      contentType: 'announcement',
+      tone: 'conversational',
+      agent: 'basil',
+      title: 'Announcement',
+      brief: 'No review needed.',
+      publishAt: '2026-05-25T16:00:00Z',
+      status: 'in_prep',
+    })
+    const ready = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_ready_for_review')!
+
+    const result = await callTool(ready, { deliverableId: (created.deliverable as Record<string, unknown>).id })
+
+    expect((result.deliverable as Record<string, unknown>).status).toBe('approved')
   })
 })

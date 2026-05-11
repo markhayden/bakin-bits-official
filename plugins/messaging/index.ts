@@ -25,6 +25,12 @@ import { archiveLegacyMessagingFile } from './lib/legacy-archive'
 import { normalizeContentTypesForActivate } from './lib/content-types'
 import { createMessagingContentStorage } from './lib/content-storage'
 import { registerMessagingDefaultWorkflows } from './lib/default-workflows'
+import {
+  approveAndPublishDeliverableNow,
+  approveDeliverable,
+  markDeliverableReadyForReview,
+  rejectDeliverable,
+} from './lib/deliverable-lifecycle'
 import { materializeApprovedProposals } from './lib/materialize'
 import type { MessagingContentStorage } from './lib/content-storage'
 import { recomputePlanStatus } from './lib/plan-status'
@@ -1372,6 +1378,51 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       },
     })
 
+    ctx.registerRoute({
+      path: '/deliverables/:id/approve',
+      method: 'POST',
+      description: 'Approve a content Deliverable',
+      handler: async (req: Request) => {
+        const url = new URL(req.url)
+        const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
+        const id = url.searchParams.get('id') || body.id
+        if (!id) return json({ error: 'id required' }, 400)
+        const result = await approveDeliverable(contentStore, ctx, ctx.getSettings<MessagingSettings>(), id)
+        if (!result.ok) return json({ error: result.error, deliverable: result.deliverable }, result.status)
+        return json({ ok: true, deliverable: result.deliverable })
+      },
+    })
+
+    ctx.registerRoute({
+      path: '/deliverables/:id/reject',
+      method: 'POST',
+      description: 'Reject a content Deliverable',
+      handler: async (req: Request) => {
+        const url = new URL(req.url)
+        const body = await readBody<{ id?: string; note?: string; reason?: string }>(req).catch(() => ({} as { id?: string; note?: string; reason?: string }))
+        const id = url.searchParams.get('id') || body.id
+        if (!id) return json({ error: 'id required' }, 400)
+        const result = await rejectDeliverable(contentStore, ctx, id, body.note ?? body.reason ?? '')
+        if (!result.ok) return json({ error: result.error, deliverable: result.deliverable }, result.status)
+        return json({ ok: true, deliverable: result.deliverable })
+      },
+    })
+
+    ctx.registerRoute({
+      path: '/deliverables/:id/approve-and-publish-now',
+      method: 'POST',
+      description: 'Approve and immediately publish a bare-task Deliverable',
+      handler: async (req: Request) => {
+        const url = new URL(req.url)
+        const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
+        const id = url.searchParams.get('id') || body.id
+        if (!id) return json({ error: 'id required' }, 400)
+        const result = await approveAndPublishDeliverableNow(contentStore, ctx, ctx.getSettings<MessagingSettings>(), id)
+        if (!result.ok) return json({ error: result.error, deliverable: result.deliverable }, result.status)
+        return json({ ok: true, deliverable: result.deliverable, published: result.published })
+      },
+    })
+
     // ── Exec Tools (agent-facing) ─────────────────────────────────────
 
     ctx.registerExecTool({
@@ -1597,6 +1648,52 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) }
         }
+      },
+    })
+
+    ctx.registerExecTool({
+      name: 'bakin_exec_messaging_deliverable_ready_for_review',
+      label: 'Marked content deliverable ready for review',
+      activityDuplicate: true,
+      description: 'Signal that a bare-task Deliverable draft is ready for user review or auto-approval.',
+      parameters: {
+        deliverableId: z.string().describe('Deliverable ID (required)'),
+      },
+      handler: async (params: Record<string, unknown>) => {
+        if (!params.deliverableId) return { ok: false, error: 'deliverableId required' }
+        const result = await markDeliverableReadyForReview(contentStore, ctx, ctx.getSettings<MessagingSettings>(), params.deliverableId as string)
+        return result.ok ? { ok: true, deliverable: result.deliverable } : { ok: false, error: result.error, status: result.status, deliverable: result.deliverable }
+      },
+    })
+
+    ctx.registerExecTool({
+      name: 'bakin_exec_messaging_deliverable_approve',
+      label: 'Approved content deliverable',
+      activityDuplicate: true,
+      description: 'Approve a Deliverable after review.',
+      parameters: {
+        deliverableId: z.string().describe('Deliverable ID (required)'),
+      },
+      handler: async (params: Record<string, unknown>) => {
+        if (!params.deliverableId) return { ok: false, error: 'deliverableId required' }
+        const result = await approveDeliverable(contentStore, ctx, ctx.getSettings<MessagingSettings>(), params.deliverableId as string)
+        return result.ok ? { ok: true, deliverable: result.deliverable } : { ok: false, error: result.error, status: result.status, deliverable: result.deliverable }
+      },
+    })
+
+    ctx.registerExecTool({
+      name: 'bakin_exec_messaging_deliverable_reject',
+      label: 'Rejected content deliverable',
+      activityDuplicate: true,
+      description: 'Request changes for a Deliverable after review.',
+      parameters: {
+        deliverableId: z.string().describe('Deliverable ID (required)'),
+        note: z.string().optional().describe('Review note for the prep agent'),
+      },
+      handler: async (params: Record<string, unknown>) => {
+        if (!params.deliverableId) return { ok: false, error: 'deliverableId required' }
+        const result = await rejectDeliverable(contentStore, ctx, params.deliverableId as string, (params.note as string | undefined) ?? '')
+        return result.ok ? { ok: true, deliverable: result.deliverable } : { ok: false, error: result.error, status: result.status, deliverable: result.deliverable }
       },
     })
 
