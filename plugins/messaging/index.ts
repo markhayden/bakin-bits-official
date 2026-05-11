@@ -27,6 +27,7 @@ import { createMessagingContentStorage } from './lib/content-storage'
 import { materializeApprovedProposals } from './lib/materialize'
 import type { MessagingContentStorage } from './lib/content-storage'
 import { recomputePlanStatus } from './lib/plan-status'
+import { runMessagingContentSweep } from './lib/sweep'
 
 const log = {
   info: (...args: unknown[]) => console.info('[messaging]', ...args),
@@ -447,7 +448,7 @@ const messagingPlugin: BakinPlugin = {
       log.info(`Normalized ${normalizedSettings.contentTypes.length} messaging content types`)
     }
 
-    ctx.hooks.register('messaging.sweep.run', async () => ({ ok: true, processed: 0 }), {
+    ctx.hooks.register('messaging.sweep.run', async () => runMessagingContentSweep(contentStore, ctx, ctx.getSettings<MessagingSettings>()), {
       hookKind: 'rpc',
       label: 'Run messaging content sweep',
       summary: 'Run messaging content sweep',
