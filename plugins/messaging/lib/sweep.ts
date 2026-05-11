@@ -1,7 +1,7 @@
 import type { PluginContext } from '@bakin/sdk/types'
 import type { ContentTypeOption, Deliverable, DeliverableStatus, MessagingSettings, Plan } from '../types'
-import { DEFAULT_CONTENT_TYPES } from '../types'
 import type { MessagingContentStorage } from './content-storage'
+import { contentTypeFor } from './content-type-lookup'
 import { recomputePlanStatus } from './plan-status'
 import { publishDeliverableNow } from './publish'
 
@@ -21,11 +21,6 @@ const PUBLISH_TERMINAL_OR_WAITING_STATUSES = new Set<DeliverableStatus>([
   'cancelled',
   'failed',
 ])
-
-function contentTypeFor(settings: MessagingSettings, contentTypeId: string): ContentTypeOption {
-  return (settings.contentTypes ?? DEFAULT_CONTENT_TYPES).find(type => type.id === contentTypeId)
-    ?? { id: contentTypeId, label: contentTypeId, assetRequirement: 'none', prepLeadHours: 0 }
-}
 
 function prepInstruction(contentType: ContentTypeOption): string {
   const requirement = contentType.assetRequirement ?? 'none'

@@ -94,7 +94,11 @@ describe('messaging plugin — activate', () => {
 
   it('keeps default workflowIds when workflow definitions are loadable', async () => {
     const { ctx } = createTestContext('messaging', testDir)
-    ctx.hooks.has = mock((name: string) => name === 'workflows.loadDefinition') as typeof ctx.hooks.has
+    ctx.hooks.has = mock((name: string) => [
+      'workflows.loadDefinition',
+      'workflows.approveGate',
+      'workflows.rejectGate',
+    ].includes(name)) as typeof ctx.hooks.has
     ctx.hooks.invoke = mock(async () => ({ id: 'workflow' })) as typeof ctx.hooks.invoke
     const updateSpy = mock()
     ctx.updateSettings = updateSpy
@@ -102,6 +106,18 @@ describe('messaging plugin — activate', () => {
     await messagingPlugin.activate(ctx)
 
     expect(updateSpy).toHaveBeenCalledWith({ contentTypes: DEFAULT_CONTENT_TYPES })
+  })
+
+  it('clears workflowIds when gate hooks are unavailable', async () => {
+    const { ctx } = createTestContext('messaging', testDir)
+    ctx.hooks.has = mock((name: string) => name === 'workflows.loadDefinition') as typeof ctx.hooks.has
+    ctx.hooks.invoke = mock(async () => ({ id: 'workflow' })) as typeof ctx.hooks.invoke
+    const updateSpy = mock()
+    ctx.updateSettings = updateSpy
+
+    await messagingPlugin.activate(ctx)
+
+    expect(updateSpy).toHaveBeenCalledWith({ contentTypes: withoutWorkflowIds(DEFAULT_CONTENT_TYPES) })
   })
 
   it('is idempotent — no seed when contentTypes already populated', async () => {

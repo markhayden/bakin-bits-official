@@ -51,6 +51,7 @@ export async function normalizeContentTypesForActivate(
   return normalizeContentTypes(existing, {
     workflowExists: async (workflowId) => {
       if (!ctx.hooks.has('workflows.loadDefinition')) return false
+      if (!ctx.hooks.has('workflows.approveGate') || !ctx.hooks.has('workflows.rejectGate')) return false
       try {
         const definition = await ctx.hooks.invoke('workflows.loadDefinition', { workflowId })
         return !!definition

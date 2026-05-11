@@ -28,6 +28,7 @@ import { materializeApprovedProposals } from './lib/materialize'
 import type { MessagingContentStorage } from './lib/content-storage'
 import { recomputePlanStatus } from './lib/plan-status'
 import { runMessagingContentSweep } from './lib/sweep'
+import { registerMessagingWorkflowBridge } from './lib/workflow-bridge'
 
 const log = {
   info: (...args: unknown[]) => console.info('[messaging]', ...args),
@@ -453,6 +454,7 @@ const messagingPlugin: BakinPlugin = {
       label: 'Run messaging content sweep',
       summary: 'Run messaging content sweep',
     })
+    registerMessagingWorkflowBridge(contentStore, ctx, () => ctx.getSettings<MessagingSettings>(), log)
     await ensureMessagingSweepCron(ctx, currentSettings.sweepCronSchedule ?? DEFAULT_SWEEP_CRON_SCHEDULE)
 
     // ── Search Content Type Registration ─────────────────────────────
