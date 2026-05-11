@@ -19,7 +19,8 @@
     "runtime.channels",
     "search.read",
     "search.write",
-    "assets.read"
+    "assets.read",
+    "tasks.write"
   ],
   "runtimeCapabilities": [
     "messaging",
@@ -57,6 +58,7 @@
       { "method": "POST", "path": "/plans", "summary": "Create content Plan", "permissions": ["storage.write"] },
       { "method": "PUT", "path": "/plans/:id", "summary": "Update content Plan", "permissions": ["storage.write"] },
       { "method": "DELETE", "path": "/plans/:id", "summary": "Delete content Plan and its Deliverables", "permissions": ["storage.write"] },
+      { "method": "POST", "path": "/plans/:id/start-fanout", "summary": "Create phase-2 Plan fan-out task", "permissions": ["storage.write", "tasks.write"] },
       { "method": "GET", "path": "/search", "summary": "Search messaging brainstorm sessions", "permissions": ["search.read"] }
     ],
     "execTools": [
@@ -78,7 +80,8 @@
       { "name": "bakin_exec_messaging_session_materialize", "summary": "Materialize approved Plan proposals into Plans", "permissions": ["storage.write"] },
       { "name": "bakin_exec_messaging_plan_list", "summary": "List content Plans", "permissions": ["storage.read"] },
       { "name": "bakin_exec_messaging_plan_get", "summary": "Get content Plan", "permissions": ["storage.read"] },
-      { "name": "bakin_exec_messaging_plan_create", "summary": "Create content Plan", "permissions": ["storage.write"] }
+      { "name": "bakin_exec_messaging_plan_create", "summary": "Create content Plan", "permissions": ["storage.write"] },
+      { "name": "bakin_exec_messaging_plan_start_fanout", "summary": "Create phase-2 Plan fan-out task", "permissions": ["storage.write", "tasks.write"] }
     ],
     "cliCommands": [
       { "name": "messaging:list", "usage": "bakin messaging list", "summary": "List messaging items", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_list" } },

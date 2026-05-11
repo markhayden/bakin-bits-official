@@ -11,7 +11,7 @@ import {
 } from '@bakin/sdk/utils'
 import { createMessagingStorage } from './lib/storage'
 import type { MessagingStorage } from './lib/storage'
-import type { CalendarItem, ContentStatus, PlanStatus, ProposalStatus, MessagingSettings } from './types'
+import type { CalendarItem, ContentStatus, Plan, PlanStatus, ProposalStatus, MessagingSettings } from './types'
 import { DEFAULT_CHANNEL, DEFAULT_CONTENT_TYPES } from './types'
 import { createMessagingSessionStore } from './lib/sessions'
 import { buildMessages } from './lib/prompt-builder'
@@ -25,6 +25,7 @@ import { archiveLegacyMessagingFile } from './lib/legacy-archive'
 import { normalizeContentTypesForActivate } from './lib/content-types'
 import { createMessagingContentStorage } from './lib/content-storage'
 import { materializeApprovedProposals } from './lib/materialize'
+import type { MessagingContentStorage } from './lib/content-storage'
 
 const log = {
   info: (...args: unknown[]) => console.info('[messaging]', ...args),
@@ -56,6 +57,58 @@ function normalizeChannels(value: unknown): string[] {
     .map(channel => channel.trim())
     .filter(Boolean)
   return channels.length > 0 ? channels : [DEFAULT_CHANNEL]
+}
+
+function buildPlanFanOutDescription(plan: Plan): string {
+  const lines = [
+    plan.brief || `Develop deliverables for "${plan.title}".`,
+    `Plan ID: ${plan.id}`,
+    `Target date: ${plan.targetDate}`,
+    plan.campaign ? `Campaign: ${plan.campaign}` : undefined,
+    plan.suggestedChannels?.length
+      ? `Suggested channels: ${plan.suggestedChannels.join(', ')}`
+      : 'Choose the right channels for this Plan.',
+    'Use bakin_exec_messaging_plan_get to read full Plan context.',
+    'Call bakin_exec_messaging_propose_deliverable once for each channel you intend to produce.',
+  ]
+  return lines.filter((line): line is string => Boolean(line)).join('\n')
+}
+
+type StartPlanFanOutResult =
+  | {
+    ok: true
+    plan: Plan
+    taskId: string
+    alreadyStarted: boolean
+    task?: Awaited<ReturnType<PluginContext['tasks']['create']>>
+  }
+  | { ok: false; error: string; status: number }
+
+async function startPlanFanOut(
+  ctx: PluginContext,
+  contentStore: MessagingContentStorage,
+  planId: string,
+): Promise<StartPlanFanOutResult> {
+  const plan = contentStore.getPlan(planId)
+  if (!plan) return { ok: false, error: 'Plan not found', status: 404 }
+  if (plan.fanOutTaskId) {
+    return { ok: true, plan, taskId: plan.fanOutTaskId, alreadyStarted: true }
+  }
+
+  const task = await ctx.tasks.create({
+    parentId: null,
+    agent: plan.agent,
+    column: 'todo',
+    title: `Plan: ${plan.title}`,
+    description: buildPlanFanOutDescription(plan),
+  })
+  const updated = contentStore.updatePlan(plan.id, {
+    fanOutTaskId: task.id,
+    status: 'planning',
+  })
+  ctx.activity.audit('plan.fanout_started', plan.agent, { planId: plan.id, taskId: task.id })
+  ctx.activity.log(plan.agent, `Started fan-out for content Plan "${plan.title}"`)
+  return { ok: true, plan: updated, task, taskId: task.id, alreadyStarted: false }
 }
 
 interface AgentMetaLike { id: string; name?: string }
@@ -1085,6 +1138,21 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       },
     })
 
+    ctx.registerRoute({
+      path: '/plans/:id/start-fanout',
+      method: 'POST',
+      description: 'Create the phase-2 Bakin task for a content Plan',
+      handler: async (req: Request) => {
+        const url = new URL(req.url)
+        const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
+        const id = url.searchParams.get('id') || body.id
+        if (!id) return json({ error: 'id required' }, 400)
+        const result = await startPlanFanOut(ctx, contentStore, id)
+        if (!result.ok) return json({ error: result.error }, result.status)
+        return json(result)
+      },
+    })
+
     // ── Exec Tools (agent-facing) ─────────────────────────────────────
 
     ctx.registerExecTool({
@@ -1147,6 +1215,22 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         })
         ctx.activity.audit('plan.created', params.agent as string, { planId: plan.id, title: plan.title })
         return { ok: true, plan }
+      },
+    })
+
+    ctx.registerExecTool({
+      name: 'bakin_exec_messaging_plan_start_fanout',
+      label: 'Started content plan fan-out',
+      activityDuplicate: true,
+      description: 'Create the phase-2 Bakin task for a content Plan',
+      parameters: {
+        planId: z.string().describe('Plan ID (required)'),
+      },
+      handler: async (params: Record<string, unknown>) => {
+        if (!params.planId) return { ok: false, error: 'planId required' }
+        const result = await startPlanFanOut(ctx, contentStore, params.planId as string)
+        if (!result.ok) return { ok: false, error: result.error }
+        return result
       },
     })
 

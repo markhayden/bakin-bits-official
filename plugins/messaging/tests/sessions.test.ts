@@ -813,11 +813,11 @@ describe('Proposal lifecycle', () => {
 // ===========================================================================
 
 describe('Calendar plugin registration (updated)', () => {
-  it('registers exactly 24 routes', () => {
-    expect(plugin.routes.length).toBe(24)
+  it('registers exactly 25 routes', () => {
+    expect(plugin.routes.length).toBe(25)
   })
 
-  it('registers exactly 19 exec tools', () => {
-    expect(plugin.execTools.length).toBe(19)
+  it('registers exactly 20 exec tools', () => {
+    expect(plugin.execTools.length).toBe(20)
   })
 })
