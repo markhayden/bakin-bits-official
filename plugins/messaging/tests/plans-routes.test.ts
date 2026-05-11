@@ -158,4 +158,68 @@ describe('Plan exec tools', () => {
     expect(started.ok).toBe(true)
     expect(started.taskId).toBe((started.plan as Record<string, unknown>).fanOutTaskId)
   })
+
+  it('proposes Deliverables during Plan fan-out', async () => {
+    const create = findTool(plugin.execTools, 'bakin_exec_messaging_plan_create')!
+    const created = await callTool(create, {
+      title: 'Fan-out soup',
+      brief: 'Turn soup plan into channel work.',
+      targetDate: '2026-05-25',
+      agent: 'basil',
+      suggestedChannels: ['blog'],
+    })
+    const plan = created.plan as Record<string, unknown>
+
+    const startFanout = findTool(plugin.execTools, 'bakin_exec_messaging_plan_start_fanout')!
+    await callTool(startFanout, { planId: plan.id as string })
+
+    const propose = findTool(plugin.execTools, 'bakin_exec_messaging_propose_deliverable')!
+    const proposed = await callTool(propose, {
+      planId: plan.id,
+      channel: 'blog',
+      contentType: 'blog',
+      tone: 'conversational',
+      title: 'Soup blog',
+      brief: 'Write the soup blog.',
+      publishAt: '2026-05-25T16:00:00Z',
+      draft: { caption: 'First angle' },
+    })
+
+    expect(proposed.ok).toBe(true)
+    const deliverable = proposed.deliverable as Record<string, unknown>
+    expect(deliverable.planId).toBe(plan.id)
+    expect(deliverable.status).toBe('proposed')
+    expect(deliverable.agent).toBe('basil')
+    expect(deliverable.prepStartAt).toBe('2026-05-22T16:00:00.000Z')
+    expect(deliverable.draft).toEqual({ caption: 'First angle' })
+
+    const get = findTool(plugin.execTools, 'bakin_exec_messaging_plan_get')!
+    const got = await callTool(get, { planId: plan.id as string })
+    expect((got.plan as Record<string, unknown>).status).toBe('fanning_out')
+    expect((got.deliverables as unknown[]).length).toBe(1)
+    expect(plugin.ctx.activity.audit).toHaveBeenCalledWith('deliverable.proposed', 'basil', {
+      deliverableId: deliverable.id,
+      planId: plan.id,
+    })
+  })
+
+  it('validates propose Deliverable inputs', async () => {
+    const propose = findTool(plugin.execTools, 'bakin_exec_messaging_propose_deliverable')!
+    const missingFields = await callTool(propose, { planId: 'plan-1' })
+    expect(missingFields).toEqual({
+      ok: false,
+      error: 'planId, channel, contentType, tone, title, brief, and publishAt required',
+    })
+
+    const missingPlan = await callTool(propose, {
+      planId: 'missing-plan',
+      channel: 'blog',
+      contentType: 'blog',
+      tone: 'conversational',
+      title: 'Missing plan',
+      brief: 'Should fail.',
+      publishAt: '2026-05-25T16:00:00Z',
+    })
+    expect(missingPlan).toEqual({ ok: false, error: 'Plan not found' })
+  })
 })

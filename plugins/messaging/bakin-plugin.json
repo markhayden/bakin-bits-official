@@ -91,6 +91,7 @@
       { "name": "bakin_exec_messaging_plan_get", "summary": "Get content Plan", "permissions": ["storage.read"] },
       { "name": "bakin_exec_messaging_plan_create", "summary": "Create content Plan", "permissions": ["storage.write"] },
       { "name": "bakin_exec_messaging_plan_start_fanout", "summary": "Create phase-2 Plan fan-out task", "permissions": ["storage.write", "tasks.write"] },
+      { "name": "bakin_exec_messaging_propose_deliverable", "summary": "Propose content Deliverable for a Plan", "permissions": ["storage.write"] },
       { "name": "bakin_exec_messaging_deliverable_list", "summary": "List content Deliverables", "permissions": ["storage.read"] },
       { "name": "bakin_exec_messaging_deliverable_get", "summary": "Get content Deliverable", "permissions": ["storage.read"] },
       { "name": "bakin_exec_messaging_deliverable_create", "summary": "Create content Deliverable", "permissions": ["storage.write"] },

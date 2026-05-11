@@ -1505,6 +1505,58 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
     })
 
     ctx.registerExecTool({
+      name: 'bakin_exec_messaging_propose_deliverable',
+      label: 'Proposed content deliverable',
+      activityDuplicate: true,
+      description: 'Propose a channel-specific Deliverable for a content Plan during phase-2 fan-out.',
+      parameters: {
+        planId: z.string().describe('Plan ID (required)'),
+        channel: z.string().describe('Runtime channel ID'),
+        contentType: z.string().describe('Messaging content type ID'),
+        tone: z.string().describe('Tone'),
+        title: z.string().describe('Deliverable title'),
+        brief: z.string().describe('Deliverable brief'),
+        publishAt: z.string().describe('Publish datetime'),
+        agent: z.string().optional().describe('Optional prep agent; defaults to Plan agent'),
+        prepStartAt: z.string().optional().describe('Optional explicit prep start datetime'),
+        prepStartAtOverride: z.string().optional().describe('Optional prep start override datetime'),
+        draft: z.object({}).passthrough().optional().describe('Optional draft fields'),
+      },
+      handler: async (params: Record<string, unknown>) => {
+        if (!params.planId || !params.channel || !params.contentType || !params.tone || !params.title || !params.brief || !params.publishAt) {
+          return { ok: false, error: 'planId, channel, contentType, tone, title, brief, and publishAt required' }
+        }
+        const plan = contentStore.getPlan(params.planId as string)
+        if (!plan) return { ok: false, error: 'Plan not found' }
+        try {
+          const contentType = params.contentType as string
+          const publishAt = params.publishAt as string
+          const agent = (params.agent as string | undefined) ?? plan.agent
+          const deliverable = contentStore.createDeliverable({
+            planId: plan.id,
+            channel: params.channel as string,
+            contentType,
+            tone: params.tone as ContentTone,
+            agent,
+            title: params.title as string,
+            brief: params.brief as string,
+            publishAt,
+            prepStartAt: (params.prepStartAt as string | undefined) ?? derivePrepStartAt(ctx, publishAt, contentType),
+            prepStartAtOverride: params.prepStartAtOverride as string | undefined,
+            status: 'proposed',
+            draft: parseDraft(params.draft),
+          })
+          recomputeLinkedPlan(contentStore, plan.id)
+          ctx.activity.audit('deliverable.proposed', agent, { deliverableId: deliverable.id, planId: plan.id })
+          ctx.activity.log(agent, `Proposed content Deliverable "${deliverable.title}"`)
+          return { ok: true, deliverable }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) }
+        }
+      },
+    })
+
+    ctx.registerExecTool({
       name: 'bakin_exec_messaging_deliverable_list',
       label: 'Listed content deliverables',
       description: 'List content Deliverables with optional filters',
