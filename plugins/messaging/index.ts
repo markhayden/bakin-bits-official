@@ -21,6 +21,7 @@ import {
   SESSION_FILE_PATTERN,
 } from './lib/brainstorm-search'
 import type { PlanningSession } from './types'
+import { archiveLegacyMessagingFile } from './lib/legacy-archive'
 
 const log = {
   info: (...args: unknown[]) => console.info('[messaging]', ...args),
@@ -255,6 +256,12 @@ const messagingPlugin: BakinPlugin = {
   contentFiles: [],
 
   activate(ctx: PluginContext) {
+    const legacyArchive = archiveLegacyMessagingFile(ctx.storage)
+    if (legacyArchive.archived) {
+      ctx.activity.audit('legacy.archived', 'system', { from: legacyArchive.from, to: legacyArchive.to })
+      log.info('Archived legacy messaging.json', legacyArchive)
+    }
+
     const messaging = createMessagingStorage(ctx.storage)
     activeMessagingStorage = messaging
     const sessions = createMessagingSessionStore(ctx.storage, messaging)
