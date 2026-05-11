@@ -33,6 +33,7 @@
     "clientRoutes": [
       { "path": "/messaging", "summary": "Messaging default route" },
       { "path": "/messaging/calendar", "summary": "Messaging content calendar" },
+      { "path": "/messaging/plans", "summary": "Messaging content Plans" },
       { "path": "/messaging/brainstorm", "summary": "Messaging brainstorming sessions" }
     ],
     "apiRoutes": [
