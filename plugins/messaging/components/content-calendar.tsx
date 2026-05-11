@@ -61,6 +61,17 @@ function matchesSearch(deliverable: Deliverable, query: string): boolean {
   )
 }
 
+function appendMissingIds(baseIds: string[], referencedIds: string[]): string[] {
+  const seen = new Set(baseIds)
+  const result = [...baseIds]
+  for (const id of referencedIds) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    result.push(id)
+  }
+  return result
+}
+
 export function ContentCalendar() {
   const { deliverables, loading, refresh } = useDeliverables()
   const contentTypes = useContentTypes()
@@ -73,12 +84,35 @@ export function ContentCalendar() {
   const [search, setSearch] = useQueryState('q', '')
   const [selectedDeliverable, setSelectedDeliverable] = useState<Deliverable | null>(null)
 
-  const typeOptions = contentTypes.map((type) => ({ value: type.id, label: type.label }))
-  const channelOptions = channels.map((channel) => ({
-    value: channel.id,
-    label: channel.label,
-    icon: <ChannelIcon channelId={channel.id} className="size-3.5" />,
-  }))
+  const calendarAgentIds = useMemo(
+    () => appendMissingIds(agentIds, deliverables.map((deliverable) => deliverable.agent)),
+    [agentIds, deliverables],
+  )
+  const typeOptions = useMemo(() => {
+    const options = new Map(contentTypes.map((type) => [type.id, { value: type.id, label: type.label }]))
+    for (const deliverable of deliverables) {
+      if (!options.has(deliverable.contentType)) {
+        options.set(deliverable.contentType, { value: deliverable.contentType, label: deliverable.contentType })
+      }
+    }
+    return Array.from(options.values())
+  }, [contentTypes, deliverables])
+  const channelOptions = useMemo(() => {
+    const options = new Map(channels.map((channel) => [
+      channel.id,
+      { value: channel.id, label: channel.label, icon: <ChannelIcon channelId={channel.id} className="size-3.5" /> },
+    ]))
+    for (const deliverable of deliverables) {
+      if (!options.has(deliverable.channel)) {
+        options.set(deliverable.channel, {
+          value: deliverable.channel,
+          label: deliverable.channel,
+          icon: <ChannelIcon channelId={deliverable.channel} className="size-3.5" />,
+        })
+      }
+    }
+    return Array.from(options.values())
+  }, [channels, deliverables])
 
   const filteredDeliverables = useMemo(() => {
     return deliverables.filter((deliverable) => {
@@ -128,7 +162,7 @@ export function ContentCalendar() {
       />
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <AgentFilter agentIds={agentIds} value={agentFilter} onChange={setAgentFilter} />
+        <AgentFilter agentIds={calendarAgentIds} value={agentFilter} onChange={setAgentFilter} />
         <FacetFilter label="Status" options={STATUS_OPTIONS} selected={statusFilter} onChange={setStatusFilter} />
         <FacetFilter label="Type" options={typeOptions} selected={typeFilter} onChange={setTypeFilter} />
         <FacetFilter label="Channel" options={channelOptions} selected={channelFilter} onChange={setChannelFilter} />

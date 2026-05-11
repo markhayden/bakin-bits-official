@@ -35,6 +35,43 @@ mock.module('@/core/watcher', () => ({
   registerUnlinkHook: mock(),
 }))
 
+mock.module('@bakin/sdk/components', () => ({
+  AgentAvatar: ({ agentId }: { agentId: string }) => <span data-testid={`avatar-${agentId}`}>{agentId}</span>,
+  AgentFilter: ({ agentIds }: { agentIds: string[] }) => (
+    <div data-testid="agent-filter">
+      {agentIds.map((agentId) => (
+        <span key={agentId} data-testid={`agent-option-${agentId}`}>
+          {agentId}
+        </span>
+      ))}
+    </div>
+  ),
+  AgentSelect: () => <select />,
+  BakinDrawer: ({ children, open }: { children: React.ReactNode; open: boolean }) =>
+    open ? <div>{children}</div> : null,
+  ChannelIcon: ({ channelId }: { channelId: string }) => <span data-testid={`channel-icon-${channelId}`} />,
+  EmptyState: ({ title }: { title: string }) => <div>{title}</div>,
+  FacetFilter: ({ label, options }: {
+    label: string
+    options: Array<{ value: string; label: string }>
+  }) => (
+    <div data-testid={`facet-${label}`}>
+      {options.map((option) => (
+        <span key={option.value} data-testid={`facet-option-${label}-${option.value}`}>
+          {option.label}
+        </span>
+      ))}
+    </div>
+  ),
+  PluginHeader: ({ title, count, actions }: Record<string, unknown>) => (
+    <div data-testid="plugin-header">
+      <h1>{title as string}</h1>
+      <span data-testid="header-count">{String(count ?? '')}</span>
+      <div>{actions as React.ReactNode}</div>
+    </div>
+  ),
+}))
+
 mock.module('@/hooks/use-query-state', () => {
   const { useState } = require('react') as typeof import('react')
   return {
@@ -178,7 +215,6 @@ function mockFetchDeliverables() {
         json: () => Promise.resolve({ contentTypes: [
           { id: 'blog', label: 'Blog post' },
           { id: 'x-post', label: 'X post' },
-          { id: 'announcement', label: 'Announcement' },
         ] }),
       })
     }
@@ -218,6 +254,17 @@ describe('ContentCalendar (Deliverable local filter)', () => {
     await waitFor(() => {
       expect(screen.getByPlaceholderText('Search calendar...')).toBeDefined()
     })
+  })
+
+  it('includes orphan Deliverable references in filter options', async () => {
+    render(<ContentCalendar />)
+    await waitFor(() => {
+      expect(screen.getByTestId('calendar-deliverable-c')).toBeDefined()
+    })
+
+    expect(screen.getByTestId('agent-option-zen')).toBeDefined()
+    expect(screen.getByTestId('facet-option-Type-announcement').textContent).toBe('announcement')
+    expect(screen.getByTestId('calendar-deliverable-c').textContent).toContain('announcement')
   })
 
   it('filters by title substring case-insensitively', async () => {
