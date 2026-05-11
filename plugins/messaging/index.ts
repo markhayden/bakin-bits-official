@@ -557,9 +557,8 @@ const messagingPlugin: BakinPlugin = {
     await ensureMessagingSweepCron(ctx, currentSettings.sweepCronSchedule ?? DEFAULT_SWEEP_CRON_SCHEDULE)
 
     // ── Search Content Type Registration ─────────────────────────────
-    // Per spec §5.1d, ONLY brainstorm sessions get indexed search; calendar
-    // items get a local substring filter in a later commit. No TTL — spec
-    // does not mandate one and this is a dev machine with tens of sessions.
+    // Brainstorm sessions are indexed for cross-plugin search. Calendar and
+    // Plan views use local filters over Deliverables and Plans.
     const sessionFilePattern = ctx.storage.searchPath?.(SESSION_FILE_PATTERN) ?? SESSION_FILE_PATTERN
     ctx.search.registerFileBackedContentType({
       table: 'messaging_brainstorm',
