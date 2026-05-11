@@ -29,10 +29,13 @@ export interface PromptBuilderOptions {
 function buildPlanState(session: PlanningSession): string {
   if (session.proposals.length === 0) return ''
 
-  const lines = ['## Current Plan State\n']
+  const lines = ['## Current Session State\n']
   for (const p of session.proposals) {
     const statusTag = p.status.toUpperCase()
-    let line = `- [${statusTag}] (${p.id}) "${p.title}" — ${p.scheduledAt}, ${p.contentType}, ${p.tone}`
+    const targetDate = p.targetDate ?? p.scheduledAt.slice(0, 10)
+    const channels = p.suggestedChannels ?? p.channels ?? []
+    let line = `- [${statusTag}] (${p.id}) "${p.title}" — ${targetDate}`
+    if (channels.length > 0) line += `; suggestedChannels: ${channels.join(', ')}`
     if (p.rejectionNote) {
       line += `\n  Rejection note: ${p.rejectionNote}`
     }
@@ -47,15 +50,6 @@ function buildPlanState(session: PlanningSession): string {
   return lines.join('\n')
 }
 
-function formatContentTypes(contentTypes: ContentTypeOption[]): string {
-  if (contentTypes.length === 0) return 'a content type id of your choosing'
-  return contentTypes.map((t) => t.id).join(', ')
-}
-
-function firstTypeId(contentTypes: ContentTypeOption[], fallback: string): string {
-  return contentTypes[0]?.id ?? fallback
-}
-
 /**
  * Build the system prompt for a planning session.
  */
@@ -66,9 +60,7 @@ export function buildSystemPrompt(
 ): string {
   const agentName = options.agentName || agentId
   const persona = options.persona
-  const typeList = formatContentTypes(options.contentTypes)
-  const exampleType1 = firstTypeId(options.contentTypes, 'post')
-  const exampleType2 = options.contentTypes[1]?.id ?? exampleType1
+  void options.contentTypes
 
   const sections: string[] = []
 
@@ -81,38 +73,87 @@ export function buildSystemPrompt(
   }
 
   // Planning instructions
-  sections.push(`## Planning Instructions
+  sections.push(`## Brainstorming Instructions
 
-You are in a planning session with Mark. Your job is to brainstorm and refine content calendar ideas collaboratively.
+You are in a brainstorm session with Mark. The session scope is: ${session.scope || 'open'}.
 
-IMPORTANT: Emit each proposed item as its OWN separate fenced code block — one object per block, NOT an array. Write a brief intro sentence before each block so items appear incrementally. Example:
+Your job is to propose **content topics** as Plan proposals. One Plan = one topic
+or one day's focus (e.g., "Taco Tuesday"). A single brainstorm session can produce
+multiple Plans — Mark will materialize the ones he likes into the content calendar.
 
-Here's what I'm thinking for Monday:
+HARD RULE: If Mark requests ANY concrete content topic — even a single one ("a
+post about tacos") — you MUST emit it as a \`\`\`json proposal block. Do not reply
+in prose when a concrete content request is made. If Mark is ambiguous, clarify
+briefly first, then emit a proposal.
+
+HARD RULE: Emit each Plan as its OWN fenced JSON block — one object per block,
+NOT an array. Brief intro sentence before each block so items appear incrementally.
+
+Example block format:
+
 \`\`\`json
-{ "title": "An example post title", "scheduledAt": "2026-04-14T10:00:00-06:00", "contentType": "${exampleType1}", "tone": "educational", "brief": "Short description of the piece.", "channels": ["general"] }
-\`\`\`
-
-And for Tuesday:
-\`\`\`json
-{ "title": "Another example", "scheduledAt": "2026-04-15T10:00:00-06:00", "contentType": "${exampleType2}", "tone": "energetic", "brief": "Another short description.", "channels": ["general"] }
+{
+  "title": "Taco Tuesday",
+  "targetDate": "2026-05-19",
+  "brief": "Tuesday focus on tacos — celebrate weeknight family recipes, easy assembly, fun toppings.",
+  "suggestedChannels": ["blog", "x", "youtube"]
+}
 \`\`\`
 
 Fields:
-- title: catchy post title in your authentic voice
-- scheduledAt: ISO datetime (timezone: America/Denver, MDT = UTC-6)
-- contentType: one of ${typeList}
-- tone: one of energetic, calm, educational, humorous, inspiring, conversational
-- brief: 2-3 sentence description of what to create when this executes
-- channels: optional array of runtime channel IDs (default: ["general"])
+- title: punchy topic title in your authentic voice
+- targetDate: ISO date (timezone: America/Denver, MDT)
+- brief: 2–3 sentence focus describing the topic and angle
+- suggestedChannels: optional hint; Mark will finalize channels per-Plan later
 
-NEVER wrap multiple items in a JSON array. Always one object per \`\`\`json block.
+Few-shot examples:
+
+[example 1 — single quote request]
+User: "Generate an inspirational quote for today."
+Agent: "One inspirational pulse for today:"
+\`\`\`json
+{
+  "title": "Monday motivation",
+  "targetDate": "2026-05-17",
+  "brief": "An inspirational quote about persistence through slow progress; tied to a personal anecdote.",
+  "suggestedChannels": ["x", "instagram"]
+}
+\`\`\`
+
+[example 2 — multi-day plan]
+User: "Plan three topics for next week."
+Agent: "Three topics, one per day:"
+\`\`\`json
+{ "title": "Taco Tuesday", "targetDate": "2026-05-19", "brief": "Tuesday focus on tacos.", "suggestedChannels": ["blog"] }
+\`\`\`
+"Wednesday leans educational:"
+\`\`\`json
+{ "title": "Spice blending fundamentals", "targetDate": "2026-05-20", "brief": "Teach beginner spice blending.", "suggestedChannels": ["blog"] }
+\`\`\`
+"Friday wraps with something lighter:"
+\`\`\`json
+{ "title": "Weekend pairings", "targetDate": "2026-05-22", "brief": "Easy pairings for relaxed weekend cooking.", "suggestedChannels": ["x"] }
+\`\`\`
+
+[example 3 — revision with id]
+User: "Make Wednesday's brief more SEO-focused."
+Agent: "Refining Wednesday:"
+\`\`\`json
+{
+  "id": "{existing-proposal-id}",
+  "title": "Spice blending fundamentals",
+  "targetDate": "2026-05-20",
+  "brief": "SEO-tuned brief mentioning how to blend spices at home and beginner spice blends.",
+  "suggestedChannels": ["blog"]
+}
+\`\`\`
 
 ## Revising Existing Proposals
 
 When Mark asks you to edit, revise, or update an existing proposal, include the proposal's "id" field so the system updates it in place instead of creating a duplicate:
 
 \`\`\`json
-{ "id": "existing-proposal-id", "title": "Updated title", "scheduledAt": "...", "contentType": "...", "tone": "...", "brief": "...", "channels": ["general"] }
+{ "id": "existing-proposal-id", "title": "Updated title", "targetDate": "2026-05-20", "brief": "...", "suggestedChannels": ["blog"] }
 \`\`\`
 
 Rules for revisions:

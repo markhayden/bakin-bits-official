@@ -95,12 +95,15 @@ export interface ProposedItem {
   agentId: string
   title: string
   scheduledAt: string
+  targetDate?: string
   contentType: string
   tone: string
   brief: string
   channels?: ContentChannel[]
+  suggestedChannels?: ContentChannel[]
   status: ProposalStatus
   calendarItemId?: string
+  planId?: string
   rejectionNote?: string
 }
 
@@ -119,6 +122,7 @@ export interface PlanningSession {
   id: string
   agentId: string
   title: string
+  scope?: string
   status: 'active' | 'completed'
   createdAt: string
   updatedAt: string

@@ -670,6 +670,30 @@ describe('Proposal lifecycle', () => {
     expect(loaded.proposals.length).toBe(2)
   })
 
+  it('stores Plan proposal fields from brainstorm JSON blocks', () => {
+    const session = createSessionDirect({ agentId: 'basil', scope: 'next week' })
+    const msg = appendMessageDirect(session.id, { role: 'assistant', content: 'Plan topics' })
+
+    const proposals = addProposalsDirect(session.id, msg.id, [
+      {
+        title: 'Taco Tuesday',
+        targetDate: '2026-05-19',
+        brief: 'A taco topic.',
+        suggestedChannels: ['blog', 'x'],
+      },
+    ])
+
+    expect(proposals[0]).toMatchObject({
+      title: 'Taco Tuesday',
+      targetDate: '2026-05-19',
+      scheduledAt: '2026-05-19T09:00:00-06:00',
+      contentType: 'post',
+      tone: 'conversational',
+      suggestedChannels: ['blog', 'x'],
+    })
+    expect(loadSessionDirect(session.id)?.scope).toBe('next week')
+  })
+
   it('approves and rejects proposals', () => {
     const session = createSessionDirect({ agentId: 'scout' })
     const msg = appendMessageDirect(session.id, { role: 'assistant', content: 'Ideas' })

@@ -53,7 +53,7 @@ export interface SessionSummary {
 }
 
 export interface MessagingSessionStore {
-  createSession(opts: { agentId: string; title?: string }): PlanningSession
+  createSession(opts: { agentId: string; title?: string; scope?: string }): PlanningSession
   loadSession(sessionId: string): PlanningSession | null
   saveSession(session: PlanningSession): void
   listSessions(opts?: { status?: string; agentId?: string }): SessionSummary[]
@@ -67,21 +67,26 @@ export interface MessagingSessionStore {
     agentId?: string
   }, proposalIds?: string[]): SessionMessage
   addProposals(sessionId: string, messageId: string, items: Array<{
+    id?: string
     title: string
-    scheduledAt: string
-    contentType: string
-    tone: string
+    scheduledAt?: string
+    targetDate?: string
+    contentType?: string
+    tone?: string
     brief: string
     channels?: string[]
+    suggestedChannels?: string[]
   }>): ProposedItem[]
   upsertProposals(sessionId: string, messageId: string, items: Array<{
     id?: string
     title: string
-    scheduledAt: string
-    contentType: string
-    tone: string
+    scheduledAt?: string
+    targetDate?: string
+    contentType?: string
+    tone?: string
     brief: string
     channels?: string[]
+    suggestedChannels?: string[]
   }>): ProposedItem[]
   updateProposal(sessionId: string, proposalId: string, updates: {
     status?: ProposalStatus
@@ -89,7 +94,9 @@ export interface MessagingSessionStore {
     brief?: string
     tone?: string
     scheduledAt?: string
+    targetDate?: string
     channels?: string[]
+    suggestedChannels?: string[]
     rejectionNote?: string
   }): ProposedItem
   confirmSession(sessionId: string, opts?: { autoApprove?: boolean }): { itemsCreated: number; itemIds: string[] }
@@ -99,12 +106,13 @@ export function createMessagingSessionStore(
   storage: StorageAdapter,
   messaging: MessagingStorage,
 ): MessagingSessionStore {
-  function createSession(opts: { agentId: string; title?: string }): PlanningSession {
+  function createSession(opts: { agentId: string; title?: string; scope?: string }): PlanningSession {
     const now = new Date().toISOString()
     const session: PlanningSession = {
       id: generateId(),
       agentId: opts.agentId,
       title: opts.title || 'New planning session',
+      scope: opts.scope,
       status: 'active',
       createdAt: now,
       updatedAt: now,
@@ -199,11 +207,13 @@ export function createMessagingSessionStore(
     items: Array<{
       id?: string
       title: string
-      scheduledAt: string
-      contentType: string
-      tone: string
+      scheduledAt?: string
+      targetDate?: string
+      contentType?: string
+      tone?: string
       brief: string
       channels?: string[]
+      suggestedChannels?: string[]
     }>,
   ): ProposedItem[] {
     const session = loadSession(sessionId)
@@ -219,11 +229,13 @@ export function createMessagingSessionStore(
 
       if (existing) {
         existing.title = item.title
-        existing.scheduledAt = item.scheduledAt
-        existing.contentType = item.contentType
-        existing.tone = item.tone
+        existing.targetDate = item.targetDate ?? item.scheduledAt?.slice(0, 10) ?? existing.targetDate
+        existing.scheduledAt = item.scheduledAt ?? (existing.targetDate ? `${existing.targetDate}T09:00:00-06:00` : existing.scheduledAt)
+        existing.contentType = item.contentType ?? existing.contentType
+        existing.tone = item.tone ?? existing.tone
         existing.brief = item.brief
         if (item.channels) existing.channels = normalizeChannels(item.channels)
+        if (item.suggestedChannels) existing.suggestedChannels = normalizeChannels(item.suggestedChannels)
         existing.messageId = messageId
         existing.revision += 1
         if (existing.status === 'rejected') existing.status = 'revised'
@@ -235,11 +247,13 @@ export function createMessagingSessionStore(
           revision: 1,
           agentId: session.agentId,
           title: item.title,
-          scheduledAt: item.scheduledAt,
-          contentType: item.contentType,
-          tone: item.tone,
+          targetDate: item.targetDate ?? item.scheduledAt?.slice(0, 10),
+          scheduledAt: item.scheduledAt ?? `${item.targetDate ?? new Date().toISOString().slice(0, 10)}T09:00:00-06:00`,
+          contentType: item.contentType ?? 'post',
+          tone: item.tone ?? 'conversational',
           brief: item.brief,
           channels: normalizeChannels(item.channels),
+          suggestedChannels: normalizeChannels(item.suggestedChannels ?? item.channels),
           status: 'proposed',
         }
         session.proposals.push(newProposal)
@@ -257,11 +271,13 @@ export function createMessagingSessionStore(
     messageId: string,
     items: Array<{
       title: string
-      scheduledAt: string
-      contentType: string
-      tone: string
+      scheduledAt?: string
+      targetDate?: string
+      contentType?: string
+      tone?: string
       brief: string
       channels?: string[]
+      suggestedChannels?: string[]
     }>,
   ): ProposedItem[] {
     return upsertProposals(sessionId, messageId, items)
@@ -276,7 +292,9 @@ export function createMessagingSessionStore(
       brief?: string
       tone?: string
       scheduledAt?: string
+      targetDate?: string
       channels?: string[]
+      suggestedChannels?: string[]
       rejectionNote?: string
     },
   ): ProposedItem {
@@ -290,7 +308,12 @@ export function createMessagingSessionStore(
     if (updates.brief !== undefined) proposal.brief = updates.brief
     if (updates.tone !== undefined) proposal.tone = updates.tone
     if (updates.scheduledAt !== undefined) proposal.scheduledAt = updates.scheduledAt
+    if (updates.targetDate !== undefined) {
+      proposal.targetDate = updates.targetDate
+      proposal.scheduledAt = `${updates.targetDate}T09:00:00-06:00`
+    }
     if (updates.channels !== undefined) proposal.channels = updates.channels
+    if (updates.suggestedChannels !== undefined) proposal.suggestedChannels = updates.suggestedChannels
     if (updates.rejectionNote !== undefined) proposal.rejectionNote = updates.rejectionNote
     session.updatedAt = new Date().toISOString()
     writeJson(storage, sessionPath(sessionId), session)

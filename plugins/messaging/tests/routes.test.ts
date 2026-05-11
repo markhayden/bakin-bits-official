@@ -499,6 +499,28 @@ describe('Calendar routes', () => {
         agentId: 'basil',
       }))
     })
+
+    it('returns Plan proposals from separate JSON blocks and prompts with hard rules', async () => {
+      sendRuntimeResponse(
+        `Two options:\n\`\`\`json\n{"title":"Taco Tuesday","targetDate":"2026-05-19","brief":"A taco topic.","suggestedChannels":["blog"]}\n\`\`\`\nNext:\n\`\`\`json\n{"title":"Soup Wednesday","targetDate":"2026-05-20","brief":"A soup topic.","suggestedChannels":["x"]}\n\`\`\``,
+      )
+
+      const route = findRoute(plugin.routes, 'POST', '/brainstorm')!
+      const { body } = await callRoute(route, plugin.ctx, {
+        body: {
+          agentId: 'basil',
+          message: 'Plan tacos and soup next week',
+          history: [],
+        },
+      })
+
+      expect(body.suggestions).toEqual([
+        expect.objectContaining({ title: 'Taco Tuesday', targetDate: '2026-05-19', suggestedChannels: ['blog'] }),
+        expect.objectContaining({ title: 'Soup Wednesday', targetDate: '2026-05-20', suggestedChannels: ['x'] }),
+      ])
+      expect(mockRuntimeSend.mock.calls[0]![0].content).toContain('HARD RULE: If Mark requests any concrete content topic')
+      expect(mockRuntimeSend.mock.calls[0]![0].content).toContain('one object per block, not an array')
+    })
   })
 })
 

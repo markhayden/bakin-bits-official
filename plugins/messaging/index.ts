@@ -524,7 +524,7 @@ const messagingPlugin: BakinPlugin = {
     }
     ctx.registerRoute({ path: '/:itemId/reject', method: 'POST', description: 'Reject messaging item', handler: rejectHandler })
 
-    // POST /brainstorm — AI brainstorming (unchanged)
+    // POST /brainstorm — one-shot Plan brainstorming
     ctx.registerRoute({
       path: '/brainstorm',
       method: 'POST',
@@ -543,9 +543,8 @@ const messagingPlugin: BakinPlugin = {
         }
 
         try {
-          const { agentName: resolvedName, contentTypes: brainstormTypes, persona } = await resolvePromptOptions(ctx, body.agentId)
+          const { agentName: resolvedName, persona } = await resolvePromptOptions(ctx, body.agentId)
           const agentName = resolvedName || body.agentId
-          const typeList = brainstormTypes.map(t => t.id).join(', ')
 
           const historyContext = (body.history || []).map(h =>
             `${h.role === 'user' ? 'Mark' : agentName}: ${h.content}`
@@ -557,18 +556,20 @@ ${persona}
 
 ---
 
-You are brainstorming content messaging ideas with Mark. When he describes what he's looking for, suggest 3-5 concrete messaging items in your authentic voice.
+You are brainstorming content topics with Mark. Suggest Plan proposals, one topic or one day's focus per proposal.
 
 For each suggestion provide:
-- title: catchy post title in your voice
-- scheduledAt: suggested date+time ISO string (timezone: America/Denver, MDT = UTC-6)
-- contentType: one of ${typeList}
-- tone: one of energetic, calm, educational, humorous, inspiring, conversational
-- brief: 2-3 sentence description of what to create when this executes
+- title: punchy topic title in your voice
+- targetDate: ISO date (timezone: America/Denver, MDT)
+- brief: 2-3 sentence focus describing the topic and angle
+- suggestedChannels: optional array of channel hints
 
-Format: conversational response in your voice, then a JSON block:
+HARD RULE: If Mark requests any concrete content topic, emit a JSON proposal block.
+HARD RULE: Emit each Plan as its own fenced JSON block, one object per block, not an array.
+
+Format: conversational response in your voice, then one or more JSON blocks:
 \`\`\`json
-[{ "title": "...", "scheduledAt": "...", "contentType": "...", "tone": "...", "brief": "..." }]
+{ "title": "...", "targetDate": "2026-05-19", "brief": "...", "suggestedChannels": ["blog"] }
 \`\`\`
 
 ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says: ${body.message}`
@@ -582,16 +583,17 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
 
           let suggestions: Array<{
             title: string
-            scheduledAt: string
-            contentType: string
-            tone: string
+            targetDate: string
             brief: string
+            suggestedChannels?: string[]
           }> = []
 
-          const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/)
-          if (jsonMatch) {
+          const blockRegex = /```json\s*([\s\S]*?)\s*```/g
+          let match: RegExpExecArray | null
+          while ((match = blockRegex.exec(content)) !== null) {
             try {
-              suggestions = JSON.parse(jsonMatch[1])
+              const parsed = JSON.parse(match[1])
+              suggestions.push(...(Array.isArray(parsed) ? parsed : [parsed]))
             } catch { /* ignore */ }
           }
 
@@ -643,9 +645,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       method: 'POST',
       description: 'Create a planning session',
       handler: async (req: Request) => {
-        const body = await readBody<{ agentId?: string; title?: string }>(req)
+        const body = await readBody<{ agentId?: string; title?: string; scope?: string }>(req)
         if (!body.agentId) return json({ error: 'agentId required' }, 400)
-        const session = createSession({ agentId: body.agentId, title: body.title })
+        const session = createSession({ agentId: body.agentId, title: body.title, scope: body.scope })
         ctx.activity.audit('session.created', body.agentId, { sessionId: session.id })
         ctx.activity.log(body.agentId, `Created planning session "${session.title}"`)
         return json({ ok: true, session })
@@ -926,7 +928,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
             brief: body.brief as string | undefined,
             tone: body.tone as string | undefined,
             scheduledAt: body.scheduledAt as string | undefined,
+            targetDate: body.targetDate as string | undefined,
             channels: body.channels as string[] | undefined,
+            suggestedChannels: body.suggestedChannels as string[] | undefined,
             rejectionNote: body.rejectionNote as string | undefined,
           })
           return json({ ok: true, proposal })
@@ -1171,14 +1175,16 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       description: 'Create a new planning session for an agent',
       parameters: {
         agentId: z.string().describe('Agent ID (required)'),
-        title: z.string().optional().describe('Session title'),
-      },
-      handler: async (params: Record<string, unknown>) => {
-        if (!params.agentId) return { ok: false, error: 'agentId required' }
-        const session = createSession({
-          agentId: params.agentId as string,
-          title: params.title as string | undefined,
-        })
+          title: z.string().optional().describe('Session title'),
+          scope: z.string().optional().describe('Optional brainstorm scope'),
+        },
+        handler: async (params: Record<string, unknown>) => {
+          if (!params.agentId) return { ok: false, error: 'agentId required' }
+          const session = createSession({
+            agentId: params.agentId as string,
+            title: params.title as string | undefined,
+            scope: params.scope as string | undefined,
+          })
         ctx.activity.audit('session.created', params.agentId as string, { sessionId: session.id })
         return { ok: true, session }
       },
@@ -1306,7 +1312,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         brief: z.string().optional().describe('Updated brief'),
         tone: z.string().optional().describe('Updated tone'),
         scheduledAt: z.string().optional().describe('Updated schedule datetime'),
+        targetDate: z.string().optional().describe('Updated Plan target date'),
         channels: z.array(z.string()).optional().describe('Updated channels'),
+        suggestedChannels: z.array(z.string()).optional().describe('Updated suggested channels'),
         rejectionNote: z.string().optional().describe('Note explaining rejection'),
       },
       handler: async (params: Record<string, unknown>) => {
@@ -1318,7 +1326,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
             brief: params.brief as string | undefined,
             tone: params.tone as string | undefined,
             scheduledAt: params.scheduledAt as string | undefined,
+            targetDate: params.targetDate as string | undefined,
             channels: params.channels as string[] | undefined,
+            suggestedChannels: params.suggestedChannels as string[] | undefined,
             rejectionNote: params.rejectionNote as string | undefined,
           })
           return { ok: true, proposal }
