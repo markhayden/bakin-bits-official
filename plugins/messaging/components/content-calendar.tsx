@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { AgentFilter } from "@bakin/sdk/components"
 import { EmptyState } from "@bakin/sdk/components"
 import { FacetFilter } from "@bakin/sdk/components"
@@ -15,9 +15,11 @@ import { useAgentIds } from "@bakin/sdk/hooks"
 import { useNotificationChannels } from "@bakin/sdk/hooks"
 import { useQueryArrayState, useQueryState } from "@bakin/sdk/hooks"
 import type { Deliverable, DeliverableStatus } from '../types'
-import { DELIVERABLE_STATUS_BADGE } from '../constants'
 import { getContentTypeLabel, useContentTypes } from '../hooks/use-content-types'
 import { useDeliverables } from '../hooks/use-deliverables'
+import { DeliverableDrawer } from './deliverable-drawer'
+import { DeliverableStatusBadge } from './deliverable-status-badge'
+import { QuickPostButton } from './quick-post-button'
 
 const STATUS_OPTIONS: Array<{ value: DeliverableStatus; label: string; icon: React.ReactNode }> = [
   { value: 'proposed', label: 'Proposed', icon: <Circle className="size-3" /> },
@@ -31,10 +33,6 @@ const STATUS_OPTIONS: Array<{ value: DeliverableStatus; label: string; icon: Rea
   { value: 'cancelled', label: 'Cancelled', icon: <Circle className="size-3" /> },
   { value: 'failed', label: 'Failed', icon: <Circle className="size-3" /> },
 ]
-
-function formatStatus(status: DeliverableStatus): string {
-  return status.replaceAll('_', ' ')
-}
 
 function dateKey(value: string): string {
   return value.slice(0, 10)
@@ -64,7 +62,7 @@ function matchesSearch(deliverable: Deliverable, query: string): boolean {
 }
 
 export function ContentCalendar() {
-  const { deliverables, loading } = useDeliverables()
+  const { deliverables, loading, refresh } = useDeliverables()
   const contentTypes = useContentTypes()
   const agentIds = useAgentIds()
   const channels = useNotificationChannels()
@@ -73,6 +71,7 @@ export function ContentCalendar() {
   const [typeFilter, setTypeFilter] = useQueryArrayState('type')
   const [channelFilter, setChannelFilter] = useQueryArrayState('channel')
   const [search, setSearch] = useQueryState('q', '')
+  const [selectedDeliverable, setSelectedDeliverable] = useState<Deliverable | null>(null)
 
   const typeOptions = contentTypes.map((type) => ({ value: type.id, label: type.label }))
   const channelOptions = channels.map((channel) => ({
@@ -113,14 +112,17 @@ export function ContentCalendar() {
         title="Calendar"
         count={filteredDeliverables.length}
         actions={
-          <div className="relative w-64">
-            <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search calendar..."
-              className="h-8 border-border bg-surface pl-9"
-            />
+          <div className="flex items-center gap-2">
+            <div className="relative w-64">
+              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search calendar..."
+                className="h-8 border-border bg-surface pl-9"
+              />
+            </div>
+            <QuickPostButton onCreated={refresh} />
           </div>
         }
       />
@@ -151,9 +153,11 @@ export function ContentCalendar() {
                 </div>
                 <div className="grid gap-2">
                   {dayDeliverables.map((deliverable) => (
-                    <article
+                    <button
                       key={deliverable.id}
-                      className="rounded-md border border-border bg-card p-3"
+                      type="button"
+                      onClick={() => setSelectedDeliverable(deliverable)}
+                      className="w-full rounded-md border border-border bg-card p-3 text-left transition-colors hover:bg-muted/40"
                       data-testid={`calendar-deliverable-${deliverable.id}`}
                     >
                       <div className="flex items-start justify-between gap-3">
@@ -181,11 +185,9 @@ export function ContentCalendar() {
                             </Badge>
                           </div>
                         </div>
-                        <Badge className={`shrink-0 capitalize ${DELIVERABLE_STATUS_BADGE[deliverable.status]}`}>
-                          {formatStatus(deliverable.status)}
-                        </Badge>
+                        <DeliverableStatusBadge status={deliverable.status} className="shrink-0" />
                       </div>
-                    </article>
+                    </button>
                   ))}
                 </div>
               </section>
@@ -193,6 +195,13 @@ export function ContentCalendar() {
           </div>
         )}
       </div>
+
+      <DeliverableDrawer
+        deliverable={selectedDeliverable}
+        open={Boolean(selectedDeliverable)}
+        onClose={() => setSelectedDeliverable(null)}
+        onUpdated={refresh}
+      />
     </div>
   )
 }

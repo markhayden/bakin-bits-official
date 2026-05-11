@@ -9,8 +9,10 @@ import { Button } from "@bakin/sdk/ui"
 import { Skeleton } from "@bakin/sdk/ui"
 import { CalendarDays, CheckCircle2, ChevronLeft, ClipboardList, Send } from 'lucide-react'
 import type { Deliverable, DeliverableStatus, PlanStatus } from '../types'
-import { DELIVERABLE_STATUS_BADGE, PLAN_STATUS_BADGE } from '../constants'
+import { PLAN_STATUS_BADGE } from '../constants'
 import { usePlan } from '../hooks/use-plan'
+import { DeliverableDrawer } from './deliverable-drawer'
+import { DeliverableStatusBadge } from './deliverable-status-badge'
 import { ProposedDeliverablesPanel } from './proposed-deliverables-panel'
 
 interface PlanWorkspaceProps {
@@ -52,6 +54,7 @@ async function updateDeliverableStatus(deliverable: Deliverable, status: Deliver
 export function PlanWorkspace({ planId, onBack }: PlanWorkspaceProps) {
   const { plan, deliverables, loading, error, refresh } = usePlan(planId)
   const [startingFanOut, setStartingFanOut] = useState(false)
+  const [selectedDeliverable, setSelectedDeliverable] = useState<Deliverable | null>(null)
   const activeDeliverables = useMemo(
     () => deliverables.filter((deliverable) => deliverable.status !== 'cancelled'),
     [deliverables],
@@ -178,7 +181,12 @@ export function PlanWorkspace({ planId, onBack }: PlanWorkspaceProps) {
             ) : (
               <div className="grid gap-2">
                 {nonProposedDeliverables.map((deliverable) => (
-                  <div key={deliverable.id} className="rounded-md border border-border bg-card p-3">
+                  <button
+                    key={deliverable.id}
+                    type="button"
+                    onClick={() => setSelectedDeliverable(deliverable)}
+                    className="w-full rounded-md border border-border bg-card p-3 text-left transition-colors hover:bg-muted/40"
+                  >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="flex min-w-0 items-center gap-2">
@@ -187,22 +195,27 @@ export function PlanWorkspace({ planId, onBack }: PlanWorkspaceProps) {
                         </div>
                         <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{deliverable.brief}</p>
                       </div>
-                      <Badge className={`shrink-0 capitalize ${DELIVERABLE_STATUS_BADGE[deliverable.status]}`}>
-                        {formatStatus(deliverable.status)}
-                      </Badge>
+                      <DeliverableStatusBadge status={deliverable.status} className="shrink-0" />
                     </div>
                     <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-muted-foreground">
                       <span>{deliverable.contentType}</span>
                       <span>{deliverable.tone}</span>
                       <span>{formatDateTime(deliverable.publishAt)}</span>
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
           </section>
         </div>
       </div>
+
+      <DeliverableDrawer
+        deliverable={selectedDeliverable}
+        open={Boolean(selectedDeliverable)}
+        onClose={() => setSelectedDeliverable(null)}
+        onUpdated={refresh}
+      />
     </div>
   )
 }
