@@ -22,6 +22,7 @@ import {
 } from './lib/brainstorm-search'
 import type { PlanningSession } from './types'
 import { archiveLegacyMessagingFile } from './lib/legacy-archive'
+import { normalizeContentTypesForActivate } from './lib/content-types'
 
 const log = {
   info: (...args: unknown[]) => console.info('[messaging]', ...args),
@@ -242,8 +243,25 @@ const messagingPlugin: BakinPlugin = {
         minItems: 1,
         uniqueField: 'id',
         itemShape: {
-          id:    { key: 'id',    type: 'string', label: 'ID',    description: 'Machine id — lowercase, no spaces (e.g. "blog-post").', required: true },
-          label: { key: 'label', type: 'string', label: 'Label', description: 'Display name shown in menus.',                           required: true },
+          id:               { key: 'id',               type: 'string',  label: 'ID',                description: 'Machine id — lowercase, no spaces (e.g. "blog").', required: true },
+          label:            { key: 'label',            type: 'string',  label: 'Label',             description: 'Display name shown in menus.', required: true },
+          prepLeadHours:    { key: 'prepLeadHours',    type: 'number',  label: 'Prep lead hours',   description: 'How many hours before publish time prep should start.' },
+          workflowId:       { key: 'workflowId',       type: 'string',  label: 'Workflow ID',       description: 'Optional workflow definition for prep.' },
+          requiresApproval: { key: 'requiresApproval', type: 'boolean', label: 'Requires approval', description: 'Bare-task path requires review before publish.', default: true },
+          defaultAgent:     { key: 'defaultAgent',     type: 'string',  label: 'Default agent',     description: 'Optional default prep agent for this content type.' },
+          assetRequirement: {
+            key: 'assetRequirement',
+            type: 'select',
+            label: 'Asset requirement',
+            description: 'Asset validation rule before approval or publish.',
+            options: [
+              { value: 'none', label: 'None' },
+              { value: 'optional-image', label: 'Optional image' },
+              { value: 'image', label: 'Required image' },
+              { value: 'optional-video', label: 'Optional video' },
+              { value: 'video', label: 'Required video' },
+            ],
+          },
         },
       },
     ],
@@ -255,7 +273,7 @@ const messagingPlugin: BakinPlugin = {
 
   contentFiles: [],
 
-  activate(ctx: PluginContext) {
+  async activate(ctx: PluginContext) {
     const legacyArchive = archiveLegacyMessagingFile(ctx.storage)
     if (legacyArchive.archived) {
       ctx.activity.audit('legacy.archived', 'system', { from: legacyArchive.from, to: legacyArchive.to })
@@ -287,9 +305,14 @@ const messagingPlugin: BakinPlugin = {
 
     // ── Seed default content types on first activate ──────────────────
     const currentSettings = ctx.getSettings<MessagingSettings>()
-    if (!currentSettings.contentTypes || currentSettings.contentTypes.length === 0) {
-      ctx.updateSettings({ contentTypes: DEFAULT_CONTENT_TYPES })
-      log.info(`Seeded ${DEFAULT_CONTENT_TYPES.length} default content types`)
+    const normalizedSettings = await normalizeContentTypesForActivate(
+      ctx,
+      currentSettings.contentTypes,
+      (message, data) => log.warn(message, data),
+    )
+    if (normalizedSettings.changed) {
+      ctx.updateSettings({ contentTypes: normalizedSettings.contentTypes })
+      log.info(`Normalized ${normalizedSettings.contentTypes.length} messaging content types`)
     }
 
     // ── Search Content Type Registration ─────────────────────────────

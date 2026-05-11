@@ -61,8 +61,12 @@ mock.module('../../../src/core/audit', () => ({
 const messagingPlugin = require('../../../plugins/messaging/index').default as typeof import('../../../plugins/messaging/index').default
 const { DEFAULT_CONTENT_TYPES } = require('../../../plugins/messaging/types') as typeof import('../../../plugins/messaging/types')
 import type messagingPluginType from '../../../plugins/messaging/index'
-import type { MessagingSettings } from '../../../plugins/messaging/types'
+import type { ContentTypeOption, MessagingSettings } from '../../../plugins/messaging/types'
 import { createTestContext } from '../test-helpers'
+
+function withoutWorkflowIds(types: ContentTypeOption[]): ContentTypeOption[] {
+  return types.map(({ workflowId: _workflowId, ...type }) => type)
+}
 
 beforeAll(() => {
   mkdirSync(testDir, { recursive: true })
@@ -77,9 +81,21 @@ describe('messaging plugin — activate', () => {
     mock.clearAllMocks()
   })
 
-  it('seeds DEFAULT_CONTENT_TYPES on first activate when settings lack contentTypes', async () => {
+  it('seeds normalized default content types on first activate when settings lack contentTypes', async () => {
     const { ctx } = createTestContext('messaging', testDir)
     // Default getSettings mock returns {} — no contentTypes present.
+    const updateSpy = mock()
+    ctx.updateSettings = updateSpy
+
+    await messagingPlugin.activate(ctx)
+
+    expect(updateSpy).toHaveBeenCalledWith({ contentTypes: withoutWorkflowIds(DEFAULT_CONTENT_TYPES) })
+  })
+
+  it('keeps default workflowIds when workflow definitions are loadable', async () => {
+    const { ctx } = createTestContext('messaging', testDir)
+    ctx.hooks.has = mock((name: string) => name === 'workflows.loadDefinition') as typeof ctx.hooks.has
+    ctx.hooks.invoke = mock(async () => ({ id: 'workflow' })) as typeof ctx.hooks.invoke
     const updateSpy = mock()
     ctx.updateSettings = updateSpy
 
@@ -114,6 +130,6 @@ describe('messaging plugin — activate', () => {
 
     await messagingPlugin.activate(ctx)
 
-    expect(updateSpy).toHaveBeenCalledWith({ contentTypes: DEFAULT_CONTENT_TYPES })
+    expect(updateSpy).toHaveBeenCalledWith({ contentTypes: withoutWorkflowIds(DEFAULT_CONTENT_TYPES) })
   })
 })
