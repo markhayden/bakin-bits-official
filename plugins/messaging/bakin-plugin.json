@@ -117,5 +117,5 @@
     ],
     "docs": { "slug": "official/messaging" }
   },
-  "devWatch": ["**/*.ts", "**/*.tsx", "bakin-plugin.json"]
+  "devWatch": ["**/*.ts", "**/*.tsx", "defaults/**/*.yaml", "bakin-plugin.json"]
 }

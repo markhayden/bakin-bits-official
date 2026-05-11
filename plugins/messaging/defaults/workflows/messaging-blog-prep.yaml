@@ -1,0 +1,50 @@
+name: Messaging - Blog Prep
+description: Standard blog-post prep flow. Agent drafts the post, optionally attaches a hero image, then the user reviews through a gate step before messaging publishes on workflow.complete.
+version: 1
+steps:
+  - id: draft
+    label: Draft blog copy
+    type: agent
+    agent: $assigned
+    description: |
+      Write the blog draft per the brief in this task's description.
+      Aim for 600-900 words, your authentic voice, and a clear CTA.
+      Then push the caption to the Deliverable:
+        bakin_exec_messaging_deliverable_update {
+          deliverableId: <from task description>,
+          draft: { caption: "<full draft>" }
+        }
+      Optional, if you want a hero image:
+        1. Save the image asset:
+             bakin_exec_assets_save { filePath, taskId, type: 'images' }
+           returns { filename }
+        2. Push the filename to the Deliverable:
+             bakin_exec_messaging_deliverable_update {
+               deliverableId,
+               draft: { imageFilename }
+             }
+      Then set this step's output and the workflow will advance to review.
+    outputs:
+      - id: caption
+        type: string
+  - id: review
+    label: Review blog draft
+    type: gate
+    description: User approves the draft in the messaging review queue.
+    approval_required: true
+    preview:
+      - draft.outputs.caption
+    on_approve: complete
+    on_reject:
+      goto: draft
+      note_to_agent: true
+  - id: complete
+    label: Mark prep complete
+    type: agent
+    agent: $assigned
+    description: |
+      Finalize draft fields on the Deliverable. Messaging publishes on the
+      workflow.complete event using ctx.runtime.channels.deliverContent.
+    outputs:
+      - id: ready
+        type: string

@@ -42,6 +42,7 @@
       "name": "@bakin-bits/messaging",
       "version": "1.0.0",
       "dependencies": {
+        "js-yaml": "^4.1.1",
         "lucide-react": "^0.577.0",
         "zod": "^4.3.0",
       },

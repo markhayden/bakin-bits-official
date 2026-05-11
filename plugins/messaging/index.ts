@@ -24,6 +24,7 @@ import type { PlanningSession } from './types'
 import { archiveLegacyMessagingFile } from './lib/legacy-archive'
 import { normalizeContentTypesForActivate } from './lib/content-types'
 import { createMessagingContentStorage } from './lib/content-storage'
+import { registerMessagingDefaultWorkflows } from './lib/default-workflows'
 import { materializeApprovedProposals } from './lib/materialize'
 import type { MessagingContentStorage } from './lib/content-storage'
 import { recomputePlanStatus } from './lib/plan-status'
@@ -436,6 +437,13 @@ const messagingPlugin: BakinPlugin = {
       updateProposal,
       confirmSession,
     } = sessions
+
+    const defaultWorkflows = registerMessagingDefaultWorkflows(ctx, undefined, log)
+    if (defaultWorkflows.registered.length > 0) {
+      log.info(`Registered ${defaultWorkflows.registered.length} messaging workflow(s)`, {
+        ids: defaultWorkflows.registered,
+      })
+    }
 
     // ── Seed default content types on first activate ──────────────────
     const currentSettings = ctx.getSettings<MessagingSettings>()
