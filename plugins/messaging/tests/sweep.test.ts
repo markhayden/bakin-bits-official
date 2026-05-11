@@ -82,7 +82,7 @@ describe('runMessagingContentSweep', () => {
 
     const result = await runMessagingContentSweep(store, ctx, settings, new Date('2026-05-25T12:00:00Z'))
 
-    expect(result).toEqual({ ok: true, processed: 1, startedPrep: 1 })
+    expect(result).toEqual({ ok: true, processed: 1, startedPrep: 1, published: 0, failed: 0, markedOverdue: 0 })
     expect(ctx.tasks.create).toHaveBeenCalledWith(expect.objectContaining({
       title: 'Prep: Taco Tuesday - general',
       agent: 'basil',
@@ -144,5 +144,80 @@ describe('runMessagingContentSweep', () => {
 
     expect(ctx.tasks.create).toHaveBeenCalledTimes(1)
     expect(store.getDeliverable('deliverable-1')?.status).toBe('in_prep')
+  }))
+
+  it('publishes due approved bare Deliverables', async () => withStore(async (store, ctx) => {
+    seedPlanAndDeliverable(store, {
+      status: 'approved',
+      draft: { caption: 'Ready to publish.' },
+      publishAt: '2026-05-25T16:00:00Z',
+    })
+
+    const result = await runMessagingContentSweep(store, ctx, settings, new Date('2026-05-25T16:00:00Z'))
+
+    expect(result.published).toBe(1)
+    expect(ctx.runtime.channels.deliverContent).toHaveBeenCalledWith(expect.objectContaining({
+      channels: ['general'],
+      content: expect.objectContaining({ body: 'Ready to publish.' }),
+    }))
+    const saved = store.getDeliverable('deliverable-1')!
+    expect(saved.status).toBe('published')
+    expect(saved.publishedDeliveryRef).toBe('content-general')
+    expect(store.getPlan('plan-1')?.status).toBe('done')
+  }))
+
+  it('leaves workflow-backed approved Deliverables for workflow.complete', async () => withStore(async (store, ctx) => {
+    seedPlanAndDeliverable(store, {
+      status: 'approved',
+      workflowInstanceId: 'workflow-instance-1',
+      publishAt: '2026-05-25T16:00:00Z',
+    })
+
+    const result = await runMessagingContentSweep(store, ctx, settings, new Date('2026-05-25T16:00:00Z'))
+
+    expect(result.processed).toBe(0)
+    expect(ctx.runtime.channels.deliverContent).not.toHaveBeenCalled()
+    expect(store.getDeliverable('deliverable-1')?.status).toBe('approved')
+  }))
+
+  it('marks due unapproved Deliverables overdue and notifies the owner channel', async () => withStore(async (store, ctx) => {
+    seedPlanAndDeliverable(store, {
+      status: 'in_prep',
+      publishAt: '2026-05-25T16:00:00Z',
+    })
+
+    const result = await runMessagingContentSweep(store, ctx, settings, new Date('2026-05-25T16:00:00Z'))
+
+    expect(result.markedOverdue).toBe(1)
+    expect(store.getDeliverable('deliverable-1')?.status).toBe('overdue')
+    expect(store.getPlan('plan-1')?.status).toBe('overdue')
+    expect(ctx.runtime.channels.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      channels: ['general'],
+      message: expect.objectContaining({
+        title: 'Deliverable overdue: Taco blog',
+      }),
+    }))
+  }))
+
+  it('marks approved Deliverables failed when publish validation fails', async () => withStore(async (store, ctx) => {
+    seedPlanAndDeliverable(store, {
+      status: 'approved',
+      contentType: 'image',
+      publishAt: '2026-05-25T16:00:00Z',
+    })
+
+    const result = await runMessagingContentSweep(store, ctx, {
+      contentTypes: [{
+        id: 'image',
+        label: 'Image post',
+        assetRequirement: 'image',
+      }],
+    }, new Date('2026-05-25T16:00:00Z'))
+
+    expect(result.failed).toBe(1)
+    const saved = store.getDeliverable('deliverable-1')!
+    expect(saved.status).toBe('failed')
+    expect(saved.failureReason).toBe('Required image asset missing on Deliverable')
+    expect(store.getPlan('plan-1')?.status).toBe('failed')
   }))
 })
