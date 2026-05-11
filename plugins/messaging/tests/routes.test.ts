@@ -912,12 +912,12 @@ describe('GET /search — auto-registered brainstorm search', () => {
 // ===========================================================================
 
 describe('Calendar plugin registration', () => {
-  it('registers exactly 19 routes', () => {
-    expect(plugin.routes.length).toBe(19)
+  it('registers exactly 24 routes', () => {
+    expect(plugin.routes.length).toBe(24)
   })
 
-  it('registers exactly 16 exec tools', () => {
-    expect(plugin.execTools.length).toBe(16)
+  it('registers exactly 19 exec tools', () => {
+    expect(plugin.execTools.length).toBe(19)
   })
 
   it('called watchFiles with messaging.json during activation', async () => {

@@ -46,10 +46,11 @@ describe('createMessagingContentStorage', () => {
         suggestedChannels: ['general'],
       })
 
-      const updated = store.updatePlan('plan-1', { status: 'fanning_out', fanOutTaskId: 'task-1' })
+      const updated = store.updatePlan('plan-1', { status: 'fanning_out', fanOutTaskId: 'task-1', brief: undefined })
 
       expect(updated.status).toBe('fanning_out')
       expect(updated.fanOutTaskId).toBe('task-1')
+      expect(updated.brief).toBe('A weekly taco feature.')
       expect(store.listPlans().map(plan => plan.id)).toEqual(['plan-1'])
 
       store.deletePlan('plan-1')
@@ -105,9 +106,10 @@ describe('createMessagingContentStorage', () => {
         draft: { caption: 'first caption' },
       })
 
-      store.updateDeliverable('deliv-1', { draft: { imageFilename: 'taco.png' } })
+      store.updateDeliverable('deliv-1', { title: undefined, draft: { imageFilename: 'taco.png' } })
       const cleared = store.updateDeliverable('deliv-1', { draft: { caption: null } })
 
+      expect(cleared.title).toBe('Draft merge')
       expect(cleared.draft).toEqual({
         caption: null,
         imageFilename: 'taco.png',

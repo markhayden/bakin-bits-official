@@ -11,7 +11,7 @@ import {
 } from '@bakin/sdk/utils'
 import { createMessagingStorage } from './lib/storage'
 import type { MessagingStorage } from './lib/storage'
-import type { CalendarItem, ContentStatus, ProposalStatus, MessagingSettings } from './types'
+import type { CalendarItem, ContentStatus, PlanStatus, ProposalStatus, MessagingSettings } from './types'
 import { DEFAULT_CHANNEL, DEFAULT_CONTENT_TYPES } from './types'
 import { createMessagingSessionStore } from './lib/sessions'
 import { buildMessages } from './lib/prompt-builder'
@@ -983,7 +983,172 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       },
     })
 
+    // ── Plan Routes ────────────────────────────────────────────────────
+
+    ctx.registerRoute({
+      path: '/plans',
+      method: 'GET',
+      description: 'List content Plans',
+      handler: async (req: Request) => {
+        const url = new URL(req.url)
+        const status = url.searchParams.get('status')
+        const agent = url.searchParams.get('agent')
+        const campaign = url.searchParams.get('campaign')
+        let plans = contentStore.listPlans()
+        if (status) plans = plans.filter(plan => plan.status === status)
+        if (agent) plans = plans.filter(plan => plan.agent === agent)
+        if (campaign) plans = plans.filter(plan => plan.campaign === campaign)
+        return json({ plans })
+      },
+    })
+
+    ctx.registerRoute({
+      path: '/plans/:id',
+      method: 'GET',
+      description: 'Get a content Plan',
+      handler: async (req: Request) => {
+        const url = new URL(req.url)
+        const id = url.searchParams.get('id')
+        if (!id) return json({ error: 'id required' }, 400)
+        const plan = contentStore.getPlan(id)
+        if (!plan) return json({ error: 'Plan not found' }, 404)
+        return json({ plan, deliverables: contentStore.listDeliverables({ planId: id }) })
+      },
+    })
+
+    ctx.registerRoute({
+      path: '/plans',
+      method: 'POST',
+      description: 'Create a content Plan',
+      handler: async (req: Request) => {
+        const body = await readBody<Record<string, unknown>>(req)
+        if (!body.title || !body.targetDate || !body.agent) {
+          return json({ error: 'title, targetDate, and agent required' }, 400)
+        }
+        const plan = contentStore.createPlan({
+          title: body.title as string,
+          brief: (body.brief as string | undefined) ?? '',
+          targetDate: body.targetDate as string,
+          agent: body.agent as string,
+          campaign: body.campaign as string | undefined,
+          suggestedChannels: body.suggestedChannels as string[] | undefined,
+        })
+        ctx.activity.audit('plan.created', body.agent as string, { planId: plan.id, title: plan.title })
+        ctx.activity.log(body.agent as string, `Created content Plan "${plan.title}"`)
+        return json({ ok: true, plan })
+      },
+    })
+
+    ctx.registerRoute({
+      path: '/plans/:id',
+      method: 'PUT',
+      description: 'Update a content Plan',
+      handler: async (req: Request) => {
+        const url = new URL(req.url)
+        const body = await readBody<Record<string, unknown>>(req)
+        const id = url.searchParams.get('id') || body.id as string | undefined
+        if (!id) return json({ error: 'id required' }, 400)
+        try {
+          const plan = contentStore.updatePlan(id, {
+            title: body.title as string | undefined,
+            brief: body.brief as string | undefined,
+            targetDate: body.targetDate as string | undefined,
+            agent: body.agent as string | undefined,
+            status: body.status as PlanStatus | undefined,
+            campaign: body.campaign as string | undefined,
+            suggestedChannels: body.suggestedChannels as string[] | undefined,
+          })
+          ctx.activity.audit('plan.updated', 'system', { planId: id })
+          return json({ ok: true, plan })
+        } catch (err) {
+          return json({ error: err instanceof Error ? err.message : String(err) }, 404)
+        }
+      },
+    })
+
+    ctx.registerRoute({
+      path: '/plans/:id',
+      method: 'DELETE',
+      description: 'Delete a content Plan and its Deliverables',
+      handler: async (req: Request) => {
+        const url = new URL(req.url)
+        const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
+        const id = url.searchParams.get('id') || body.id
+        if (!id) return json({ error: 'id required' }, 400)
+        if (!contentStore.getPlan(id)) return json({ error: 'Plan not found' }, 404)
+        for (const deliverable of contentStore.listDeliverables({ planId: id })) {
+          contentStore.deleteDeliverable(deliverable.id)
+        }
+        contentStore.deletePlan(id)
+        ctx.activity.audit('plan.deleted', 'system', { planId: id })
+        return json({ ok: true })
+      },
+    })
+
     // ── Exec Tools (agent-facing) ─────────────────────────────────────
+
+    ctx.registerExecTool({
+      name: 'bakin_exec_messaging_plan_list',
+      label: 'Listed content plans',
+      description: 'List content Plans with optional filters',
+      parameters: {
+        status: z.string().optional().describe('Filter by Plan status'),
+        agent: z.string().optional().describe('Filter by lead agent'),
+        campaign: z.string().optional().describe('Filter by campaign'),
+      },
+      handler: async (params: Record<string, unknown>) => {
+        let plans = contentStore.listPlans()
+        if (params.status) plans = plans.filter(plan => plan.status === params.status)
+        if (params.agent) plans = plans.filter(plan => plan.agent === params.agent)
+        if (params.campaign) plans = plans.filter(plan => plan.campaign === params.campaign)
+        return { ok: true, count: plans.length, plans }
+      },
+    })
+
+    ctx.registerExecTool({
+      name: 'bakin_exec_messaging_plan_get',
+      label: 'Read content plan',
+      description: 'Get a content Plan and its Deliverables',
+      parameters: {
+        planId: z.string().describe('Plan ID (required)'),
+      },
+      handler: async (params: Record<string, unknown>) => {
+        if (!params.planId) return { ok: false, error: 'planId required' }
+        const plan = contentStore.getPlan(params.planId as string)
+        if (!plan) return { ok: false, error: 'Plan not found' }
+        return { ok: true, plan, deliverables: contentStore.listDeliverables({ planId: plan.id }) }
+      },
+    })
+
+    ctx.registerExecTool({
+      name: 'bakin_exec_messaging_plan_create',
+      label: 'Created content plan',
+      activityDuplicate: true,
+      description: 'Create a content Plan',
+      parameters: {
+        title: z.string().describe('Plan title'),
+        targetDate: z.string().describe('Target ISO date'),
+        agent: z.string().describe('Lead agent'),
+        brief: z.string().optional().describe('Plan brief'),
+        campaign: z.string().optional().describe('Campaign tag'),
+        suggestedChannels: z.array(z.string()).optional().describe('Suggested channel IDs'),
+      },
+      handler: async (params: Record<string, unknown>) => {
+        if (!params.title || !params.targetDate || !params.agent) {
+          return { ok: false, error: 'title, targetDate, and agent required' }
+        }
+        const plan = contentStore.createPlan({
+          title: params.title as string,
+          brief: (params.brief as string | undefined) ?? '',
+          targetDate: params.targetDate as string,
+          agent: params.agent as string,
+          campaign: params.campaign as string | undefined,
+          suggestedChannels: params.suggestedChannels as string[] | undefined,
+        })
+        ctx.activity.audit('plan.created', params.agent as string, { planId: plan.id, title: plan.title })
+        return { ok: true, plan }
+      },
+    })
 
     ctx.registerExecTool({
       name: 'bakin_exec_messaging_list',

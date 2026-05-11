@@ -41,6 +41,10 @@ function listJsonFiles(storage: StorageAdapter, dir: string): string[] {
   return storage.list?.(dir).filter(file => file.endsWith('.json')) ?? []
 }
 
+function withoutUndefined<T extends Record<string, unknown>>(value: T): Partial<T> {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as Partial<T>
+}
+
 export type CreateBrainstormSessionInput = Omit<BrainstormSession, 'id' | 'createdAt' | 'updatedAt' | 'messages' | 'proposals' | 'createdAtPlanIds' | 'status'> & {
   id?: string
   status?: BrainstormSession['status']
@@ -115,9 +119,10 @@ export function createMessagingContentStorage(storage: StorageAdapter): Messagin
   function updateBrainstormSession(id: string, patch: Partial<BrainstormSession>): BrainstormSession {
     const existing = getBrainstormSession(id)
     if (!existing) throw new Error(`Brainstorm session ${id} not found`)
+    const cleanPatch = withoutUndefined(patch as Record<string, unknown>) as Partial<BrainstormSession>
     const next: BrainstormSession = {
       ...existing,
-      ...patch,
+      ...cleanPatch,
       id: existing.id,
       updatedAt: nowIso(),
     }
@@ -162,9 +167,10 @@ export function createMessagingContentStorage(storage: StorageAdapter): Messagin
   function updatePlan(id: string, patch: Partial<Plan>): Plan {
     const existing = getPlan(id)
     if (!existing) throw new Error(`Plan ${id} not found`)
+    const cleanPatch = withoutUndefined(patch as Record<string, unknown>) as Partial<Plan>
     const next: Plan = {
       ...existing,
-      ...patch,
+      ...cleanPatch,
       id: existing.id,
       updatedAt: nowIso(),
     }
@@ -212,9 +218,10 @@ export function createMessagingContentStorage(storage: StorageAdapter): Messagin
   function updateDeliverable(id: string, patch: Partial<Deliverable>): Deliverable {
     const existing = getDeliverable(id)
     if (!existing) throw new Error(`Deliverable ${id} not found`)
+    const cleanPatch = withoutUndefined(patch as Record<string, unknown>) as Partial<Deliverable>
     const next: Deliverable = {
       ...existing,
-      ...patch,
+      ...cleanPatch,
       id: existing.id,
       draft: patch.draft ? { ...existing.draft, ...patch.draft } : existing.draft,
       updatedAt: nowIso(),
