@@ -38,7 +38,7 @@ afterAll(() => {
 })
 
 beforeEach(() => {
-  for (const dir of ['plans', 'deliverables']) {
+  for (const dir of ['sessions', 'plans', 'deliverables']) {
     const full = join(testDir, 'messaging', dir)
     if (existsSync(full)) rmSync(full, { recursive: true, force: true })
   }
@@ -86,11 +86,11 @@ describe('Plan routes', () => {
     expect(plugin.ctx.storage.exists(`messaging/plans/${plan.id}.json`)).toBe(false)
   })
 
-  it('starts fan-out by creating one bare Bakin task for the Plan', async () => {
+  it('starts content piece planning by creating one bare Bakin task for the Plan', async () => {
     const createRoute = findRoute(plugin.routes, 'POST', '/plans')!
     const created = await callRoute(createRoute, plugin.ctx, {
       body: {
-        title: 'Fan-out tacos',
+        title: 'Content plan tacos',
         brief: 'Turn the taco plan into channel-specific work.',
         targetDate: '2026-05-21',
         agent: 'basil',
@@ -112,7 +112,7 @@ describe('Plan routes', () => {
       parentId: null,
       agent: 'basil',
       column: 'todo',
-      title: 'Plan: Fan-out tacos',
+      title: 'Plan: Content plan tacos',
     }))
 
     const task = await plugin.ctx.tasks.get(started.body.taskId as string)
@@ -123,6 +123,44 @@ describe('Plan routes', () => {
     const repeated = await callRoute(startRoute, plugin.ctx, { searchParams: { id: plan.id as string } })
     expect(repeated.body.alreadyStarted).toBe(true)
     expect(plugin.ctx.tasks.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('deletes linked planning tasks when deleting a Plan', async () => {
+    const createRoute = findRoute(plugin.routes, 'POST', '/plans')!
+    const created = await callRoute(createRoute, plugin.ctx, {
+      body: {
+        title: 'Delete me',
+        brief: 'This plan should be removed.',
+        targetDate: '2026-05-22',
+        agent: 'basil',
+      },
+    })
+    const plan = created.body.plan as Record<string, unknown>
+    const startRoute = findRoute(plugin.routes, 'POST', '/plans/:id/start-fanout')!
+    const started = await callRoute(startRoute, plugin.ctx, { searchParams: { id: plan.id as string } })
+
+    const deleteRoute = findRoute(plugin.routes, 'DELETE', '/plans/:id')!
+    const deleted = await callRoute(deleteRoute, plugin.ctx, { searchParams: { id: plan.id as string } })
+
+    expect(deleted.body.ok).toBe(true)
+    expect(deleted.body.taskIds).toEqual([started.body.taskId])
+    expect(plugin.ctx.tasks.remove).toHaveBeenCalledWith(started.body.taskId)
+    expect(await plugin.ctx.tasks.get(started.body.taskId as string)).toBeNull()
+    expect(plugin.ctx.storage.exists(`messaging/plans/${plan.id}.json`)).toBe(false)
+  })
+
+  it('deletes brainstorm sessions from the route', async () => {
+    const createRoute = findRoute(plugin.routes, 'POST', '/sessions')!
+    const created = await callRoute(createRoute, plugin.ctx, {
+      body: { agentId: 'basil', title: 'Delete brainstorm' },
+    })
+    const session = created.body.session as Record<string, unknown>
+
+    const deleteRoute = findRoute(plugin.routes, 'DELETE', '/sessions/:id')!
+    const deleted = await callRoute(deleteRoute, plugin.ctx, { searchParams: { id: session.id as string } })
+
+    expect(deleted.body).toEqual({ ok: true, planIds: [], taskIds: [] })
+    expect(plugin.ctx.storage.exists(`messaging/sessions/${session.id}.json`)).toBe(false)
   })
 
   it('returns 400 when required create fields are missing', async () => {
@@ -157,12 +195,17 @@ describe('Plan exec tools', () => {
     const started = await callTool(startFanout, { planId: ((created.plan as Record<string, unknown>).id as string) })
     expect(started.ok).toBe(true)
     expect(started.taskId).toBe((started.plan as Record<string, unknown>).fanOutTaskId)
+
+    const remove = findTool(plugin.execTools, 'bakin_exec_messaging_plan_delete')!
+    const deleted = await callTool(remove, { planId: ((created.plan as Record<string, unknown>).id as string) })
+    expect(deleted.ok).toBe(true)
+    expect(deleted.taskIds).toEqual([started.taskId])
   })
 
-  it('proposes Deliverables during Plan fan-out', async () => {
+  it('proposes Deliverables during content piece planning', async () => {
     const create = findTool(plugin.execTools, 'bakin_exec_messaging_plan_create')!
     const created = await callTool(create, {
-      title: 'Fan-out soup',
+      title: 'Content plan soup',
       brief: 'Turn soup plan into channel work.',
       targetDate: '2026-05-25',
       agent: 'basil',

@@ -85,7 +85,11 @@ function MessagingPlanWorkspaceRoute({ params, id }: PluginRouteProps) {
 
   return (
     <MessagingPageFrame>
-      <PlanWorkspace planId={planId} onBack={() => router.push('/messaging/plans')} />
+      <PlanWorkspace
+        planId={planId}
+        onBack={() => router.push('/messaging/plans')}
+        onDeleted={() => router.push('/messaging/plans')}
+      />
     </MessagingPageFrame>
   )
 }

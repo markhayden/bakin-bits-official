@@ -40,16 +40,16 @@ export function ProposedDeliverablesPanel({
     <section className="flex flex-col gap-3" aria-labelledby="proposed-deliverables-heading">
       <div className="flex items-center justify-between gap-3">
         <h3 id="proposed-deliverables-heading" className="text-sm font-semibold">
-          Proposed Deliverables
+          Content Piece Suggestions
         </h3>
         <Badge variant="outline" className="text-[11px]">
-          {proposedDeliverables.length} proposed
+          {proposedDeliverables.length} to review
         </Badge>
       </div>
 
       {proposedDeliverables.length === 0 ? (
         <div className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
-          No proposed deliverables
+          No content pieces to review
         </div>
       ) : (
         <div className="flex flex-col gap-2">
@@ -89,8 +89,8 @@ export function ProposedDeliverablesPanel({
                       size="sm"
                       variant="ghost"
                       className="h-7 w-7 p-0 text-emerald-500 hover:text-emerald-400"
-                      aria-label={`Approve ${deliverable.title}`}
-                      title="Approve"
+                      aria-label={`Accept ${deliverable.title}`}
+                      title="Accept"
                       onClick={() => onApprove(deliverable)}
                     >
                       <Check className="h-3.5 w-3.5" aria-hidden="true" />
@@ -101,8 +101,8 @@ export function ProposedDeliverablesPanel({
                       size="sm"
                       variant="ghost"
                       className="h-7 w-7 p-0 text-red-500 hover:text-red-400"
-                      aria-label={`Reject ${deliverable.title}`}
-                      title="Reject"
+                      aria-label={`Decline ${deliverable.title}`}
+                      title="Decline"
                       onClick={() => onReject(deliverable)}
                     >
                       <X className="h-3.5 w-3.5" aria-hidden="true" />

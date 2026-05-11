@@ -47,7 +47,7 @@ describe('derivePlanStatus', () => {
     expect(derivePlanStatus(basePlan, [])).toBe('planning')
   })
 
-  it('returns fanning_out when fan-out has proposed deliverables', () => {
+  it('returns fanning_out when content piece planning has proposed deliverables', () => {
     expect(derivePlanStatus({ ...basePlan, fanOutTaskId: 'task-1' }, [deliverable('proposed')])).toBe('fanning_out')
   })
 

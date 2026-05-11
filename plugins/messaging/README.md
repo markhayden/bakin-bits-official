@@ -1,9 +1,9 @@
 # Messaging Plugin
 
 Messaging is Bakin's content planning plugin. It turns open-ended agent
-brainstorming into content Plans, fans each Plan out into per-channel
-Deliverables, starts prep work at the right time, routes drafts through review,
-and publishes approved content through Bakin channel runtimes.
+brainstorming into content Plans, helps shape each Plan into channel-specific
+content pieces, starts prep work at the right time, routes drafts through
+review, and publishes approved content through Bakin channel runtimes.
 
 ## Model
 
@@ -18,7 +18,7 @@ messaging/deliverables/<deliverableId>.json
 - `BrainstormSession` stores visible chat messages, streamed runtime activity,
   Plan proposals, and the Plan ids created from the session.
 - `Plan` is one topic or date focus, such as "Taco Tuesday". A Plan has a
-  soft `targetDate`, a lead agent, optional campaign text, and fan-out status.
+  soft `targetDate`, a lead agent, optional campaign text, and planning status.
 - `Deliverable` is the channel-specific work item. It has exact `publishAt`
   and `prepStartAt` timestamps, a content type, status, draft fields, optional
   Bakin task and workflow ids, and publish/failure metadata.
@@ -31,8 +31,8 @@ migrated into the new model.
 Messaging contributes three top-level routes:
 
 - `/messaging/calendar` shows Deliverables on the content calendar.
-- `/messaging/plans` lists Plans and opens a Plan workspace for fan-out and
-  Deliverable review.
+- `/messaging/plans` lists Plans and opens a Plan workspace for timeline,
+  task, brainstorm, and content-piece review.
 - `/messaging/brainstorm` lists brainstorm sessions and embeds
   `IntegratedBrainstorm` for session chat and Plan-proposal review.
 
@@ -43,9 +43,11 @@ The header-level Quick Post action creates a free-floating Deliverable with
 
 1. Brainstorm with an agent. The agent emits fenced JSON Plan proposals with
    `title`, `targetDate`, `brief`, and optional `suggestedChannels`.
-2. Approve proposals and create Plans from them.
-3. Start Plan fan-out. A Bakin task asks the lead agent to call
-   `bakin_exec_messaging_propose_deliverable` once per intended channel.
+2. Accept proposals and prepare Plans from them. No production work starts at
+   this step.
+3. Shape the Plan into channel-specific content pieces. A Bakin task can ask
+   the lead agent to call `bakin_exec_messaging_propose_deliverable` once per
+   intended channel.
 4. Approve, edit, or reject proposed Deliverables in the Plan workspace.
 5. The sweep cron runs `bakin:messaging:sweep`. Planned Deliverables whose prep
    window has opened become prep tasks. Content types with `workflowId` use
@@ -158,6 +160,6 @@ bun test --isolate --preload ./test/setup-dom.ts plugins/messaging/tests
 ```
 
 Relevant coverage includes storage and atomic writes, prompt building and SSE
-streaming, Plan materialization, fan-out, Deliverable review and publishing,
-workflow bridge behavior, default workflows, content-type refresh, calendar
-filters, Quick Post, and the Plan/brainstorm UI.
+streaming, Plan preparation, content-piece planning, Deliverable review and
+publishing, workflow bridge behavior, default workflows, content-type refresh,
+calendar filters, Quick Post, and the Plan/brainstorm UI.

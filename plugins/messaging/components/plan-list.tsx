@@ -17,13 +17,13 @@ import { usePlans } from '../hooks/use-plans'
 
 const PLAN_STATUS_OPTIONS: Array<{ value: PlanStatus; label: string; icon: React.ReactNode }> = [
   { value: 'planning', label: 'Planning', icon: <Circle className="size-3" /> },
-  { value: 'fanning_out', label: 'Fanning out', icon: <Circle className="size-3" /> },
-  { value: 'in_prep', label: 'In prep', icon: <Circle className="size-3" /> },
+  { value: 'fanning_out', label: 'Planning content pieces', icon: <Circle className="size-3" /> },
+  { value: 'in_prep', label: 'In production', icon: <Circle className="size-3" /> },
   { value: 'in_review', label: 'In review', icon: <Circle className="size-3" /> },
   { value: 'scheduled', label: 'Scheduled', icon: <Circle className="size-3" /> },
   { value: 'overdue', label: 'Overdue', icon: <Circle className="size-3" /> },
   { value: 'partially_published', label: 'Partially published', icon: <Circle className="size-3" /> },
-  { value: 'done', label: 'Done', icon: <Circle className="size-3" /> },
+  { value: 'done', label: 'Published', icon: <Circle className="size-3" /> },
   { value: 'cancelled', label: 'Cancelled', icon: <Circle className="size-3" /> },
   { value: 'failed', label: 'Failed', icon: <Circle className="size-3" /> },
 ]
@@ -39,7 +39,7 @@ function formatTargetDate(value: string): string {
 }
 
 function formatStatus(status: PlanStatus): string {
-  return status.replaceAll('_', ' ')
+  return PLAN_STATUS_OPTIONS.find(option => option.value === status)?.label ?? status.replaceAll('_', ' ')
 }
 
 export function PlanList({ onSelectPlan }: PlanListProps) {

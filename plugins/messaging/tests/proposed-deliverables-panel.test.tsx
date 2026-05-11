@@ -51,9 +51,9 @@ function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
 describe('ProposedDeliverablesPanel', () => {
   it('renders the empty state when there are no proposed Deliverables', () => {
     render(<ProposedDeliverablesPanel deliverables={[]} />)
-    expect(screen.getByText('Proposed Deliverables')).toBeDefined()
-    expect(screen.getByText('0 proposed')).toBeDefined()
-    expect(screen.getByText('No proposed deliverables')).toBeDefined()
+    expect(screen.getByText('Content Piece Suggestions')).toBeDefined()
+    expect(screen.getByText('0 to review')).toBeDefined()
+    expect(screen.getByText('No content pieces to review')).toBeDefined()
   })
 
   it('filters to proposed Deliverables and renders their details', () => {
@@ -66,7 +66,7 @@ describe('ProposedDeliverablesPanel', () => {
       />,
     )
 
-    expect(screen.getByText('1 proposed')).toBeDefined()
+    expect(screen.getByText('1 to review')).toBeDefined()
     expect(screen.getByText('Soup blog')).toBeDefined()
     expect(screen.queryByText('Approved soup')).toBeNull()
     expect(screen.getByText('newsletter')).toBeDefined()
@@ -91,8 +91,8 @@ describe('ProposedDeliverablesPanel', () => {
       />,
     )
 
-    fireEvent.click(screen.getByLabelText('Approve Soup blog'))
-    fireEvent.click(screen.getByLabelText('Reject Soup blog'))
+    fireEvent.click(screen.getByLabelText('Accept Soup blog'))
+    fireEvent.click(screen.getByLabelText('Decline Soup blog'))
     fireEvent.click(screen.getByLabelText('Edit Soup blog'))
 
     expect(onApprove).toHaveBeenCalledWith(deliverable)

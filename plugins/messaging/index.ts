@@ -188,9 +188,53 @@ async function startPlanFanOut(
     fanOutTaskId: task.id,
     status: 'planning',
   })
-  ctx.activity.audit('plan.fanout_started', plan.agent, { planId: plan.id, taskId: task.id })
-  ctx.activity.log(plan.agent, `Started fan-out for content Plan "${plan.title}"`)
+  ctx.activity.audit('plan.content_piece_planning_started', plan.agent, { planId: plan.id, taskId: task.id })
+  ctx.activity.log(plan.agent, `Started content piece planning for "${plan.title}"`)
   return { ok: true, plan: updated, task, taskId: task.id, alreadyStarted: false }
+}
+
+async function removeLinkedTasks(ctx: PluginContext, taskIds: Iterable<string>): Promise<string[]> {
+  const removedTaskIds: string[] = []
+  for (const taskId of new Set(taskIds)) {
+    try {
+      await ctx.tasks.remove(taskId)
+      removedTaskIds.push(taskId)
+    } catch (err) {
+      log.warn('Failed to remove linked task while deleting Messaging plan', {
+        taskId,
+        err: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+  return removedTaskIds
+}
+
+async function deletePlanAndLinkedWork(
+  ctx: PluginContext,
+  contentStore: MessagingContentStorage,
+  planId: string,
+  opts: { deleteLinkedTasks?: boolean } = {},
+): Promise<{ deleted: boolean; deliverableIds: string[]; taskIds: string[] }> {
+  const plan = contentStore.getPlan(planId)
+  if (!plan) return { deleted: false, deliverableIds: [], taskIds: [] }
+
+  const deliverables = contentStore.listDeliverables({ planId })
+  const linkedTaskIds = [
+    ...(plan.fanOutTaskId ? [plan.fanOutTaskId] : []),
+    ...deliverables.map((deliverable) => deliverable.taskId).filter((taskId): taskId is string => Boolean(taskId)),
+  ]
+
+  for (const deliverable of deliverables) {
+    contentStore.deleteDeliverable(deliverable.id)
+  }
+  contentStore.deletePlan(planId)
+
+  const removedTaskIds = opts.deleteLinkedTasks === false ? [] : await removeLinkedTasks(ctx, linkedTaskIds)
+  return {
+    deleted: true,
+    deliverableIds: deliverables.map((deliverable) => deliverable.id),
+    taskIds: removedTaskIds,
+  }
 }
 
 interface BrainstormSessionSummary {
@@ -770,17 +814,43 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
     ctx.registerRoute({
       path: '/sessions/:id',
       method: 'DELETE',
-      description: 'Delete a planning session',
+      description: 'Delete a planning session and optionally the Plans prepared from it',
       handler: async (req: Request) => {
         const url = new URL(req.url)
-        const body = await readBody<{ id?: string }>(req).catch(() => ({} as { id?: string }))
+        const body = await readBody<{
+          id?: string
+          deleteCreatedPlans?: boolean
+          deleteLinkedTasks?: boolean
+        }>(req).catch(() => ({} as {
+          id?: string
+          deleteCreatedPlans?: boolean
+          deleteLinkedTasks?: boolean
+        }))
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
-        if (!contentStore.getBrainstormSession(id)) return json({ error: 'Session not found' }, 404)
+        const session = contentStore.getBrainstormSession(id)
+        if (!session) return json({ error: 'Session not found' }, 404)
+        const deletedPlanIds: string[] = []
+        const deletedTaskIds: string[] = []
+        if (body.deleteCreatedPlans !== false) {
+          const planIds = new Set([
+            ...session.createdAtPlanIds,
+            ...contentStore.listPlans()
+              .filter((plan) => plan.sourceSessionId === session.id)
+              .map((plan) => plan.id),
+          ])
+          for (const planId of planIds) {
+            const result = await deletePlanAndLinkedWork(ctx, contentStore, planId, {
+              deleteLinkedTasks: body.deleteLinkedTasks,
+            })
+            if (result.deleted) deletedPlanIds.push(planId)
+            deletedTaskIds.push(...result.taskIds)
+          }
+        }
         contentStore.deleteBrainstormSession(id)
-        ctx.activity.audit('session.deleted', 'system', { sessionId: id })
+        ctx.activity.audit('session.deleted', 'system', { sessionId: id, deletedPlanIds, deletedTaskIds })
         ctx.activity.log('system', `Deleted planning session ${id}`)
-        return json({ ok: true })
+        return json({ ok: true, planIds: deletedPlanIds, taskIds: deletedTaskIds })
       },
     })
 
@@ -1033,7 +1103,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
     ctx.registerRoute({
       path: '/sessions/:id/materialize',
       method: 'POST',
-      description: 'Create Plans from approved brainstorm proposals',
+      description: 'Prepare Plans from accepted brainstorm proposals',
       handler: async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<{ id?: string }>(req).catch(() => ({} as { id?: string }))
@@ -1138,26 +1208,26 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
     ctx.registerRoute({
       path: '/plans/:id',
       method: 'DELETE',
-      description: 'Delete a content Plan and its Deliverables',
+      description: 'Delete a content Plan, its content pieces, and linked board tasks',
       handler: async (req: Request) => {
         const url = new URL(req.url)
-        const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
+        const body = await readBody<{ id?: string; deleteLinkedTasks?: boolean }>(req)
+          .catch((): { id?: string; deleteLinkedTasks?: boolean } => ({}))
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
-        if (!contentStore.getPlan(id)) return json({ error: 'Plan not found' }, 404)
-        for (const deliverable of contentStore.listDeliverables({ planId: id })) {
-          contentStore.deleteDeliverable(deliverable.id)
-        }
-        contentStore.deletePlan(id)
-        ctx.activity.audit('plan.deleted', 'system', { planId: id })
-        return json({ ok: true })
+        const result = await deletePlanAndLinkedWork(ctx, contentStore, id, {
+          deleteLinkedTasks: body.deleteLinkedTasks,
+        })
+        if (!result.deleted) return json({ error: 'Plan not found' }, 404)
+        ctx.activity.audit('plan.deleted', 'system', { planId: id, deliverableIds: result.deliverableIds, taskIds: result.taskIds })
+        return json({ ok: true, deliverableIds: result.deliverableIds, taskIds: result.taskIds })
       },
     })
 
     ctx.registerRoute({
       path: '/plans/:id/start-fanout',
       method: 'POST',
-      description: 'Create the phase-2 Bakin task for a content Plan',
+      description: 'Create the content piece planning task for a content Plan',
       handler: async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
@@ -1405,10 +1475,34 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
     })
 
     ctx.registerExecTool({
-      name: 'bakin_exec_messaging_plan_start_fanout',
-      label: 'Started content plan fan-out',
+      name: 'bakin_exec_messaging_plan_delete',
+      label: 'Deleted content plan',
       activityDuplicate: true,
-      description: 'Create the phase-2 Bakin task for a content Plan',
+      description: 'Delete a content Plan, its content pieces, and linked board tasks.',
+      parameters: {
+        planId: z.string().describe('Plan ID (required)'),
+        deleteLinkedTasks: z.boolean().optional().describe('Delete linked board tasks; defaults to true'),
+      },
+      handler: async (params: Record<string, unknown>) => {
+        if (!params.planId) return { ok: false, error: 'planId required' }
+        const result = await deletePlanAndLinkedWork(ctx, contentStore, params.planId as string, {
+          deleteLinkedTasks: params.deleteLinkedTasks as boolean | undefined,
+        })
+        if (!result.deleted) return { ok: false, error: 'Plan not found' }
+        ctx.activity.audit('plan.deleted', 'system', {
+          planId: params.planId,
+          deliverableIds: result.deliverableIds,
+          taskIds: result.taskIds,
+        })
+        return { ok: true, deliverableIds: result.deliverableIds, taskIds: result.taskIds }
+      },
+    })
+
+    ctx.registerExecTool({
+      name: 'bakin_exec_messaging_plan_start_fanout',
+      label: 'Started content piece planning',
+      activityDuplicate: true,
+      description: 'Create the content piece planning task for a content Plan',
       parameters: {
         planId: z.string().describe('Plan ID (required)'),
       },
@@ -1424,7 +1518,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       name: 'bakin_exec_messaging_propose_deliverable',
       label: 'Proposed content deliverable',
       activityDuplicate: true,
-      description: 'Propose a channel-specific Deliverable for a content Plan during phase-2 fan-out.',
+      description: 'Propose a channel-specific content piece for a content Plan.',
       parameters: {
         planId: z.string().describe('Plan ID (required)'),
         channel: z.string().describe('Runtime channel ID'),
@@ -1749,16 +1843,40 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       name: 'bakin_exec_messaging_session_delete',
       label: 'Deleted brainstorm session',
       activityDuplicate: true,
-      description: 'Delete a planning session',
+      description: 'Delete a planning session and optionally the Plans prepared from it.',
       parameters: {
         sessionId: z.string().describe('Session ID (required)'),
+        deleteCreatedPlans: z.boolean().optional().describe('Delete Plans created from the session; defaults to true'),
+        deleteLinkedTasks: z.boolean().optional().describe('Delete linked board tasks; defaults to true'),
       },
       handler: async (params: Record<string, unknown>) => {
         if (!params.sessionId) return { ok: false, error: 'sessionId required' }
-        if (!contentStore.getBrainstormSession(params.sessionId as string)) return { ok: false, error: 'Session not found' }
+        const session = contentStore.getBrainstormSession(params.sessionId as string)
+        if (!session) return { ok: false, error: 'Session not found' }
+        const deletedPlanIds: string[] = []
+        const deletedTaskIds: string[] = []
+        if (params.deleteCreatedPlans !== false) {
+          const planIds = new Set([
+            ...session.createdAtPlanIds,
+            ...contentStore.listPlans()
+              .filter((plan) => plan.sourceSessionId === session.id)
+              .map((plan) => plan.id),
+          ])
+          for (const planId of planIds) {
+            const result = await deletePlanAndLinkedWork(ctx, contentStore, planId, {
+              deleteLinkedTasks: params.deleteLinkedTasks as boolean | undefined,
+            })
+            if (result.deleted) deletedPlanIds.push(planId)
+            deletedTaskIds.push(...result.taskIds)
+          }
+        }
         contentStore.deleteBrainstormSession(params.sessionId as string)
-        ctx.activity.audit('session.deleted', 'system', { sessionId: params.sessionId })
-        return { ok: true }
+        ctx.activity.audit('session.deleted', 'system', {
+          sessionId: params.sessionId,
+          deletedPlanIds,
+          deletedTaskIds,
+        })
+        return { ok: true, planIds: deletedPlanIds, taskIds: deletedTaskIds }
       },
     })
 
@@ -1863,9 +1981,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
 
     ctx.registerExecTool({
       name: 'bakin_exec_messaging_session_materialize',
-      label: 'Created Plans from brainstorm proposals',
+      label: 'Prepared Plans from brainstorm proposals',
       activityDuplicate: true,
-      description: 'Create Plans from approved brainstorm proposals',
+      description: 'Prepare Plans from accepted brainstorm proposals',
       parameters: {
         sessionId: z.string().describe('Session ID (required)'),
       },

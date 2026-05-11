@@ -15,7 +15,7 @@ import { useAgentIds, useAgentList, usePathname, useQueryState, useRouter, useSe
 import { Badge } from "@bakin/sdk/ui"
 import { Button } from "@bakin/sdk/ui"
 import { Input } from "@bakin/sdk/ui"
-import { ArrowLeft, CalendarDays, Check, ClipboardList, Plus, X } from 'lucide-react'
+import { ArrowLeft, CalendarDays, Check, ClipboardList, Plus, Trash2, X } from 'lucide-react'
 import type { BrainstormSession, PlanProposal, SessionMessage } from '../types'
 
 interface SessionSummary {
@@ -88,11 +88,17 @@ function mergeProposal(proposals: PlanProposal[], incoming: PlanProposal): PlanP
 
 function ProposalStatusBadge({ proposal }: { proposal: PlanProposal }) {
   if (proposal.planId) {
-    return <Badge variant="outline" className="shrink-0 text-[10px]">Plan created</Badge>
+    return <Badge variant="outline" className="shrink-0 text-[10px]">Plan ready</Badge>
+  }
+  const label: Record<PlanProposal['status'], string> = {
+    proposed: 'Needs review',
+    approved: 'Accepted',
+    rejected: 'Rejected',
+    revised: 'Revised',
   }
   return (
     <Badge className="max-w-28 shrink-0 truncate capitalize">
-      {proposal.status.replaceAll('_', ' ')}
+      {label[proposal.status] ?? proposal.status.replaceAll('_', ' ')}
     </Badge>
   )
 }
@@ -160,7 +166,7 @@ function ProposalDrawer({
               </Button>
               <Button onClick={() => save('approved')} disabled={saving}>
                 <Check className="size-4" />
-                Approve
+                Accept
               </Button>
             </>
           )}
@@ -219,7 +225,7 @@ function ProposalDrawer({
             </Button>
             <Button onClick={() => save('approved')} disabled={saving}>
               <Check className="size-4" />
-              Approve
+              Accept
             </Button>
           </div>
         )}
@@ -246,6 +252,8 @@ export function BrainstormView() {
   const [activeSession, setActiveSession] = useState<BrainstormSession | null>(null)
   const [messages, setMessages] = useState<BrainstormMessage[]>([])
   const [materializing, setMaterializing] = useState(false)
+  const [deleteSessionId, setDeleteSessionId] = useState<string | null>(null)
+  const [deletingSession, setDeletingSession] = useState(false)
   const [selectedProposalId, setSelectedProposalId] = useState<string | null>(null)
   const searchHook = useSearch({ plugin: 'messaging', facets: ['status', 'agent_id'], debounce: 300 })
 
@@ -372,6 +380,29 @@ export function BrainstormView() {
     }
   }
 
+  const deleteSession = async () => {
+    if (!deleteSessionId) return
+    setDeletingSession(true)
+    try {
+      const encoded = encodeURIComponent(deleteSessionId)
+      const response = await fetch(`/api/plugins/messaging/sessions/${encoded}?id=${encoded}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deleteCreatedPlans: true, deleteLinkedTasks: true }),
+      })
+      if (!response.ok) return
+      if (sessionId === deleteSessionId) {
+        setActiveSession(null)
+        setMessages([])
+        pushSessionId('')
+      }
+      setDeleteSessionId(null)
+      await loadSessions()
+    } finally {
+      setDeletingSession(false)
+    }
+  }
+
   const onSend = useCallback(async (
     prompt: string,
     _history: BrainstormMessage[],
@@ -404,6 +435,33 @@ export function BrainstormView() {
     return result
   }, [activeSession, loadSession, loadSessions])
 
+  const sessionPendingDelete = deleteSessionId
+    ? activeSession?.id === deleteSessionId
+      ? activeSession
+      : sessions.find(session => session.id === deleteSessionId)
+    : null
+
+  const deleteSessionDialog = sessionPendingDelete ? (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/60" onClick={() => !deletingSession && setDeleteSessionId(null)} />
+      <div className="relative w-[420px] rounded-md border border-border bg-background p-5 shadow-2xl">
+        <h2 className="text-sm font-semibold">Delete this brainstorm session?</h2>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          This removes the brainstorm, any plans prepared from accepted proposals, and linked board tasks for those plans.
+        </p>
+        <p className="mt-3 truncate text-xs text-muted-foreground">{sessionPendingDelete.title}</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="outline" disabled={deletingSession} onClick={() => setDeleteSessionId(null)}>
+            Cancel
+          </Button>
+          <Button variant="destructive" disabled={deletingSession} onClick={deleteSession}>
+            {deletingSession ? 'Deleting...' : 'Delete session'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  ) : null
+
   if (sessionId && activeSession) {
     const approvedCount = activeSession.proposals.filter(proposal => proposal.status === 'approved' && !proposal.planId).length
     const selectedProposal = activeSession.proposals.find(proposal => proposal.id === selectedProposalId) ?? null
@@ -418,9 +476,15 @@ export function BrainstormView() {
                 <ArrowLeft className="size-3.5" data-icon="inline-start" />
                 Sessions
               </Button>
-              <Button size="sm" disabled={approvedCount === 0 || materializing} onClick={materialize}>
-                <ClipboardList className="size-3.5" data-icon="inline-start" />
-                Create Plans
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-muted-foreground hover:text-red-400"
+                aria-label="Delete brainstorm session"
+                title="Delete brainstorm session"
+                onClick={() => setDeleteSessionId(activeSession.id)}
+              >
+                <Trash2 className="size-4" aria-hidden="true" />
               </Button>
             </div>
           }
@@ -442,76 +506,84 @@ export function BrainstormView() {
             />
           </div>
 
-          <aside className="min-h-0 overflow-y-auto overflow-x-hidden border-l border-border px-4">
+          <aside className="flex min-h-0 flex-col overflow-hidden border-l border-border px-4">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-sm font-semibold">Plan proposals</h2>
               <Badge variant="outline" className="text-[11px]">{activeSession.proposals.length}</Badge>
             </div>
-            {activeSession.proposals.length === 0 ? (
-              <EmptyState icon={ClipboardList} title="No proposals yet" />
-            ) : (
-              <div className="grid gap-2">
-                {activeSession.proposals.map(proposal => (
-                  <article
-                    key={proposal.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setSelectedProposalId(proposal.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault()
-                        setSelectedProposalId(proposal.id)
-                      }
-                    }}
-                    className="w-full overflow-hidden rounded-md border border-border bg-card p-3 text-left transition-colors hover:bg-muted/30 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <h3 className="line-clamp-2 text-sm font-medium">{proposal.title}</h3>
-                        <p className="mt-1 text-xs text-muted-foreground">{formatDate(proposal.targetDate)}</p>
+            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1">
+              {activeSession.proposals.length === 0 ? (
+                <EmptyState icon={ClipboardList} title="No proposals yet" />
+              ) : (
+                <div className="grid gap-2">
+                  {activeSession.proposals.map(proposal => (
+                    <article
+                      key={proposal.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedProposalId(proposal.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          setSelectedProposalId(proposal.id)
+                        }
+                      }}
+                      className="w-full overflow-hidden rounded-md border border-border bg-card p-3 text-left transition-colors hover:bg-muted/30 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <h3 className="line-clamp-2 text-sm font-medium">{proposal.title}</h3>
+                          <p className="mt-1 text-xs text-muted-foreground">{formatDate(proposal.targetDate)}</p>
+                        </div>
+                        <ProposalStatusBadge proposal={proposal} />
                       </div>
-                      <ProposalStatusBadge proposal={proposal} />
-                    </div>
-                    <p className="mt-2 line-clamp-3 text-sm text-muted-foreground">{proposal.brief}</p>
-                    {proposal.suggestedChannels && proposal.suggestedChannels.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {proposal.suggestedChannels.map(channel => (
-                          <Badge key={channel} variant="outline" className="text-[10px]">{channel}</Badge>
-                        ))}
-                      </div>
-                    )}
-                    {!proposal.planId && (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="px-3"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            updateProposal(proposal, { status: 'approved' })
-                          }}
-                        >
-                          <Check className="size-3.5" data-icon="inline-start" />
-                          Approve
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="px-3"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            updateProposal(proposal, { status: 'rejected' })
-                          }}
-                        >
-                          <X className="size-3.5" data-icon="inline-start" />
-                          Reject
-                        </Button>
-                      </div>
-                    )}
-                  </article>
-                ))}
-              </div>
-            )}
+                      <p className="mt-2 line-clamp-3 text-sm text-muted-foreground">{proposal.brief}</p>
+                      {proposal.suggestedChannels && proposal.suggestedChannels.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {proposal.suggestedChannels.map(channel => (
+                            <Badge key={channel} variant="outline" className="text-[10px]">{channel}</Badge>
+                          ))}
+                        </div>
+                      )}
+                      {!proposal.planId && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="px-3"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              updateProposal(proposal, { status: 'approved' })
+                            }}
+                          >
+                            <Check className="size-3.5" data-icon="inline-start" />
+                            Accept
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="px-3"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              updateProposal(proposal, { status: 'rejected' })
+                            }}
+                          >
+                            <X className="size-3.5" data-icon="inline-start" />
+                            Reject
+                          </Button>
+                        </div>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="mt-3 border-t border-border pt-3">
+              <Button className="w-full justify-center" disabled={approvedCount === 0 || materializing} onClick={materialize}>
+                <ClipboardList className="size-4" />
+                Complete session and prepare plans
+              </Button>
+            </div>
           </aside>
         </div>
 
@@ -521,6 +593,7 @@ export function BrainstormView() {
           onClose={() => setSelectedProposalId(null)}
           onUpdate={updateProposal}
         />
+        {deleteSessionDialog}
       </div>
     )
   }
@@ -590,7 +663,7 @@ export function BrainstormView() {
                       <h2 className="truncate text-sm font-medium">{session.title}</h2>
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {session.proposalCount} proposals, {session.approvedCount} approved
+                      {session.proposalCount} proposals, {session.approvedCount} accepted
                     </p>
                   </div>
                   <Badge className="capitalize">{session.status}</Badge>
@@ -600,6 +673,7 @@ export function BrainstormView() {
           </div>
         )}
       </div>
+      {deleteSessionDialog}
     </div>
   )
 }

@@ -172,29 +172,42 @@ describe('Plan client UI', () => {
     expect(onSelectPlan).toHaveBeenCalledWith(PLAN)
   })
 
-  it('starts Plan fan-out from the workspace', async () => {
+  it('renders the planning hub without starting background work', async () => {
     render(<PlanWorkspace planId="plan-1" />)
 
     await waitFor(() => {
-      expect(screen.getByText('Start fan-out')).toBeDefined()
+      expect(screen.getByText('Tasks')).toBeDefined()
+      expect(screen.getByText('Content Piece Suggestions')).toBeDefined()
     })
-    fireEvent.click(screen.getByText('Start fan-out'))
-
-    await waitFor(() => {
-      expect(screen.getByText('Fan-out started')).toBeDefined()
-    })
+    expect(screen.queryByText('Start fan-out')).toBeNull()
+    expect(fanOutStarted).toBe(false)
   })
 
   it('approves proposed Deliverables into planned status', async () => {
     render(<PlanWorkspace planId="plan-1" />)
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Approve Soup blog')).toBeDefined()
+      expect(screen.getByLabelText('Accept Soup blog')).toBeDefined()
     })
-    fireEvent.click(screen.getByLabelText('Approve Soup blog'))
+    fireEvent.click(screen.getByLabelText('Accept Soup blog'))
 
     await waitFor(() => {
       expect(putBodies[0]).toEqual({ status: 'planned' })
+    })
+  })
+
+  it('deletes a Plan and returns to the Plan list', async () => {
+    const onDeleted = mock()
+    render(<PlanWorkspace planId="plan-1" onDeleted={onDeleted} />)
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Delete plan')).toBeDefined()
+    })
+    fireEvent.click(screen.getByLabelText('Delete plan'))
+    fireEvent.click(screen.getByText('Delete plan'))
+
+    await waitFor(() => {
+      expect(onDeleted).toHaveBeenCalled()
     })
   })
 })
