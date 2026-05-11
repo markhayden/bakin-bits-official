@@ -4,16 +4,15 @@ import { useEffect, useState } from 'react'
 import { DEFAULT_CONTENT_TYPES, type ContentTypeOption } from '../types'
 
 /**
- * Module-level cache — one fetch per page load is plenty for messaging UI
- * (content types change rarely and settings updates are reflected after a
- * browser refresh, per the v1 scope in the refactor spec). An in-flight
- * promise coalesces concurrent mounts so we only hit the network once.
+ * Module-level cache. The initial settings request is shared across mounts,
+ * then plugin:settings-changed SSE events force a refresh so content-type
+ * edits appear without a browser reload.
  */
 let cached: ContentTypeOption[] | null = null
 let inFlight: Promise<ContentTypeOption[]> | null = null
 
-function fetchContentTypes(): Promise<ContentTypeOption[]> {
-  if (cached) return Promise.resolve(cached)
+function fetchContentTypes(force = false): Promise<ContentTypeOption[]> {
+  if (!force && cached) return Promise.resolve(cached)
   if (inFlight) return inFlight
   inFlight = fetch('/api/plugin-settings/messaging')
     .then((r) => (r.ok ? r.json() : null))
@@ -37,12 +36,32 @@ export function useContentTypes(): ContentTypeOption[] {
   const [types, setTypes] = useState<ContentTypeOption[]>(() => cached ?? DEFAULT_CONTENT_TYPES)
 
   useEffect(() => {
-    if (cached) return
     let cancelled = false
     fetchContentTypes().then((list) => {
       if (!cancelled) setTypes(list)
     })
     return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    if (typeof EventSource === 'undefined') return
+    let cancelled = false
+    const events = new EventSource('/api/events')
+    events.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data) as { type?: unknown; pluginId?: unknown }
+        if (data.type !== 'plugin:settings-changed' || data.pluginId !== 'messaging') return
+        fetchContentTypes(true).then((list) => {
+          if (!cancelled) setTypes(list)
+        })
+      } catch {
+        // Ignore malformed events; a later settings event or reload will recover.
+      }
+    }
+    return () => {
+      cancelled = true
+      events.close()
+    }
   }, [])
 
   return types
