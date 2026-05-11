@@ -34,6 +34,10 @@ const log = {
   error: (...args: unknown[]) => console.error('[messaging]', ...args),
 }
 
+const SWEEP_CRON_ID = 'messaging-content-sweep'
+const SWEEP_CRON_COMMAND = 'bakin:messaging:sweep'
+const DEFAULT_SWEEP_CRON_SCHEDULE = '*/5 * * * *'
+
 let activeMessagingStorage: MessagingStorage | null = null
 
 // ---------------------------------------------------------------------------
@@ -104,6 +108,31 @@ function filterDeliverablesBySearchParams(
 
 function recomputeLinkedPlan(contentStore: MessagingContentStorage, planId: string | null | undefined): void {
   if (planId) recomputePlanStatus(contentStore, planId)
+}
+
+async function ensureMessagingSweepCron(ctx: PluginContext, schedule: string): Promise<void> {
+  const job = {
+    name: 'Messaging content sweep',
+    schedule,
+    command: SWEEP_CRON_COMMAND,
+    enabled: true,
+    metadata: {
+      source: 'bakin',
+      isBakinJob: true,
+      description: 'Sweeps messaging Deliverables for prep, overdue, and publish transitions.',
+    },
+  }
+
+  try {
+    const existing = await ctx.runtime.cron.get(SWEEP_CRON_ID)
+    if (existing) {
+      await ctx.runtime.cron.update(SWEEP_CRON_ID, job)
+    } else {
+      await ctx.runtime.cron.create({ id: SWEEP_CRON_ID, ...job })
+    }
+  } catch (err) {
+    log.warn('Messaging content sweep cron registration failed', { err: err instanceof Error ? err.message : String(err) })
+  }
 }
 
 function buildPlanFanOutDescription(plan: Plan): string {
@@ -417,6 +446,13 @@ const messagingPlugin: BakinPlugin = {
       ctx.updateSettings({ contentTypes: normalizedSettings.contentTypes })
       log.info(`Normalized ${normalizedSettings.contentTypes.length} messaging content types`)
     }
+
+    ctx.hooks.register('messaging.sweep.run', async () => ({ ok: true, processed: 0 }), {
+      hookKind: 'rpc',
+      label: 'Run messaging content sweep',
+      summary: 'Run messaging content sweep',
+    })
+    await ensureMessagingSweepCron(ctx, currentSettings.sweepCronSchedule ?? DEFAULT_SWEEP_CRON_SCHEDULE)
 
     // ── Search Content Type Registration ─────────────────────────────
     // Per spec §5.1d, ONLY brainstorm sessions get indexed search; calendar

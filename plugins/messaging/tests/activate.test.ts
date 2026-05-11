@@ -132,4 +132,45 @@ describe('messaging plugin — activate', () => {
 
     expect(updateSpy).toHaveBeenCalledWith({ contentTypes: withoutWorkflowIds(DEFAULT_CONTENT_TYPES) })
   })
+
+  it('registers the sweep hook and default cron job on activate', async () => {
+    const { ctx } = createTestContext('messaging', testDir)
+
+    await messagingPlugin.activate(ctx)
+
+    expect(ctx.hooks.register).toHaveBeenCalledWith(
+      'messaging.sweep.run',
+      expect.any(Function),
+      expect.objectContaining({
+        hookKind: 'rpc',
+        label: 'Run messaging content sweep',
+      }),
+    )
+    expect(ctx.runtime.cron.create).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'messaging-content-sweep',
+      name: 'Messaging content sweep',
+      schedule: '*/5 * * * *',
+      command: 'bakin:messaging:sweep',
+      enabled: true,
+      metadata: expect.objectContaining({
+        source: 'bakin',
+        isBakinJob: true,
+      }),
+    }))
+  })
+
+  it('uses sweepCronSchedule from settings when present', async () => {
+    const { ctx } = createTestContext('messaging', testDir)
+    ctx.getSettings = (() => ({
+      contentTypes: DEFAULT_CONTENT_TYPES,
+      sweepCronSchedule: '0 * * * *',
+    })) as typeof ctx.getSettings
+
+    await messagingPlugin.activate(ctx)
+
+    expect(ctx.runtime.cron.create).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'messaging-content-sweep',
+      schedule: '0 * * * *',
+    }))
+  })
 })

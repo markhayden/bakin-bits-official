@@ -216,6 +216,7 @@ export interface MessagingSettings {
   showScheduleJobs?: boolean
   channels?: string
   contentTypes?: ContentTypeOption[]
+  sweepCronSchedule?: string
 }
 
 /**

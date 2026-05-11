@@ -10,13 +10,14 @@
   },
   "contentFiles": ["messaging.json"],
   "tests": "tests/",
-  "dependencies": ["team", "workflows"],
+  "dependencies": ["team", "workflows", "schedule"],
   "permissions": [
     "storage.read",
     "storage.write",
     "events.emit",
     "runtime.messaging",
     "runtime.channels",
+    "runtime.cron",
     "search.read",
     "search.write",
     "assets.read",
@@ -111,7 +112,8 @@
     ],
     "settings": [
       { "key": "channels", "summary": "Default notification channels for delivered messaging items" },
-      { "key": "defaultAgent", "summary": "Default agent for new messaging items and planning sessions" }
+      { "key": "defaultAgent", "summary": "Default agent for new messaging items and planning sessions" },
+      { "key": "sweepCronSchedule", "summary": "Cron schedule for the messaging content sweep" }
     ],
     "docs": { "slug": "official/messaging" }
   },
