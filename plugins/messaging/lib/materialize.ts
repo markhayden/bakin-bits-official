@@ -1,0 +1,32 @@
+import type { PlanningSession } from '../types'
+import type { MessagingContentStorage } from './content-storage'
+
+export interface MaterializeResult {
+  planIds: string[]
+}
+
+export function materializeApprovedProposals(
+  session: PlanningSession,
+  contentStore: MessagingContentStorage,
+): MaterializeResult {
+  const planIds: string[] = []
+  session.createdAtPlanIds ??= []
+
+  for (const proposal of session.proposals) {
+    if (proposal.status !== 'approved' || proposal.planId) continue
+
+    const plan = contentStore.createPlan({
+      title: proposal.title,
+      brief: proposal.brief,
+      targetDate: proposal.targetDate ?? proposal.scheduledAt.slice(0, 10),
+      agent: proposal.agentId,
+      sourceSessionId: session.id,
+      suggestedChannels: proposal.suggestedChannels ?? proposal.channels,
+    })
+    proposal.planId = plan.id
+    planIds.push(plan.id)
+    if (!session.createdAtPlanIds.includes(plan.id)) session.createdAtPlanIds.push(plan.id)
+  }
+
+  return { planIds }
+}

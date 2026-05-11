@@ -95,12 +95,13 @@ describe('orphaned references — agents in prompt builder', () => {
     expect(prompt).not.toContain('undefined')
   })
 
-  it('handles an empty content-type taxonomy in the prompt instruction', () => {
+  it('builds Plan-proposal instructions without requiring content types', () => {
     const prompt = buildSystemPrompt(
       'x',
       makeSession({ agentId: 'x' }),
       { contentTypes: [], persona: '' },
     )
-    expect(prompt).toContain('contentType: one of a content type id of your choosing')
+    expect(prompt).toContain('Your job is to propose **content topics** as Plan proposals')
+    expect(prompt).toContain('suggestedChannels: optional hint')
   })
 })

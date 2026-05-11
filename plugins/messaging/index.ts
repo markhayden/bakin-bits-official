@@ -23,6 +23,8 @@ import {
 import type { PlanningSession } from './types'
 import { archiveLegacyMessagingFile } from './lib/legacy-archive'
 import { normalizeContentTypesForActivate } from './lib/content-types'
+import { createMessagingContentStorage } from './lib/content-storage'
+import { materializeApprovedProposals } from './lib/materialize'
 
 const log = {
   info: (...args: unknown[]) => console.info('[messaging]', ...args),
@@ -281,6 +283,7 @@ const messagingPlugin: BakinPlugin = {
     }
 
     const messaging = createMessagingStorage(ctx.storage)
+    const contentStore = createMessagingContentStorage(ctx.storage)
     activeMessagingStorage = messaging
     const sessions = createMessagingSessionStore(ctx.storage, messaging)
     const {
@@ -961,6 +964,25 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       },
     })
 
+    ctx.registerRoute({
+      path: '/sessions/:id/materialize',
+      method: 'POST',
+      description: 'Materialize approved Plan proposals into Plans',
+      handler: async (req: Request) => {
+        const url = new URL(req.url)
+        const body = await readBody<{ id?: string }>(req).catch(() => ({} as { id?: string }))
+        const id = url.searchParams.get('id') || body.id
+        if (!id) return json({ error: 'id required' }, 400)
+        const session = loadSession(id)
+        if (!session) return json({ error: 'Session not found' }, 404)
+        const result = materializeApprovedProposals(session, contentStore)
+        saveSession(session)
+        ctx.activity.audit('session.materialized', 'system', { sessionId: id, planIds: result.planIds })
+        ctx.activity.log('system', `Materialized ${result.planIds.length} Plan(s) from "${session.title}"`)
+        return json({ ok: true, ...result })
+      },
+    })
+
     // ── Exec Tools (agent-facing) ─────────────────────────────────────
 
     ctx.registerExecTool({
@@ -1360,6 +1382,25 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         } catch (e: unknown) {
           return { ok: false, error: (e as Error).message }
         }
+      },
+    })
+
+    ctx.registerExecTool({
+      name: 'bakin_exec_messaging_session_materialize',
+      label: 'Materialized brainstorm proposals',
+      activityDuplicate: true,
+      description: 'Materialize approved Plan proposals into Plans',
+      parameters: {
+        sessionId: z.string().describe('Session ID (required)'),
+      },
+      handler: async (params: Record<string, unknown>) => {
+        if (!params.sessionId) return { ok: false, error: 'sessionId required' }
+        const session = loadSession(params.sessionId as string)
+        if (!session) return { ok: false, error: 'Session not found' }
+        const result = materializeApprovedProposals(session, contentStore)
+        saveSession(session)
+        ctx.activity.audit('session.materialized', 'system', { sessionId: params.sessionId, planIds: result.planIds })
+        return { ok: true, ...result }
       },
     })
 

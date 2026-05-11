@@ -51,6 +51,7 @@
       { "method": "POST", "path": "/sessions/:id/messages", "summary": "Send a message to a planning session", "permissions": ["runtime.messaging", "storage.write"] },
       { "method": "PUT", "path": "/sessions/:id/proposals/:proposalId", "summary": "Update a planning-session proposal", "permissions": ["storage.write"] },
       { "method": "POST", "path": "/sessions/:id/confirm", "summary": "Confirm planning-session proposals into calendar items", "permissions": ["storage.write", "runtime.channels", "assets.read"] },
+      { "method": "POST", "path": "/sessions/:id/materialize", "summary": "Materialize approved Plan proposals into Plans", "permissions": ["storage.write"] },
       { "method": "GET", "path": "/search", "summary": "Search messaging brainstorm sessions", "permissions": ["search.read"] }
     ],
     "execTools": [
@@ -68,7 +69,8 @@
       { "name": "bakin_exec_messaging_session_delete", "summary": "Delete a planning session", "permissions": ["storage.write"] },
       { "name": "bakin_exec_messaging_session_message", "summary": "Message a planning session", "permissions": ["runtime.messaging", "storage.write"] },
       { "name": "bakin_exec_messaging_proposal_update", "summary": "Update a planning-session proposal", "permissions": ["storage.write"] },
-      { "name": "bakin_exec_messaging_session_confirm", "summary": "Confirm planning-session proposals", "permissions": ["storage.write", "runtime.channels"] }
+      { "name": "bakin_exec_messaging_session_confirm", "summary": "Confirm planning-session proposals", "permissions": ["storage.write", "runtime.channels"] },
+      { "name": "bakin_exec_messaging_session_materialize", "summary": "Materialize approved Plan proposals into Plans", "permissions": ["storage.write"] }
     ],
     "cliCommands": [
       { "name": "messaging:list", "usage": "bakin messaging list", "summary": "List messaging items", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_list" } },

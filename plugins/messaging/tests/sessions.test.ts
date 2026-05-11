@@ -125,6 +125,10 @@ beforeEach(() => {
   if (existsSync(sessionsDir)) {
     rmSync(sessionsDir, { recursive: true, force: true })
   }
+  const plansDir = join(testDir, 'messaging', 'plans')
+  if (existsSync(plansDir)) {
+    rmSync(plansDir, { recursive: true, force: true })
+  }
   // Reset messaging.json
   const { writeFileSync } = require('fs')
   writeFileSync(join(testDir, 'messaging.json'), '[]')
@@ -463,6 +467,34 @@ describe('Session routes', () => {
       expect(findRoute(plugin.routes, 'POST', '/sessions/:id/confirm')).toBeDefined()
     })
   })
+
+  describe('POST /sessions/:id/materialize', () => {
+    it('is registered', () => {
+      expect(findRoute(plugin.routes, 'POST', '/sessions/:id/materialize')).toBeDefined()
+    })
+
+    it('creates Plans from approved proposals', async () => {
+      const sessionsMod = await import('../../../plugins/messaging/lib/sessions')
+      const storageMod = await import('../../../plugins/messaging/lib/storage')
+      const sessions = sessionsMod.createMessagingSessionStore(plugin.ctx.storage, storageMod.createMessagingStorage(plugin.ctx.storage))
+      const session = sessions.createSession({ agentId: 'basil' })
+      const msg = sessions.appendMessage(session.id, { role: 'assistant', content: 'Ideas' })
+      const [proposal] = sessions.addProposals(session.id, msg.id, [
+        { title: 'Taco Tuesday', targetDate: '2026-05-19', brief: 'A taco topic.', suggestedChannels: ['blog'] },
+      ])
+      sessions.updateProposal(session.id, proposal.id, { status: 'approved' })
+
+      const route = findRoute(plugin.routes, 'POST', '/sessions/:id/materialize')!
+      const { status, body } = await callRoute(route, plugin.ctx, { searchParams: { id: session.id } })
+
+      expect(status).toBe(200)
+      expect(body.ok).toBe(true)
+      expect((body.planIds as string[]).length).toBe(1)
+      const plan = plugin.ctx.storage.readJson<Record<string, unknown>>(`messaging/plans/${(body.planIds as string[])[0]}.json`)
+      expect(plan).toMatchObject({ title: 'Taco Tuesday', targetDate: '2026-05-19', sourceSessionId: session.id })
+      expect(sessions.loadSession(session.id)?.proposals[0].planId).toBe((body.planIds as string[])[0])
+    })
+  })
 })
 
 // ===========================================================================
@@ -607,6 +639,12 @@ describe('Session exec tools', () => {
   describe('session_confirm', () => {
     it('is registered', () => {
       expect(findTool(plugin.execTools, 'bakin_exec_messaging_session_confirm')).toBeDefined()
+    })
+  })
+
+  describe('session_materialize', () => {
+    it('is registered', () => {
+      expect(findTool(plugin.execTools, 'bakin_exec_messaging_session_materialize')).toBeDefined()
     })
   })
 })
@@ -775,11 +813,11 @@ describe('Proposal lifecycle', () => {
 // ===========================================================================
 
 describe('Calendar plugin registration (updated)', () => {
-  it('registers exactly 18 routes', () => {
-    expect(plugin.routes.length).toBe(18)
+  it('registers exactly 19 routes', () => {
+    expect(plugin.routes.length).toBe(19)
   })
 
-  it('registers exactly 15 exec tools', () => {
-    expect(plugin.execTools.length).toBe(15)
+  it('registers exactly 16 exec tools', () => {
+    expect(plugin.execTools.length).toBe(16)
   })
 })

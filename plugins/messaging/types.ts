@@ -124,6 +124,7 @@ export interface PlanningSession {
   title: string
   scope?: string
   status: 'active' | 'completed'
+  createdAtPlanIds?: string[]
   createdAt: string
   updatedAt: string
   messages: SessionMessage[]

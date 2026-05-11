@@ -114,6 +114,7 @@ export function createMessagingSessionStore(
       title: opts.title || 'New planning session',
       scope: opts.scope,
       status: 'active',
+      createdAtPlanIds: [],
       createdAt: now,
       updatedAt: now,
       messages: [],
