@@ -45,7 +45,7 @@
       { "method": "DELETE", "path": "/sessions/:id", "summary": "Delete a planning session", "permissions": ["storage.write"] },
       { "method": "POST", "path": "/sessions/:id/messages", "summary": "Send a message to a planning session", "permissions": ["runtime.messaging", "storage.write"] },
       { "method": "PUT", "path": "/sessions/:id/proposals/:proposalId", "summary": "Update a planning-session proposal", "permissions": ["storage.write"] },
-      { "method": "POST", "path": "/sessions/:id/materialize", "summary": "Materialize approved Plan proposals into Plans", "permissions": ["storage.write"] },
+      { "method": "POST", "path": "/sessions/:id/materialize", "summary": "Create Plans from approved brainstorm proposals", "permissions": ["storage.write"] },
       { "method": "GET", "path": "/plans", "summary": "List content Plans", "permissions": ["storage.read"] },
       { "method": "GET", "path": "/plans/:id", "summary": "Get content Plan", "permissions": ["storage.read"] },
       { "method": "POST", "path": "/plans", "summary": "Create content Plan", "permissions": ["storage.write"] },
@@ -70,7 +70,7 @@
       { "name": "bakin_exec_messaging_session_delete", "summary": "Delete a planning session", "permissions": ["storage.write"] },
       { "name": "bakin_exec_messaging_session_message", "summary": "Message a planning session", "permissions": ["runtime.messaging", "storage.write"] },
       { "name": "bakin_exec_messaging_proposal_update", "summary": "Update a planning-session proposal", "permissions": ["storage.write"] },
-      { "name": "bakin_exec_messaging_session_materialize", "summary": "Materialize approved Plan proposals into Plans", "permissions": ["storage.write"] },
+      { "name": "bakin_exec_messaging_session_materialize", "summary": "Create Plans from approved brainstorm proposals", "permissions": ["storage.write"] },
       { "name": "bakin_exec_messaging_plan_list", "summary": "List content Plans", "permissions": ["storage.read"] },
       { "name": "bakin_exec_messaging_plan_get", "summary": "Get content Plan", "permissions": ["storage.read"] },
       { "name": "bakin_exec_messaging_plan_create", "summary": "Create content Plan", "permissions": ["storage.write"] },
@@ -91,7 +91,7 @@
       { "name": "messaging:session-update", "usage": "bakin messaging session-update <sessionId>", "summary": "Update a planning session", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_update" } },
       { "name": "messaging:session-delete", "usage": "bakin messaging session-delete <sessionId>", "summary": "Delete a planning session", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_delete" } },
       { "name": "messaging:message", "usage": "bakin messaging message <sessionId> <message>", "summary": "Message a planning session", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_message" } },
-      { "name": "messaging:materialize", "usage": "bakin messaging materialize <sessionId>", "summary": "Materialize planning-session proposals", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_materialize" } },
+      { "name": "messaging:materialize", "usage": "bakin messaging materialize <sessionId>", "summary": "Create Plans from approved proposals", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_session_materialize" } },
       { "name": "messaging:proposal", "usage": "bakin messaging proposal <sessionId> <proposalId>", "summary": "Update a planning-session proposal", "dispatch": { "type": "execTool", "name": "bakin_exec_messaging_proposal_update" } }
     ],
     "settings": [

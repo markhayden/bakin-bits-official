@@ -16,7 +16,7 @@ messaging/deliverables/<deliverableId>.json
 ```
 
 - `BrainstormSession` stores visible chat messages, streamed runtime activity,
-  Plan proposals, and the Plan ids materialized from the session.
+  Plan proposals, and the Plan ids created from the session.
 - `Plan` is one topic or date focus, such as "Taco Tuesday". A Plan has a
   soft `targetDate`, a lead agent, optional campaign text, and fan-out status.
 - `Deliverable` is the channel-specific work item. It has exact `publishAt`
@@ -43,7 +43,7 @@ The header-level Quick Post action creates a free-floating Deliverable with
 
 1. Brainstorm with an agent. The agent emits fenced JSON Plan proposals with
    `title`, `targetDate`, `brief`, and optional `suggestedChannels`.
-2. Approve proposals and materialize them into Plans.
+2. Approve proposals and create Plans from them.
 3. Start Plan fan-out. A Bakin task asks the lead agent to call
    `bakin_exec_messaging_propose_deliverable` once per intended channel.
 4. Approve, edit, or reject proposed Deliverables in the Plan workspace.

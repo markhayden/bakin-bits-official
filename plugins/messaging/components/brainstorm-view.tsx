@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import {
   AgentAvatar,
   AgentFilter,
+  BakinDrawer,
   EmptyState,
   IntegratedBrainstorm,
   PluginHeader,
@@ -85,6 +86,148 @@ function mergeProposal(proposals: PlanProposal[], incoming: PlanProposal): PlanP
   return proposals.map(proposal => proposal.id === incoming.id ? incoming : proposal)
 }
 
+function ProposalStatusBadge({ proposal }: { proposal: PlanProposal }) {
+  if (proposal.planId) {
+    return <Badge variant="outline" className="shrink-0 text-[10px]">Plan created</Badge>
+  }
+  return (
+    <Badge className="max-w-28 shrink-0 truncate capitalize">
+      {proposal.status.replaceAll('_', ' ')}
+    </Badge>
+  )
+}
+
+function ProposalDrawer({
+  proposal,
+  open,
+  onClose,
+  onUpdate,
+}: {
+  proposal: PlanProposal | null
+  open: boolean
+  onClose: () => void
+  onUpdate: (proposal: PlanProposal, patch: Partial<PlanProposal>) => Promise<void>
+}) {
+  const [title, setTitle] = useState('')
+  const [targetDate, setTargetDate] = useState('')
+  const [brief, setBrief] = useState('')
+  const [channels, setChannels] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!proposal) return
+    setTitle(proposal.title)
+    setTargetDate(proposal.targetDate)
+    setBrief(proposal.brief)
+    setChannels((proposal.suggestedChannels ?? []).join(', '))
+  }, [proposal])
+
+  if (!proposal) return null
+
+  const disabled = Boolean(proposal.planId || saving)
+  const save = async (status?: PlanProposal['status']) => {
+    setSaving(true)
+    try {
+      await onUpdate(proposal, {
+        title: title.trim() || proposal.title,
+        targetDate: targetDate.trim() || proposal.targetDate,
+        brief: brief.trim() || proposal.brief,
+        suggestedChannels: channels.split(',').map(channel => channel.trim()).filter(Boolean),
+        ...(status ? { status } : {}),
+      })
+      if (status) onClose()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <BakinDrawer
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onClose()
+      }}
+      title={proposal.title}
+      defaultWidth={640}
+      storageKey="messaging-proposal"
+      actions={
+        <div className="flex items-center gap-2">
+          {!proposal.planId && (
+            <>
+              <Button variant="outline" onClick={() => save('rejected')} disabled={saving}>
+                <X className="size-4" />
+                Reject
+              </Button>
+              <Button onClick={() => save('approved')} disabled={saving}>
+                <Check className="size-4" />
+                Approve
+              </Button>
+            </>
+          )}
+        </div>
+      }
+    >
+      <div className="space-y-5">
+        <section className="rounded-md border border-border bg-surface p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <ProposalStatusBadge proposal={proposal} />
+            {proposal.suggestedChannels?.map(channel => (
+              <Badge key={channel} variant="outline">{channel}</Badge>
+            ))}
+          </div>
+          <p className="mt-3 text-sm text-muted-foreground">{proposal.brief}</p>
+        </section>
+
+        <section className="grid gap-4">
+          <label className="grid gap-1.5 text-sm font-medium">
+            Title
+            <Input value={title} disabled={disabled} onChange={(event) => setTitle(event.target.value)} />
+          </label>
+          <label className="grid gap-1.5 text-sm font-medium">
+            Target date
+            <Input type="date" value={targetDate} disabled={disabled} onChange={(event) => setTargetDate(event.target.value)} />
+          </label>
+          <label className="grid gap-1.5 text-sm font-medium">
+            Brief
+            <textarea
+              value={brief}
+              disabled={disabled}
+              onChange={(event) => setBrief(event.target.value)}
+              rows={6}
+              className="min-h-32 rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+            />
+          </label>
+          <label className="grid gap-1.5 text-sm font-medium">
+            Suggested channels
+            <Input
+              value={channels}
+              disabled={disabled}
+              onChange={(event) => setChannels(event.target.value)}
+              placeholder="instagram, blog, youtube"
+            />
+          </label>
+        </section>
+
+        {!proposal.planId && (
+          <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-4">
+            <Button variant="outline" onClick={() => save()} disabled={saving}>
+              Save changes
+            </Button>
+            <Button variant="outline" onClick={() => save('rejected')} disabled={saving}>
+              <X className="size-4" />
+              Reject
+            </Button>
+            <Button onClick={() => save('approved')} disabled={saving}>
+              <Check className="size-4" />
+              Approve
+            </Button>
+          </div>
+        )}
+      </div>
+    </BakinDrawer>
+  )
+}
+
 export function BrainstormView() {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -103,6 +246,7 @@ export function BrainstormView() {
   const [activeSession, setActiveSession] = useState<BrainstormSession | null>(null)
   const [messages, setMessages] = useState<BrainstormMessage[]>([])
   const [materializing, setMaterializing] = useState(false)
+  const [selectedProposalId, setSelectedProposalId] = useState<string | null>(null)
   const searchHook = useSearch({ plugin: 'messaging', facets: ['status', 'agent_id'], debounce: 300 })
 
   useEffect(() => {
@@ -262,6 +406,7 @@ export function BrainstormView() {
 
   if (sessionId && activeSession) {
     const approvedCount = activeSession.proposals.filter(proposal => proposal.status === 'approved' && !proposal.planId).length
+    const selectedProposal = activeSession.proposals.find(proposal => proposal.id === selectedProposalId) ?? null
     return (
       <div className="flex h-full min-h-0 flex-col">
         <PluginHeader
@@ -275,13 +420,13 @@ export function BrainstormView() {
               </Button>
               <Button size="sm" disabled={approvedCount === 0 || materializing} onClick={materialize}>
                 <ClipboardList className="size-3.5" data-icon="inline-start" />
-                Materialize
+                Create Plans
               </Button>
             </div>
           }
         />
 
-        <div className="mt-4 grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="mt-4 grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(420px,34vw)]">
           <div className="min-h-0">
             <IntegratedBrainstorm
               messages={messages}
@@ -297,7 +442,7 @@ export function BrainstormView() {
             />
           </div>
 
-          <aside className="min-h-0 overflow-auto border-l border-border pl-4">
+          <aside className="min-h-0 overflow-y-auto overflow-x-hidden border-l border-border px-4">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-sm font-semibold">Plan proposals</h2>
               <Badge variant="outline" className="text-[11px]">{activeSession.proposals.length}</Badge>
@@ -307,13 +452,25 @@ export function BrainstormView() {
             ) : (
               <div className="grid gap-2">
                 {activeSession.proposals.map(proposal => (
-                  <div key={proposal.id} className="rounded-md border border-border bg-card p-3">
+                  <article
+                    key={proposal.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedProposalId(proposal.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        setSelectedProposalId(proposal.id)
+                      }
+                    }}
+                    className="w-full overflow-hidden rounded-md border border-border bg-card p-3 text-left transition-colors hover:bg-muted/30 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                  >
                     <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="truncate text-sm font-medium">{proposal.title}</h3>
+                      <div className="min-w-0 flex-1">
+                        <h3 className="line-clamp-2 text-sm font-medium">{proposal.title}</h3>
                         <p className="mt-1 text-xs text-muted-foreground">{formatDate(proposal.targetDate)}</p>
                       </div>
-                      <Badge className="capitalize">{proposal.status.replaceAll('_', ' ')}</Badge>
+                      <ProposalStatusBadge proposal={proposal} />
                     </div>
                     <p className="mt-2 line-clamp-3 text-sm text-muted-foreground">{proposal.brief}</p>
                     {proposal.suggestedChannels && proposal.suggestedChannels.length > 0 && (
@@ -323,26 +480,47 @@ export function BrainstormView() {
                         ))}
                       </div>
                     )}
-                    {proposal.planId ? (
-                      <Badge variant="outline" className="mt-3 text-[10px]">Plan created</Badge>
-                    ) : (
-                      <div className="mt-3 flex gap-2">
-                        <Button size="sm" variant="outline" onClick={() => updateProposal(proposal, { status: 'approved' })}>
+                    {!proposal.planId && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="px-3"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            updateProposal(proposal, { status: 'approved' })
+                          }}
+                        >
                           <Check className="size-3.5" data-icon="inline-start" />
                           Approve
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => updateProposal(proposal, { status: 'rejected' })}>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="px-3"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            updateProposal(proposal, { status: 'rejected' })
+                          }}
+                        >
                           <X className="size-3.5" data-icon="inline-start" />
                           Reject
                         </Button>
                       </div>
                     )}
-                  </div>
+                  </article>
                 ))}
               </div>
             )}
           </aside>
         </div>
+
+        <ProposalDrawer
+          proposal={selectedProposal}
+          open={Boolean(selectedProposal)}
+          onClose={() => setSelectedProposalId(null)}
+          onUpdate={updateProposal}
+        />
       </div>
     )
   }

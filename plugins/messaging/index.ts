@@ -1033,7 +1033,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
     ctx.registerRoute({
       path: '/sessions/:id/materialize',
       method: 'POST',
-      description: 'Materialize approved Plan proposals into Plans',
+      description: 'Create Plans from approved brainstorm proposals',
       handler: async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<{ id?: string }>(req).catch(() => ({} as { id?: string }))
@@ -1047,7 +1047,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
           createdAtPlanIds: session.createdAtPlanIds,
         })
         ctx.activity.audit('session.materialized', 'system', { sessionId: id, planIds: result.planIds })
-        ctx.activity.log('system', `Materialized ${result.planIds.length} Plan(s) from "${session.title}"`)
+        ctx.activity.log('system', `Created ${result.planIds.length} Plan(s) from "${session.title}"`)
         return json({ ok: true, ...result })
       },
     })
@@ -1863,9 +1863,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
 
     ctx.registerExecTool({
       name: 'bakin_exec_messaging_session_materialize',
-      label: 'Materialized brainstorm proposals',
+      label: 'Created Plans from brainstorm proposals',
       activityDuplicate: true,
-      description: 'Materialize approved Plan proposals into Plans',
+      description: 'Create Plans from approved brainstorm proposals',
       parameters: {
         sessionId: z.string().describe('Session ID (required)'),
       },
