@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   AgentAvatar,
+  ChannelIcon,
   EmptyState,
   IntegratedBrainstorm,
   PluginHeader,
@@ -12,7 +13,8 @@ import type { BrainstormMessage } from "@bakin/sdk/components"
 import { Badge } from "@bakin/sdk/ui"
 import { Button } from "@bakin/sdk/ui"
 import { Skeleton } from "@bakin/sdk/ui"
-import { ArrowLeft, CalendarDays, CheckCircle2, Circle, ClipboardList, ExternalLink, MessageSquareText, Trash2 } from 'lucide-react'
+import { ArrowLeft, CalendarDays, CheckCircle2, Circle, ClipboardList, ExternalLink, MessageSquareText, Rocket, Trash2 } from 'lucide-react'
+import { useNotificationChannels } from "@bakin/sdk/hooks"
 import type { BrainstormSession, Deliverable, DeliverableStatus, Plan, PlanStatus, SessionMessage } from '../types'
 import { PLAN_STATUS_BADGE } from '../constants'
 import { usePlan } from '../hooks/use-plan'
@@ -36,6 +38,7 @@ interface PlanningTask {
 }
 
 const PLAN_STATUS_LABELS: Record<PlanStatus, string> = {
+  needs_review: 'Needs review',
   planning: 'Planning',
   fanning_out: 'Planning content pieces',
   in_prep: 'In production',
@@ -210,10 +213,14 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
 
 export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps) {
   const { plan, deliverables, loading, error, refresh } = usePlan(planId)
+  const channels = useNotificationChannels()
   const [selectedDeliverable, setSelectedDeliverable] = useState<Deliverable | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [savingChannels, setSavingChannels] = useState(false)
+  const [startingPrep, setStartingPrep] = useState(false)
+  const [kickoffError, setKickoffError] = useState<string | null>(null)
   const [brainstormMessages, setBrainstormMessages] = useState<BrainstormMessage[]>([])
   const activeDeliverables = useMemo(
     () => deliverables.filter((deliverable) => deliverable.status !== 'cancelled'),
@@ -229,6 +236,15 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
   )
   const completedTaskCount = planningTasks.filter((task) => task.state === 'done').length
   const progress = planningTasks.length === 0 ? 0 : Math.round((completedTaskCount / planningTasks.length) * 100)
+  const selectedChannels = plan?.suggestedChannels ?? []
+  const channelOptions = useMemo(() => {
+    const byId = new Map(channels.map((channel) => [channel.id, { id: channel.id, label: channel.label }]))
+    for (const channelId of selectedChannels) {
+      if (!byId.has(channelId)) byId.set(channelId, { id: channelId, label: channelId })
+    }
+    return [...byId.values()]
+  }, [channels, selectedChannels])
+  const canKickoffContentPrep = Boolean(plan && !plan.fanOutTaskId && activeDeliverables.length === 0)
 
   useEffect(() => {
     if (!plan?.sourceSessionId) {
@@ -259,6 +275,54 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
   const handleReject = async (deliverable: Deliverable) => {
     await updateDeliverableStatus(deliverable, 'cancelled')
     await refresh()
+  }
+
+  const updatePlanChannels = async (nextChannels: string[]) => {
+    if (!plan) return
+    setSavingChannels(true)
+    setKickoffError(null)
+    try {
+      const encoded = encodeURIComponent(plan.id)
+      const response = await fetch(`/api/plugins/messaging/plans/${encoded}?id=${encoded}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ suggestedChannels: nextChannels }),
+      })
+      if (!response.ok) {
+        setKickoffError(await readErrorMessage(response, 'Could not update plan channels.'))
+        return
+      }
+      await refresh()
+    } finally {
+      setSavingChannels(false)
+    }
+  }
+
+  const togglePlanChannel = async (channelId: string) => {
+    const selected = new Set(selectedChannels)
+    if (selected.has(channelId)) selected.delete(channelId)
+    else selected.add(channelId)
+    await updatePlanChannels([...selected])
+  }
+
+  const startContentPrep = async () => {
+    if (!plan) return
+    setStartingPrep(true)
+    setKickoffError(null)
+    try {
+      const encoded = encodeURIComponent(plan.id)
+      const response = await fetch(`/api/plugins/messaging/plans/${encoded}/start-fanout?id=${encoded}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (!response.ok) {
+        setKickoffError(await readErrorMessage(response, 'Could not kick off content prep.'))
+        return
+      }
+      await refresh()
+    } finally {
+      setStartingPrep(false)
+    }
   }
 
   const onBrainstormSend = useCallback(async (
@@ -381,6 +445,28 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                 ))}
               </div>
 
+              {plan.status === 'needs_review' && (
+                <div className="mt-4 rounded-md border border-amber-500/20 bg-amber-500/10 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h2 className="text-sm font-semibold text-amber-200">Review this plan before work starts</h2>
+                      <p className="mt-1 max-w-2xl text-sm leading-6 text-amber-100/80">
+                        Confirm the angle, pick channels, and add guidance in the brainstorm before kicking off content prep.
+                      </p>
+                    </div>
+                    {canKickoffContentPrep && (
+                      <Button onClick={startContentPrep} disabled={startingPrep || selectedChannels.length === 0}>
+                        <Rocket className="size-4" data-icon="inline-start" />
+                        {startingPrep ? 'Starting...' : 'Kickoff content prep'}
+                      </Button>
+                    )}
+                  </div>
+                  {selectedChannels.length === 0 && (
+                    <p className="mt-2 text-xs text-amber-100/70">Choose at least one channel before kickoff.</p>
+                  )}
+                </div>
+              )}
+
               <div className="mt-4 grid gap-3 text-sm md:grid-cols-[minmax(0,1fr)_220px]">
                 <p className="leading-6 text-muted-foreground">{plan.brief}</p>
                 <div className="flex flex-col gap-2 text-xs text-muted-foreground">
@@ -391,6 +477,43 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                   <span>Created: {formatDateTime(plan.createdAt)}</span>
                   <span>Updated: {formatDateTime(plan.updatedAt)}</span>
                 </div>
+              </div>
+
+              <div className="mt-5">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <h2 className="text-sm font-semibold">Channels</h2>
+                  {savingChannels && <span className="text-xs text-muted-foreground">Saving...</span>}
+                </div>
+                {channelOptions.length === 0 ? (
+                  <div className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">
+                    No channels are configured yet.
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {channelOptions.map(channel => {
+                      const selected = selectedChannels.includes(channel.id)
+                      return (
+                        <button
+                          key={channel.id}
+                          type="button"
+                          disabled={savingChannels || Boolean(plan.fanOutTaskId)}
+                          onClick={() => togglePlanChannel(channel.id)}
+                          className={`inline-flex h-8 items-center gap-2 rounded-md border px-3 text-sm transition-colors focus-visible:border-ring focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60 ${
+                            selected ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-200' : 'border-border bg-surface text-muted-foreground hover:bg-muted/40'
+                          }`}
+                        >
+                          <ChannelIcon channelId={channel.id} className="size-3.5" />
+                          {channel.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+                {kickoffError && (
+                  <div className="mt-3 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
+                    {kickoffError}
+                  </div>
+                )}
               </div>
             </section>
 
@@ -445,15 +568,22 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
 
           <div className="mt-4 shrink-0 border-t border-border pt-4">
             {plan.sourceSessionId ? (
-              <IntegratedBrainstorm
-                messages={brainstormMessages}
-                onMessagesChange={setBrainstormMessages}
-                onSend={onBrainstormSend}
-                agentId={plan.agent}
-                placeholder="Refine the angle, channels, timeline, or content pieces..."
-                fitParent
-                showHeader={false}
-              />
+              <div className="space-y-3">
+                {plan.status === 'needs_review' && (
+                  <div className="rounded-md bg-surface p-3 text-sm leading-6 text-muted-foreground">
+                    Before content prep starts, refine the angle and channels here. A useful first note is which channels this message should use and anything the prep agents should avoid.
+                  </div>
+                )}
+                <IntegratedBrainstorm
+                  messages={brainstormMessages}
+                  onMessagesChange={setBrainstormMessages}
+                  onSend={onBrainstormSend}
+                  agentId={plan.agent}
+                  placeholder="Refine the angle, channels, timeline, or content pieces..."
+                  fitParent
+                  showHeader={false}
+                />
+              </div>
             ) : (
               <div className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
                 Brainstorm refinements are available for plans prepared from a brainstorm session.
@@ -475,6 +605,20 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
               />
             </div>
           </div>
+
+          {canKickoffContentPrep && plan.status !== 'needs_review' && (
+            <div className="mt-5 rounded-md border border-border bg-surface p-3">
+              <h3 className="text-sm font-semibold">Ready for content prep?</h3>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                Kickoff creates the planning task for channel-specific content pieces.
+              </p>
+              <Button className="mt-3 w-full justify-center" onClick={startContentPrep} disabled={startingPrep || selectedChannels.length === 0}>
+                <Rocket className="size-4" data-icon="inline-start" />
+                {startingPrep ? 'Starting...' : 'Kickoff content prep'}
+              </Button>
+              {selectedChannels.length === 0 && <p className="mt-2 text-xs text-muted-foreground">Choose at least one channel first.</p>}
+            </div>
+          )}
 
           <div className="mt-5 border-t border-border pt-5">
             <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">Tasks</h3>

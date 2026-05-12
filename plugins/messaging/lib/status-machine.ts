@@ -14,6 +14,7 @@ export const DELIVERABLE_STATUSES: readonly DeliverableStatus[] = [
 ] as const
 
 export const PLAN_STATUSES: readonly PlanStatus[] = [
+  'needs_review',
   'planning',
   'fanning_out',
   'in_prep',

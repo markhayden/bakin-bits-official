@@ -18,6 +18,7 @@ export type ContentTone = 'energetic' | 'calm' | 'educational' | 'humorous' | 'i
 
 export type AssetRequirement = 'none' | 'optional-image' | 'image' | 'optional-video' | 'video'
 export type PlanStatus =
+  | 'needs_review'
   | 'planning'
   | 'fanning_out'
   | 'in_prep'
@@ -173,7 +174,7 @@ export const DEFAULT_CONTENT_TYPES: ContentTypeOption[] = [
 export const ContentToneSchema = z.enum(['energetic', 'calm', 'educational', 'humorous', 'inspiring', 'conversational'])
 export const ProposalStatusSchema = z.enum(['proposed', 'approved', 'rejected', 'revised'])
 export const AssetRequirementSchema = z.enum(['none', 'optional-image', 'image', 'optional-video', 'video'])
-export const PlanStatusSchema = z.enum(['planning', 'fanning_out', 'in_prep', 'in_review', 'scheduled', 'overdue', 'partially_published', 'done', 'cancelled', 'failed'])
+export const PlanStatusSchema = z.enum(['needs_review', 'planning', 'fanning_out', 'in_prep', 'in_review', 'scheduled', 'overdue', 'partially_published', 'done', 'cancelled', 'failed'])
 export const DeliverableStatusSchema = z.enum(['proposed', 'planned', 'in_prep', 'in_review', 'changes_requested', 'approved', 'published', 'overdue', 'cancelled', 'failed'])
 
 export const SessionMessageSchema = z.object({

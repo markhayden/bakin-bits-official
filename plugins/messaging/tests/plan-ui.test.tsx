@@ -115,6 +115,7 @@ const PROPOSED_DELIVERABLE: Deliverable = {
 }
 
 let fanOutStarted = false
+let planResponse: Plan = PLAN
 let deliverables: Deliverable[] = []
 const putBodies: Record<string, unknown>[] = []
 
@@ -122,19 +123,20 @@ function installFetchMock() {
   globalThis.fetch = mock().mockImplementation(async (url: string, init?: RequestInit) => {
     if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/plans/plan-1/start-fanout')) {
       fanOutStarted = true
-      return { ok: true, json: async () => ({ ok: true, plan: { ...PLAN, fanOutTaskId: 'task-1' }, taskId: 'task-1' }) }
+      planResponse = { ...planResponse, fanOutTaskId: 'task-1', status: 'fanning_out' }
+      return { ok: true, json: async () => ({ ok: true, plan: planResponse, taskId: 'task-1' }) }
     }
     if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/plans/plan-1')) {
       return {
         ok: true,
         json: async () => ({
-          plan: fanOutStarted ? { ...PLAN, fanOutTaskId: 'task-1' } : PLAN,
+          plan: planResponse,
           deliverables,
         }),
       }
     }
     if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/plans')) {
-      return { ok: true, json: async () => ({ plans: [PLAN] }) }
+      return { ok: true, json: async () => ({ plans: [planResponse] }) }
     }
     if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/deliverables/deliverable-1')) {
       const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
@@ -152,6 +154,7 @@ function installFetchMock() {
 
 beforeEach(() => {
   fanOutStarted = false
+  planResponse = PLAN
   deliverables = [PROPOSED_DELIVERABLE]
   putBodies.length = 0
   installFetchMock()
@@ -181,6 +184,23 @@ describe('Plan client UI', () => {
     })
     expect(screen.queryByText('Start fan-out')).toBeNull()
     expect(fanOutStarted).toBe(false)
+  })
+
+  it('requires an explicit kickoff before content prep starts', async () => {
+    planResponse = { ...PLAN, status: 'needs_review' }
+    deliverables = []
+    render(<PlanWorkspace planId="plan-1" />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Review this plan before work starts')).toBeDefined()
+    })
+    expect(fanOutStarted).toBe(false)
+
+    fireEvent.click(screen.getByText('Kickoff content prep'))
+
+    await waitFor(() => {
+      expect(fanOutStarted).toBe(true)
+    })
   })
 
   it('approves proposed Deliverables into planned status', async () => {

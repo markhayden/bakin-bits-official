@@ -106,7 +106,7 @@ describe('Plan routes', () => {
     expect(started.status).toBe(200)
     expect(started.body.ok).toBe(true)
     expect(started.body.alreadyStarted).toBe(false)
-    expect((started.body.plan as Record<string, unknown>).status).toBe('planning')
+    expect((started.body.plan as Record<string, unknown>).status).toBe('fanning_out')
     expect((started.body.plan as Record<string, unknown>).fanOutTaskId).toBe(started.body.taskId)
     expect(plugin.ctx.tasks.create).toHaveBeenCalledWith(expect.objectContaining({
       parentId: null,

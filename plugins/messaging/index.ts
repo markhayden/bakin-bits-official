@@ -194,7 +194,7 @@ async function startPlanFanOut(
   })
   const updated = contentStore.updatePlan(plan.id, {
     fanOutTaskId: task.id,
-    status: 'planning',
+    status: 'fanning_out',
   })
   ctx.activity.audit('plan.content_piece_planning_started', plan.agent, { planId: plan.id, taskId: task.id })
   ctx.activity.log(plan.agent, `Started content piece planning for "${plan.title}"`)

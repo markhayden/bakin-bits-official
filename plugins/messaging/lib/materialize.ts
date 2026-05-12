@@ -20,6 +20,7 @@ export function materializeApprovedProposals(
       brief: proposal.brief,
       targetDate: proposal.targetDate,
       agent: proposal.agentId,
+      status: 'needs_review',
       sourceSessionId: session.id,
       suggestedChannels: proposal.suggestedChannels,
     })

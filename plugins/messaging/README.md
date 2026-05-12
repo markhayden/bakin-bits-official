@@ -44,17 +44,21 @@ The header-level Quick Post action creates a free-floating Deliverable with
 1. Brainstorm with an agent. The agent emits fenced JSON Plan proposals with
    `title`, `targetDate`, `brief`, and optional `suggestedChannels`.
 2. Accept proposals and prepare Plans from them. No production work starts at
-   this step.
-3. Shape the Plan into channel-specific content pieces. A Bakin task can ask
+   this step. Prepared Plans start in `needs_review`.
+3. Review the Plan workspace. Confirm the angle, pick channels, and add
+   guidance in the embedded brainstorm.
+4. Kickoff content prep when the Plan is ready. This creates the planning task
+   that asks the lead agent to propose channel-specific content pieces.
+5. Shape the Plan into channel-specific content pieces. A Bakin task can ask
    the lead agent to call `bakin_exec_messaging_propose_deliverable` once per
    intended channel.
-4. Approve, edit, or reject proposed Deliverables in the Plan workspace.
-5. The sweep cron runs `bakin:messaging:sweep`. Planned Deliverables whose prep
+6. Approve, edit, or reject proposed Deliverables in the Plan workspace.
+7. The sweep cron runs `bakin:messaging:sweep`. Planned Deliverables whose prep
    window has opened become prep tasks. Content types with `workflowId` use
    workflow-backed prep; others use bare Bakin tasks.
-6. Drafts move to review. Approval validates required assets before status
+8. Drafts move to review. Approval validates required assets before status
    moves to `approved`.
-7. Approved bare-task Deliverables publish on the sweep when `publishAt` is due.
+9. Approved bare-task Deliverables publish on the sweep when `publishAt` is due.
    Workflow-backed Deliverables publish on `workflow.complete` after messaging
    has approved the gate.
 

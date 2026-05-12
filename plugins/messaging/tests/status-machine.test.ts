@@ -59,6 +59,7 @@ describe('messaging status machine helpers', () => {
   it('keeps status enumerations explicit', () => {
     expect(DELIVERABLE_STATUSES).toContain('changes_requested')
     expect(DELIVERABLE_STATUSES).toContain('overdue')
+    expect(PLAN_STATUSES).toContain('needs_review')
     expect(PLAN_STATUSES).toContain('partially_published')
     expect(PLAN_STATUSES).toContain('fanning_out')
   })

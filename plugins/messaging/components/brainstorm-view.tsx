@@ -554,12 +554,14 @@ export function BrainstormView() {
     setMaterializing(true)
     try {
       const encoded = encodeURIComponent(activeSession.id)
-      await fetch(`/api/plugins/messaging/sessions/${encoded}/materialize?id=${encoded}`, {
+      const response = await fetch(`/api/plugins/messaging/sessions/${encoded}/materialize?id=${encoded}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       })
+      if (!response.ok) return
       await loadSession(activeSession.id)
       await loadSessions()
+      router.push('/messaging/plans')
     } finally {
       setMaterializing(false)
     }

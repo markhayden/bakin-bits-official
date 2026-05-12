@@ -57,6 +57,7 @@ describe('materializeApprovedProposals', () => {
         title: 'Taco Tuesday',
         targetDate: '2026-05-19',
         agent: 'basil',
+        status: 'needs_review',
         sourceSessionId: 'session-1',
         suggestedChannels: ['blog', 'x'],
       })

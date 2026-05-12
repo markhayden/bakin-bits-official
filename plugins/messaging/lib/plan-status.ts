@@ -8,7 +8,7 @@ const PRE_SCHEDULE_STATUSES = new Set(['proposed', 'planned', 'in_prep', 'change
 export function derivePlanStatus(plan: Plan, deliverables: Deliverable[]): PlanStatus {
   if (plan.status === 'cancelled') return 'cancelled'
   if (plan.status === 'failed') return 'failed'
-  if (deliverables.length === 0) return 'planning'
+  if (deliverables.length === 0) return plan.fanOutTaskId ? 'fanning_out' : plan.status === 'needs_review' ? 'needs_review' : 'planning'
 
   const statuses = deliverables.map(deliverable => deliverable.status)
   const allTerminal = statuses.every(isDeliverableTerminal)

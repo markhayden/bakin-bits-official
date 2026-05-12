@@ -8,9 +8,10 @@ import { PluginHeader } from "@bakin/sdk/components"
 import { AgentAvatar } from "@bakin/sdk/components"
 import { ChannelIcon } from "@bakin/sdk/components"
 import { Badge } from "@bakin/sdk/ui"
+import { Button } from "@bakin/sdk/ui"
 import { Input } from "@bakin/sdk/ui"
 import { Skeleton } from "@bakin/sdk/ui"
-import { CalendarDays, Circle, Search } from 'lucide-react'
+import { CalendarDays, ChevronLeft, ChevronRight, Circle, Search } from 'lucide-react'
 import { useAgentIds } from "@bakin/sdk/hooks"
 import { useNotificationChannels } from "@bakin/sdk/hooks"
 import { useQueryArrayState, useQueryState } from "@bakin/sdk/hooks"
@@ -33,15 +34,29 @@ const STATUS_OPTIONS: Array<{ value: DeliverableStatus; label: string; icon: Rea
   { value: 'cancelled', label: 'Cancelled', icon: <Circle className="size-3" /> },
   { value: 'failed', label: 'Failed', icon: <Circle className="size-3" /> },
 ]
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 function dateKey(value: string): string {
   return value.slice(0, 10)
 }
 
-function formatDay(value: string): string {
-  const date = new Date(`${value}T00:00:00`)
+function localDateKey(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function monthKey(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  return `${year}-${month}`
+}
+
+function monthLabel(value: string): string {
+  const date = new Date(`${value}-01T00:00:00`)
   if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+  return date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
 }
 
 function formatTime(value: string): string {
@@ -59,6 +74,20 @@ function matchesSearch(deliverable: Deliverable, query: string): boolean {
     (deliverable.draft.caption ?? '').toLowerCase().includes(q) ||
     (deliverable.draft.agentNotes ?? '').toLowerCase().includes(q)
   )
+}
+
+function addMonths(value: string, delta: number): string {
+  const date = new Date(`${value}-01T00:00:00`)
+  if (Number.isNaN(date.getTime())) return monthKey(new Date())
+  date.setMonth(date.getMonth() + delta)
+  return monthKey(date)
+}
+
+function defaultCalendarMonth(deliverables: Deliverable[]): string {
+  const current = monthKey(new Date())
+  if (deliverables.some(deliverable => monthKey(new Date(deliverable.publishAt)) === current)) return current
+  const first = [...deliverables].sort((a, b) => Date.parse(a.publishAt) - Date.parse(b.publishAt))[0]
+  return first ? monthKey(new Date(first.publishAt)) : current
 }
 
 function appendMissingIds(baseIds: string[], referencedIds: string[]): string[] {
@@ -82,6 +111,7 @@ export function ContentCalendar() {
   const [typeFilter, setTypeFilter] = useQueryArrayState('type')
   const [channelFilter, setChannelFilter] = useQueryArrayState('channel')
   const [search, setSearch] = useQueryState('q', '')
+  const [visibleMonth, setVisibleMonth] = useState<string | null>(null)
   const [selectedDeliverable, setSelectedDeliverable] = useState<Deliverable | null>(null)
 
   const calendarAgentIds = useMemo(
@@ -124,7 +154,8 @@ export function ContentCalendar() {
     })
   }, [agentFilter, channelFilter, deliverables, search, statusFilter, typeFilter])
 
-  const groupedDeliverables = useMemo(() => {
+  const activeMonth = visibleMonth ?? defaultCalendarMonth(filteredDeliverables)
+  const calendarDays = useMemo(() => {
     const groups = new Map<string, Deliverable[]>()
     for (const deliverable of filteredDeliverables) {
       const key = dateKey(deliverable.publishAt)
@@ -132,13 +163,22 @@ export function ContentCalendar() {
       existing.push(deliverable)
       groups.set(key, existing)
     }
-    return Array.from(groups.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([day, rows]) => ({
-        day,
-        deliverables: rows.sort((a, b) => Date.parse(a.publishAt) - Date.parse(b.publishAt)),
-      }))
-  }, [filteredDeliverables])
+    const first = new Date(`${activeMonth}-01T00:00:00`)
+    const start = new Date(first)
+    start.setDate(1 - first.getDay())
+    return Array.from({ length: 42 }).map((_, index) => {
+      const date = new Date(start)
+      date.setDate(start.getDate() + index)
+      const key = localDateKey(date)
+      return {
+        key,
+        date,
+        inMonth: monthKey(date) === activeMonth,
+        isToday: key === localDateKey(new Date()),
+        deliverables: (groups.get(key) ?? []).sort((a, b) => Date.parse(a.publishAt) - Date.parse(b.publishAt)),
+      }
+    })
+  }, [activeMonth, filteredDeliverables])
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -170,62 +210,94 @@ export function ContentCalendar() {
 
       <div className="mt-4 min-h-0 flex-1 overflow-auto">
         {loading ? (
-          <div className="flex flex-col gap-2">
-            {Array.from({ length: 6 }).map((_, index) => (
-              <Skeleton key={index} className="h-20 w-full" />
+          <div className="grid grid-cols-7 gap-px overflow-hidden rounded-md border border-border bg-border">
+            {Array.from({ length: 35 }).map((_, index) => (
+              <Skeleton key={index} className="h-28 w-full rounded-none" />
             ))}
           </div>
-        ) : groupedDeliverables.length === 0 ? (
+        ) : filteredDeliverables.length === 0 ? (
           <EmptyState icon={CalendarDays} title="No deliverables match filters" />
         ) : (
-          <div className="grid gap-5">
-            {groupedDeliverables.map(({ day, deliverables: dayDeliverables }) => (
-              <section key={day} className="grid gap-2">
-                <div className="flex items-center justify-between border-b border-border pb-2">
-                  <h2 className="text-sm font-semibold">{formatDay(day)}</h2>
-                  <span className="text-xs text-muted-foreground">{dayDeliverables.length}</span>
-                </div>
-                <div className="grid gap-2">
-                  {dayDeliverables.map((deliverable) => (
-                    <button
-                      key={deliverable.id}
-                      type="button"
-                      onClick={() => setSelectedDeliverable(deliverable)}
-                      className="w-full rounded-md border border-border bg-card p-3 text-left transition-colors hover:bg-muted/40"
-                      data-testid={`calendar-deliverable-${deliverable.id}`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex min-w-0 items-center gap-2">
-                            <span className="font-mono text-[11px] text-muted-foreground">
-                              {formatTime(deliverable.publishAt)}
-                            </span>
-                            <h3 className="truncate text-sm font-medium">{deliverable.title}</h3>
-                          </div>
-                          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{deliverable.brief}</p>
-                          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                            <span className="inline-flex items-center gap-1">
-                              <AgentAvatar agentId={deliverable.agent} size="xs" />
-                              {deliverable.agent}
-                            </span>
-                            <Badge variant="outline" className="text-[10px]">
-                              {deliverable.channel}
-                            </Badge>
-                            <Badge variant="outline" className="text-[10px]">
-                              {getContentTypeLabel(deliverable.contentType, contentTypes)}
-                            </Badge>
-                            <Badge variant="outline" className="text-[10px]">
-                              {deliverable.tone}
-                            </Badge>
-                          </div>
+          <div className="min-w-[860px]">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 w-8 p-0"
+                  aria-label="Previous month"
+                  onClick={() => setVisibleMonth(addMonths(activeMonth, -1))}
+                >
+                  <ChevronLeft className="size-4" aria-hidden="true" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 w-8 p-0"
+                  aria-label="Next month"
+                  onClick={() => setVisibleMonth(addMonths(activeMonth, 1))}
+                >
+                  <ChevronRight className="size-4" aria-hidden="true" />
+                </Button>
+              </div>
+              <h2 className="text-sm font-semibold">{monthLabel(activeMonth)}</h2>
+              <Button size="sm" variant="outline" onClick={() => setVisibleMonth(monthKey(new Date()))}>
+                Today
+              </Button>
+            </div>
+
+            <div className="grid grid-cols-7 rounded-t-md border border-b-0 border-border bg-surface text-xs font-medium text-muted-foreground">
+              {WEEKDAYS.map(day => (
+                <div key={day} className="border-r border-border px-2 py-2 last:border-r-0">{day}</div>
+              ))}
+            </div>
+            <div className="grid grid-cols-7 overflow-hidden rounded-b-md border border-border bg-border">
+              {calendarDays.map(day => (
+                <div
+                  key={day.key}
+                  className={`min-h-32 border-r border-b border-border p-2 last:border-r-0 ${
+                    day.inMonth ? 'bg-background' : 'bg-surface/60 text-muted-foreground'
+                  }`}
+                >
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className={`flex size-6 items-center justify-center rounded-full text-xs ${
+                      day.isToday ? 'bg-primary text-primary-foreground' : ''
+                    }`}>
+                      {day.date.getDate()}
+                    </span>
+                    {day.deliverables.length > 0 && (
+                      <span className="text-[10px] text-muted-foreground">{day.deliverables.length}</span>
+                    )}
+                  </div>
+                  <div className="space-y-1">
+                    {day.deliverables.map((deliverable) => (
+                      <button
+                        key={deliverable.id}
+                        type="button"
+                        onClick={() => setSelectedDeliverable(deliverable)}
+                        className="w-full rounded border border-border bg-card px-2 py-1.5 text-left transition-colors hover:bg-muted/40"
+                        data-testid={`calendar-deliverable-${deliverable.id}`}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-[10px] text-muted-foreground">{formatTime(deliverable.publishAt)}</span>
+                          <DeliverableStatusBadge status={deliverable.status} className="h-1.5 w-1.5 shrink-0 rounded-full p-0 text-[0px]" />
                         </div>
-                        <DeliverableStatusBadge status={deliverable.status} className="shrink-0" />
-                      </div>
-                    </button>
-                  ))}
+                        <div className="mt-0.5 truncate text-xs font-medium">{deliverable.title}</div>
+                        <div className="mt-1 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                          <AgentAvatar agentId={deliverable.agent} size="xs" />
+                          <span className="truncate">{deliverable.channel}</span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          <Badge variant="outline" className="max-w-full truncate text-[10px]">
+                            {getContentTypeLabel(deliverable.contentType, contentTypes)}
+                          </Badge>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </section>
-            ))}
+              ))}
+            </div>
           </div>
         )}
       </div>
