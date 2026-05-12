@@ -459,10 +459,8 @@ export function BrainstormView() {
     setDeletingSession(true)
     try {
       const encoded = encodeURIComponent(deleteSessionId)
-      const response = await fetch(`/api/plugins/messaging/sessions/${encoded}?id=${encoded}`, {
+      const response = await fetch(`/api/plugins/messaging/sessions/${encoded}?id=${encoded}&deleteCreatedPlans=true&deleteLinkedTasks=true`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deleteCreatedPlans: true, deleteLinkedTasks: true }),
       })
       if (!response.ok) return
       if (sessionId === deleteSessionId) {

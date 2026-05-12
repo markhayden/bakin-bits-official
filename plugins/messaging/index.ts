@@ -54,6 +54,7 @@ const log = {
 const SWEEP_CRON_ID = 'messaging-content-sweep'
 const SWEEP_CRON_COMMAND = 'bakin:messaging:sweep'
 const DEFAULT_SWEEP_CRON_SCHEDULE = '*/5 * * * *'
+const LINKED_TASK_DELETE_TIMEOUT_MS = 2000
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -68,6 +69,13 @@ function json(data: unknown, status = 200): Response {
 
 async function readBody<T>(req: Request): Promise<T> {
   return req.json() as Promise<T>
+}
+
+function parseBooleanSearchParam(value: string | null): boolean | undefined {
+  if (value === null) return undefined
+  if (value === 'true') return true
+  if (value === 'false') return false
+  return undefined
 }
 
 function parseNullablePlanId(value: unknown): string | null | undefined {
@@ -193,18 +201,33 @@ async function startPlanFanOut(
   return { ok: true, plan: updated, task, taskId: task.id, alreadyStarted: false }
 }
 
+async function removeLinkedTask(ctx: PluginContext, taskId: string): Promise<boolean> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      ctx.tasks.remove(taskId),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`Timed out after ${LINKED_TASK_DELETE_TIMEOUT_MS}ms`))
+        }, LINKED_TASK_DELETE_TIMEOUT_MS)
+      }),
+    ])
+    return true
+  } catch (err) {
+    log.warn('Failed to remove linked task while deleting Messaging plan', {
+      taskId,
+      err: err instanceof Error ? err.message : String(err),
+    })
+    return false
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
+}
+
 async function removeLinkedTasks(ctx: PluginContext, taskIds: Iterable<string>): Promise<string[]> {
   const removedTaskIds: string[] = []
   for (const taskId of new Set(taskIds)) {
-    try {
-      await ctx.tasks.remove(taskId)
-      removedTaskIds.push(taskId)
-    } catch (err) {
-      log.warn('Failed to remove linked task while deleting Messaging plan', {
-        taskId,
-        err: err instanceof Error ? err.message : String(err),
-      })
-    }
+    if (await removeLinkedTask(ctx, taskId)) removedTaskIds.push(taskId)
   }
   return removedTaskIds
 }
@@ -817,7 +840,14 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       description: 'Delete a planning session and optionally the Plans prepared from it',
       handler: async (req: Request) => {
         const url = new URL(req.url)
-        const body = await readBody<{
+        const hasQueryOptions = url.searchParams.has('id')
+          && url.searchParams.has('deleteCreatedPlans')
+          && url.searchParams.has('deleteLinkedTasks')
+        const body: {
+          id?: string
+          deleteCreatedPlans?: boolean
+          deleteLinkedTasks?: boolean
+        } = hasQueryOptions ? {} : await readBody<{
           id?: string
           deleteCreatedPlans?: boolean
           deleteLinkedTasks?: boolean
@@ -830,9 +860,11 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         if (!id) return json({ error: 'id required' }, 400)
         const session = contentStore.getBrainstormSession(id)
         if (!session) return json({ error: 'Session not found' }, 404)
+        const deleteCreatedPlans = parseBooleanSearchParam(url.searchParams.get('deleteCreatedPlans')) ?? body.deleteCreatedPlans
+        const deleteLinkedTasks = parseBooleanSearchParam(url.searchParams.get('deleteLinkedTasks')) ?? body.deleteLinkedTasks
         const deletedPlanIds: string[] = []
         const deletedTaskIds: string[] = []
-        if (body.deleteCreatedPlans !== false) {
+        if (deleteCreatedPlans !== false) {
           const planIds = new Set([
             ...session.createdAtPlanIds,
             ...contentStore.listPlans()
@@ -841,7 +873,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
           ])
           for (const planId of planIds) {
             const result = await deletePlanAndLinkedWork(ctx, contentStore, planId, {
-              deleteLinkedTasks: body.deleteLinkedTasks,
+              deleteLinkedTasks,
             })
             if (result.deleted) deletedPlanIds.push(planId)
             deletedTaskIds.push(...result.taskIds)
@@ -1211,12 +1243,14 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       description: 'Delete a content Plan, its content pieces, and linked board tasks',
       handler: async (req: Request) => {
         const url = new URL(req.url)
-        const body = await readBody<{ id?: string; deleteLinkedTasks?: boolean }>(req)
+        const hasQueryOptions = url.searchParams.has('id') && url.searchParams.has('deleteLinkedTasks')
+        const body: { id?: string; deleteLinkedTasks?: boolean } = hasQueryOptions ? {} : await readBody<{ id?: string; deleteLinkedTasks?: boolean }>(req)
           .catch((): { id?: string; deleteLinkedTasks?: boolean } => ({}))
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
+        const deleteLinkedTasks = parseBooleanSearchParam(url.searchParams.get('deleteLinkedTasks')) ?? body.deleteLinkedTasks
         const result = await deletePlanAndLinkedWork(ctx, contentStore, id, {
-          deleteLinkedTasks: body.deleteLinkedTasks,
+          deleteLinkedTasks,
         })
         if (!result.deleted) return json({ error: 'Plan not found' }, 404)
         ctx.activity.audit('plan.deleted', 'system', { planId: id, deliverableIds: result.deliverableIds, taskIds: result.taskIds })

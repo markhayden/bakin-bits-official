@@ -274,10 +274,8 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
     setDeleting(true)
     try {
       const encoded = encodeURIComponent(plan.id)
-      const response = await fetch(`/api/plugins/messaging/plans/${encoded}?id=${encoded}`, {
+      const response = await fetch(`/api/plugins/messaging/plans/${encoded}?id=${encoded}&deleteLinkedTasks=true`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deleteLinkedTasks: true }),
       })
       if (!response.ok) return
       setDeleteOpen(false)
