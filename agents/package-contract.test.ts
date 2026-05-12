@@ -46,6 +46,7 @@ function listAgentPackageDirs(): string[] {
         entry !== "README.md",
     )
     .filter((entry) => statSync(join(agentsRoot, entry)).isDirectory())
+    .filter((entry) => existsSync(join(agentsRoot, entry, "bakin-package.json")))
     .sort();
 }
 
@@ -115,13 +116,7 @@ describe("agent package contracts", () => {
   it("patch exposes the expected developer-agent controls", () => {
     const manifest = readManifest("patch");
 
-    expect(manifest.agent?.allowedTools ?? []).toEqual(
-      expect.arrayContaining([
-        "bakin_exec_git_*",
-        "bakin_exec_lesson_search",
-        "bakin_exec_tasks_*",
-      ]),
-    );
+    expect(manifest.agent?.allowedTools ?? []).toEqual([]);
     expect(manifest.agent?.defaultModel).toBe("openai-codex/gpt-5.5");
     expect(manifest.agent?.allowedSkills ?? []).toContain("git-isolation");
     expect(manifest.contributions?.lessons ?? []).toContain(
