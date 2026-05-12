@@ -141,6 +141,21 @@ describe('Deliverable routes', () => {
     expect(plugin.ctx.storage.exists(`messaging/deliverables/${deliverable.id}.json`)).toBe(false)
   })
 
+  it('deletes linked board tasks when deleting a Deliverable', async () => {
+    const deliverable = await createDeliverable()
+    const contentStore = createMessagingContentStorage(plugin.ctx.storage)
+    contentStore.updateDeliverable(deliverable.id as string, { taskId: 'task-1' })
+
+    const deleteRoute = findRoute(plugin.routes, 'DELETE', '/deliverables/:id')!
+    const deleted = await callRoute(deleteRoute, plugin.ctx, {
+      searchParams: { id: deliverable.id as string, deleteLinkedTasks: 'true' },
+    })
+
+    expect(deleted.body.ok).toBe(true)
+    expect(deleted.body.taskIds).toEqual(['task-1'])
+    expect(plugin.ctx.tasks.remove).toHaveBeenCalledWith('task-1')
+  })
+
   it('creates Quick Posts with nullable planId and lists them via planId=null', async () => {
     const createRoute = findRoute(plugin.routes, 'POST', '/deliverables')!
     const created = await callRoute(createRoute, plugin.ctx, {

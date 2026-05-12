@@ -198,10 +198,21 @@ async function updateDeliverableStatus(deliverable: Deliverable, status: Deliver
   })
 }
 
+async function readErrorMessage(response: Response, fallback: string): Promise<string> {
+  try {
+    const data = await response.json() as { error?: unknown }
+    if (typeof data.error === 'string' && data.error.trim()) return data.error
+  } catch {
+    // Use the fallback below when the response is not JSON.
+  }
+  return fallback
+}
+
 export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps) {
   const { plan, deliverables, loading, error, refresh } = usePlan(planId)
   const [selectedDeliverable, setSelectedDeliverable] = useState<Deliverable | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [brainstormMessages, setBrainstormMessages] = useState<BrainstormMessage[]>([])
   const activeDeliverables = useMemo(
@@ -273,6 +284,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
   const handleDeletePlan = async () => {
     if (!plan) return
     setDeleting(true)
+    setDeleteError(null)
     const controller = new AbortController()
     const timeout = window.setTimeout(() => controller.abort(), DELETE_REQUEST_TIMEOUT_MS)
     try {
@@ -281,9 +293,18 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
         method: 'DELETE',
         signal: controller.signal,
       })
-      if (!response.ok) return
+      if (!response.ok) {
+        setDeleteError(await readErrorMessage(response, 'Could not delete this plan.'))
+        return
+      }
       setDeleteOpen(false)
       ;(onDeleted ?? onBack)?.()
+    } catch (err) {
+      setDeleteError(
+        err instanceof Error && err.name === 'AbortError'
+          ? 'Plan delete timed out. Cleanup may still be running; refresh the Plans list in a moment.'
+          : err instanceof Error ? err.message : String(err),
+      )
     } finally {
       window.clearTimeout(timeout)
       setDeleting(false)
@@ -332,7 +353,10 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
             className="text-muted-foreground hover:text-red-400"
             aria-label="Delete plan"
             title="Delete plan"
-            onClick={() => setDeleteOpen(true)}
+            onClick={() => {
+              setDeleteError(null)
+              setDeleteOpen(true)
+            }}
           >
             <Trash2 className="size-4" aria-hidden="true" />
           </Button>
@@ -511,14 +535,33 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
 
       {deleteOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60" onClick={() => !deleting && setDeleteOpen(false)} />
+          <div
+            className="absolute inset-0 bg-black/60"
+            onClick={() => {
+              if (deleting) return
+              setDeleteError(null)
+              setDeleteOpen(false)
+            }}
+          />
           <div className="relative w-[420px] rounded-md border border-border bg-background p-5 shadow-2xl">
             <h2 className="text-sm font-semibold">Delete this plan?</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
               This removes the plan, its content pieces, and any linked board tasks created for this plan.
             </p>
+            {deleteError && (
+              <div className="mt-3 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
+                {deleteError}
+              </div>
+            )}
             <div className="mt-5 flex justify-end gap-2">
-              <Button variant="outline" disabled={deleting} onClick={() => setDeleteOpen(false)}>
+              <Button
+                variant="outline"
+                disabled={deleting}
+                onClick={() => {
+                  setDeleteError(null)
+                  setDeleteOpen(false)
+                }}
+              >
                 Cancel
               </Button>
               <Button variant="destructive" disabled={deleting} onClick={handleDeletePlan}>

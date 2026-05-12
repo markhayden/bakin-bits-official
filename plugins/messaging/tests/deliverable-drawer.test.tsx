@@ -140,4 +140,29 @@ describe('DeliverableDrawer', () => {
     })
     expect(onUpdated).toHaveBeenCalled()
   })
+
+  it('deletes a scheduled content piece from the drawer', async () => {
+    const onClose = mock()
+    const onUpdated = mock()
+    render(
+      <DeliverableDrawer
+        deliverable={makeDeliverable({ status: 'scheduled', contentType: 'blog' })}
+        open
+        onClose={onClose}
+        onUpdated={onUpdated}
+      />,
+    )
+
+    fireEvent.click(screen.getByText('Delete'))
+    fireEvent.click(screen.getByText('Confirm delete'))
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        '/api/plugins/messaging/deliverables/deliverable-1?id=deliverable-1&deleteLinkedTasks=true',
+        expect.objectContaining({ method: 'DELETE' }),
+      )
+    })
+    expect(onUpdated).toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalled()
+  })
 })

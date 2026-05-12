@@ -1,13 +1,13 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AgentAvatar } from "@bakin/sdk/components"
 import { BakinDrawer } from "@bakin/sdk/components"
 import { Badge } from "@bakin/sdk/ui"
 import { Button } from "@bakin/sdk/ui"
 import { Textarea } from "@bakin/sdk/ui"
 import { Separator } from "@bakin/sdk/ui"
-import { AlertCircle, CalendarDays, Check, Clock, ImageIcon, Video, X } from 'lucide-react'
+import { AlertCircle, CalendarDays, Check, Clock, ImageIcon, Trash2, Video, X } from 'lucide-react'
 import type { AssetRequirement, ContentTypeOption, Deliverable } from '../types'
 import { getContentTypeLabel, useContentTypes } from '../hooks/use-content-types'
 import { DeliverableStatusBadge } from './deliverable-status-badge'
@@ -46,11 +46,30 @@ function contentTypeFor(deliverable: Deliverable, contentTypes: ContentTypeOptio
     ?? { id: deliverable.contentType, label: deliverable.contentType, assetRequirement: 'none' }
 }
 
+async function readErrorMessage(response: Response, fallback: string): Promise<string> {
+  try {
+    const data = await response.json() as { error?: unknown }
+    if (typeof data.error === 'string' && data.error.trim()) return data.error
+  } catch {
+    // Use the fallback below when the response is not JSON.
+  }
+  return fallback
+}
+
 export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: DeliverableDrawerProps) {
   const contentTypes = useContentTypes()
   const [rejecting, setRejecting] = useState(false)
   const [rejectionNote, setRejectionNote] = useState('')
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
+
+  useEffect(() => {
+    setRejecting(false)
+    setRejectionNote('')
+    setConfirmingDelete(false)
+    setActionError(null)
+  }, [deliverable?.id, open])
 
   const contentType = useMemo(
     () => deliverable ? contentTypeFor(deliverable, contentTypes) : null,
@@ -69,15 +88,22 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
 
   const handleApprove = async () => {
     setActionLoading(true)
+    setActionError(null)
     try {
       const encoded = encodeURIComponent(deliverable.id)
       const path = canApproveAndPublishNow ? 'approve-and-publish-now' : 'approve'
-      await fetch(`/api/plugins/messaging/deliverables/${encoded}/${path}?id=${encoded}`, {
+      const response = await fetch(`/api/plugins/messaging/deliverables/${encoded}/${path}?id=${encoded}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       })
+      if (!response.ok) {
+        setActionError(await readErrorMessage(response, 'Could not approve this content piece.'))
+        return
+      }
       await onUpdated?.()
       onClose()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err))
     } finally {
       setActionLoading(false)
     }
@@ -85,15 +111,49 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
 
   const handleReject = async () => {
     setActionLoading(true)
+    setActionError(null)
     try {
       const encoded = encodeURIComponent(deliverable.id)
-      await fetch(`/api/plugins/messaging/deliverables/${encoded}/reject?id=${encoded}`, {
+      const response = await fetch(`/api/plugins/messaging/deliverables/${encoded}/reject?id=${encoded}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ note: rejectionNote }),
       })
+      if (!response.ok) {
+        setActionError(await readErrorMessage(response, 'Could not request changes for this content piece.'))
+        return
+      }
       await onUpdated?.()
       onClose()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!confirmingDelete) {
+      setConfirmingDelete(true)
+      setActionError(null)
+      return
+    }
+
+    setActionLoading(true)
+    setActionError(null)
+    try {
+      const encoded = encodeURIComponent(deliverable.id)
+      const response = await fetch(`/api/plugins/messaging/deliverables/${encoded}?id=${encoded}&deleteLinkedTasks=true`, {
+        method: 'DELETE',
+      })
+      if (!response.ok) {
+        setActionError(await readErrorMessage(response, 'Could not delete this content piece.'))
+        return
+      }
+      await onUpdated?.()
+      onClose()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err))
     } finally {
       setActionLoading(false)
     }
@@ -139,25 +199,52 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
           </div>
         </div>
 
-        {(canApprove || canApproveAndPublishNow || canReject) && (
-          <div className="flex flex-wrap gap-2">
-            {(canApprove || canApproveAndPublishNow) && (
-              <Button
-                size="sm"
-                onClick={handleApprove}
-                disabled={approveDisabled}
-                title={missingRequirement ?? undefined}
-              >
-                <Check className="size-3.5" data-icon="inline-start" />
-                {canApproveAndPublishNow ? 'Approve & publish now' : 'Approve'}
-              </Button>
-            )}
-            {canReject && (
-              <Button size="sm" variant="outline" onClick={() => setRejecting((value) => !value)}>
-                <X className="size-3.5" data-icon="inline-start" />
-                Request changes
-              </Button>
-            )}
+        <div className="flex flex-wrap gap-2">
+          {(canApprove || canApproveAndPublishNow) && (
+            <Button
+              size="sm"
+              onClick={handleApprove}
+              disabled={approveDisabled}
+              title={missingRequirement ?? undefined}
+            >
+              <Check className="size-3.5" data-icon="inline-start" />
+              {canApproveAndPublishNow ? 'Approve & publish now' : 'Approve'}
+            </Button>
+          )}
+          {canReject && (
+            <Button size="sm" variant="outline" onClick={() => setRejecting((value) => !value)}>
+              <X className="size-3.5" data-icon="inline-start" />
+              Request changes
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant={confirmingDelete ? 'destructive' : 'outline'}
+            disabled={actionLoading}
+            onClick={handleDelete}
+          >
+            <Trash2 className="size-3.5" data-icon="inline-start" />
+            {confirmingDelete ? 'Confirm delete' : 'Delete'}
+          </Button>
+          {confirmingDelete && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={actionLoading}
+              onClick={() => {
+                setConfirmingDelete(false)
+                setActionError(null)
+              }}
+            >
+              Cancel
+            </Button>
+          )}
+        </div>
+
+        {actionError && (
+          <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
+            <AlertCircle className="mt-0.5 size-4 shrink-0" />
+            <span>{actionError}</span>
           </div>
         )}
 

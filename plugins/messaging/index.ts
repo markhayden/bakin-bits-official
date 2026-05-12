@@ -214,7 +214,7 @@ async function removeLinkedTask(ctx: PluginContext, taskId: string): Promise<boo
     ])
     return true
   } catch (err) {
-    log.warn('Failed to remove linked task while deleting Messaging plan', {
+    log.warn('Failed to remove linked task while deleting Messaging work', {
       taskId,
       err: err instanceof Error ? err.message : String(err),
     })
@@ -262,6 +262,24 @@ async function deletePlanAndLinkedWork(
     deliverableIds: deliverables.map((deliverable) => deliverable.id),
     taskIds: removedTaskIds,
   }
+}
+
+async function deleteDeliverableAndLinkedWork(
+  ctx: PluginContext,
+  contentStore: MessagingContentStorage,
+  deliverableId: string,
+  opts: { deleteLinkedTasks?: boolean } = {},
+): Promise<{ deleted: boolean; planId: string | null; taskIds: string[] }> {
+  const deliverable = contentStore.getDeliverable(deliverableId)
+  if (!deliverable) return { deleted: false, planId: null, taskIds: [] }
+
+  contentStore.deleteDeliverable(deliverableId)
+  recomputeLinkedPlan(contentStore, deliverable.planId)
+
+  const taskIds = opts.deleteLinkedTasks === false || !deliverable.taskId
+    ? []
+    : await removeLinkedTasks(ctx, [deliverable.taskId])
+  return { deleted: true, planId: deliverable.planId, taskIds }
 }
 
 interface BrainstormSessionSummary {
@@ -1390,15 +1408,18 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       description: 'Delete a content Deliverable',
       handler: async (req: Request) => {
         const url = new URL(req.url)
-        const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
+        const hasQueryOptions = url.searchParams.has('id') && url.searchParams.has('deleteLinkedTasks')
+        const body: { id?: string; deleteLinkedTasks?: boolean } = hasQueryOptions ? {} : await readBody<{ id?: string; deleteLinkedTasks?: boolean }>(req)
+          .catch((): { id?: string; deleteLinkedTasks?: boolean } => ({}))
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
-        const existing = contentStore.getDeliverable(id)
-        if (!existing) return json({ error: 'Deliverable not found' }, 404)
-        contentStore.deleteDeliverable(id)
-        recomputeLinkedPlan(contentStore, existing.planId)
-        ctx.activity.audit('deliverable.deleted', 'system', { deliverableId: id, planId: existing.planId })
-        return json({ ok: true })
+        const deleteLinkedTasks = parseBooleanSearchParam(url.searchParams.get('deleteLinkedTasks')) ?? body.deleteLinkedTasks
+        const result = await deleteDeliverableAndLinkedWork(ctx, contentStore, id, {
+          deleteLinkedTasks,
+        })
+        if (!result.deleted) return json({ error: 'Deliverable not found' }, 404)
+        ctx.activity.audit('deliverable.deleted', 'system', { deliverableId: id, planId: result.planId, taskIds: result.taskIds })
+        return json({ ok: true, taskIds: result.taskIds })
       },
     })
 
