@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import {
   AgentAvatar,
   AgentFilter,
@@ -14,6 +14,7 @@ import type { BrainstormMessage } from "@bakin/sdk/components"
 import { useAgentIds, useAgentList, usePathname, useQueryState, useRouter, useSearch, useSearchParams } from "@bakin/sdk/hooks"
 import { Badge } from "@bakin/sdk/ui"
 import { Button } from "@bakin/sdk/ui"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@bakin/sdk/ui"
 import { Input } from "@bakin/sdk/ui"
 import { ArrowLeft, CalendarDays, Check, ClipboardList, Plus, Trash2, X } from 'lucide-react'
 import type { BrainstormSession, PlanProposal, SessionMessage } from '../types'
@@ -27,6 +28,11 @@ interface SessionSummary {
   updatedAt: string
   proposalCount: number
   approvedCount: number
+}
+
+interface AgentOption {
+  id: string
+  name: string
 }
 
 const PROPOSAL_PANEL_MIN_WIDTH = 360
@@ -130,6 +136,94 @@ function ProposalStatusBadge({ proposal }: { proposal: PlanProposal }) {
     <Badge className={`max-w-28 shrink-0 truncate ${badge.className}`}>
       {badge.label}
     </Badge>
+  )
+}
+
+function NewBrainstormSessionDialog({
+  open,
+  agents,
+  defaultAgentId,
+  creating,
+  error,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean
+  agents: AgentOption[]
+  defaultAgentId: string
+  creating: boolean
+  error: string | null
+  onConfirm: (input: { title: string; agentId: string }) => void | Promise<void>
+  onCancel: () => void
+}) {
+  const [title, setTitle] = useState('')
+  const [agentId, setAgentId] = useState(defaultAgentId)
+
+  useEffect(() => {
+    if (!open) return
+    setTitle('')
+    setAgentId(defaultAgentId)
+  }, [defaultAgentId, open])
+
+  const trimmedTitle = title.trim()
+  const selectedAgentId = agentId || defaultAgentId
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!trimmedTitle || creating) return
+    void onConfirm({ title: trimmedTitle, agentId: selectedAgentId })
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !creating) onCancel() }}>
+      <DialogContent className="max-w-md border-border bg-card">
+        <DialogHeader>
+          <DialogTitle>New brainstorm</DialogTitle>
+        </DialogHeader>
+        <form className="space-y-4" onSubmit={handleSubmit}>
+          <Input
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="Session title..."
+            autoFocus
+            disabled={creating}
+          />
+          <div className="space-y-2">
+            <div className="text-xs font-medium uppercase text-muted-foreground">Agent</div>
+            <div className="grid max-h-56 gap-2 overflow-y-auto sm:grid-cols-2" role="radiogroup" aria-label="Brainstorm agent">
+              {agents.map(agent => {
+                const selected = agent.id === selectedAgentId
+                return (
+                  <button
+                    key={agent.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    disabled={creating}
+                    onClick={() => setAgentId(agent.id)}
+                    className={`flex min-w-0 items-center gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors focus-visible:border-ring focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 ${
+                      selected ? 'border-emerald-500/70 bg-emerald-500/10' : 'border-border bg-surface hover:bg-muted/40'
+                    }`}
+                  >
+                    <AgentAvatar agentId={agent.id} size="sm" />
+                    <span className="truncate font-medium">{agent.name}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+          {error && <p className="text-xs text-red-400">{error}</p>}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={onCancel} disabled={creating}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!trimmedTitle || creating}>
+              {creating ? 'Creating...' : 'Create Session'}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -290,9 +384,9 @@ export function BrainstormView() {
   const [agentFilter, setAgentFilter] = useQueryState('agent', 'all')
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
+  const [newSessionOpen, setNewSessionOpen] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [newTitle, setNewTitle] = useState('')
-  const [newAgent, setNewAgent] = useState('')
+  const [createError, setCreateError] = useState<string | null>(null)
   const [activeSession, setActiveSession] = useState<BrainstormSession | null>(null)
   const [messages, setMessages] = useState<BrainstormMessage[]>([])
   const [materializing, setMaterializing] = useState(false)
@@ -337,9 +431,19 @@ export function BrainstormView() {
     else searchHook.clear()
   }, [search])
 
-  useEffect(() => {
-    setNewAgent(current => current || agentIds[0] || agentList[0]?.id || 'main')
+  const agentOptions = useMemo((): AgentOption[] => {
+    const byId = new Map<string, AgentOption>()
+    for (const agent of agentList) {
+      if (!agent.id) continue
+      byId.set(agent.id, { id: agent.id, name: agent.name ?? agent.id })
+    }
+    for (const id of agentIds) {
+      if (!byId.has(id)) byId.set(id, { id, name: id === 'main' ? 'Main' : id })
+    }
+    return byId.size > 0 ? [...byId.values()] : [{ id: 'main', name: 'Main' }]
   }, [agentIds, agentList])
+
+  const defaultNewSessionAgentId = agentOptions[0]?.id ?? 'main'
 
   const pushSessionId = useCallback((id: string) => {
     const params = new URLSearchParams(searchParams.toString())
@@ -404,20 +508,26 @@ export function BrainstormView() {
     return rows
   }, [agentFilter, search, searchHook.loading, searchHook.results, sessions])
 
-  const createSession = async () => {
-    const agentId = newAgent || agentIds[0] || agentList[0]?.id || 'main'
-    const title = newTitle.trim() || 'New brainstorm session'
-    const response = await fetch('/api/plugins/messaging/sessions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId, title }),
-    })
-    if (!response.ok) return
-    const data = await response.json() as { session?: BrainstormSession }
-    setCreating(false)
-    setNewTitle('')
-    await loadSessions()
-    if (data.session) pushSessionId(data.session.id)
+  const createSession = async ({ title, agentId }: { title: string; agentId: string }) => {
+    setCreating(true)
+    setCreateError(null)
+    try {
+      const response = await fetch('/api/plugins/messaging/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId, title }),
+      })
+      if (!response.ok) {
+        setCreateError('Could not create this brainstorm.')
+        return
+      }
+      const data = await response.json() as { session?: BrainstormSession }
+      setNewSessionOpen(false)
+      await loadSessions()
+      if (data.session) pushSessionId(data.session.id)
+    } finally {
+      setCreating(false)
+    }
   }
 
   const updateProposal = async (proposal: PlanProposal, patch: Partial<PlanProposal>) => {
@@ -704,34 +814,31 @@ export function BrainstormView() {
           placeholder: 'Search sessions...',
         }}
         actions={
-          <Button size="sm" onClick={() => setCreating(value => !value)}>
+          <Button
+            size="sm"
+            onClick={() => {
+              setCreateError(null)
+              setNewSessionOpen(true)
+            }}
+          >
             <Plus className="size-3.5" data-icon="inline-start" />
-            New Session
+            New
           </Button>
         }
       />
 
-      {creating && (
-        <div className="mt-4 grid gap-3 rounded-md border border-border bg-card p-3 md:grid-cols-[180px_minmax(0,1fr)_auto]">
-          <select
-            value={newAgent}
-            onChange={(event) => setNewAgent(event.target.value)}
-            className="h-9 rounded-md border border-border bg-surface px-3 text-sm"
-            aria-label="Brainstorm agent"
-          >
-            {(agentList.length > 0 ? agentList : agentIds.map(id => ({ id, name: id }))).map(agent => (
-              <option key={agent.id} value={agent.id}>{agent.name ?? agent.id}</option>
-            ))}
-          </select>
-          <Input
-            value={newTitle}
-            onChange={(event) => setNewTitle(event.target.value)}
-            placeholder="Session title"
-            aria-label="Brainstorm session title"
-          />
-          <Button onClick={createSession}>Create</Button>
-        </div>
-      )}
+      <NewBrainstormSessionDialog
+        open={newSessionOpen}
+        agents={agentOptions}
+        defaultAgentId={defaultNewSessionAgentId}
+        creating={creating}
+        error={createError}
+        onConfirm={createSession}
+        onCancel={() => {
+          setCreateError(null)
+          setNewSessionOpen(false)
+        }}
+      />
 
       <div className="mt-4 flex items-center gap-3">
         <AgentFilter agentIds={agentIds} value={agentFilter} onChange={setAgentFilter} />

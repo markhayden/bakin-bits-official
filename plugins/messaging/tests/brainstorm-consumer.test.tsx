@@ -9,7 +9,7 @@
  * title/agentId substring filter when the hook returns nothing.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
-import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -169,7 +169,22 @@ const SESSIONS = [
 ]
 
 function mockFetchSessions() {
-  globalThis.fetch = mock().mockImplementation((url: string) => {
+  globalThis.fetch = mock().mockImplementation((url: string, init?: RequestInit) => {
+    if (typeof url === 'string' && url === '/api/plugins/messaging/sessions' && init?.method === 'POST') {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({
+          session: {
+            id: 'sess-new',
+            agentId: 'scout',
+            title: 'May survival ideas',
+            status: 'active',
+            messages: [],
+            proposals: [],
+          },
+        }),
+      })
+    }
     if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/sessions')) {
       return Promise.resolve({
         ok: true,
@@ -187,6 +202,11 @@ beforeEach(() => {
   useSearchMock.mockClear()
   ;(globalThis as unknown as { __bakinTestSdkHooks?: Record<string, unknown> }).__bakinTestSdkHooks = {
     useSearch: (...args: unknown[]) => useSearchMock(...args),
+    useAgentIds: () => ['basil', 'scout'],
+    useAgentList: () => [
+      { id: 'basil', name: 'Basil' },
+      { id: 'scout', name: 'Scout' },
+    ],
   }
   mockFetchSessions()
 })
@@ -268,5 +288,33 @@ describe('BrainstormView (search consumer)', () => {
       expect(screen.queryByText('Week 16 recipes')).toBeNull()
     })
     expect(screen.getByText('Outdoor sprint')).toBeDefined()
+  })
+
+  it('creates new brainstorm sessions from a modal with avatar agent selection', async () => {
+    render(<BrainstormView />)
+    await waitFor(() => {
+      expect(screen.getByText('Week 16 recipes')).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByText('New'))
+
+    expect(screen.getByText('New brainstorm')).toBeDefined()
+    const agentGroup = screen.getByRole('radiogroup', { name: 'Brainstorm agent' })
+    expect(within(agentGroup).getByTestId('avatar-scout')).toBeDefined()
+    fireEvent.click(within(agentGroup).getByText('Scout').closest('button')!)
+    fireEvent.change(screen.getByPlaceholderText('Session title...'), {
+      target: { value: 'May survival ideas' },
+    })
+    fireEvent.click(screen.getByText('Create Session'))
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        '/api/plugins/messaging/sessions',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ agentId: 'scout', title: 'May survival ideas' }),
+        }),
+      )
+    })
   })
 })
