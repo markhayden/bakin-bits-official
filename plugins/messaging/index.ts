@@ -126,24 +126,41 @@ function recomputeLinkedPlan(contentStore: MessagingContentStorage, planId: stri
 
 async function ensureMessagingSweepCron(ctx: PluginContext, schedule: string): Promise<void> {
   const job = {
+    jobId: SWEEP_CRON_ID,
     name: 'Messaging content sweep',
     schedule,
     command: SWEEP_CRON_COMMAND,
     enabled: true,
+    description: 'Sweeps messaging Deliverables for prep, overdue, and publish transitions.',
     metadata: {
       source: 'bakin',
       isBakinJob: true,
+      pluginId: 'messaging',
       description: 'Sweeps messaging Deliverables for prep, overdue, and publish transitions.',
     },
   }
 
   try {
-    const existing = await ctx.runtime.cron.get(SWEEP_CRON_ID)
-    if (existing) {
-      await ctx.runtime.cron.update(SWEEP_CRON_ID, job)
-    } else {
-      await ctx.runtime.cron.create({ id: SWEEP_CRON_ID, ...job })
+    if (ctx.hooks.has('schedule.ensureBakinJob')) {
+      const result = await ctx.hooks.invoke<{ ok: boolean; error?: string }>('schedule.ensureBakinJob', job)
+      if (!result?.ok) throw new Error(result?.error ?? 'schedule.ensureBakinJob failed')
+      return
     }
+
+    const fallbackJob = {
+      name: job.name,
+      schedule: job.schedule,
+      command: job.command,
+      enabled: job.enabled,
+      metadata: {
+        ...job.metadata,
+        scheduleType: 'cron',
+        bakinSchedule: true,
+      },
+    }
+    const existing = await ctx.runtime.cron.get(SWEEP_CRON_ID)
+    if (existing) await ctx.runtime.cron.update(SWEEP_CRON_ID, fallbackJob)
+    else await ctx.runtime.cron.create({ id: SWEEP_CRON_ID, ...fallbackJob })
   } catch (err) {
     log.warn('Messaging content sweep cron registration failed', { err: err instanceof Error ? err.message : String(err) })
   }

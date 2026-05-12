@@ -170,8 +170,33 @@ describe('messaging plugin — activate', () => {
       metadata: expect.objectContaining({
         source: 'bakin',
         isBakinJob: true,
+        bakinSchedule: true,
       }),
     }))
+  })
+
+  it('delegates sweep cron ownership to schedule when the hook is available', async () => {
+    const { ctx } = createTestContext('messaging', testDir)
+    ctx.hooks.has = mock((name: string) => name === 'schedule.ensureBakinJob') as typeof ctx.hooks.has
+    ctx.hooks.invoke = mock(async () => ({ ok: true })) as typeof ctx.hooks.invoke
+
+    await messagingPlugin.activate(ctx)
+
+    expect(ctx.hooks.invoke).toHaveBeenCalledWith(
+      'schedule.ensureBakinJob',
+      expect.objectContaining({
+        jobId: 'messaging-content-sweep',
+        name: 'Messaging content sweep',
+        schedule: '*/5 * * * *',
+        command: 'bakin:messaging:sweep',
+        metadata: expect.objectContaining({
+          source: 'bakin',
+          isBakinJob: true,
+          pluginId: 'messaging',
+        }),
+      }),
+    )
+    expect(ctx.runtime.cron.create).not.toHaveBeenCalled()
   })
 
   it('uses sweepCronSchedule from settings when present', async () => {
