@@ -54,6 +54,7 @@ const TASK_STATE_LABELS: Record<PlanningTaskState, string> = {
   upcoming: 'Next',
   needs_attention: 'Needs attention',
 }
+const DELETE_REQUEST_TIMEOUT_MS = 10000
 
 function toBrainstorm(agentId: string, message: SessionMessage): BrainstormMessage {
   return {
@@ -272,15 +273,19 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
   const handleDeletePlan = async () => {
     if (!plan) return
     setDeleting(true)
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), DELETE_REQUEST_TIMEOUT_MS)
     try {
       const encoded = encodeURIComponent(plan.id)
       const response = await fetch(`/api/plugins/messaging/plans/${encoded}?id=${encoded}&deleteLinkedTasks=true`, {
         method: 'DELETE',
+        signal: controller.signal,
       })
       if (!response.ok) return
       setDeleteOpen(false)
       ;(onDeleted ?? onBack)?.()
     } finally {
+      window.clearTimeout(timeout)
       setDeleting(false)
     }
   }

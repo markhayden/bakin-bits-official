@@ -33,6 +33,7 @@ const PROPOSAL_PANEL_MIN_WIDTH = 360
 const PROPOSAL_PANEL_MAX_WIDTH = 720
 const PROPOSAL_PANEL_DEFAULT_WIDTH = 460
 const PROPOSAL_PANEL_STORAGE_KEY = 'messaging-proposal-panel-width'
+const DELETE_REQUEST_TIMEOUT_MS = 10000
 
 function clampProposalPanelWidth(width: number): number {
   return Math.min(PROPOSAL_PANEL_MAX_WIDTH, Math.max(PROPOSAL_PANEL_MIN_WIDTH, width))
@@ -457,10 +458,13 @@ export function BrainstormView() {
   const deleteSession = async () => {
     if (!deleteSessionId) return
     setDeletingSession(true)
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), DELETE_REQUEST_TIMEOUT_MS)
     try {
       const encoded = encodeURIComponent(deleteSessionId)
       const response = await fetch(`/api/plugins/messaging/sessions/${encoded}?id=${encoded}&deleteCreatedPlans=true&deleteLinkedTasks=true`, {
         method: 'DELETE',
+        signal: controller.signal,
       })
       if (!response.ok) return
       if (sessionId === deleteSessionId) {
@@ -471,6 +475,7 @@ export function BrainstormView() {
       setDeleteSessionId(null)
       await loadSessions()
     } finally {
+      window.clearTimeout(timeout)
       setDeletingSession(false)
     }
   }

@@ -225,11 +225,15 @@ async function removeLinkedTask(ctx: PluginContext, taskId: string): Promise<boo
 }
 
 async function removeLinkedTasks(ctx: PluginContext, taskIds: Iterable<string>): Promise<string[]> {
-  const removedTaskIds: string[] = []
-  for (const taskId of new Set(taskIds)) {
-    if (await removeLinkedTask(ctx, taskId)) removedTaskIds.push(taskId)
-  }
-  return removedTaskIds
+  const results = await Promise.all(
+    [...new Set(taskIds)].map(async (taskId) => ({
+      taskId,
+      removed: await removeLinkedTask(ctx, taskId),
+    })),
+  )
+  return results
+    .filter((result) => result.removed)
+    .map((result) => result.taskId)
 }
 
 async function deletePlanAndLinkedWork(
