@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import {
   AgentAvatar,
   AgentFilter,
@@ -27,6 +27,36 @@ interface SessionSummary {
   updatedAt: string
   proposalCount: number
   approvedCount: number
+}
+
+const PROPOSAL_PANEL_MIN_WIDTH = 360
+const PROPOSAL_PANEL_MAX_WIDTH = 720
+const PROPOSAL_PANEL_DEFAULT_WIDTH = 460
+const PROPOSAL_PANEL_STORAGE_KEY = 'messaging-proposal-panel-width'
+
+function clampProposalPanelWidth(width: number): number {
+  return Math.min(PROPOSAL_PANEL_MAX_WIDTH, Math.max(PROPOSAL_PANEL_MIN_WIDTH, width))
+}
+
+function getStoredProposalPanelWidth(): number {
+  if (typeof window === 'undefined') return PROPOSAL_PANEL_DEFAULT_WIDTH
+  try {
+    const raw = window.localStorage.getItem(PROPOSAL_PANEL_STORAGE_KEY)
+    if (!raw) return PROPOSAL_PANEL_DEFAULT_WIDTH
+    const parsed = Number.parseInt(raw, 10)
+    return Number.isFinite(parsed) ? clampProposalPanelWidth(parsed) : PROPOSAL_PANEL_DEFAULT_WIDTH
+  } catch {
+    return PROPOSAL_PANEL_DEFAULT_WIDTH
+  }
+}
+
+function persistProposalPanelWidth(width: number): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(PROPOSAL_PANEL_STORAGE_KEY, String(clampProposalPanelWidth(width)))
+  } catch {
+    // Resizing should continue to work even if localStorage is unavailable.
+  }
 }
 
 function toBrainstorm(agentId: string, message: SessionMessage): BrainstormMessage {
@@ -268,7 +298,38 @@ export function BrainstormView() {
   const [deleteSessionId, setDeleteSessionId] = useState<string | null>(null)
   const [deletingSession, setDeletingSession] = useState(false)
   const [selectedProposalId, setSelectedProposalId] = useState<string | null>(null)
+  const [proposalPanelWidth, setProposalPanelWidth] = useState(getStoredProposalPanelWidth)
+  const proposalPanelWidthRef = useRef(proposalPanelWidth)
   const searchHook = useSearch({ plugin: 'messaging', facets: ['status', 'agent_id'], debounce: 300 })
+
+  useEffect(() => {
+    proposalPanelWidthRef.current = proposalPanelWidth
+  }, [proposalPanelWidth])
+
+  const startProposalPanelResize = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = proposalPanelWidthRef.current
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const nextWidth = clampProposalPanelWidth(startWidth + startX - moveEvent.clientX)
+      proposalPanelWidthRef.current = nextWidth
+      setProposalPanelWidth(nextWidth)
+    }
+
+    const handleMouseUp = () => {
+      persistProposalPanelWidth(proposalPanelWidthRef.current)
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }, [])
 
   useEffect(() => {
     if (search) searchHook.search(search)
@@ -511,7 +572,10 @@ export function BrainstormView() {
           </div>
         </div>
 
-        <div className="mt-4 grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(420px,34vw)]">
+        <div
+          className="mt-4 grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_var(--proposal-panel-width)]"
+          style={{ '--proposal-panel-width': `${proposalPanelWidth}px` } as CSSProperties}
+        >
           <div className="min-h-0">
             <IntegratedBrainstorm
               messages={messages}
@@ -527,7 +591,14 @@ export function BrainstormView() {
             />
           </div>
 
-          <aside className="flex min-h-0 flex-col overflow-hidden border-l border-border px-4">
+          <aside className="relative flex min-h-0 flex-col overflow-hidden border-l border-border px-4">
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize proposal panel"
+              className="absolute inset-y-0 left-0 z-10 hidden w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-accent/50 active:bg-accent xl:block"
+              onMouseDown={startProposalPanelResize}
+            />
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-sm font-semibold">Plan proposals</h2>
               <Badge variant="outline" className="text-[11px]">{activeSession.proposals.length}</Badge>
