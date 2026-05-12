@@ -12,7 +12,7 @@ import type { BrainstormMessage } from "@bakin/sdk/components"
 import { Badge } from "@bakin/sdk/ui"
 import { Button } from "@bakin/sdk/ui"
 import { Skeleton } from "@bakin/sdk/ui"
-import { CalendarDays, CheckCircle2, ChevronLeft, Circle, ClipboardList, ExternalLink, MessageSquareText, Trash2 } from 'lucide-react'
+import { ArrowLeft, CalendarDays, CheckCircle2, Circle, ClipboardList, ExternalLink, MessageSquareText, Trash2 } from 'lucide-react'
 import type { BrainstormSession, Deliverable, DeliverableStatus, Plan, PlanStatus, SessionMessage } from '../types'
 import { PLAN_STATUS_BADGE } from '../constants'
 import { usePlan } from '../hooks/use-plan'
@@ -305,9 +305,15 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center justify-between border-b border-border pb-4">
         {onBack ? (
-          <Button size="sm" variant="ghost" onClick={onBack}>
-            <ChevronLeft className="size-4" data-icon="inline-start" />
-            Plans
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-8 w-8 p-0"
+            aria-label="Back to plans"
+            title="Back to plans"
+            onClick={onBack}
+          >
+            <ArrowLeft className="size-4" aria-hidden="true" />
           </Button>
         ) : (
           <span />

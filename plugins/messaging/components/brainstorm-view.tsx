@@ -87,20 +87,23 @@ function mergeProposal(proposals: PlanProposal[], incoming: PlanProposal): PlanP
 }
 
 function ProposalStatusBadge({ proposal }: { proposal: PlanProposal }) {
-  if (proposal.planId) {
-    return <Badge variant="outline" className="shrink-0 text-[10px]">Plan ready</Badge>
+  const status = proposal.planId ? 'approved' : proposal.status
+  const meta: Record<PlanProposal['status'], { label: string; className: string }> = {
+    proposed: { label: 'Needs review', className: 'bg-amber-500/20 text-amber-300' },
+    approved: { label: 'Accepted', className: 'bg-emerald-500/20 text-emerald-300' },
+    rejected: { label: 'Rejected', className: 'bg-red-500/20 text-red-400' },
+    revised: { label: 'Revised', className: 'bg-sky-500/20 text-sky-300' },
   }
-  const label: Record<PlanProposal['status'], string> = {
-    proposed: 'Needs review',
-    approved: 'Accepted',
-    rejected: 'Rejected',
-    revised: 'Revised',
-  }
+  const badge = meta[status]
   return (
-    <Badge className="max-w-28 shrink-0 truncate capitalize">
-      {label[proposal.status] ?? proposal.status.replaceAll('_', ' ')}
+    <Badge className={`max-w-28 shrink-0 truncate ${badge.className}`}>
+      {badge.label}
     </Badge>
   )
+}
+
+function hasInlineProposalActions(proposal: PlanProposal): boolean {
+  return !proposal.planId && (proposal.status === 'proposed' || proposal.status === 'revised')
 }
 
 function ProposalDrawer({
@@ -131,6 +134,8 @@ function ProposalDrawer({
   if (!proposal) return null
 
   const disabled = Boolean(proposal.planId || saving)
+  const canReject = !proposal.planId && proposal.status !== 'rejected'
+  const canAccept = !proposal.planId && proposal.status !== 'approved'
   const save = async (status?: PlanProposal['status']) => {
     setSaving(true)
     try {
@@ -154,20 +159,24 @@ function ProposalDrawer({
         if (!nextOpen) onClose()
       }}
       title={proposal.title}
-      defaultWidth={640}
-      storageKey="messaging-proposal"
+      defaultWidth={520}
+      storageKey="messaging-proposal-review"
       actions={
         <div className="flex items-center gap-2">
           {!proposal.planId && (
             <>
-              <Button variant="outline" onClick={() => save('rejected')} disabled={saving}>
-                <X className="size-4" />
-                Reject
-              </Button>
-              <Button onClick={() => save('approved')} disabled={saving}>
-                <Check className="size-4" />
-                Accept
-              </Button>
+              {canReject && (
+                <Button variant="outline" onClick={() => save('rejected')} disabled={saving}>
+                  <X className="size-4" />
+                  Reject
+                </Button>
+              )}
+              {canAccept && (
+                <Button onClick={() => save('approved')} disabled={saving}>
+                  <Check className="size-4" />
+                  Accept
+                </Button>
+              )}
             </>
           )}
         </div>
@@ -219,14 +228,18 @@ function ProposalDrawer({
             <Button variant="outline" onClick={() => save()} disabled={saving}>
               Save changes
             </Button>
-            <Button variant="outline" onClick={() => save('rejected')} disabled={saving}>
-              <X className="size-4" />
-              Reject
-            </Button>
-            <Button onClick={() => save('approved')} disabled={saving}>
-              <Check className="size-4" />
-              Accept
-            </Button>
+            {canReject && (
+              <Button variant="outline" onClick={() => save('rejected')} disabled={saving}>
+                <X className="size-4" />
+                Reject
+              </Button>
+            )}
+            {canAccept && (
+              <Button onClick={() => save('approved')} disabled={saving}>
+                <Check className="size-4" />
+                Accept
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -467,28 +480,36 @@ export function BrainstormView() {
     const selectedProposal = activeSession.proposals.find(proposal => proposal.id === selectedProposalId) ?? null
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <PluginHeader
-          title={activeSession.title}
-          count={activeSession.proposals.length}
-          actions={
-            <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" onClick={() => pushSessionId('')}>
-                <ArrowLeft className="size-3.5" data-icon="inline-start" />
-                Sessions
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="text-muted-foreground hover:text-red-400"
-                aria-label="Delete brainstorm session"
-                title="Delete brainstorm session"
-                onClick={() => setDeleteSessionId(activeSession.id)}
-              >
-                <Trash2 className="size-4" aria-hidden="true" />
-              </Button>
-            </div>
-          }
-        />
+        <div className="flex items-center gap-3">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-8 w-8 shrink-0 p-0"
+            aria-label="Back to sessions"
+            title="Back to sessions"
+            onClick={() => pushSessionId('')}
+          >
+            <ArrowLeft className="size-4" aria-hidden="true" />
+          </Button>
+          <div className="min-w-0 flex-1">
+            <PluginHeader
+              title={activeSession.title}
+              count={activeSession.proposals.length}
+              actions={
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-muted-foreground hover:text-red-400"
+                  aria-label="Delete brainstorm session"
+                  title="Delete brainstorm session"
+                  onClick={() => setDeleteSessionId(activeSession.id)}
+                >
+                  <Trash2 className="size-4" aria-hidden="true" />
+                </Button>
+              }
+            />
+          </div>
+        </div>
 
         <div className="mt-4 grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(420px,34vw)]">
           <div className="min-h-0">
@@ -545,7 +566,7 @@ export function BrainstormView() {
                           ))}
                         </div>
                       )}
-                      {!proposal.planId && (
+                      {hasInlineProposalActions(proposal) && (
                         <div className="mt-3 flex flex-wrap gap-2">
                           <Button
                             type="button"
