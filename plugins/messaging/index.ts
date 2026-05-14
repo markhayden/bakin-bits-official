@@ -3,12 +3,12 @@
  * Manages content pipeline: draft → scheduled → executing → waiting → review → published
  */
 import { z } from 'zod'
-import type { BakinPlugin, PluginContext } from '@bakin/sdk/types'
+import type { BakinPlugin, PluginContext } from '@makinbakin/sdk/types'
 import {
   brainstormThreadId,
   normalizeBrainstormActivityForStorage,
   runtimeChunkToBrainstormActivity,
-} from '@bakin/sdk/utils'
+} from '@makinbakin/sdk/utils'
 import { createMessagingStorage } from './lib/storage'
 import type { MessagingStorage } from './lib/storage'
 import type { CalendarItem, ContentStatus, ProposalStatus, MessagingSettings } from './types'

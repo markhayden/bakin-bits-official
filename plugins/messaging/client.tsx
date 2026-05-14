@@ -1,9 +1,9 @@
 /**
  * Messaging plugin — client entry point.
  */
-import { registerPlugin } from '@bakin/sdk'
-import type { NavItem } from '@bakin/sdk'
-import { useRouter } from '@bakin/sdk/hooks'
+import { registerPlugin } from '@makinbakin/sdk'
+import type { NavItem } from '@makinbakin/sdk'
+import { useRouter } from '@makinbakin/sdk/hooks'
 import { Suspense, useEffect, type ReactNode } from 'react'
 import { ContentCalendar } from './components/content-calendar'
 import { BrainstormView } from './components/brainstorm-view'

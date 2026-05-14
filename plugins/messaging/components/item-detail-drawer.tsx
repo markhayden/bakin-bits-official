@@ -2,44 +2,44 @@
 
 import { useState, useEffect } from 'react'
 import { Pencil, Trash2, MoreHorizontal, Check, X, Calendar, Clock, MessageSquare, Undo2 } from 'lucide-react'
-import { BakinDrawer } from "@bakin/sdk/components"
-import { AgentAvatar } from "@bakin/sdk/components"
-import { AgentSelect } from "@bakin/sdk/components"
-import { Badge } from "@bakin/sdk/ui"
-import { Button } from "@bakin/sdk/ui"
-import { Input } from "@bakin/sdk/ui"
-import { Textarea } from "@bakin/sdk/ui"
-import { Separator } from "@bakin/sdk/ui"
+import { BakinDrawer } from "@makinbakin/sdk/components"
+import { AgentAvatar } from "@makinbakin/sdk/components"
+import { AgentSelect } from "@makinbakin/sdk/components"
+import { Badge } from "@makinbakin/sdk/ui"
+import { Button } from "@makinbakin/sdk/ui"
+import { Input } from "@makinbakin/sdk/ui"
+import { Textarea } from "@makinbakin/sdk/ui"
+import { Separator } from "@makinbakin/sdk/ui"
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@bakin/sdk/ui"
+} from "@makinbakin/sdk/ui"
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-} from "@bakin/sdk/ui"
+} from "@makinbakin/sdk/ui"
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-} from "@bakin/sdk/ui"
+} from "@makinbakin/sdk/ui"
 import type { CalendarItem, ContentTone } from '../types'
 import { DEFAULT_CHANNEL } from '../types'
 import { TONE_LABELS, STATUS_BADGE } from '../constants'
-import { useAgent, useAgentIds } from "@bakin/sdk/hooks"
+import { useAgent, useAgentIds } from "@makinbakin/sdk/hooks"
 import { useContentTypes, getContentTypeLabel } from '../hooks/use-content-types'
 import {
   useNotificationChannels,
   getChannelLabel,
-} from "@bakin/sdk/hooks"
-import { ChannelIcon } from "@bakin/sdk/components"
+} from "@makinbakin/sdk/hooks"
+import { ChannelIcon } from "@makinbakin/sdk/components"
 
 interface Props {
   item: CalendarItem | null

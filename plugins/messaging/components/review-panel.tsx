@@ -1,27 +1,27 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { Button } from "@bakin/sdk/ui"
-import { Badge } from "@bakin/sdk/ui"
-import { Input } from "@bakin/sdk/ui"
-import { Textarea } from "@bakin/sdk/ui"
-import { Label } from "@bakin/sdk/ui"
+import { Button } from "@makinbakin/sdk/ui"
+import { Badge } from "@makinbakin/sdk/ui"
+import { Input } from "@makinbakin/sdk/ui"
+import { Textarea } from "@makinbakin/sdk/ui"
+import { Label } from "@makinbakin/sdk/ui"
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@bakin/sdk/ui"
-import { BakinDrawer } from "@bakin/sdk/components"
+} from "@makinbakin/sdk/ui"
+import { BakinDrawer } from "@makinbakin/sdk/components"
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-} from "@bakin/sdk/ui"
+} from "@makinbakin/sdk/ui"
 import { Check, CheckCircle, Loader2, X } from 'lucide-react'
-import { toast } from "@bakin/sdk/hooks"
+import { toast } from "@makinbakin/sdk/hooks"
 import { ProposalCard } from './proposal-card'
 import type { ContentTone, ProposedItem } from '../types'
 import { TONE_LABELS } from '../constants'

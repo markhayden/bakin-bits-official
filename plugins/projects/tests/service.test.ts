@@ -28,7 +28,7 @@ function clearIndex() {
 import { createProjectService, type ProjectService } from '../../../plugins/projects/lib/project-service'
 import { createProjectRepository, type ProjectRepository } from '../../../plugins/projects/lib/parser'
 import { MarkdownStorageAdapter } from '../test-helpers'
-import type { PluginContext } from '@bakin/sdk/types'
+import type { PluginContext } from '@makinbakin/sdk/types'
 
 let service: ProjectService
 let repo: ProjectRepository

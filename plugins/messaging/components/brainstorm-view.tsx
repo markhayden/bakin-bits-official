@@ -1,21 +1,21 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
-import { useSearchParams, useRouter, usePathname } from '@bakin/sdk/hooks'
-import { Button } from "@bakin/sdk/ui"
+import { useSearchParams, useRouter, usePathname } from '@makinbakin/sdk/hooks'
+import { Button } from "@makinbakin/sdk/ui"
 import { Plus } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
-} from "@bakin/sdk/ui"
-import { PluginHeader } from "@bakin/sdk/components"
-import { AgentAvatar } from "@bakin/sdk/components"
-import { AgentFilter } from "@bakin/sdk/components"
-import { useQueryState } from "@bakin/sdk/hooks"
-import { useSearch } from "@bakin/sdk/hooks"
-import { useAgentList, useAgentIds } from "@bakin/sdk/hooks"
+} from "@makinbakin/sdk/ui"
+import { PluginHeader } from "@makinbakin/sdk/components"
+import { AgentAvatar } from "@makinbakin/sdk/components"
+import { AgentFilter } from "@makinbakin/sdk/components"
+import { useQueryState } from "@makinbakin/sdk/hooks"
+import { useSearch } from "@makinbakin/sdk/hooks"
+import { useAgentList, useAgentIds } from "@makinbakin/sdk/hooks"
 import { SessionList } from './session-list'
 import { PlanningLayout } from './planning-layout'
 import { NewSessionDialog } from './new-session-dialog'

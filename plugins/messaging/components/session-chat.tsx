@@ -1,17 +1,16 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { AgentAvatar, IntegratedBrainstorm, readBrainstormSseResponse } from "@bakin/sdk/components"
-import type { BrainstormMessage } from "@bakin/sdk/components"
-import { Badge } from "@bakin/sdk/ui"
-import { useAgent } from "@bakin/sdk/hooks"
+import { AgentAvatar, IntegratedBrainstorm, readBrainstormSseResponse } from "@makinbakin/sdk/components"
+import type { BrainstormMessage } from "@makinbakin/sdk/components"
+import { Badge } from "@makinbakin/sdk/ui"
+import { useAgent } from "@makinbakin/sdk/hooks"
 import type { ProposedItem, SessionMessage } from '../types'
 
 interface Props {
   sessionId: string
   agentId: string
   initialMessages?: SessionMessage[]
-  initialProposals?: ProposedItem[]
   isCompleted?: boolean
   onProposalsReceived?: (proposals: ProposedItem[]) => void
 }

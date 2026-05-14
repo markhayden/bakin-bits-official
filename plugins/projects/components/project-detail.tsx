@@ -1,15 +1,15 @@
 'use client'
 
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { useRouter } from '@bakin/sdk/hooks'
+import { useRouter } from '@makinbakin/sdk/hooks'
 import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, ChevronDown, Search, Pencil, Trash2 } from 'lucide-react'
-import { useMainAgentId } from "@bakin/sdk/hooks"
-import { AgentSelect, IntegratedBrainstorm, readBrainstormSseResponse } from "@bakin/sdk/components"
-import type { BrainstormMessage } from "@bakin/sdk/components"
-import { Slot } from '@bakin/sdk/slots'
+import { useMainAgentId } from "@makinbakin/sdk/hooks"
+import { AgentSelect, IntegratedBrainstorm, readBrainstormSseResponse } from "@makinbakin/sdk/components"
+import type { BrainstormMessage } from "@makinbakin/sdk/components"
+import { Slot } from '@makinbakin/sdk/slots'
 import { ProjectChecklist } from './project-checklist'
 import { ProjectEditor } from './project-editor'
-import { Skeleton } from "@bakin/sdk/ui"
+import { Skeleton } from "@makinbakin/sdk/ui"
 import type { ProjectStatus } from '../types'
 
 // ---------------------------------------------------------------------------

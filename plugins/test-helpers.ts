@@ -20,7 +20,7 @@ import type {
   TaskCreateInput,
   TaskService,
   WorkflowDefinitionInput,
-} from '@bakin/sdk/types'
+} from '@makinbakin/sdk/types'
 
 export class MarkdownStorageAdapter implements StorageAdapter {
   constructor(private readonly root: string) {}

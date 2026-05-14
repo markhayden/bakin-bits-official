@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo } from 'react'
-import { AgentAvatar } from "@bakin/sdk/components"
+import { AgentAvatar } from "@makinbakin/sdk/components"
 import { Plus } from 'lucide-react'
 import type { CalendarItem } from '../types'
 import { STATUS_BADGE } from '../constants'

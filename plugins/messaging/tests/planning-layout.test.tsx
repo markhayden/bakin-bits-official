@@ -26,15 +26,8 @@ mock.module('../../../src/core/content-dir', () => ({
   }),
 }))
 
-// Mock all child components to isolate layout testing
-mock.module('../../../plugins/messaging/components/session-chat', () => ({
-  SessionChat: ({ sessionId, agentId, isCompleted }: Record<string, unknown>) => (
-    <div data-testid="session-chat" data-session={sessionId} data-agent={agentId} data-completed={String(isCompleted)}>
-      Chat
-    </div>
-  ),
-}))
-
+// Mock the review panel to keep layout assertions focused; SessionChat stays
+// real because Bun module mocks can leak into the dedicated SessionChat tests.
 mock.module('../../../plugins/messaging/components/review-panel', () => ({
   ReviewPanel: ({ sessionId, proposals }: Record<string, unknown>) => (
     <div data-testid="review-panel" data-session={sessionId}>
@@ -106,13 +99,13 @@ describe('PlanningLayout', () => {
     await waitFor(() => {
       expect(screen.getByText('Test Plan')).toBeDefined()
     })
-    expect(screen.getByTestId('avatar-basil')).toBeDefined()
+    expect(screen.getAllByTestId('avatar-basil').length).toBeGreaterThan(0)
   })
 
   it('renders both chat and review panel', async () => {
     render(<PlanningLayout sessionId="s1" />)
     await waitFor(() => {
-      expect(screen.getByTestId('session-chat')).toBeDefined()
+      expect(screen.getByTestId('session-chat-shell')).toBeDefined()
     })
     expect(screen.getByTestId('review-panel')).toBeDefined()
   })
@@ -120,9 +113,7 @@ describe('PlanningLayout', () => {
   it('passes session data to chat component', async () => {
     render(<PlanningLayout sessionId="s1" />)
     await waitFor(() => {
-      const chat = screen.getByTestId('session-chat')
-      expect(chat.getAttribute('data-session')).toBe('s1')
-      expect(chat.getAttribute('data-agent')).toBe('basil')
+      expect(screen.getByText('Plan with Basil')).toBeDefined()
     })
   })
 

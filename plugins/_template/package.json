@@ -7,10 +7,10 @@
   "peerDependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "@bakin/sdk": "^0.1.0"
+    "@makinbakin/sdk": "^0.1.0"
   },
   "peerDependenciesMeta": {
-    "@bakin/sdk": {
+    "@makinbakin/sdk": {
       "optional": true
     },
     "react": {

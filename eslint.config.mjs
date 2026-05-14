@@ -2,7 +2,7 @@
  * Workspace-wide ESLint config for bakin-bits-official.
  *
  * Each plugin is independent — there's no cross-plugin imports
- * permitted, and the only Bakin-side import target is `@bakin/sdk/*`.
+ * permitted, and the only Bakin-side import target is `@makinbakin/sdk/*`.
  * The `no-restricted-imports` rule below is the enforcement mechanism;
  * plugins that need core APIs go through SDK exports.
  */
@@ -28,7 +28,7 @@ export default tseslint.config(
         patterns: [
           {
             group: ['@/*', '@bakin/core/*', '@bakin/tasks/*', '@bakin/workflows/*', '@bakin/team/*', '@bakin/health/*', '@bakin/memory/*', '@bakin/assets/*', '@bakin/schedule/*', '@bakin/models/*'],
-            message: 'Plugins may only import from `@bakin/sdk/*`. Cross-plugin imports break under hot reload and at runtime.',
+            message: 'Plugins may only import from `@makinbakin/sdk/*`. Cross-plugin imports break under hot reload and at runtime.',
           },
         ],
       }],

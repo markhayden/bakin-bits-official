@@ -6,11 +6,11 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-} from "@bakin/sdk/ui"
-import { Button } from "@bakin/sdk/ui"
-import { Input } from "@bakin/sdk/ui"
-import { AgentAvatar } from "@bakin/sdk/components"
-import { useAgent } from "@bakin/sdk/hooks"
+} from "@makinbakin/sdk/ui"
+import { Button } from "@makinbakin/sdk/ui"
+import { Input } from "@makinbakin/sdk/ui"
+import { AgentAvatar } from "@makinbakin/sdk/components"
+import { useAgent } from "@makinbakin/sdk/hooks"
 
 interface NewSessionDialogProps {
   open: boolean

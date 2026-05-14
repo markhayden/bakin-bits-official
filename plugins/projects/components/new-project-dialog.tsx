@@ -8,7 +8,7 @@ import {
   DialogTitle,
   Button,
   Input,
-} from '@bakin/sdk/ui'
+} from '@makinbakin/sdk/ui'
 
 interface NewProjectDialogProps {
   open: boolean

@@ -1,4 +1,4 @@
-import type { StorageAdapter } from '@bakin/sdk/types'
+import type { StorageAdapter } from '@makinbakin/sdk/types'
 import type { CalendarItem } from '../types'
 
 const MESSAGING_FILE = 'messaging.json'

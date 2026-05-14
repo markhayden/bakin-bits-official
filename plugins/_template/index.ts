@@ -13,7 +13,7 @@
  *   - Don't capture closures from one activate that outlive it — each
  *     reload runs a fresh `activate` against a fresh module.
  */
-import type { BakinPlugin, PluginContext } from '@bakin/sdk/types'
+import type { BakinPlugin, PluginContext } from '@makinbakin/sdk/types'
 
 interface TemplateState {
   /** Example timer that gets cleared in onShutdown. */

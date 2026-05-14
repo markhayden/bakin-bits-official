@@ -3,12 +3,12 @@
  * Registers API routes, exec tools, and the task-link index.
  */
 import { z } from 'zod'
-import type { BakinPlugin, PluginContext, RuntimeAgent } from '@bakin/sdk/types'
+import type { BakinPlugin, PluginContext, RuntimeAgent } from '@makinbakin/sdk/types'
 import {
   brainstormThreadId,
   normalizeBrainstormActivityForStorage,
   runtimeChunkToBrainstormActivity,
-} from '@bakin/sdk/utils'
+} from '@makinbakin/sdk/utils'
 import { createProjectRepository, projectToSummary } from './lib/parser'
 import { createProjectService } from './lib/project-service'
 import type { Project, ProjectBrainstormMessage, ProjectStatus } from './types'

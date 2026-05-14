@@ -61,7 +61,8 @@ mock.module('@bakin/team/hooks/use-agent-store', () => ({
 
 mock.module('../../../plugins/messaging/hooks/use-content-types', () => ({
   useContentTypes: () => [{ id: 'post', label: 'Post' }],
-  getContentTypeLabel: (id: string) => id,
+  getContentTypeLabel: (id: string, types: Array<{ id: string; label: string }> = [{ id: 'post', label: 'Post' }]) =>
+    types.find((type) => type.id === id)?.label ?? id,
 }))
 
 mock.module('@/components/bakin-drawer', () => ({
