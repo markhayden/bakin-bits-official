@@ -8,7 +8,7 @@ shared dependencies beyond `@makinbakin/sdk`.
 ## Prerequisites
 
 - **Bun** ≥ 1.3.13 (matches Bakin core; pinned in `.bun-version`)
-- **Bakin** ≥ 1.0.0 for local install/link smoke tests
+- A matching **Bakin** build for local install/link smoke tests
 - A working **Bakin checkout** alongside this repo only for hot-reload or
   end-to-end development (clone `markhayden/bakin` as a sibling of this repo)
 

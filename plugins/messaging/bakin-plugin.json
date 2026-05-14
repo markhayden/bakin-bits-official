@@ -2,7 +2,7 @@
   "id": "messaging",
   "name": "Messaging",
   "version": "1.0.0",
-  "bakin": ">=1.0.0",
+  "bakin": ">=0.0.1",
   "description": "Content messaging with scheduling, brainstorming, and multi-agent content pipeline",
   "entry": {
     "server": "index.ts",

@@ -42,9 +42,10 @@ Install the messaging plugin into a running Bakin runtime:
 bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging
 ```
 
-Official plugins require Bakin >= 1.0.0. A normal binary install provides the
-runtime SDK host modules for `@makinbakin/sdk/*`; you do not need a local Bakin
-checkout unless you are doing hot-reload or end-to-end development.
+During the SDK cutover, install this branch with a matching Bakin cutover build.
+A normal binary install provides the runtime SDK host modules for
+`@makinbakin/sdk/*`; you do not need a local Bakin checkout unless you are doing
+hot-reload or end-to-end development.
 
 Pin to a released version with the `@<ref>` suffix:
 
