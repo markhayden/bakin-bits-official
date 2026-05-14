@@ -11,7 +11,6 @@ interface Props {
   sessionId: string
   agentId: string
   initialMessages?: SessionMessage[]
-  initialProposals?: ProposedItem[]
   isCompleted?: boolean
   onProposalsReceived?: (proposals: ProposedItem[]) => void
 }

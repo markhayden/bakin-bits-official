@@ -5,9 +5,9 @@
     "": {
       "name": "bakin-bits-official",
       "devDependencies": {
-        "@makinbakin/sdk": "file:./test-sdk",
         "@eslint/js": "^9.0.0",
         "@happy-dom/global-registrator": "^20.9.0",
+        "@makinbakin/sdk": "file:./test-sdk",
         "@testing-library/react": "^16.3.2",
         "@testing-library/user-event": "^14.6.1",
         "@types/bun": "latest",
@@ -28,7 +28,7 @@
       "name": "@bakin-bits/_template",
       "version": "0.0.0",
       "peerDependencies": {
-        "@makinbakin/sdk": "^0.1.0",
+        "@makinbakin/sdk": ">=1.0.0",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
       },
@@ -46,7 +46,7 @@
         "zod": "^4.3.0",
       },
       "peerDependencies": {
-        "@makinbakin/sdk": "^0.1.0",
+        "@makinbakin/sdk": ">=1.0.0",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
       },
@@ -65,7 +65,7 @@
         "zod": "^4.3.0",
       },
       "peerDependencies": {
-        "@makinbakin/sdk": "^0.1.0",
+        "@makinbakin/sdk": ">=1.0.0",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
       },
@@ -88,8 +88,6 @@
     "@bakin-bits/messaging": ["@bakin-bits/messaging@workspace:plugins/messaging"],
 
     "@bakin-bits/projects": ["@bakin-bits/projects@workspace:plugins/projects"],
-
-    "@makinbakin/sdk": ["@makinbakin/sdk@file:test-sdk", { "peerDependencies": { "react": "^19.0.0" } }],
 
     "@eslint-community/eslint-utils": ["@eslint-community/eslint-utils@4.9.1", "", { "dependencies": { "eslint-visitor-keys": "^3.4.3" }, "peerDependencies": { "eslint": "^6.0.0 || ^7.0.0 || >=8.0.0" } }, "sha512-phrYmNiYppR7znFEdqgfWHXR6NCkZEK7hwWDHZUjit/2/U0r6XvkDl0SYnoM51Hq7FhCGdLDT6zxCCOY1hexsQ=="],
 
@@ -120,6 +118,8 @@
     "@humanwhocodes/module-importer": ["@humanwhocodes/module-importer@1.0.1", "", {}, "sha512-bxveV4V8v5Yb4ncFTT3rPSgZBOpCkjfK0y4oVVVJwIuDVBRMDXrPyXRL988i5ap9m9bnyEEjWfm5WkBmtffLfA=="],
 
     "@humanwhocodes/retry": ["@humanwhocodes/retry@0.4.3", "", {}, "sha512-bV0Tgo9K4hfPCek+aMAn81RppFKv2ySDQeMoSZuvTASywNTnVJCArCZE2FWqpvIatKu7VMRLWlR1EazvVhDyhQ=="],
+
+    "@makinbakin/sdk": ["@makinbakin/sdk@file:test-sdk", { "peerDependencies": { "react": "^19.0.0" } }],
 
     "@testing-library/dom": ["@testing-library/dom@10.4.1", "", { "dependencies": { "@babel/code-frame": "^7.10.4", "@babel/runtime": "^7.12.5", "@types/aria-query": "^5.0.1", "aria-query": "5.3.0", "dom-accessibility-api": "^0.5.9", "lz-string": "^1.5.0", "picocolors": "1.1.1", "pretty-format": "^27.0.2" } }, "sha512-o4PXJQidqJl82ckFaXUeoAW+XysPLauYI43Abki5hABd853iMhitooc6znOnczgbTYmEP6U6/y1ZyKAIsvMKGg=="],
 
@@ -360,8 +360,6 @@
     "yocto-queue": ["yocto-queue@0.1.0", "", {}, "sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q=="],
 
     "zod": ["zod@4.3.6", "", {}, "sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg=="],
-
-    "@bakin-bits/_template/@makinbakin/sdk": ["@makinbakin/sdk@file:test-sdk", { "peerDependencies": { "react": "^19.0.0" } }],
 
     "@eslint-community/eslint-utils/eslint-visitor-keys": ["eslint-visitor-keys@3.4.3", "", {}, "sha512-wpc+LXeiyiisxPlEkUzU6svyS1frIO3Mgxj1fdy7Pm8Ygzguax2N3Fa/D/ag1WqbOprdI+uY6wMUl8/a2G+iag=="],
 

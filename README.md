@@ -42,6 +42,10 @@ Install the messaging plugin into a running Bakin runtime:
 bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging
 ```
 
+Official plugins require Bakin >= 1.0.0. A normal binary install provides the
+runtime SDK host modules for `@makinbakin/sdk/*`; you do not need a local Bakin
+checkout unless you are doing hot-reload or end-to-end development.
+
 Pin to a released version with the `@<ref>` suffix:
 
 ```sh
@@ -87,7 +91,7 @@ bakin plugins link ./plugins/_template
 Before opening a PR, run the same gates CI runs:
 
 ```sh
-bun typecheck && bun test --isolate && bun lint
+bun run typecheck && bun run test && bun run lint
 ```
 
 ## Plugin architecture notes
@@ -96,7 +100,10 @@ Official plugins should stay on the public SDK surface: `@makinbakin/sdk`,
 `@makinbakin/sdk/types`, `@makinbakin/sdk/components`, `@makinbakin/sdk/hooks`,
 `@makinbakin/sdk/ui`, and `@makinbakin/sdk/utils`. Do not import Bakin host internals
 or a specific runtime adapter from plugin source. Runtime work goes through
-`ctx.runtime`; UI primitives and brainstorm helpers come from the SDK.
+`ctx.runtime`; UI primitives and brainstorm helpers come from the SDK. The
+runtime provides these SDK modules when plugins are installed from git subpaths,
+so plugin packages should keep `@makinbakin/sdk` as an external peer instead of
+vendoring it.
 
 For durable agent chat surfaces, use stable adapter-neutral thread IDs via
 `brainstormThreadId(scope, entityId, agentId)`. Store plugin-owned messages
