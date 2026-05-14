@@ -66,10 +66,13 @@ export interface ProposedItem {
 
 export interface SessionMessage {
   id: string
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'activity'
   content: string
   timestamp: string
   proposalIds?: string[]
+  kind?: string
+  data?: unknown
+  agentId?: string
 }
 
 export interface PlanningSession {

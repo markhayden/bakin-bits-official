@@ -65,6 +65,23 @@ export interface UpdateProjectOpts {
   owner?: string
 }
 
+export interface ApplyProjectPlanOpts extends UpdateProjectOpts {
+  appendBody?: string
+  checklistItems?: string[]
+}
+
+export interface ApplyProjectPlanResult {
+  addedItems: { id: string; title: string }[]
+  progress: number
+  updated: {
+    title: boolean
+    status: boolean
+    body: boolean
+    owner: boolean
+    checklistItems: boolean
+  }
+}
+
 export interface PromoteItemOpts {
   assignee?: string
   workflowId?: string
@@ -86,6 +103,7 @@ export interface ProjectService {
   getProjectTitleForTask(boardTaskId: string): string | null
   createProject(opts: CreateProjectOpts): Promise<{ id: string; taskItems: { id: string; title: string }[] }>
   updateProject(id: string, updates: UpdateProjectOpts, agent?: string): Promise<void>
+  applyProjectPlan(id: string, updates: ApplyProjectPlanOpts, agent?: string): Promise<ApplyProjectPlanResult>
   deleteProject(id: string, agent?: string): Promise<void>
   addChecklistItem(projectId: string, title: string): Promise<{ taskItemId: string }>
   markChecklistItem(projectId: string, taskItemId: string, checked: boolean): Promise<{ progress: number }>
@@ -145,7 +163,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
         owner: opts.owner || 'main',
         tasks: taskItems,
         assets: [],
-        body: opts.body || (opts.title ? `# ${opts.title}\n` : ''),
+        body: opts.body ?? '',
         progress: 0,
       }
 
@@ -173,6 +191,71 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       repo.writeProject(project)
       ctx.activity.audit('updated', agent || project.owner, { id, ...updates })
       broadcast({ type: 'project.updated', id, title: project.title })
+    })
+  }
+
+  async function applyProjectPlan(id: string, updates: ApplyProjectPlanOpts, agent?: string): Promise<ApplyProjectPlanResult> {
+    return withProjectLock(() => {
+      if (updates.body !== undefined && updates.appendBody !== undefined) {
+        throw new Error('Provide either body or appendBody, not both')
+      }
+
+      const project = repo.readProject(id)
+      if (!project) throw new Error(`Project not found: ${id}`)
+
+      const checklistItems = (updates.checklistItems ?? [])
+        .map((title) => title.trim())
+        .filter(Boolean)
+
+      if (updates.status === 'completed') {
+        const uncheckedCount = project.tasks.filter(t => !t.checked).length + checklistItems.length
+        if (uncheckedCount > 0) throw new Error(`Cannot complete project: ${uncheckedCount} unchecked items remain`)
+      }
+
+      const addedItems: { id: string; title: string }[] = []
+      for (const title of checklistItems) {
+        const itemId = nextTaskItemId(project.tasks)
+        project.tasks.push({ id: itemId, title, checked: false })
+        addedItems.push({ id: itemId, title })
+      }
+
+      if (updates.title !== undefined) project.title = updates.title
+      if (updates.status !== undefined) project.status = updates.status
+      if (updates.owner !== undefined) project.owner = updates.owner
+      if (updates.body !== undefined) {
+        project.body = updates.body
+      } else if (updates.appendBody !== undefined) {
+        project.body = [project.body.trimEnd(), updates.appendBody.trim()].filter(Boolean).join('\n\n')
+      }
+
+      project.updated = new Date().toISOString()
+      project.progress = computeProgress(project.tasks)
+      repo.writeProject(project)
+
+      ctx.activity.audit('plan.applied', agent || project.owner, {
+        id,
+        addedItemCount: addedItems.length,
+        title: updates.title,
+        status: updates.status,
+        owner: updates.owner,
+        bodyUpdated: updates.body !== undefined || updates.appendBody !== undefined,
+      })
+      broadcast({ type: 'project.updated', id, title: project.title })
+      for (const item of addedItems) {
+        broadcast({ type: 'project.checklist_changed', projectId: id, action: 'add', taskItemId: item.id })
+      }
+
+      return {
+        addedItems,
+        progress: project.progress,
+        updated: {
+          title: updates.title !== undefined,
+          status: updates.status !== undefined,
+          body: updates.body !== undefined || updates.appendBody !== undefined,
+          owner: updates.owner !== undefined,
+          checklistItems: addedItems.length > 0,
+        },
+      }
     })
   }
 
@@ -388,6 +471,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     getProjectTitleForTask,
     createProject,
     updateProject,
+    applyProjectPlan,
     deleteProject,
     addChecklistItem,
     markChecklistItem,

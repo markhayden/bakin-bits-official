@@ -6,7 +6,7 @@
  */
 import type { StorageAdapter } from '@makinbakin/sdk/types'
 import yaml from 'js-yaml'
-import type { Project, ProjectFrontmatter, ProjectTask, ProjectAsset, ProjectSummary } from '../types'
+import type { Project, ProjectFrontmatter, ProjectTask, ProjectAsset, ProjectBrainstormMessage, ProjectSummary } from '../types'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -29,6 +29,10 @@ export function nextTaskItemId(tasks: ProjectTask[]): string {
 
 function projectPath(id: string): string {
   return `projects/${id}.md`
+}
+
+function projectBrainstormPath(id: string): string {
+  return `projects/${id}.brainstorm.json`
 }
 
 // ---------------------------------------------------------------------------
@@ -119,8 +123,11 @@ export interface ProjectRepository {
   readProject(id: string): Project | null
   readAllProjects(): Project[]
   writeProject(project: Project): void
+  readBrainstormMessages(id: string): ProjectBrainstormMessage[]
+  writeBrainstormMessages(id: string, messages: ProjectBrainstormMessage[]): void
   deleteProjectFile(id: string): boolean
   projectStoragePath(id: string): string
+  projectBrainstormStoragePath(id: string): string
   projectsGlob(): string
 }
 
@@ -149,15 +156,57 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
       storage.write(projectPath(project.id), serializeProject(project))
     },
 
+    readBrainstormMessages(id: string): ProjectBrainstormMessage[] {
+      const content = storage.read(projectBrainstormPath(id))
+      if (!content) return []
+      try {
+        const parsed = JSON.parse(content)
+        if (!Array.isArray(parsed)) return []
+        return parsed
+          .map(normalizeBrainstormMessage)
+          .filter((message): message is ProjectBrainstormMessage => message !== null)
+      } catch {
+        return []
+      }
+    },
+
+    writeBrainstormMessages(id: string, messages: ProjectBrainstormMessage[]): void {
+      storage.write(projectBrainstormPath(id), JSON.stringify(messages, null, 2))
+    },
+
     deleteProjectFile(id: string): boolean {
       const path = projectPath(id)
       if (!storage.exists(path)) return false
       storage.remove?.(path)
+      const brainstormPath = projectBrainstormPath(id)
+      if (storage.exists(brainstormPath)) storage.remove?.(brainstormPath)
       return true
     },
 
     projectStoragePath: projectPath,
+    projectBrainstormStoragePath: projectBrainstormPath,
     projectsGlob: () => storage.searchPath?.('projects/*.md') ?? 'projects/*.md',
+  }
+}
+
+function normalizeBrainstormMessage(value: unknown): ProjectBrainstormMessage | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const raw = value as Record<string, unknown>
+  const role = raw.role === 'user' || raw.role === 'assistant' || raw.role === 'activity'
+    ? raw.role
+    : null
+  const content = typeof raw.content === 'string' ? raw.content : null
+  if (!role || content === null) return null
+  const id = typeof raw.id === 'string' && raw.id ? raw.id : `msg-${Date.now().toString(36)}`
+  const timestamp = typeof raw.timestamp === 'string' && raw.timestamp ? raw.timestamp : new Date().toISOString()
+  return {
+    id,
+    role,
+    content,
+    ...(typeof raw.agentId === 'string' ? { agentId: raw.agentId } : {}),
+    ...(typeof raw.kind === 'string' ? { kind: raw.kind } : {}),
+    ...(raw.data !== undefined ? { data: raw.data } : {}),
+    timestamp,
   }
 }
 

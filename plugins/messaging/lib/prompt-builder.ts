@@ -3,7 +3,8 @@
  *
  * Builds a system prompt with agent persona, planning instructions,
  * and current plan state. Returns a proper messages array (not a
- * flattened string) so the LLM can track conversational context.
+ * flattened string). Durable conversation continuity is owned by the
+ * runtime adapter via threadId; stored messages are for UI hydration.
  *
  * Pure module — agent identity, persona markdown, and the content-type
  * taxonomy are all resolved by the caller (who has plugin context +
@@ -131,7 +132,7 @@ Rules for revisions:
 }
 
 /**
- * Build a proper messages array from session history plus a new user message.
+ * Build a proper messages array for the current turn.
  * Returns an array suitable for the OpenAI-compatible chat completions API.
  */
 export function buildMessages(
@@ -146,14 +147,6 @@ export function buildMessages(
     role: 'system',
     content: buildSystemPrompt(session.agentId, session, options),
   })
-
-  // Session history
-  for (const msg of session.messages) {
-    messages.push({
-      role: msg.role,
-      content: msg.content,
-    })
-  }
 
   // New user message
   messages.push({

@@ -33,6 +33,16 @@ export interface Project extends ProjectFrontmatter {
   progress: number    // 0-100, derived from tasks
 }
 
+export interface ProjectBrainstormMessage {
+  id: string
+  role: 'user' | 'assistant' | 'activity'
+  content: string
+  agentId?: string
+  kind?: 'runtime_status' | 'tool_call' | 'error' | string
+  data?: unknown
+  timestamp: string
+}
+
 export interface ProjectSummary {
   id: string
   title: string
