@@ -2,7 +2,7 @@
  * Planning session storage. All persistence goes through ctx.storage so the
  * plugin works the same as a built-in plugin and as an extracted plugin.
  */
-import type { StorageAdapter } from '@bakin/sdk/types'
+import type { StorageAdapter } from '@makinbakin/sdk/types'
 import { generateId } from './ids'
 import type { MessagingStorage } from './storage'
 import type {

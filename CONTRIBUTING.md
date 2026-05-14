@@ -3,7 +3,7 @@
 This repository hosts community plugins for Bakin. Each plugin lives at
 `plugins/<id>/` as a self-contained directory: manifest, source, tests,
 docs, dist (generated). Plugins are independent — there are no shared
-dependencies beyond `@bakin/sdk`.
+dependencies beyond `@makinbakin/sdk`.
 
 ## Prerequisites
 
@@ -40,7 +40,7 @@ bakin-bits-official/
    - `name`, `description`, `version`, `permissions` (declare every
      capability the plugin uses; runtime gate added in the future).
 3. **Update `package.json`.** Set the workspace name (e.g.
-   `@bakin-bits/my-plugin`), keep `@bakin/sdk` in `peerDependencies`.
+   `@bakin-bits/my-plugin`), keep `@makinbakin/sdk` in `peerDependencies`.
 4. **Implement.** `index.ts` exports a `BakinPlugin` with `activate(ctx)`
    and (recommended) `onShutdown(ctx)`. `client.tsx` calls
    `registerPlugin({ id, navItems, routes })` for plugin-owned pages.
@@ -92,7 +92,7 @@ starting point.
    - Screenshot if it touches UI
 4. Reviews focus on the four areas: hot-reload compliance, permissions
    accuracy, error handling, and SDK boundary discipline (no imports
-   from outside `@bakin/sdk/*`).
+   from outside `@makinbakin/sdk/*`).
 
 ## Releasing a plugin
 

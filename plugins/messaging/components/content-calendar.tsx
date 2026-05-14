@@ -1,9 +1,9 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { useSearchParams, useRouter, usePathname } from '@bakin/sdk/hooks'
-import { Button } from "@bakin/sdk/ui"
-import { Input } from "@bakin/sdk/ui"
+import { useSearchParams, useRouter, usePathname } from '@makinbakin/sdk/hooks'
+import { Button } from "@makinbakin/sdk/ui"
+import { Input } from "@makinbakin/sdk/ui"
 import {
   ChevronLeft,
   ChevronRight,
@@ -22,12 +22,12 @@ import {
   ImageIcon,
   MessageSquare,
 } from 'lucide-react'
-import { PluginHeader } from "@bakin/sdk/components"
-import { FacetFilter } from "@bakin/sdk/components"
-import { Skeleton } from "@bakin/sdk/ui"
-import { EmptyState } from "@bakin/sdk/components"
-import { AgentFilter } from "@bakin/sdk/components"
-import { AgentAvatar } from "@bakin/sdk/components"
+import { PluginHeader } from "@makinbakin/sdk/components"
+import { FacetFilter } from "@makinbakin/sdk/components"
+import { Skeleton } from "@makinbakin/sdk/ui"
+import { EmptyState } from "@makinbakin/sdk/components"
+import { AgentFilter } from "@makinbakin/sdk/components"
+import { AgentAvatar } from "@makinbakin/sdk/components"
 import {
   Table,
   TableHeader,
@@ -35,15 +35,15 @@ import {
   TableRow,
   TableHead,
   TableCell,
-} from "@bakin/sdk/ui"
-import { SortableHead, type SortDir } from "@bakin/sdk/components"
-import { useQueryState, useQueryArrayState } from "@bakin/sdk/hooks"
+} from "@makinbakin/sdk/ui"
+import { SortableHead, type SortDir } from "@makinbakin/sdk/components"
+import { useQueryState, useQueryArrayState } from "@makinbakin/sdk/hooks"
 import type { CalendarItem } from '../types'
 import { STATUS_BADGE } from '../constants'
-import { useAgentIds } from "@bakin/sdk/hooks"
+import { useAgentIds } from "@makinbakin/sdk/hooks"
 import { useContentTypes, getContentTypeLabel } from '../hooks/use-content-types'
-import { useNotificationChannels } from "@bakin/sdk/hooks"
-import { ChannelIcon } from "@bakin/sdk/components"
+import { useNotificationChannels } from "@makinbakin/sdk/hooks"
+import { ChannelIcon } from "@makinbakin/sdk/components"
 import { ItemDetailDrawer } from './item-detail-drawer'
 import { CalendarWeek } from './calendar-week'
 

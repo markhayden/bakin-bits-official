@@ -1,15 +1,15 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { useRouter } from '@bakin/sdk/hooks'
+import { useRouter } from '@makinbakin/sdk/hooks'
 import { Plus, ListFilter, FolderKanban } from 'lucide-react'
-import { Button } from "@bakin/sdk/ui"
-import { PluginHeader } from "@bakin/sdk/components"
-import { EmptyState } from "@bakin/sdk/components"
-import { Skeleton } from "@bakin/sdk/ui"
-import { useQueryState } from "@bakin/sdk/hooks"
-import { useSearch } from "@bakin/sdk/hooks"
-import { useDebug } from "@bakin/sdk/hooks"
+import { Button } from "@makinbakin/sdk/ui"
+import { PluginHeader } from "@makinbakin/sdk/components"
+import { EmptyState } from "@makinbakin/sdk/components"
+import { Skeleton } from "@makinbakin/sdk/ui"
+import { useQueryState } from "@makinbakin/sdk/hooks"
+import { useSearch } from "@makinbakin/sdk/hooks"
+import { useDebug } from "@makinbakin/sdk/hooks"
 import { ProjectCard } from './project-card'
 import { NewProjectDialog } from './new-project-dialog'
 import type { ProjectSummary, ProjectStatus } from '../types'

@@ -1,12 +1,12 @@
 /**
  * Temporary local SDK contract for official plugin development.
  *
- * Keep this file explicit: it mirrors the public `@bakin/sdk` symbols used by
+ * Keep this file explicit: it mirrors the public `@makinbakin/sdk` symbols used by
  * official plugins until the SDK package is installable from npm/GitHub. Do
  * not add catch-all `any` module declarations for Bakin internals.
  */
 
-declare module '@bakin/sdk/types' {
+declare module '@makinbakin/sdk/types' {
   import type { ComponentType } from 'react'
   import type { ZodRawShape } from 'zod'
 
@@ -668,10 +668,10 @@ declare module '@bakin/sdk/types' {
   }
 }
 
-declare module '@bakin/sdk' {
-  export * from '@bakin/sdk/types'
+declare module '@makinbakin/sdk' {
+  export * from '@makinbakin/sdk/types'
   import type { ComponentType } from 'react'
-  import type { NavItem } from '@bakin/sdk/types'
+  import type { NavItem } from '@makinbakin/sdk/types'
 
   export interface ClientRouteEntry {
     path: string
@@ -690,7 +690,7 @@ declare module '@bakin/sdk' {
   export function getAllNavItems(): NavItem[]
 }
 
-declare module '@bakin/sdk/ui' {
+declare module '@makinbakin/sdk/ui' {
   import type { ComponentType, ReactNode } from 'react'
   interface UIProps {
     children?: ReactNode
@@ -746,7 +746,7 @@ declare module '@bakin/sdk/ui' {
   export const Tooltip: UIComponent
 }
 
-declare module '@bakin/sdk/components' {
+declare module '@makinbakin/sdk/components' {
   import type { ComponentType, ReactNode } from 'react'
   interface SDKProps {
     children?: ReactNode
@@ -796,7 +796,7 @@ declare module '@bakin/sdk/components' {
   export const SortableHead: ComponentType<Record<string, unknown> & { children?: ReactNode }>
 }
 
-declare module '@bakin/sdk/hooks' {
+declare module '@makinbakin/sdk/hooks' {
   export interface AgentInfo {
     id: string
     name: string
@@ -848,13 +848,13 @@ declare module '@bakin/sdk/hooks' {
   export function toast(message: string, type?: 'success' | 'error' | 'info' | 'warning'): void
 }
 
-declare module '@bakin/sdk/slots' {
+declare module '@makinbakin/sdk/slots' {
   import type { ComponentType, ReactElement } from 'react'
   export function Slot(props: { name: string; [key: string]: unknown }): ReactElement | null
   export function registerSlot<TProps>(name: string, component: ComponentType<TProps>, order?: number, owner?: string): void
 }
 
-declare module '@bakin/sdk/utils' {
+declare module '@makinbakin/sdk/utils' {
   export function cn(...args: Array<string | undefined | null | false>): string
   export function formatAge(date: Date | string): string
   export function formatSize(bytes: number): string

@@ -18,7 +18,7 @@ import { tmpdir } from 'os'
 import type {
   PluginContext,
   FileBackedContentTypeDefinition,
-} from '@bakin/sdk/types'
+} from '@makinbakin/sdk/types'
 import {
   BakinEventBus,
   MarkdownStorageAdapter,

@@ -95,7 +95,7 @@ bakin-bits-official/
 ├── agents/       # installable agent packages
 ├── assets/       # shared brand assets (logo, etc.)
 ├── test/         # shared test setup (DOM globals)
-├── test-sdk/     # mock @bakin/sdk used during local tests
+├── test-sdk/     # mock @makinbakin/sdk used during local tests
 └── types/        # shared ambient TypeScript types
 ```
 

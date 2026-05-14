@@ -21,7 +21,7 @@ import type {
   RuntimeChatChunk as ChatChunk,
   RuntimeMessageArgs as MessageArgs,
   RuntimeMessageResult as MessageResult,
-} from '@bakin/sdk/types'
+} from '@makinbakin/sdk/types'
 
 // ---------------------------------------------------------------------------
 // Test directory

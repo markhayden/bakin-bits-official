@@ -5,8 +5,8 @@
  * global registry that the shell's PluginHost reads on mount. Nothing
  * exported from this file is read; the import side effect is the API.
  */
-import { registerPlugin } from '@bakin/sdk'
-import type { NavItem } from '@bakin/sdk'
+import { registerPlugin } from '@makinbakin/sdk'
+import type { NavItem } from '@makinbakin/sdk'
 import { TemplatePage } from './components/template-page'
 
 const navItems: NavItem[] = [

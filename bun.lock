@@ -5,7 +5,7 @@
     "": {
       "name": "bakin-bits-official",
       "devDependencies": {
-        "@bakin/sdk": "file:./test-sdk",
+        "@makinbakin/sdk": "file:./test-sdk",
         "@eslint/js": "^9.0.0",
         "@happy-dom/global-registrator": "^20.9.0",
         "@testing-library/react": "^16.3.2",
@@ -28,12 +28,12 @@
       "name": "@bakin-bits/_template",
       "version": "0.0.0",
       "peerDependencies": {
-        "@bakin/sdk": "^0.1.0",
+        "@makinbakin/sdk": "^0.1.0",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
       },
       "optionalPeers": [
-        "@bakin/sdk",
+        "@makinbakin/sdk",
         "react",
         "react-dom",
       ],
@@ -46,12 +46,12 @@
         "zod": "^4.3.0",
       },
       "peerDependencies": {
-        "@bakin/sdk": "^0.1.0",
+        "@makinbakin/sdk": "^0.1.0",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
       },
       "optionalPeers": [
-        "@bakin/sdk",
+        "@makinbakin/sdk",
         "react",
         "react-dom",
       ],
@@ -65,12 +65,12 @@
         "zod": "^4.3.0",
       },
       "peerDependencies": {
-        "@bakin/sdk": "^0.1.0",
+        "@makinbakin/sdk": "^0.1.0",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
       },
       "optionalPeers": [
-        "@bakin/sdk",
+        "@makinbakin/sdk",
         "react",
         "react-dom",
       ],
@@ -89,7 +89,7 @@
 
     "@bakin-bits/projects": ["@bakin-bits/projects@workspace:plugins/projects"],
 
-    "@bakin/sdk": ["@bakin/sdk@file:test-sdk", { "peerDependencies": { "react": "^19.0.0" } }],
+    "@makinbakin/sdk": ["@makinbakin/sdk@file:test-sdk", { "peerDependencies": { "react": "^19.0.0" } }],
 
     "@eslint-community/eslint-utils": ["@eslint-community/eslint-utils@4.9.1", "", { "dependencies": { "eslint-visitor-keys": "^3.4.3" }, "peerDependencies": { "eslint": "^6.0.0 || ^7.0.0 || >=8.0.0" } }, "sha512-phrYmNiYppR7znFEdqgfWHXR6NCkZEK7hwWDHZUjit/2/U0r6XvkDl0SYnoM51Hq7FhCGdLDT6zxCCOY1hexsQ=="],
 
@@ -361,7 +361,7 @@
 
     "zod": ["zod@4.3.6", "", {}, "sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg=="],
 
-    "@bakin-bits/_template/@bakin/sdk": ["@bakin/sdk@file:test-sdk", { "peerDependencies": { "react": "^19.0.0" } }],
+    "@bakin-bits/_template/@makinbakin/sdk": ["@makinbakin/sdk@file:test-sdk", { "peerDependencies": { "react": "^19.0.0" } }],
 
     "@eslint-community/eslint-utils/eslint-visitor-keys": ["eslint-visitor-keys@3.4.3", "", {}, "sha512-wpc+LXeiyiisxPlEkUzU6svyS1frIO3Mgxj1fdy7Pm8Ygzguax2N3Fa/D/ag1WqbOprdI+uY6wMUl8/a2G+iag=="],
 

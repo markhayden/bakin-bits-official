@@ -294,7 +294,7 @@ describe('ContentCalendar (local substring filter)', () => {
   it('does not import useSearch — calendar filter is local-only', () => {
     // Per spec §5.1d, the calendar is intentionally NOT search-backed.
     // Read the source file and assert no useSearch import / hook usage exists.
-    // (useSearchParams from @bakin/sdk/hooks is fine — it's URL state, not
+    // (useSearchParams from @makinbakin/sdk/hooks is fine — it's URL state, not
     // the Bakin search hook — so only `@/hooks/use-search` is forbidden.)
     const source = readFileSync(
       join(__dirname, '../../../plugins/messaging/components/content-calendar.tsx'),
