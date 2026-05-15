@@ -3,19 +3,19 @@
 /**
  * Calendar local filter smoke tests.
  *
- * Per spec §5.1d, the content calendar is intentionally NOT backed by
- * search — only brainstorm sessions are. C14 wired a plain client-side
- * substring filter over `title | brief | draft.caption | draft.agentNotes`
- * (case-insensitive). These tests verify the filter, the empty-state
- * behavior, and assert that this component does NOT import useSearch.
+ * The content calendar reads Deliverables directly and keeps filtering local:
+ * title | brief | draft.caption | draft.agentNotes, plus URL-backed facets.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
-import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { readFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
+import type { Deliverable } from '../../../plugins/messaging/types'
+import { __resetContentTypesCache } from '../../../plugins/messaging/hooks/use-content-types'
 
 const testDir = join(tmpdir(), `bakin-test-messaging-calfilter-${Date.now()}`)
+const originalEventSource = globalThis.EventSource
 
 mock.module('@bakin/core/main-agent', () => ({
   getMainAgentId: () => 'main',
@@ -29,12 +29,7 @@ mock.module('@/core/content-dir', () => ({
 }))
 
 mock.module('@/core/logger', () => ({
-  createLogger: () => ({
-    info: mock(),
-    warn: mock(),
-    error: mock(),
-    debug: mock(),
-  }),
+  createLogger: () => ({ info: mock(), warn: mock(), error: mock(), debug: mock() }),
 }))
 
 mock.module('@/core/watcher', () => ({
@@ -42,9 +37,43 @@ mock.module('@/core/watcher', () => ({
   registerUnlinkHook: mock(),
 }))
 
-// ---------------------------------------------------------------------------
-// useQueryState — back with React.useState so updates are reactive
-// ---------------------------------------------------------------------------
+mock.module('@makinbakin/sdk/components', () => ({
+  AgentAvatar: ({ agentId }: { agentId: string }) => <span data-testid={`avatar-${agentId}`}>{agentId}</span>,
+  AgentFilter: ({ agentIds }: { agentIds: string[] }) => (
+    <div data-testid="agent-filter">
+      {agentIds.map((agentId) => (
+        <span key={agentId} data-testid={`agent-option-${agentId}`}>
+          {agentId}
+        </span>
+      ))}
+    </div>
+  ),
+  AgentSelect: () => <select />,
+  BakinDrawer: ({ children, open }: { children: React.ReactNode; open: boolean }) =>
+    open ? <div>{children}</div> : null,
+  ChannelIcon: ({ channelId }: { channelId: string }) => <span data-testid={`channel-icon-${channelId}`} />,
+  EmptyState: ({ title }: { title: string }) => <div>{title}</div>,
+  FacetFilter: ({ label, options }: {
+    label: string
+    options: Array<{ value: string; label: string }>
+  }) => (
+    <div data-testid={`facet-${label}`}>
+      {options.map((option) => (
+        <span key={option.value} data-testid={`facet-option-${label}-${option.value}`}>
+          {option.label}
+        </span>
+      ))}
+    </div>
+  ),
+  PluginHeader: ({ title, count, actions }: Record<string, unknown>) => (
+    <div data-testid="plugin-header">
+      <h1>{title as string}</h1>
+      <span data-testid="header-count">{String(count ?? '')}</span>
+      <div>{actions as React.ReactNode}</div>
+    </div>
+  ),
+}))
+
 mock.module('@/hooks/use-query-state', () => {
   const { useState } = require('react') as typeof import('react')
   return {
@@ -59,9 +88,6 @@ mock.module('@/hooks/use-query-state', () => {
   }
 })
 
-// ---------------------------------------------------------------------------
-// Heavy / unrelated children
-// ---------------------------------------------------------------------------
 mock.module('@/components/plugin-header', () => ({
   PluginHeader: ({ title, count, actions }: Record<string, unknown>) => (
     <div data-testid="plugin-header">
@@ -76,14 +102,20 @@ mock.module('@/components/facet-filter', () => ({
   FacetFilter: () => null,
 }))
 
+mock.module('@/components/agent-filter', () => ({
+  AgentFilter: () => null,
+}))
+
+mock.module('@/components/empty-state', () => ({
+  EmptyState: ({ title }: { title: string }) => <div>{title}</div>,
+}))
+
 mock.module('@/components/agent-avatar', () => ({
   AgentAvatar: ({ agentId }: { agentId: string }) => <span data-testid={`avatar-${agentId}`} />,
 }))
 
-mock.module('@/components/ui/button', () => ({
-  Button: ({ children, onClick }: Record<string, unknown>) => (
-    <button onClick={onClick as () => void}>{children as React.ReactNode}</button>
-  ),
+mock.module('@bakin/workflows/hooks/channel-icon', () => ({
+  ChannelIcon: ({ channelId }: { channelId: string }) => <span data-testid={`channel-icon-${channelId}`} />,
 }))
 
 mock.module('@/components/ui/input', () => ({
@@ -97,25 +129,16 @@ mock.module('@/components/ui/input', () => ({
   ),
 }))
 
-// Stub every lucide icon with a noop span. List all names imported by
-// content-calendar so destructured imports resolve.
-// CalendarWeek — emit one row per item we receive so we can assert on
-// what survives the filter.
-mock.module('../../../plugins/messaging/components/calendar-week', () => ({
-  CalendarWeek: ({ items }: { items: Array<{ id: string; title: string }> }) => (
-    <div data-testid="calendar-week">
-      {items.map(it => (
-        <div key={it.id} data-testid={`week-item-${it.id}`}>{it.title}</div>
-      ))}
-    </div>
+mock.module('@/components/ui/badge', () => ({
+  Badge: ({ children, ...props }: Record<string, unknown>) => (
+    <span data-testid="badge" {...props}>{children as React.ReactNode}</span>
   ),
 }))
 
-mock.module('../../../plugins/messaging/components/item-detail-drawer', () => ({
-  ItemDetailDrawer: () => null,
+mock.module('@/components/ui/skeleton', () => ({
+  Skeleton: () => <div data-testid="skeleton" />,
 }))
 
-// EventSource shim (jsdom doesn't ship one)
 class FakeEventSource {
   url: string
   onmessage: ((ev: MessageEvent) => void) | null = null
@@ -127,61 +150,108 @@ class FakeEventSource {
 }
 ;(globalThis as unknown as { EventSource: typeof FakeEventSource }).EventSource = FakeEventSource
 
-// ---------------------------------------------------------------------------
-// Real component under test
-// ---------------------------------------------------------------------------
 import { ContentCalendar } from '../../../plugins/messaging/components/content-calendar'
 
-const ITEMS = [
+const DELIVERABLES: Deliverable[] = [
   {
     id: 'a',
-    title: 'Spring Smoothie',
-    agent: 'basil',
-    channels: ['general'],
-    contentType: 'recipe',
+    planId: 'plan-1',
+    channel: 'general',
+    contentType: 'blog',
     tone: 'energetic',
-    scheduledAt: '2026-04-15T10:00:00Z',
+    agent: 'basil',
+    title: 'Spring Smoothie',
     brief: 'Refreshing morning drink',
-    status: 'draft',
+    publishAt: '2026-04-15T10:00:00Z',
+    prepStartAt: '2026-04-12T10:00:00Z',
+    status: 'planned',
+    taskId: 'task-a',
+    draft: { caption: 'Try this!', agentNotes: 'Use mango' },
     createdAt: '2026-04-01T00:00:00Z',
     updatedAt: '2026-04-01T00:00:00Z',
-    draft: { caption: 'Try this!', agentNotes: 'Use mango' },
   },
   {
     id: 'b',
-    title: 'Trail Run Tips',
-    agent: 'scout',
-    channels: ['general'],
-    contentType: 'tip',
+    planId: 'plan-2',
+    channel: 'general',
+    contentType: 'x-post',
     tone: 'energetic',
-    scheduledAt: '2026-04-16T10:00:00Z',
+    agent: 'scout',
+    title: 'Trail Run Tips',
     brief: 'Outdoor running advice',
-    status: 'draft',
+    publishAt: '2026-04-16T10:00:00Z',
+    prepStartAt: '2026-04-16T06:00:00Z',
+    status: 'approved',
+    taskId: 'task-b',
+    draft: { caption: 'Hit the trails', agentNotes: 'mention shoes' },
     createdAt: '2026-04-01T00:00:00Z',
     updatedAt: '2026-04-01T00:00:00Z',
-    draft: { caption: 'Hit the trails', agentNotes: 'mention shoes' },
   },
   {
     id: 'c',
-    title: 'Mindful Breathing',
-    agent: 'zen',
-    channels: ['general'],
-    contentType: 'motivation',
+    planId: null,
+    channel: 'announcements',
+    contentType: 'newsletter',
     tone: 'calm',
-    scheduledAt: '2026-04-17T10:00:00Z',
+    agent: 'zen',
+    title: 'Mindful Breathing',
     brief: 'Box breathing intro',
-    status: 'draft',
+    publishAt: '2026-04-17T10:00:00Z',
+    prepStartAt: '2026-04-17T09:00:00Z',
+    status: 'planned',
+    draft: {},
+    createdAt: '2026-04-01T00:00:00Z',
+    updatedAt: '2026-04-01T00:00:00Z',
+  },
+  {
+    id: 'invalid-plan-owned',
+    planId: 'plan-bad',
+    channel: 'instagram',
+    contentType: 'image-social-post',
+    tone: 'calm',
+    agent: 'scout',
+    title: 'Invalid plan duplicate',
+    brief: 'This leaked before activation and should not show on the calendar.',
+    publishAt: '2026-04-18T10:00:00Z',
+    prepStartAt: '2026-04-17T09:00:00Z',
+    status: 'planned',
+    draft: {},
+    createdAt: '2026-04-01T00:00:00Z',
+    updatedAt: '2026-04-01T00:00:00Z',
+  },
+  {
+    id: 'proposal',
+    planId: null,
+    channel: 'reddit',
+    contentType: 'text-social-post',
+    tone: 'calm',
+    agent: 'scout',
+    title: 'Proposal only',
+    brief: 'Proposals are not scheduled calendar work.',
+    publishAt: '2026-04-19T10:00:00Z',
+    prepStartAt: '2026-04-18T09:00:00Z',
+    status: 'proposed',
+    draft: {},
     createdAt: '2026-04-01T00:00:00Z',
     updatedAt: '2026-04-01T00:00:00Z',
   },
 ]
 
-function mockFetchItems() {
+function mockFetchDeliverables() {
   globalThis.fetch = mock().mockImplementation((url: string) => {
-    if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/?month=')) {
+    if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/deliverables')) {
       return Promise.resolve({
         ok: true,
-        json: () => Promise.resolve({ items: ITEMS }),
+        json: () => Promise.resolve({ deliverables: DELIVERABLES }),
+      })
+    }
+    if (typeof url === 'string' && url.startsWith('/api/plugin-settings/messaging')) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ contentTypes: [
+          { id: 'blog', label: 'Blog post' },
+          { id: 'x-post', label: 'X post' },
+        ] }),
       })
     }
     return Promise.resolve({ ok: true, json: () => Promise.resolve({}) })
@@ -189,20 +259,25 @@ function mockFetchItems() {
 }
 
 beforeEach(() => {
-  mockFetchItems()
+  __resetContentTypesCache()
+  mockFetchDeliverables()
 })
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  __resetContentTypesCache()
+})
 
 afterAll(() => {
   rmSync(testDir, { recursive: true, force: true })
+  if (originalEventSource) {
+    globalThis.EventSource = originalEventSource
+  } else {
+    delete (globalThis as Partial<typeof globalThis>).EventSource
+  }
 })
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-describe('ContentCalendar (local substring filter)', () => {
+describe('ContentCalendar (Deliverable local filter)', () => {
   it('renders without crashing', async () => {
     render(<ContentCalendar />)
     await waitFor(() => {
@@ -210,13 +285,15 @@ describe('ContentCalendar (local substring filter)', () => {
     })
   })
 
-  it('shows all items when search query is empty', async () => {
+  it('shows only calendar-visible Deliverables when search query is empty', async () => {
     render(<ContentCalendar />)
     await waitFor(() => {
-      expect(screen.getByTestId('week-item-a')).toBeDefined()
+      expect(screen.getByTestId('calendar-deliverable-a')).toBeDefined()
     })
-    expect(screen.getByTestId('week-item-b')).toBeDefined()
-    expect(screen.getByTestId('week-item-c')).toBeDefined()
+    expect(screen.getByTestId('calendar-deliverable-b')).toBeDefined()
+    expect(screen.getByTestId('calendar-deliverable-c')).toBeDefined()
+    expect(screen.queryByTestId('calendar-deliverable-invalid-plan-owned')).toBeNull()
+    expect(screen.queryByTestId('calendar-deliverable-proposal')).toBeNull()
   })
 
   it('exposes the "Search calendar..." placeholder on the input', async () => {
@@ -224,78 +301,81 @@ describe('ContentCalendar (local substring filter)', () => {
     await waitFor(() => {
       expect(screen.getByPlaceholderText('Search calendar...')).toBeDefined()
     })
-    expect((screen.getByPlaceholderText('Search calendar...') as HTMLInputElement).placeholder).toBe(
-      'Search calendar...',
-    )
   })
 
-  it('filters by title substring (case-insensitive)', async () => {
+  it('includes orphan Deliverable references in filter options', async () => {
     render(<ContentCalendar />)
     await waitFor(() => {
-      expect(screen.getByTestId('week-item-a')).toBeDefined()
+      expect(screen.getByTestId('calendar-deliverable-c')).toBeDefined()
+    })
+
+    expect(screen.getByTestId('agent-option-zen')).toBeDefined()
+    expect(screen.getByTestId('facet-option-Type-newsletter').textContent).toBe('newsletter')
+    expect(screen.getByTestId('calendar-deliverable-c').textContent).toContain('newsletter')
+  })
+
+  it('filters by title substring case-insensitively', async () => {
+    render(<ContentCalendar />)
+    await waitFor(() => {
+      expect(screen.getByTestId('calendar-deliverable-a')).toBeDefined()
     })
     fireEvent.change(screen.getByPlaceholderText('Search calendar...'), { target: { value: 'SMOOTHIE' } })
     await waitFor(() => {
-      expect(screen.queryByTestId('week-item-b')).toBeNull()
+      expect(screen.queryByTestId('calendar-deliverable-b')).toBeNull()
     })
-    expect(screen.getByTestId('week-item-a')).toBeDefined()
-    expect(screen.queryByTestId('week-item-c')).toBeNull()
+    expect(screen.getByTestId('calendar-deliverable-a')).toBeDefined()
+    expect(screen.queryByTestId('calendar-deliverable-c')).toBeNull()
   })
 
   it('filters by brief substring', async () => {
     render(<ContentCalendar />)
     await waitFor(() => {
-      expect(screen.getByTestId('week-item-b')).toBeDefined()
+      expect(screen.getByTestId('calendar-deliverable-b')).toBeDefined()
     })
     fireEvent.change(screen.getByPlaceholderText('Search calendar...'), { target: { value: 'breathing' } })
     await waitFor(() => {
-      expect(screen.queryByTestId('week-item-a')).toBeNull()
+      expect(screen.queryByTestId('calendar-deliverable-a')).toBeNull()
     })
-    expect(screen.getByTestId('week-item-c')).toBeDefined()
+    expect(screen.getByTestId('calendar-deliverable-c')).toBeDefined()
   })
 
   it('filters by draft.caption substring', async () => {
     render(<ContentCalendar />)
     await waitFor(() => {
-      expect(screen.getByTestId('week-item-a')).toBeDefined()
+      expect(screen.getByTestId('calendar-deliverable-a')).toBeDefined()
     })
     fireEvent.change(screen.getByPlaceholderText('Search calendar...'), { target: { value: 'hit the trails' } })
     await waitFor(() => {
-      expect(screen.queryByTestId('week-item-a')).toBeNull()
+      expect(screen.queryByTestId('calendar-deliverable-a')).toBeNull()
     })
-    expect(screen.getByTestId('week-item-b')).toBeDefined()
+    expect(screen.getByTestId('calendar-deliverable-b')).toBeDefined()
   })
 
   it('filters by draft.agentNotes substring', async () => {
     render(<ContentCalendar />)
     await waitFor(() => {
-      expect(screen.getByTestId('week-item-a')).toBeDefined()
+      expect(screen.getByTestId('calendar-deliverable-a')).toBeDefined()
     })
     fireEvent.change(screen.getByPlaceholderText('Search calendar...'), { target: { value: 'mango' } })
     await waitFor(() => {
-      expect(screen.queryByTestId('week-item-b')).toBeNull()
+      expect(screen.queryByTestId('calendar-deliverable-b')).toBeNull()
     })
-    expect(screen.getByTestId('week-item-a')).toBeDefined()
+    expect(screen.getByTestId('calendar-deliverable-a')).toBeDefined()
   })
 
-  it('renders zero items when the query matches nothing', async () => {
+  it('renders zero Deliverables when the query matches nothing', async () => {
     render(<ContentCalendar />)
     await waitFor(() => {
-      expect(screen.getByTestId('week-item-a')).toBeDefined()
+      expect(screen.getByTestId('calendar-deliverable-a')).toBeDefined()
     })
     fireEvent.change(screen.getByPlaceholderText('Search calendar...'), { target: { value: 'nothing-matches-xyz' } })
     await waitFor(() => {
-      expect(screen.queryByTestId('week-item-a')).toBeNull()
+      expect(screen.queryByTestId('calendar-deliverable-a')).toBeNull()
     })
-    expect(screen.queryByTestId('week-item-b')).toBeNull()
-    expect(screen.queryByTestId('week-item-c')).toBeNull()
+    expect(screen.getByText('No deliverables match filters')).toBeDefined()
   })
 
-  it('does not import useSearch — calendar filter is local-only', () => {
-    // Per spec §5.1d, the calendar is intentionally NOT search-backed.
-    // Read the source file and assert no useSearch import / hook usage exists.
-    // (useSearchParams from @makinbakin/sdk/hooks is fine — it's URL state, not
-    // the Bakin search hook — so only `@/hooks/use-search` is forbidden.)
+  it('does not import useSearch', () => {
     const source = readFileSync(
       join(__dirname, '../../../plugins/messaging/components/content-calendar.tsx'),
       'utf-8',

@@ -55,9 +55,8 @@ mock.module('../../../src/core/audit', () => ({
 
 ;(globalThis as any).__bakinBroadcast = mock()
 
-// Dynamic require — ES imports are hoisted above mock.module registrations, so
-// plugins/messaging/lib/storage.ts would evaluate getContentDir before the mock
-// takes effect. Using require() defers the load until after mocks are set.
+// Dynamic require — ES imports are hoisted above mock.module registrations.
+// Using require() defers the plugin load until after mocks are set.
 const messagingPlugin = require('../../../plugins/messaging/index').default as typeof import('../../../plugins/messaging/index').default
 const { DEFAULT_CONTENT_TYPES } = require('../../../plugins/messaging/types') as typeof import('../../../plugins/messaging/types')
 import type messagingPluginType from '../../../plugins/messaging/index'
@@ -77,9 +76,37 @@ describe('messaging plugin — activate', () => {
     mock.clearAllMocks()
   })
 
-  it('seeds DEFAULT_CONTENT_TYPES on first activate when settings lack contentTypes', async () => {
+  it('seeds normalized default content types on first activate when settings lack contentTypes', async () => {
     const { ctx } = createTestContext('messaging', testDir)
     // Default getSettings mock returns {} — no contentTypes present.
+    const updateSpy = mock()
+    ctx.updateSettings = updateSpy
+
+    await messagingPlugin.activate(ctx)
+
+    expect(updateSpy).toHaveBeenCalledWith({ contentTypes: DEFAULT_CONTENT_TYPES })
+  })
+
+  it('keeps default workflowIds when workflow definitions are loadable', async () => {
+    const { ctx } = createTestContext('messaging', testDir)
+    ctx.hooks.has = mock((name: string) => [
+      'workflows.loadDefinition',
+      'workflows.approveGate',
+      'workflows.rejectGate',
+    ].includes(name)) as typeof ctx.hooks.has
+    ctx.hooks.invoke = mock(async () => ({ id: 'workflow' })) as typeof ctx.hooks.invoke
+    const updateSpy = mock()
+    ctx.updateSettings = updateSpy
+
+    await messagingPlugin.activate(ctx)
+
+    expect(updateSpy).toHaveBeenCalledWith({ contentTypes: DEFAULT_CONTENT_TYPES })
+  })
+
+  it('keeps default workflowIds when gate hooks are unavailable', async () => {
+    const { ctx } = createTestContext('messaging', testDir)
+    ctx.hooks.has = mock((name: string) => name === 'workflows.loadDefinition') as typeof ctx.hooks.has
+    ctx.hooks.invoke = mock(async () => ({ id: 'workflow' })) as typeof ctx.hooks.invoke
     const updateSpy = mock()
     ctx.updateSettings = updateSpy
 
@@ -115,5 +142,44 @@ describe('messaging plugin — activate', () => {
     await messagingPlugin.activate(ctx)
 
     expect(updateSpy).toHaveBeenCalledWith({ contentTypes: DEFAULT_CONTENT_TYPES })
+  })
+
+  it('does not register a sweep hook or cron job on activate', async () => {
+    const { ctx } = createTestContext('messaging', testDir)
+
+    await messagingPlugin.activate(ctx)
+
+    const registerCalls = (ctx.hooks.register as unknown as { mock: { calls: Array<[string]> } }).mock.calls
+    expect(registerCalls.map(([name]) => name).some((name) => name.includes('sweep'))).toBe(false)
+    expect(ctx.runtime.cron.create).not.toHaveBeenCalled()
+  })
+
+  it('does not call Schedule even when Schedule hooks are available', async () => {
+    const { ctx } = createTestContext('messaging', testDir)
+    ctx.hooks.has = mock((name: string) => name === 'schedule.ensureBakinJob') as typeof ctx.hooks.has
+    ctx.hooks.invoke = mock(async () => ({ ok: true })) as typeof ctx.hooks.invoke
+
+    await messagingPlugin.activate(ctx)
+
+    expect(ctx.hooks.invoke).not.toHaveBeenCalledWith('schedule.ensureBakinJob', expect.anything())
+    expect(ctx.runtime.cron.create).not.toHaveBeenCalled()
+  })
+
+  it('registers and cleans up workflow bridge event listeners', async () => {
+    const { ctx } = createTestContext('messaging', testDir)
+    const offGateReached = mock()
+    const offComplete = mock()
+    ctx.hooks.has = mock((name: string) => ['workflows.approveGate', 'workflows.rejectGate'].includes(name)) as typeof ctx.hooks.has
+    ctx.events.on = mock((event: string) => event === 'workflow.gate_reached' ? offGateReached : offComplete) as typeof ctx.events.on
+
+    await messagingPlugin.activate(ctx)
+
+    expect(ctx.events.on).toHaveBeenCalledWith('workflow.gate_reached', expect.any(Function))
+    expect(ctx.events.on).toHaveBeenCalledWith('workflow.complete', expect.any(Function))
+
+    ;(messagingPlugin as typeof messagingPluginType).onShutdown?.()
+
+    expect(offGateReached).toHaveBeenCalled()
+    expect(offComplete).toHaveBeenCalled()
   })
 })

@@ -18,3 +18,6 @@ coverage/
 
 # logs
 *.log
+
+# local agent settings
+.claude/settings.local.json

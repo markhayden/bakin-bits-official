@@ -9,59 +9,74 @@
 //   - ContentChannel is an opaque runtime channel id
 //   - ContentType    resolves against MessagingSettings.contentTypes
 // ---------------------------------------------------------------------------
+import { z } from 'zod'
+
 export type ContentAgent = string
 export type ContentChannel = string
 export type ContentType = string
 export type ContentTone = 'energetic' | 'calm' | 'educational' | 'humorous' | 'inspiring' | 'conversational'
-export type ContentStatus = 'draft' | 'scheduled' | 'executing' | 'waiting' | 'review' | 'published' | 'failed'
+export type AgentMutationPolicy = 'blocked' | 'allowed'
 
-export interface CalendarItem {
-  id: string
-  createdAt: string
-  updatedAt: string
-  scheduledAt: string
-  agent: ContentAgent
-  contentType: ContentType
-  title: string
-  brief: string
-  tone: ContentTone
-  status: ContentStatus
-  channels: ContentChannel[]
-  draft?: {
-    caption: string
-    imagePrompt?: string
-    videoPrompt?: string
-    imageFilename?: string
-    videoFilename?: string
-    agentNotes?: string
-  }
-  publishedAt?: string
-  publishedMessageId?: string
-  taskId?: string
-  rejectionNote?: string
-  sessionId?: string
-}
+export type AssetRequirement = 'none' | 'optional-image' | 'image' | 'optional-video' | 'video'
+export type PlanStatus =
+  | 'needs_review'
+  | 'planning'
+  | 'in_prep'
+  | 'in_review'
+  | 'scheduled'
+  | 'overdue'
+  | 'partially_published'
+  | 'done'
+  | 'cancelled'
+  | 'failed'
+export type DeliverableStatus =
+  | 'proposed'
+  | 'planned'
+  | 'in_prep'
+  | 'in_review'
+  | 'changes_requested'
+  | 'approved'
+  | 'published'
+  | 'overdue'
+  | 'cancelled'
+  | 'failed'
+export type DeliverableFailureStage =
+  | 'workflow_handoff'
+  | 'validation'
+  | 'delivery'
+  | 'workflow'
 
 // ---------------------------------------------------------------------------
-// Planning Sessions
+// Content planning domain
 // ---------------------------------------------------------------------------
 
 export type ProposalStatus = 'proposed' | 'approved' | 'rejected' | 'revised'
 
-export interface ProposedItem {
+export interface PlanProposal {
   id: string
   messageId: string
   revision: number
   agentId: string
   title: string
-  scheduledAt: string
-  contentType: string
-  tone: string
+  targetDate: string
   brief: string
-  channels?: ContentChannel[]
+  suggestedChannels?: ContentChannel[]
   status: ProposalStatus
-  calendarItemId?: string
+  planId?: string
   rejectionNote?: string
+}
+
+export interface PlanChannel {
+  id: string
+  channel: ContentChannel
+  contentType: ContentType
+  publishAt: string
+  prepStartAt?: string
+  workflowId?: string
+  agent?: ContentAgent
+  tone?: ContentTone
+  title?: string
+  brief?: string
 }
 
 export interface SessionMessage {
@@ -75,16 +90,69 @@ export interface SessionMessage {
   agentId?: string
 }
 
-export interface PlanningSession {
+export interface BrainstormSession {
   id: string
   agentId: string
   title: string
-  status: 'active' | 'completed'
+  scope?: string
+  status: 'active' | 'archived'
+  createdAtPlanIds: string[]
   createdAt: string
   updatedAt: string
   messages: SessionMessage[]
-  proposals: ProposedItem[]
-  participants?: string[]
+  proposals: PlanProposal[]
+}
+
+export interface Plan {
+  id: string
+  title: string
+  brief: string
+  targetDate: string
+  agent: ContentAgent
+  status: PlanStatus
+  sourceSessionId?: string
+  campaign?: string
+  channels?: PlanChannel[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DeliverableDraft {
+  caption?: string | null
+  imagePrompt?: string | null
+  videoPrompt?: string | null
+  imageFilename?: string | null
+  videoFilename?: string | null
+  agentNotes?: string | null
+}
+
+export interface Deliverable {
+  id: string
+  planId: string | null
+  planChannelId?: string
+  channel: ContentChannel
+  contentType: ContentType
+  tone: ContentTone
+  agent: ContentAgent
+  title: string
+  brief: string
+  publishAt: string
+  prepStartAt: string
+  prepStartAtOverride?: string
+  status: DeliverableStatus
+  taskId?: string
+  workflowInstanceId?: string
+  pendingGateStepId?: string
+  draft: DeliverableDraft
+  rejectionNote?: string
+  failureReason?: string
+  failureStage?: DeliverableFailureStage
+  failedStep?: string
+  failedAt?: string
+  publishedAt?: string
+  publishedDeliveryRef?: string
+  createdAt: string
+  updatedAt: string
 }
 
 export const DEFAULT_CHANNEL = 'general'
@@ -96,6 +164,11 @@ export const DEFAULT_CHANNEL = 'general'
 export interface ContentTypeOption {
   id: string
   label: string
+  prepLeadHours?: number
+  workflowId?: string
+  requiresApproval?: boolean
+  defaultAgent?: string
+  assetRequirement?: AssetRequirement
 }
 
 export interface MessagingSettings {
@@ -103,6 +176,8 @@ export interface MessagingSettings {
   showScheduleJobs?: boolean
   channels?: string
   contentTypes?: ContentTypeOption[]
+  agentPlanActivationPolicy?: AgentMutationPolicy
+  agentDeliverableApprovalPolicy?: AgentMutationPolicy
 }
 
 /**
@@ -110,9 +185,139 @@ export interface MessagingSettings {
  * broad — users customize in settings. Do not ship brand-specific values here.
  */
 export const DEFAULT_CONTENT_TYPES: ContentTypeOption[] = [
-  { id: 'post',         label: 'Post' },
-  { id: 'article',      label: 'Article' },
-  { id: 'video',        label: 'Video' },
-  { id: 'image',        label: 'Image' },
-  { id: 'announcement', label: 'Announcement' },
+  { id: 'blog',         label: 'Blog post',    prepLeadHours: 72,  workflowId: 'messaging-blog-prep',       requiresApproval: true,  assetRequirement: 'optional-image' },
+  { id: 'video',        label: 'Video',        prepLeadHours: 168, workflowId: 'messaging-video-prep',      requiresApproval: true,  assetRequirement: 'video' },
+  { id: 'x-post',       label: 'X post',       prepLeadHours: 4,                                           requiresApproval: true,  assetRequirement: 'optional-image' },
+  { id: 'image',        label: 'Image post',   prepLeadHours: 24,  workflowId: 'messaging-image-post-prep', requiresApproval: true,  assetRequirement: 'image' },
+  { id: 'announcement', label: 'Announcement', prepLeadHours: 1,                                           requiresApproval: false, assetRequirement: 'none' },
 ]
+
+export const ContentToneSchema = z.enum(['energetic', 'calm', 'educational', 'humorous', 'inspiring', 'conversational'])
+export const AgentMutationPolicySchema = z.enum(['blocked', 'allowed'])
+export const ProposalStatusSchema = z.enum(['proposed', 'approved', 'rejected', 'revised'])
+export const DeliverableFailureStageSchema = z.enum(['workflow_handoff', 'validation', 'delivery', 'workflow'])
+export const AssetRequirementSchema = z.enum(['none', 'optional-image', 'image', 'optional-video', 'video'])
+export const PlanStatusSchema = z.enum(['needs_review', 'planning', 'in_prep', 'in_review', 'scheduled', 'overdue', 'partially_published', 'done', 'cancelled', 'failed'])
+export const DeliverableStatusSchema = z.enum(['proposed', 'planned', 'in_prep', 'in_review', 'changes_requested', 'approved', 'published', 'overdue', 'cancelled', 'failed'])
+
+export const SessionMessageSchema = z.object({
+  id: z.string().min(1),
+  role: z.enum(['user', 'assistant', 'activity']),
+  content: z.string(),
+  timestamp: z.string().min(1),
+  proposalIds: z.array(z.string()).optional(),
+  kind: z.string().optional(),
+  data: z.unknown().optional(),
+  agentId: z.string().optional(),
+})
+
+export const PlanProposalSchema = z.object({
+  id: z.string().min(1),
+  messageId: z.string().min(1),
+  revision: z.number().int().positive(),
+  agentId: z.string().min(1),
+  title: z.string().min(1),
+  targetDate: z.string().min(1),
+  brief: z.string(),
+  suggestedChannels: z.array(z.string()).optional(),
+  status: ProposalStatusSchema,
+  planId: z.string().optional(),
+  rejectionNote: z.string().optional(),
+})
+
+export const PlanChannelSchema = z.object({
+  id: z.string().min(1),
+  channel: z.string().min(1),
+  contentType: z.string().min(1),
+  publishAt: z.string().min(1),
+  prepStartAt: z.string().optional(),
+  workflowId: z.string().optional(),
+  agent: z.string().optional(),
+  tone: ContentToneSchema.optional(),
+  title: z.string().optional(),
+  brief: z.string().optional(),
+})
+
+export const BrainstormSessionSchema = z.object({
+  id: z.string().min(1),
+  agentId: z.string().min(1),
+  title: z.string().min(1),
+  scope: z.string().optional(),
+  status: z.enum(['active', 'archived']),
+  createdAtPlanIds: z.array(z.string()),
+  createdAt: z.string().min(1),
+  updatedAt: z.string().min(1),
+  messages: z.array(SessionMessageSchema),
+  proposals: z.array(PlanProposalSchema),
+})
+
+export const PlanSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  brief: z.string(),
+  targetDate: z.string().min(1),
+  agent: z.string().min(1),
+  status: PlanStatusSchema,
+  sourceSessionId: z.string().optional(),
+  campaign: z.string().optional(),
+  channels: z.array(PlanChannelSchema).optional(),
+  createdAt: z.string().min(1),
+  updatedAt: z.string().min(1),
+})
+
+export const DeliverableDraftSchema = z.object({
+  caption: z.string().nullable().optional(),
+  imagePrompt: z.string().nullable().optional(),
+  videoPrompt: z.string().nullable().optional(),
+  imageFilename: z.string().nullable().optional(),
+  videoFilename: z.string().nullable().optional(),
+  agentNotes: z.string().nullable().optional(),
+})
+
+export const DeliverableSchema = z.object({
+  id: z.string().min(1),
+  planId: z.string().nullable(),
+  planChannelId: z.string().optional(),
+  channel: z.string().min(1),
+  contentType: z.string().min(1),
+  tone: ContentToneSchema,
+  agent: z.string().min(1),
+  title: z.string().min(1),
+  brief: z.string(),
+  publishAt: z.string().min(1),
+  prepStartAt: z.string().min(1),
+  prepStartAtOverride: z.string().optional(),
+  status: DeliverableStatusSchema,
+  taskId: z.string().optional(),
+  workflowInstanceId: z.string().optional(),
+  pendingGateStepId: z.string().optional(),
+  draft: DeliverableDraftSchema,
+  rejectionNote: z.string().optional(),
+  failureReason: z.string().optional(),
+  failureStage: DeliverableFailureStageSchema.optional(),
+  failedStep: z.string().optional(),
+  failedAt: z.string().optional(),
+  publishedAt: z.string().optional(),
+  publishedDeliveryRef: z.string().optional(),
+  createdAt: z.string().min(1),
+  updatedAt: z.string().min(1),
+})
+
+export const ContentTypeOptionSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  prepLeadHours: z.number().nonnegative().optional(),
+  workflowId: z.string().optional(),
+  requiresApproval: z.boolean().optional(),
+  defaultAgent: z.string().optional(),
+  assetRequirement: AssetRequirementSchema.optional(),
+})
+
+export const MessagingSettingsSchema = z.object({
+  defaultView: z.enum(['month', 'week', 'list']).optional(),
+  showScheduleJobs: z.boolean().optional(),
+  channels: z.string().optional(),
+  contentTypes: z.array(ContentTypeOptionSchema).optional(),
+  agentPlanActivationPolicy: AgentMutationPolicySchema.optional(),
+  agentDeliverableApprovalPolicy: AgentMutationPolicySchema.optional(),
+})

@@ -1,0 +1,55 @@
+name: Messaging - Video Prep
+description: Standard video prep flow. Agent writes a script, records or attaches a video asset, then the user reviews through a gate step before messaging publishes on workflow.complete.
+version: 1
+steps:
+  - id: script
+    label: Write video script
+    type: agent
+    agent: $assigned
+    description: |
+      Write a concise script, about 60-90 seconds spoken length, per the brief.
+    outputs:
+      - id: script
+        type: string
+  - id: record
+    label: Generate or attach the video asset
+    type: agent
+    agent: $assigned
+    description: |
+      Produce or attach a video asset matching the script. Required steps:
+        1. Save the video asset:
+             bakin_exec_assets_save { filePath, taskId, type: 'video' }
+           returns { filename }
+        2. Push the filename to the Deliverable so messaging can publish it:
+             bakin_exec_messaging_deliverable_update {
+               deliverableId: <from task description>,
+               draft: { videoFilename }
+             }
+        3. Set this step's output to the same filename.
+      If you skip step 2 the workflow will still complete, but messaging's
+      asset validation will fail the Deliverable at publish time.
+    outputs:
+      - id: videoFilename
+        type: file
+  - id: review
+    label: Review final video
+    type: gate
+    description: User approves the video draft.
+    approval_required: true
+    preview:
+      - script.outputs.script
+      - record.outputs.videoFilename
+    on_approve: complete
+    on_reject:
+      goto: script
+      note_to_agent: true
+  - id: complete
+    label: Mark prep complete
+    type: agent
+    agent: $assigned
+    description: |
+      Confirm the script and video asset are finalized. Messaging publishes on
+      workflow.complete.
+    outputs:
+      - id: ready
+        type: string

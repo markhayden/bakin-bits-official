@@ -4,19 +4,22 @@ import { useEffect, useState } from 'react'
 import { DEFAULT_CONTENT_TYPES, type ContentTypeOption } from '../types'
 
 /**
- * Module-level cache — one fetch per page load is plenty for messaging UI
- * (content types change rarely and settings updates are reflected after a
- * browser refresh, per the v1 scope in the refactor spec). An in-flight
- * promise coalesces concurrent mounts so we only hit the network once.
+ * Module-level cache. The initial settings request is shared across mounts,
+ * then plugin:settings-changed SSE events force a refresh so content-type
+ * edits appear without a browser reload.
  */
 let cached: ContentTypeOption[] | null = null
 let inFlight: Promise<ContentTypeOption[]> | null = null
+let testFetcher: (() => Promise<ContentTypeOption[]>) | null = null
 
-function fetchContentTypes(): Promise<ContentTypeOption[]> {
-  if (cached) return Promise.resolve(cached)
+function fetchContentTypes(force = false): Promise<ContentTypeOption[]> {
+  if (!force && cached) return Promise.resolve(cached)
   if (inFlight) return inFlight
-  inFlight = fetch('/api/plugin-settings/messaging')
-    .then((r) => (r.ok ? r.json() : null))
+  inFlight = (testFetcher
+    ? testFetcher().then((contentTypes) => ({ contentTypes }))
+    : fetch('/api/plugin-settings/messaging')
+      .then((r) => (r.ok ? r.json() : null))
+  )
     .then((data: { contentTypes?: ContentTypeOption[] } | null) => {
       const list =
         data && Array.isArray(data.contentTypes) && data.contentTypes.length > 0
@@ -37,12 +40,32 @@ export function useContentTypes(): ContentTypeOption[] {
   const [types, setTypes] = useState<ContentTypeOption[]>(() => cached ?? DEFAULT_CONTENT_TYPES)
 
   useEffect(() => {
-    if (cached) return
     let cancelled = false
     fetchContentTypes().then((list) => {
       if (!cancelled) setTypes(list)
     })
     return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    if (typeof EventSource === 'undefined') return
+    let cancelled = false
+    const events = new EventSource('/api/events')
+    events.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data) as { type?: unknown; pluginId?: unknown }
+        if (data.type !== 'plugin:settings-changed' || data.pluginId !== 'messaging') return
+        fetchContentTypes(true).then((list) => {
+          if (!cancelled) setTypes(list)
+        })
+      } catch {
+        // Ignore malformed events; a later settings event or reload will recover.
+      }
+    }
+    return () => {
+      cancelled = true
+      events.close()
+    }
   }, [])
 
   return types
@@ -57,4 +80,12 @@ export function __resetContentTypesCache(): void {
   if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) return
   cached = null
   inFlight = null
+}
+
+/** Test-only: avoid process-global fetch races in DOM hook tests. */
+export function __setContentTypesFetcherForTest(fetcher: (() => Promise<ContentTypeOption[]>) | null): void {
+  if (process.env.NODE_ENV !== 'test' && !process.env.VITEST) return
+  cached = null
+  inFlight = null
+  testFetcher = fetcher
 }
