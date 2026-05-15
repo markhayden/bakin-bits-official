@@ -11,7 +11,8 @@
  * roster validation + user settings) and passed in via options. No
  * filesystem access here.
  */
-import type { PlanningSession, ContentTypeOption } from '../types'
+import type { BrainstormSession, ContentTypeOption, Plan } from '../types'
+import { MESSAGING_DISTRIBUTION_CHANNELS } from './distribution-channels'
 
 export interface PromptBuilderOptions {
   /** Display name for the agent. Falls back to agentId when omitted (orphaned reference). */
@@ -26,13 +27,16 @@ export interface PromptBuilderOptions {
 /**
  * Build a summary of the current plan state (proposals with statuses).
  */
-function buildPlanState(session: PlanningSession): string {
+function buildPlanState(session: BrainstormSession): string {
   if (session.proposals.length === 0) return ''
 
-  const lines = ['## Current Plan State\n']
+  const lines = ['## Current Session State\n']
   for (const p of session.proposals) {
     const statusTag = p.status.toUpperCase()
-    let line = `- [${statusTag}] (${p.id}) "${p.title}" — ${p.scheduledAt}, ${p.contentType}, ${p.tone}`
+    const targetDate = p.targetDate
+    const channels = p.suggestedChannels ?? []
+    let line = `- [${statusTag}] (${p.id}) "${p.title}" — ${targetDate}`
+    if (channels.length > 0) line += `; suggestedChannels: ${channels.join(', ')}`
     if (p.rejectionNote) {
       line += `\n  Rejection note: ${p.rejectionNote}`
     }
@@ -47,13 +51,18 @@ function buildPlanState(session: PlanningSession): string {
   return lines.join('\n')
 }
 
-function formatContentTypes(contentTypes: ContentTypeOption[]): string {
-  if (contentTypes.length === 0) return 'a content type id of your choosing'
-  return contentTypes.map((t) => t.id).join(', ')
+function buildDistributionChannelCatalog(): string {
+  return MESSAGING_DISTRIBUTION_CHANNELS
+    .map((channel) => `- ${channel.id}: ${channel.label}; default contentType: ${channel.contentType}`)
+    .join('\n')
 }
 
-function firstTypeId(contentTypes: ContentTypeOption[], fallback: string): string {
-  return contentTypes[0]?.id ?? fallback
+function buildPlanChannelState(plan: Plan): string {
+  const channels = plan.channels ?? []
+  if (channels.length === 0) return 'No channels are configured yet.'
+  return channels
+    .map((channel) => `- ${channel.channel}; contentType: ${channel.contentType}; publishAt: ${channel.publishAt}`)
+    .join('\n')
 }
 
 /**
@@ -61,14 +70,12 @@ function firstTypeId(contentTypes: ContentTypeOption[], fallback: string): strin
  */
 export function buildSystemPrompt(
   agentId: string,
-  session: PlanningSession,
+  session: BrainstormSession,
   options: PromptBuilderOptions,
 ): string {
   const agentName = options.agentName || agentId
   const persona = options.persona
-  const typeList = formatContentTypes(options.contentTypes)
-  const exampleType1 = firstTypeId(options.contentTypes, 'post')
-  const exampleType2 = options.contentTypes[1]?.id ?? exampleType1
+  void options.contentTypes
 
   const sections: string[] = []
 
@@ -81,38 +88,87 @@ export function buildSystemPrompt(
   }
 
   // Planning instructions
-  sections.push(`## Planning Instructions
+  sections.push(`## Brainstorming Instructions
 
-You are in a planning session with Mark. Your job is to brainstorm and refine content calendar ideas collaboratively.
+You are in a brainstorm session with Mark. The session scope is: ${session.scope || 'open'}.
 
-IMPORTANT: Emit each proposed item as its OWN separate fenced code block — one object per block, NOT an array. Write a brief intro sentence before each block so items appear incrementally. Example:
+Your job is to propose **content topics** as Plan proposals. One Plan = one topic
+or one day's focus (e.g., "Taco Tuesday"). A single brainstorm session can produce
+multiple Plans — Mark will create Plans from the ones he likes.
 
-Here's what I'm thinking for Monday:
+HARD RULE: If Mark requests ANY concrete content topic — even a single one ("a
+post about tacos") — you MUST emit it as a \`\`\`json proposal block. Do not reply
+in prose when a concrete content request is made. If Mark is ambiguous, clarify
+briefly first, then emit a proposal.
+
+HARD RULE: Emit each Plan as its OWN fenced JSON block — one object per block,
+NOT an array. Brief intro sentence before each block so items appear incrementally.
+
+Example block format:
+
 \`\`\`json
-{ "title": "An example post title", "scheduledAt": "2026-04-14T10:00:00-06:00", "contentType": "${exampleType1}", "tone": "educational", "brief": "Short description of the piece.", "channels": ["general"] }
-\`\`\`
-
-And for Tuesday:
-\`\`\`json
-{ "title": "Another example", "scheduledAt": "2026-04-15T10:00:00-06:00", "contentType": "${exampleType2}", "tone": "energetic", "brief": "Another short description.", "channels": ["general"] }
+{
+  "title": "Taco Tuesday",
+  "targetDate": "2026-05-19",
+  "brief": "Tuesday focus on tacos — celebrate weeknight family recipes, easy assembly, fun toppings.",
+  "suggestedChannels": ["blog", "x", "youtube"]
+}
 \`\`\`
 
 Fields:
-- title: catchy post title in your authentic voice
-- scheduledAt: ISO datetime (timezone: America/Denver, MDT = UTC-6)
-- contentType: one of ${typeList}
-- tone: one of energetic, calm, educational, humorous, inspiring, conversational
-- brief: 2-3 sentence description of what to create when this executes
-- channels: optional array of runtime channel IDs (default: ["general"])
+- title: punchy topic title in your authentic voice
+- targetDate: ISO date (timezone: America/Denver, MDT)
+- brief: 2–3 sentence focus describing the topic and angle
+- suggestedChannels: optional hint; Mark will finalize channels per-Plan later
 
-NEVER wrap multiple items in a JSON array. Always one object per \`\`\`json block.
+Few-shot examples:
+
+[example 1 — single quote request]
+User: "Generate an inspirational quote for today."
+Agent: "One inspirational pulse for today:"
+\`\`\`json
+{
+  "title": "Monday motivation",
+  "targetDate": "2026-05-17",
+  "brief": "An inspirational quote about persistence through slow progress; tied to a personal anecdote.",
+  "suggestedChannels": ["x", "instagram"]
+}
+\`\`\`
+
+[example 2 — multi-day plan]
+User: "Plan three topics for next week."
+Agent: "Three topics, one per day:"
+\`\`\`json
+{ "title": "Taco Tuesday", "targetDate": "2026-05-19", "brief": "Tuesday focus on tacos.", "suggestedChannels": ["blog"] }
+\`\`\`
+"Wednesday leans educational:"
+\`\`\`json
+{ "title": "Spice blending fundamentals", "targetDate": "2026-05-20", "brief": "Teach beginner spice blending.", "suggestedChannels": ["blog"] }
+\`\`\`
+"Friday wraps with something lighter:"
+\`\`\`json
+{ "title": "Weekend pairings", "targetDate": "2026-05-22", "brief": "Easy pairings for relaxed weekend cooking.", "suggestedChannels": ["x"] }
+\`\`\`
+
+[example 3 — revision with id]
+User: "Make Wednesday's brief more SEO-focused."
+Agent: "Refining Wednesday:"
+\`\`\`json
+{
+  "id": "{existing-proposal-id}",
+  "title": "Spice blending fundamentals",
+  "targetDate": "2026-05-20",
+  "brief": "SEO-tuned brief mentioning how to blend spices at home and beginner spice blends.",
+  "suggestedChannels": ["blog"]
+}
+\`\`\`
 
 ## Revising Existing Proposals
 
 When Mark asks you to edit, revise, or update an existing proposal, include the proposal's "id" field so the system updates it in place instead of creating a duplicate:
 
 \`\`\`json
-{ "id": "existing-proposal-id", "title": "Updated title", "scheduledAt": "...", "contentType": "...", "tone": "...", "brief": "...", "channels": ["general"] }
+{ "id": "existing-proposal-id", "title": "Updated title", "targetDate": "2026-05-20", "brief": "...", "suggestedChannels": ["blog"] }
 \`\`\`
 
 Rules for revisions:
@@ -136,7 +192,7 @@ Rules for revisions:
  * Returns an array suitable for the OpenAI-compatible chat completions API.
  */
 export function buildMessages(
-  session: PlanningSession,
+  session: BrainstormSession,
   newMessage: string,
   options: PromptBuilderOptions,
 ): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
@@ -155,4 +211,78 @@ export function buildMessages(
   })
 
   return messages
+}
+
+export function buildPlanRefinementMessages(
+  session: BrainstormSession,
+  plan: Plan,
+  newMessage: string,
+  options: PromptBuilderOptions,
+): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
+  const agentName = options.agentName || session.agentId
+  const sections: string[] = [`You are ${agentName}.`]
+
+  if (options.persona) {
+    sections.push(`## Your Persona\n\n${options.persona}`)
+  }
+
+  sections.push(`## Plan Refinement Mode
+
+You are helping Mark refine one existing Messaging Plan. You are no longer in
+proposal brainstorming mode.
+
+HARD RULES:
+- Do not create new Plan proposal JSON blocks.
+- Do not inspect Schedule, cron jobs, schedule runs, task dispatch state, or any external system.
+- Do not use tools for channel recommendations or Plan refinement. The Plan record below is the source of truth.
+- Keep replies concise and focused on the Plan.
+
+When Mark asks which channels you recommend, choose the channels and emit a
+single fenced JSON block that updates this Plan. The UI will apply that block
+to the existing Plan.
+
+Plan update block format:
+
+\`\`\`json
+{
+  "planUpdate": {
+    "channels": [
+      { "channel": "x", "contentType": "x-post" },
+      { "channel": "instagram", "contentType": "image" }
+    ]
+  }
+}
+\`\`\`
+
+Allowed planUpdate fields:
+- title: optional updated Plan title
+- brief: optional updated Plan brief
+- targetDate: optional ISO date
+- channels: optional full replacement channel list
+
+Channel rules:
+- Use only the available channel ids below unless Mark explicitly asks for a custom destination.
+- For custom destinations, use channel "custom".
+- If publishAt is omitted, the system will default it from the Plan target date.
+- If the Plan already has channels, preserve them unless Mark asks for a change.`)
+
+  sections.push(`## Existing Plan
+
+ID: ${plan.id}
+Title: ${plan.title}
+Status: ${plan.status}
+Target date: ${plan.targetDate}
+Brief: ${plan.brief || '(empty)'}
+
+Configured channels:
+${buildPlanChannelState(plan)}`)
+
+  sections.push(`## Available Channels
+
+${buildDistributionChannelCatalog()}`)
+
+  return [
+    { role: 'system', content: sections.join('\n\n---\n\n') },
+    { role: 'user', content: newMessage },
+  ]
 }

@@ -13,7 +13,7 @@
  * gets slow, the spec A8 bailout is keyword-only indexing on
  * `message_body` (drop the embedding template).
  */
-import type { PlanningSession } from '../types'
+import type { BrainstormSession } from '../types'
 import { readFileSync } from 'fs'
 
 /** Glob pattern relative to ctx.storage. */
@@ -28,7 +28,7 @@ export const SESSION_FILE_PATTERN = 'messaging/sessions/*.json'
  * Returns a `Record<string, unknown>` to match the SearchAPI doc shape.
  * Field keys mirror the schema declared at the registration site.
  */
-export function buildDoc(session: PlanningSession): Record<string, unknown> {
+export function buildDoc(session: BrainstormSession): Record<string, unknown> {
   const messageBody = session.messages
     .filter(m => m.role !== 'activity')
     .map(m => m.content)
@@ -65,10 +65,10 @@ export function sessionKey(sessionId: string): string {
   return `brainstorm-${sessionId}`
 }
 
-export function parseSessionFile(absPath: string): PlanningSession | null {
+export function parseSessionFile(absPath: string): BrainstormSession | null {
   try {
     const raw = readFileSync(absPath, 'utf-8')
-    const parsed = JSON.parse(raw) as PlanningSession
+    const parsed = JSON.parse(raw) as BrainstormSession
     if (!parsed || typeof parsed !== 'object' || typeof parsed.id !== 'string') return null
     if (!Array.isArray(parsed.messages)) parsed.messages = []
     if (!Array.isArray(parsed.proposals)) parsed.proposals = []

@@ -7,21 +7,23 @@
   "bakin": "^1.0.0",
   "author": "Made in Wyo",
   "agent": {
-    "identity": { "name": "Patch", "emoji": "⚙️" },
+    "identity": {
+      "name": "Patch",
+      "emoji": "⚙️"
+    },
     "role": "Developer agent",
     "defaultModel": "openai-codex/gpt-5.5",
-    "dispatchableBy": ["main"],
-    "tags": ["dev", "automation", "tooling"],
-    "allowedTools": [
-      "bakin_exec_tasks_*",
-      "bakin_exec_assets_*",
-      "bakin_exec_git_*",
-      "bakin_exec_lesson_search",
-      "bakin_exec_get_paths",
-      "bakin_exec_log",
-      "bakin_exec_heartbeat"
+    "dispatchableBy": [
+      "main"
     ],
-    "allowedSkills": ["git-isolation"]
+    "tags": [
+      "dev",
+      "automation",
+      "tooling"
+    ],
+    "allowedSkills": [
+      "git-isolation"
+    ]
   },
   "install": {
     "createIfMissing": true,
@@ -29,7 +31,9 @@
     "writeWorkspaceFiles": true,
     "installSkills": true,
     "installWorkflows": true,
-    "enableLessons": ["dev-discipline"]
+    "enableLessons": [
+      "dev-discipline"
+    ]
   },
   "contributions": {
     "workspaceFiles": [
@@ -38,8 +42,15 @@
       "workspace/AGENTS.md",
       "workspace/TOOLS.md"
     ],
-    "skills": ["skills/git-isolation"],
-    "lessons": ["lessons/dev-discipline.md"],
-    "assets": ["assets/avatar.jpg", "assets/avatar-full.png"]
+    "skills": [
+      "skills/git-isolation"
+    ],
+    "lessons": [
+      "lessons/dev-discipline.md"
+    ],
+    "assets": [
+      "assets/avatar.jpg",
+      "assets/avatar-full.png"
+    ]
   }
 }

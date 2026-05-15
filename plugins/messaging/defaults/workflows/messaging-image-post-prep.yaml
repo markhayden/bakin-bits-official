@@ -1,0 +1,56 @@
+name: Messaging - Image Post Prep
+description: Image-required social post prep. Agent writes a caption and produces or attaches an image asset, then the user reviews through a gate step before messaging publishes on workflow.complete.
+version: 1
+steps:
+  - id: caption
+    label: Write caption
+    type: agent
+    agent: $assigned
+    description: |
+      Write the caption per the brief. Keep it within platform limits.
+      Push it to the Deliverable:
+        bakin_exec_messaging_deliverable_update {
+          deliverableId: <from task description>,
+          draft: { caption: "<final caption>" }
+        }
+    outputs:
+      - id: caption
+        type: string
+  - id: image
+    label: Generate or attach the image asset
+    type: agent
+    agent: $assigned
+    description: |
+      Produce or attach the image asset. Required steps:
+        1. Save the image asset:
+             bakin_exec_assets_save { filePath, taskId, type: 'images' }
+           returns { filename }
+        2. Push the filename to the Deliverable:
+             bakin_exec_messaging_deliverable_update {
+               deliverableId,
+               draft: { imageFilename }
+             }
+        3. Set this step's output to the same filename.
+    outputs:
+      - id: imageFilename
+        type: file
+  - id: review
+    label: Review final post
+    type: gate
+    description: User approves caption and image.
+    approval_required: true
+    preview:
+      - caption.outputs.caption
+      - image.outputs.imageFilename
+    on_approve: complete
+    on_reject:
+      goto: caption
+      note_to_agent: true
+  - id: complete
+    label: Mark prep complete
+    type: agent
+    agent: $assigned
+    description: Confirm caption and image are finalized.
+    outputs:
+      - id: ready
+        type: string

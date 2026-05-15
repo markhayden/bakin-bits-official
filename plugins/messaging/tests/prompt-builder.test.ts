@@ -29,7 +29,7 @@ mock.module('../../../src/core/logger', () => ({
 }))
 
 import { buildSystemPrompt, buildMessages } from '../../../plugins/messaging/lib/prompt-builder'
-import type { PlanningSession, ContentTypeOption } from '../../../plugins/messaging/types'
+import type { BrainstormSession, ContentTypeOption } from '../../../plugins/messaging/types'
 
 const DEFAULT_TYPES: ContentTypeOption[] = [
   { id: 'post',    label: 'Post' },
@@ -45,7 +45,7 @@ function opts(overrides: { agentName?: string; contentTypes?: ContentTypeOption[
   }
 }
 
-function makeSession(overrides: Partial<PlanningSession> = {}): PlanningSession {
+function makeSession(overrides: Partial<BrainstormSession> = {}): BrainstormSession {
   return {
     id: 'sess-1',
     agentId: 'basil',
@@ -55,6 +55,7 @@ function makeSession(overrides: Partial<PlanningSession> = {}): PlanningSession 
     updatedAt: '2026-04-07T00:00:00Z',
     messages: [],
     proposals: [],
+    createdAtPlanIds: [],
     ...overrides,
   }
 }
@@ -63,7 +64,7 @@ describe('buildSystemPrompt', () => {
   it('uses the agentName from options when provided', () => {
     const prompt = buildSystemPrompt('basil', makeSession(), opts({ agentName: 'Basil (Chef)' }))
     expect(prompt).toContain('You are Basil (Chef)')
-    expect(prompt).toContain('Planning Instructions')
+    expect(prompt).toContain('Brainstorming Instructions')
     expect(prompt).toContain('Revising Existing Proposals')
   })
 
@@ -72,16 +73,26 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('You are ghost')
   })
 
-  it('lists caller-supplied content types in the instructions', () => {
-    const prompt = buildSystemPrompt('x', makeSession(), opts({
-      contentTypes: [{ id: 'blog', label: 'Blog' }, { id: 'reel', label: 'Reel' }],
-    }))
-    expect(prompt).toContain('contentType: one of blog, reel')
+  it('includes #156 hard rules for concrete topic requests and one-object JSON blocks', () => {
+    const prompt = buildSystemPrompt('x', makeSession(), opts())
+    expect(prompt).toContain('HARD RULE: If Mark requests ANY concrete content topic')
+    expect(prompt).toContain('you MUST emit it as a ```json proposal block')
+    expect(prompt).toContain('HARD RULE: Emit each Plan as its OWN fenced JSON block')
+    expect(prompt).toContain('NOT an array')
   })
 
-  it('falls back to a neutral placeholder when contentTypes is empty', () => {
-    const prompt = buildSystemPrompt('x', makeSession(), opts({ contentTypes: [] }))
-    expect(prompt).toContain('contentType: one of a content type id of your choosing')
+  it('includes all three few-shot examples', () => {
+    const prompt = buildSystemPrompt('x', makeSession(), opts())
+    expect(prompt).toContain('[example 1 — single quote request]')
+    expect(prompt).toContain('[example 2 — multi-day plan]')
+    expect(prompt).toContain('[example 3 — revision with id]')
+    expect(prompt).toContain('"targetDate": "2026-05-19"')
+    expect(prompt).toContain('"suggestedChannels": ["blog"]')
+  })
+
+  it('includes the optional session scope', () => {
+    const prompt = buildSystemPrompt('x', makeSession({ scope: 'next four weekdays' }), opts())
+    expect(prompt).toContain('The session scope is: next four weekdays.')
   })
 
   it('includes persona section when caller supplies persona markdown', () => {
@@ -105,21 +116,21 @@ describe('buildSystemPrompt', () => {
       proposals: [
         {
           id: 'p1', messageId: 'm1', revision: 1, agentId: 'basil',
-          title: 'Monday Post', scheduledAt: '2026-04-13T10:00:00Z',
-          contentType: 'post', tone: 'energetic', brief: 'Intro',
+          title: 'Monday Post', targetDate: '2026-04-13',
+          brief: 'Intro', suggestedChannels: ['blog'],
           status: 'approved',
         },
         {
           id: 'p2', messageId: 'm1', revision: 1, agentId: 'basil',
-          title: 'Wednesday Article', scheduledAt: '2026-04-15T10:00:00Z',
-          contentType: 'article', tone: 'calm', brief: 'Deep dive',
+          title: 'Wednesday Article', targetDate: '2026-04-15',
+          brief: 'Deep dive', suggestedChannels: ['newsletter'],
           status: 'rejected', rejectionNote: 'Too similar to last week',
         },
       ],
     })
 
     const prompt = buildSystemPrompt('basil', session, opts({ agentName: 'Basil' }))
-    expect(prompt).toContain('Current Plan State')
+    expect(prompt).toContain('Current Session State')
     expect(prompt).toContain('[APPROVED]')
     expect(prompt).toContain('[REJECTED]')
     expect(prompt).toContain('Monday Post')
@@ -129,7 +140,7 @@ describe('buildSystemPrompt', () => {
 
   it('omits plan state when no proposals exist', () => {
     const prompt = buildSystemPrompt('basil', makeSession(), opts({ agentName: 'Basil' }))
-    expect(prompt).not.toContain('## Current Plan State')
+    expect(prompt).not.toContain('## Current Session State')
   })
 })
 
@@ -166,15 +177,15 @@ describe('buildMessages', () => {
       proposals: [
         {
           id: 'p1', messageId: 'm1', revision: 1, agentId: 'basil',
-          title: 'Test Item', scheduledAt: '2026-04-13T10:00:00Z',
-          contentType: 'post', tone: 'energetic', brief: 'Test',
+          title: 'Test Item', targetDate: '2026-04-13',
+          brief: 'Test', suggestedChannels: ['blog'],
           status: 'proposed',
         },
       ],
     })
 
     const messages = buildMessages(session, 'What do you think?', opts())
-    expect(messages[0].content).toContain('Current Plan State')
+    expect(messages[0].content).toContain('Current Session State')
     expect(messages[0].content).toContain('Test Item')
   })
 })

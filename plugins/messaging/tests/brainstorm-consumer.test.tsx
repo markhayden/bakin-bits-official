@@ -4,13 +4,12 @@
  * Brainstorm search consumer smoke tests.
  *
  * Covers the C13 wiring: BrainstormView consumes `useSearch({ plugin:
- * 'messaging' })` and feeds `searchResults` into `SessionList`, which
- * filters its locally-fetched sessions by search hits (stripping the
- * `brainstorm-` key prefix) and falls back to a local title/agentId
- * substring filter when the hook returns nothing.
+ * 'messaging' })`, filters locally-fetched sessions by search hits
+ * (stripping the `brainstorm-` key prefix), and falls back to a local
+ * title/agentId substring filter when the hook returns nothing.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
-import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -129,8 +128,7 @@ mock.module('@/components/ui/dropdown-menu', () => ({
   ),
 }))
 
-// Stub every lucide icon with a noop span. List names imported by
-// brainstorm-view + session-list so destructured imports resolve.
+// Stub table components used by BrainstormView.
 mock.module('@/components/ui/table', () => ({
   Table: ({ children }: { children: React.ReactNode }) => <table>{children}</table>,
   TableHeader: ({ children }: { children: React.ReactNode }) => <thead>{children}</thead>,
@@ -142,20 +140,8 @@ mock.module('@/components/ui/table', () => ({
   TableCell: ({ children }: { children: React.ReactNode }) => <td>{children}</td>,
 }))
 
-mock.module('../../../plugins/messaging/components/planning-layout', () => ({
-  PlanningLayout: () => <div data-testid="planning-layout" />,
-}))
-
-mock.module('../../../plugins/messaging/components/new-session-dialog', () => ({
-  NewSessionDialog: () => null,
-}))
-
-mock.module('../../../plugins/messaging/components/delete-session-dialog', () => ({
-  DeleteSessionDialog: () => null,
-}))
-
 // ---------------------------------------------------------------------------
-// Imports — real BrainstormView + real SessionList
+// Imports — real BrainstormView
 // ---------------------------------------------------------------------------
 import { BrainstormView } from '../../../plugins/messaging/components/brainstorm-view'
 
@@ -183,7 +169,22 @@ const SESSIONS = [
 ]
 
 function mockFetchSessions() {
-  globalThis.fetch = mock().mockImplementation((url: string) => {
+  globalThis.fetch = mock().mockImplementation((url: string, init?: RequestInit) => {
+    if (typeof url === 'string' && url === '/api/plugins/messaging/sessions' && init?.method === 'POST') {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({
+          session: {
+            id: 'sess-new',
+            agentId: 'scout',
+            title: 'May survival ideas',
+            status: 'active',
+            messages: [],
+            proposals: [],
+          },
+        }),
+      })
+    }
     if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/sessions')) {
       return Promise.resolve({
         ok: true,
@@ -201,6 +202,11 @@ beforeEach(() => {
   useSearchMock.mockClear()
   ;(globalThis as unknown as { __bakinTestSdkHooks?: Record<string, unknown> }).__bakinTestSdkHooks = {
     useSearch: (...args: unknown[]) => useSearchMock(...args),
+    useAgentIds: () => ['basil', 'scout'],
+    useAgentList: () => [
+      { id: 'basil', name: 'Basil' },
+      { id: 'scout', name: 'Scout' },
+    ],
   }
   mockFetchSessions()
 })
@@ -282,5 +288,33 @@ describe('BrainstormView (search consumer)', () => {
       expect(screen.queryByText('Week 16 recipes')).toBeNull()
     })
     expect(screen.getByText('Outdoor sprint')).toBeDefined()
+  })
+
+  it('creates new brainstorm sessions from a modal with avatar agent selection', async () => {
+    render(<BrainstormView />)
+    await waitFor(() => {
+      expect(screen.getByText('Week 16 recipes')).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByText('New'))
+
+    expect(screen.getByText('New brainstorm')).toBeDefined()
+    const agentGroup = screen.getByRole('radiogroup', { name: 'Brainstorm agent' })
+    expect(within(agentGroup).getByTestId('avatar-scout')).toBeDefined()
+    fireEvent.click(within(agentGroup).getByText('Scout').closest('button')!)
+    fireEvent.change(screen.getByPlaceholderText('Session title...'), {
+      target: { value: 'May survival ideas' },
+    })
+    fireEvent.click(screen.getByText('Create Session'))
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        '/api/plugins/messaging/sessions',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ agentId: 'scout', title: 'May survival ideas' }),
+        }),
+      )
+    })
   })
 })

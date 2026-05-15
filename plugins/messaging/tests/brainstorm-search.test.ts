@@ -45,7 +45,7 @@ import {
   sessionKey,
   SESSION_FILE_PATTERN,
 } from '../../../plugins/messaging/lib/brainstorm-search'
-import type { PlanningSession } from '../../../plugins/messaging/types'
+import type { BrainstormSession } from '../../../plugins/messaging/types'
 
 beforeAll(() => {
   mkdirSync(testDir, { recursive: true })
@@ -55,12 +55,13 @@ afterAll(() => {
   rmSync(testDir, { recursive: true, force: true })
 })
 
-function makeSession(overrides: Partial<PlanningSession> = {}): PlanningSession {
+function makeSession(overrides: Partial<BrainstormSession> = {}): BrainstormSession {
   return {
     id: 'sess-1',
     agentId: 'basil',
     title: 'Week 16 recipes',
     status: 'active',
+    createdAtPlanIds: [],
     createdAt: '2026-04-01T00:00:00Z',
     updatedAt: '2026-04-09T15:00:00Z',
     messages: [],
@@ -117,9 +118,7 @@ describe('buildDoc', () => {
           revision: 1,
           agentId: 'basil',
           title: 'Mango Lassi',
-          scheduledAt: '2026-04-15T09:00:00Z',
-          contentType: 'recipe',
-          tone: 'energetic',
+          targetDate: '2026-04-15',
           brief: 'Sweet, tangy summer drink',
           status: 'proposed',
         },
@@ -188,13 +187,13 @@ describe('buildDoc', () => {
       proposals: [
         {
           id: 'p1', messageId: 'm1', revision: 1, agentId: 'basil',
-          title: 'Title Only', scheduledAt: '2026-04-15T09:00:00Z',
-          contentType: 'recipe', tone: 'calm', brief: '', status: 'proposed',
+          title: 'Title Only', targetDate: '2026-04-15',
+          brief: '', status: 'proposed',
         },
         {
           id: 'p2', messageId: 'm1', revision: 1, agentId: 'basil',
-          title: '', scheduledAt: '2026-04-15T09:00:00Z',
-          contentType: 'recipe', tone: 'calm', brief: 'Brief Only', status: 'proposed',
+          title: '', targetDate: '2026-04-15',
+          brief: 'Brief Only', status: 'proposed',
         },
       ],
     })
@@ -215,7 +214,7 @@ describe('buildDoc', () => {
       agentId: 'scout',
       messages: [],
       proposals: [],
-    } as unknown as PlanningSession
+    } as unknown as BrainstormSession
     const doc = buildDoc(partial)
     expect(doc.session_id).toBe('sess-2')
     // String fields coerce to '' so Antfly text indexes don't choke.
