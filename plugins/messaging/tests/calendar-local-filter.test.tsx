@@ -35,7 +35,7 @@ mock.module('@/core/watcher', () => ({
   registerUnlinkHook: mock(),
 }))
 
-mock.module('@bakin/sdk/components', () => ({
+mock.module('@makinbakin/sdk/components', () => ({
   AgentAvatar: ({ agentId }: { agentId: string }) => <span data-testid={`avatar-${agentId}`}>{agentId}</span>,
   AgentFilter: ({ agentIds }: { agentIds: string[] }) => (
     <div data-testid="agent-filter">

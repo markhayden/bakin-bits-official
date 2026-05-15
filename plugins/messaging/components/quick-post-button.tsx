@@ -1,24 +1,24 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { AgentSelect } from "@bakin/sdk/components"
-import { ChannelIcon } from "@bakin/sdk/components"
-import { Button } from "@bakin/sdk/ui"
-import { Input } from "@bakin/sdk/ui"
-import { Textarea } from "@bakin/sdk/ui"
+import { AgentSelect } from "@makinbakin/sdk/components"
+import { ChannelIcon } from "@makinbakin/sdk/components"
+import { Button } from "@makinbakin/sdk/ui"
+import { Input } from "@makinbakin/sdk/ui"
+import { Textarea } from "@makinbakin/sdk/ui"
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-} from "@bakin/sdk/ui"
+} from "@makinbakin/sdk/ui"
 import { Paperclip, Plus, Search, X } from 'lucide-react'
 import type { ContentTone, DeliverableDraft } from '../types'
 import { DEFAULT_CHANNEL } from '../types'
 import { TONE_LABELS } from '../constants'
 import { useContentTypes } from '../hooks/use-content-types'
-import { useAgentIds } from "@bakin/sdk/hooks"
-import { useNotificationChannels } from "@bakin/sdk/hooks"
+import { useAgentIds } from "@makinbakin/sdk/hooks"
+import { useNotificationChannels } from "@makinbakin/sdk/hooks"
 
 interface AssetOption {
   filename: string

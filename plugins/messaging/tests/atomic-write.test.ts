@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import type { StorageAdapter } from '@bakin/sdk/types'
+import type { StorageAdapter } from '@makinbakin/sdk/types'
 import { MarkdownStorageAdapter } from '../test-helpers'
 import { atomicWriteJson } from '../lib/atomic-write'
 

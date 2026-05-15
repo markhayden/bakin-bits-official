@@ -9,13 +9,13 @@ import {
   IntegratedBrainstorm,
   PluginHeader,
   readBrainstormSseResponse,
-} from "@bakin/sdk/components"
-import type { BrainstormMessage } from "@bakin/sdk/components"
-import { useAgentIds, useAgentList, usePathname, useQueryState, useRouter, useSearch, useSearchParams } from "@bakin/sdk/hooks"
-import { Badge } from "@bakin/sdk/ui"
-import { Button } from "@bakin/sdk/ui"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@bakin/sdk/ui"
-import { Input } from "@bakin/sdk/ui"
+} from "@makinbakin/sdk/components"
+import type { BrainstormMessage } from "@makinbakin/sdk/components"
+import { useAgentIds, useAgentList, usePathname, useQueryState, useRouter, useSearch, useSearchParams } from "@makinbakin/sdk/hooks"
+import { Badge } from "@makinbakin/sdk/ui"
+import { Button } from "@makinbakin/sdk/ui"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@makinbakin/sdk/ui"
+import { Input } from "@makinbakin/sdk/ui"
 import { ArrowLeft, CalendarDays, Check, ClipboardList, Plus, Trash2, X } from 'lucide-react'
 import type { BrainstormSession, PlanProposal, SessionMessage } from '../types'
 

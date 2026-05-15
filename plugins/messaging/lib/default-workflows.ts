@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
-import type { PluginContext, WorkflowDefinitionInput } from '@bakin/sdk/types'
+import type { PluginContext, WorkflowDefinitionInput } from '@makinbakin/sdk/types'
 import yaml from 'js-yaml'
 import { z } from 'zod'
 

@@ -7,11 +7,11 @@ import {
   IntegratedBrainstorm,
   PluginHeader,
   readBrainstormSseResponse,
-} from "@bakin/sdk/components"
-import type { BrainstormMessage } from "@bakin/sdk/components"
-import { Badge } from "@bakin/sdk/ui"
-import { Button } from "@bakin/sdk/ui"
-import { Skeleton } from "@bakin/sdk/ui"
+} from "@makinbakin/sdk/components"
+import type { BrainstormMessage } from "@makinbakin/sdk/components"
+import { Badge } from "@makinbakin/sdk/ui"
+import { Button } from "@makinbakin/sdk/ui"
+import { Skeleton } from "@makinbakin/sdk/ui"
 import { ArrowLeft, CalendarDays, CheckCircle2, Circle, ClipboardList, ExternalLink, FileText, Globe2, Info, Instagram, MessageCircle, MessageSquareText, Music2, Rocket, Slack, Trash2, Twitter, type LucideIcon } from 'lucide-react'
 import type { BrainstormSession, ContentTypeOption, Deliverable, Plan, PlanChannel, PlanStatus, SessionMessage } from '../types'
 import { PLAN_STATUS_BADGE } from '../constants'

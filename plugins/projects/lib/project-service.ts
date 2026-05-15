@@ -4,7 +4,7 @@
  * All host-owned capabilities are injected through PluginContext so this file
  * can run as an extracted official plugin without Bakin core imports.
  */
-import type { PluginContext } from '@bakin/sdk/types'
+import type { PluginContext } from '@makinbakin/sdk/types'
 import {
   type ProjectRepository,
   computeProgress,

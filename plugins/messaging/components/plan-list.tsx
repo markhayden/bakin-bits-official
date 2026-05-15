@@ -1,16 +1,16 @@
 'use client'
 
 import { useMemo } from 'react'
-import { AgentFilter } from "@bakin/sdk/components"
-import { EmptyState } from "@bakin/sdk/components"
-import { FacetFilter } from "@bakin/sdk/components"
-import { PluginHeader } from "@bakin/sdk/components"
-import { AgentAvatar } from "@bakin/sdk/components"
-import { Skeleton } from "@bakin/sdk/ui"
+import { AgentFilter } from "@makinbakin/sdk/components"
+import { EmptyState } from "@makinbakin/sdk/components"
+import { FacetFilter } from "@makinbakin/sdk/components"
+import { PluginHeader } from "@makinbakin/sdk/components"
+import { AgentAvatar } from "@makinbakin/sdk/components"
+import { Skeleton } from "@makinbakin/sdk/ui"
 import { ClipboardList, Circle, Search } from 'lucide-react'
-import { Input } from "@bakin/sdk/ui"
-import { useAgentIds } from "@bakin/sdk/hooks"
-import { useQueryArrayState, useQueryState } from "@bakin/sdk/hooks"
+import { Input } from "@makinbakin/sdk/ui"
+import { useAgentIds } from "@makinbakin/sdk/hooks"
+import { useQueryArrayState, useQueryState } from "@makinbakin/sdk/hooks"
 import type { Plan, PlanStatus } from '../types'
 import { PLAN_STATUS_BADGE } from '../constants'
 import { usePlans } from '../hooks/use-plans'

@@ -1,20 +1,20 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { AgentFilter } from "@bakin/sdk/components"
-import { EmptyState } from "@bakin/sdk/components"
-import { FacetFilter } from "@bakin/sdk/components"
-import { PluginHeader } from "@bakin/sdk/components"
-import { AgentAvatar } from "@bakin/sdk/components"
-import { ChannelIcon } from "@bakin/sdk/components"
-import { Badge } from "@bakin/sdk/ui"
-import { Button } from "@bakin/sdk/ui"
-import { Input } from "@bakin/sdk/ui"
-import { Skeleton } from "@bakin/sdk/ui"
+import { AgentFilter } from "@makinbakin/sdk/components"
+import { EmptyState } from "@makinbakin/sdk/components"
+import { FacetFilter } from "@makinbakin/sdk/components"
+import { PluginHeader } from "@makinbakin/sdk/components"
+import { AgentAvatar } from "@makinbakin/sdk/components"
+import { ChannelIcon } from "@makinbakin/sdk/components"
+import { Badge } from "@makinbakin/sdk/ui"
+import { Button } from "@makinbakin/sdk/ui"
+import { Input } from "@makinbakin/sdk/ui"
+import { Skeleton } from "@makinbakin/sdk/ui"
 import { CalendarDays, ChevronLeft, ChevronRight, Circle, Search } from 'lucide-react'
-import { useAgentIds } from "@bakin/sdk/hooks"
-import { useNotificationChannels } from "@bakin/sdk/hooks"
-import { useQueryArrayState, useQueryState } from "@bakin/sdk/hooks"
+import { useAgentIds } from "@makinbakin/sdk/hooks"
+import { useNotificationChannels } from "@makinbakin/sdk/hooks"
+import { useQueryArrayState, useQueryState } from "@makinbakin/sdk/hooks"
 import type { Deliverable, DeliverableStatus } from '../types'
 import { getContentTypeLabel, useContentTypes } from '../hooks/use-content-types'
 import { useDeliverables } from '../hooks/use-deliverables'

@@ -1,12 +1,12 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { AgentAvatar } from "@bakin/sdk/components"
-import { BakinDrawer } from "@bakin/sdk/components"
-import { Badge } from "@bakin/sdk/ui"
-import { Button } from "@bakin/sdk/ui"
-import { Textarea } from "@bakin/sdk/ui"
-import { Separator } from "@bakin/sdk/ui"
+import { AgentAvatar } from "@makinbakin/sdk/components"
+import { BakinDrawer } from "@makinbakin/sdk/components"
+import { Badge } from "@makinbakin/sdk/ui"
+import { Button } from "@makinbakin/sdk/ui"
+import { Textarea } from "@makinbakin/sdk/ui"
+import { Separator } from "@makinbakin/sdk/ui"
 import { AlertCircle, CalendarDays, Check, Clock, ImageIcon, RefreshCcw, RotateCcw, Trash2, Video, X } from 'lucide-react'
 import type { AssetRequirement, ContentTypeOption, Deliverable, DeliverableFailureStage } from '../types'
 import { getContentTypeLabel, useContentTypes } from '../hooks/use-content-types'

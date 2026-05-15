@@ -4,7 +4,7 @@
  * storage-backed repository for project file I/O.
  * Pure functions where possible — no side effects.
  */
-import type { StorageAdapter } from '@bakin/sdk/types'
+import type { StorageAdapter } from '@makinbakin/sdk/types'
 import yaml from 'js-yaml'
 import type { Project, ProjectFrontmatter, ProjectTask, ProjectAsset, ProjectBrainstormMessage, ProjectSummary } from '../types'
 

@@ -2,7 +2,7 @@
   "id": "projects",
   "name": "Projects",
   "version": "1.0.0",
-  "bakin": ">=1.0.0",
+  "bakin": ">=0.0.1",
   "description": "Project management with specs, checklists, task linking, and agent access via MCP tools",
   "entry": {
     "server": "index.ts",

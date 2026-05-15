@@ -1,15 +1,16 @@
 # Contributing
 
-This repository hosts community plugins for Bakin. Each plugin lives at
-`plugins/<id>/` as a self-contained directory: manifest, source, tests,
-docs, dist (generated). Plugins are independent — there are no shared
-dependencies beyond `@bakin/sdk`.
+This repository hosts community plugins and agent packages for Bakin. Each
+plugin lives at `plugins/<id>/` as a self-contained directory: manifest,
+source, tests, docs, dist (generated). Plugins are independent — there are no
+shared dependencies beyond `@makinbakin/sdk`.
 
 ## Prerequisites
 
 - **Bun** ≥ 1.3.13 (matches Bakin core; pinned in `.bun-version`)
-- A working **Bakin checkout** alongside this repo for end-to-end testing
-  (clone `markhayden/bakin` as a sibling of this repo)
+- A matching **Bakin** build for local install/link smoke tests
+- A working **Bakin checkout** alongside this repo only for hot-reload or
+  end-to-end development (clone `markhayden/bakin` as a sibling of this repo)
 
 ## Repo layout
 
@@ -19,7 +20,7 @@ bakin-bits-official/
 │   ├── _template/          ← copy this when starting a new plugin
 │   ├── messaging/          ← extracted from bakin/plugins/messaging
 │   └── projects/           ← extracted from bakin/plugins/projects
-├── agents/                 ← reserved for future agent packages
+├── agents/                 ← installable agent packages
 ├── package.json            ← workspaces: plugins/*
 ├── tsconfig.json
 ├── eslint.config.mjs
@@ -40,7 +41,7 @@ bakin-bits-official/
    - `name`, `description`, `version`, `permissions` (declare every
      capability the plugin uses; runtime gate added in the future).
 3. **Update `package.json`.** Set the workspace name (e.g.
-   `@bakin-bits/my-plugin`), keep `@bakin/sdk` in `peerDependencies`.
+   `@bakin-bits/my-plugin`), keep `@makinbakin/sdk` in `peerDependencies`.
 4. **Implement.** `index.ts` exports a `BakinPlugin` with `activate(ctx)`
    and (recommended) `onShutdown(ctx)`. `client.tsx` calls
    `registerPlugin({ id, navItems, routes })` for plugin-owned pages.
@@ -82,9 +83,9 @@ starting point.
 1. Fork + branch: `git checkout -b feat/my-plugin`
 2. Make changes; ensure CI passes locally:
    ```sh
-   bun typecheck
-   bun test --isolate
-   bun lint
+   bun run typecheck
+   bun run test
+   bun run lint
    ```
 3. Open a PR against `main`. Include:
    - What the plugin does (one sentence)
@@ -92,7 +93,7 @@ starting point.
    - Screenshot if it touches UI
 4. Reviews focus on the four areas: hot-reload compliance, permissions
    accuracy, error handling, and SDK boundary discipline (no imports
-   from outside `@bakin/sdk/*`).
+   from outside `@makinbakin/sdk/*`).
 
 ## Releasing a plugin
 

@@ -3,12 +3,12 @@
  * Manages content Plans, Deliverables, brainstorm sessions, prep tasks, and publishing.
  */
 import { z } from 'zod'
-import type { BakinPlugin, PluginContext } from '@bakin/sdk/types'
+import type { BakinPlugin, PluginContext } from '@makinbakin/sdk/types'
 import {
   brainstormThreadId,
   normalizeBrainstormActivityForStorage,
   runtimeChunkToBrainstormActivity,
-} from '@bakin/sdk/utils'
+} from '@makinbakin/sdk/utils'
 import type {
   BrainstormSession,
   ContentTone,

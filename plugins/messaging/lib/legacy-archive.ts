@@ -1,4 +1,4 @@
-import type { StorageAdapter } from '@bakin/sdk/types'
+import type { StorageAdapter } from '@makinbakin/sdk/types'
 import { generateId } from './ids'
 
 export const LEGACY_MESSAGING_FILE = 'messaging.json'

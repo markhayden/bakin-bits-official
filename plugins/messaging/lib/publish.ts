@@ -1,4 +1,4 @@
-import type { AssetFileRef, PluginContext } from '@bakin/sdk/types'
+import type { AssetFileRef, PluginContext } from '@makinbakin/sdk/types'
 import type { ContentTypeOption, Deliverable, DeliverableFailureStage } from '../types'
 import type { MessagingContentStorage } from './content-storage'
 

@@ -6,13 +6,13 @@ import { join, relative } from 'node:path'
 const PLUGINS = ['messaging', 'projects'] as const
 
 const HOST_EXTERNALS = new Set([
-  '@bakin/sdk',
-  '@bakin/sdk/components',
-  '@bakin/sdk/hooks',
-  '@bakin/sdk/slots',
-  '@bakin/sdk/types',
-  '@bakin/sdk/ui',
-  '@bakin/sdk/utils',
+  '@makinbakin/sdk',
+  '@makinbakin/sdk/components',
+  '@makinbakin/sdk/hooks',
+  '@makinbakin/sdk/slots',
+  '@makinbakin/sdk/types',
+  '@makinbakin/sdk/ui',
+  '@makinbakin/sdk/utils',
   'react',
   'react-dom',
   'react-dom/client',
@@ -53,7 +53,7 @@ function packageName(specifier: string): string | null {
   if (NODE_BUILTINS.has(specifier)) return null
   const bare = specifier.startsWith('node:') ? specifier.slice('node:'.length) : specifier
   if (NODE_BUILTINS.has(bare.split('/')[0])) return null
-  if (HOST_EXTERNALS.has(specifier) || specifier.startsWith('@bakin/sdk/')) return null
+  if (HOST_EXTERNALS.has(specifier) || specifier.startsWith('@makinbakin/sdk/')) return null
   const parts = bare.split('/')
   return bare.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0]
 }

@@ -1,6 +1,6 @@
 'use client'
 
-import { MarkdownEditor } from "@bakin/sdk/components"
+import { MarkdownEditor } from "@makinbakin/sdk/components"
 
 interface EditorProps {
   body: string

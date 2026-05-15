@@ -1,9 +1,9 @@
 /**
  * Projects plugin — client entry point.
  */
-import { registerPlugin } from '@bakin/sdk'
-import type { NavItem } from '@bakin/sdk'
-import { useRouter } from '@bakin/sdk/hooks'
+import { registerPlugin } from '@makinbakin/sdk'
+import type { NavItem } from '@makinbakin/sdk'
+import { useRouter } from '@makinbakin/sdk/hooks'
 import { Suspense, useEffect, type ReactNode } from 'react'
 import { ProjectGrid } from './components/project-grid'
 import { ProjectDetail } from './components/project-detail'

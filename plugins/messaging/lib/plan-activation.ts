@@ -1,4 +1,4 @@
-import type { PluginContext } from '@bakin/sdk/types'
+import type { PluginContext } from '@makinbakin/sdk/types'
 import type { ContentTypeOption, Deliverable, MessagingSettings, Plan, PlanChannel } from '../types'
 import { DEFAULT_CONTENT_TYPES } from '../types'
 import type { MessagingContentStorage } from './content-storage'

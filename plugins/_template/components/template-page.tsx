@@ -1,11 +1,11 @@
 /**
  * Page component for the _template plugin.
  *
- * Renders at `/_template` in the shell. Uses only `@bakin/sdk/*`
+ * Renders at `/_template` in the shell. Uses only `@makinbakin/sdk/*`
  * imports — never reach into Bakin internals or other plugin packages.
  */
 import type { ReactElement } from 'react'
-import { PluginHeader } from '@bakin/sdk/components'
+import { PluginHeader } from '@makinbakin/sdk/components'
 
 export function TemplatePage(): ReactElement {
   return (

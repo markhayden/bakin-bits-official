@@ -1,6 +1,6 @@
 'use client'
 
-import { Badge } from "@bakin/sdk/ui"
+import { Badge } from "@makinbakin/sdk/ui"
 import type { DeliverableStatus } from '../types'
 import { DELIVERABLE_STATUS_BADGE } from '../constants'
 
