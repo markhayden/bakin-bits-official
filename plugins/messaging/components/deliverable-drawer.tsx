@@ -7,8 +7,8 @@ import { Badge } from "@bakin/sdk/ui"
 import { Button } from "@bakin/sdk/ui"
 import { Textarea } from "@bakin/sdk/ui"
 import { Separator } from "@bakin/sdk/ui"
-import { AlertCircle, CalendarDays, Check, Clock, ImageIcon, Trash2, Video, X } from 'lucide-react'
-import type { AssetRequirement, ContentTypeOption, Deliverable } from '../types'
+import { AlertCircle, CalendarDays, Check, Clock, ImageIcon, RefreshCcw, RotateCcw, Trash2, Video, X } from 'lucide-react'
+import type { AssetRequirement, ContentTypeOption, Deliverable, DeliverableFailureStage } from '../types'
 import { getContentTypeLabel, useContentTypes } from '../hooks/use-content-types'
 import { DeliverableStatusBadge } from './deliverable-status-badge'
 
@@ -56,6 +56,35 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
   return fallback
 }
 
+function inferFailureStage(deliverable: Deliverable): DeliverableFailureStage | null {
+  if (deliverable.failureStage) return deliverable.failureStage
+  const reason = deliverable.failureReason ?? ''
+  if (reason.startsWith('workflow.complete fired')) return 'workflow_handoff'
+  if (reason.startsWith('Channel delivery')) return 'delivery'
+  if (reason.includes('asset missing') || reason.includes('not resolvable')) return 'validation'
+  return null
+}
+
+function recoveryActionFor(deliverable: Deliverable): { label: string; route: string; confirm?: string; icon: 'restore' | 'retry' } | null {
+  if (deliverable.status !== 'failed') return null
+  const stage = inferFailureStage(deliverable)
+  if (stage === 'workflow_handoff') {
+    return { label: 'Restore approval', route: 'restore-approval', icon: 'restore' }
+  }
+  if (stage === 'validation' || stage === 'workflow') {
+    return { label: 'Reopen prep', route: 'reopen-prep', icon: 'restore' }
+  }
+  if (stage === 'delivery') {
+    return {
+      label: 'Retry delivery',
+      route: 'retry-delivery',
+      icon: 'retry',
+      confirm: `Retry delivery to ${deliverable.channel}? This may publish or send the content externally.`,
+    }
+  }
+  return null
+}
+
 export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: DeliverableDrawerProps) {
   const contentTypes = useContentTypes()
   const [rejecting, setRejecting] = useState(false)
@@ -85,6 +114,7 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
   const canApproveAndPublishNow = deliverable.status === 'overdue'
   const canReject = deliverable.status === 'in_review'
   const approveDisabled = actionLoading || Boolean(missingRequirement)
+  const recoveryAction = recoveryActionFor(deliverable)
 
   const handleApprove = async () => {
     setActionLoading(true)
@@ -159,6 +189,31 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
     }
   }
 
+  const handleRecovery = async () => {
+    if (!recoveryAction) return
+    if (recoveryAction.confirm && !window.confirm(recoveryAction.confirm)) return
+
+    setActionLoading(true)
+    setActionError(null)
+    try {
+      const encoded = encodeURIComponent(deliverable.id)
+      const response = await fetch(`/api/plugins/messaging/deliverables/${encoded}/${recoveryAction.route}?id=${encoded}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (!response.ok) {
+        setActionError(await readErrorMessage(response, `Could not ${recoveryAction.label.toLowerCase()}.`))
+        return
+      }
+      await onUpdated?.()
+      onClose()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
   return (
     <BakinDrawer
       open={open}
@@ -200,6 +255,14 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
         </div>
 
         <div className="flex flex-wrap gap-2">
+          {recoveryAction && (
+            <Button size="sm" onClick={handleRecovery} disabled={actionLoading}>
+              {recoveryAction.icon === 'retry'
+                ? <RefreshCcw className="size-3.5" data-icon="inline-start" />
+                : <RotateCcw className="size-3.5" data-icon="inline-start" />}
+              {recoveryAction.label}
+            </Button>
+          )}
           {(canApprove || canApproveAndPublishNow) && (
             <Button
               size="sm"
@@ -240,6 +303,13 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
             </Button>
           )}
         </div>
+
+        {deliverable.failureReason && (
+          <div className="rounded-md border border-red-500/30 bg-red-500/10 p-3">
+            <div className="text-sm font-medium text-red-300">Failure reason</div>
+            <p className="mt-1 text-sm text-red-200">{deliverable.failureReason}</p>
+          </div>
+        )}
 
         {actionError && (
           <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
@@ -338,12 +408,6 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
           </div>
         )}
 
-        {deliverable.failureReason && (
-          <div className="rounded-md border border-red-500/30 bg-red-500/10 p-3">
-            <div className="text-sm font-medium text-red-300">Failure reason</div>
-            <p className="mt-1 text-sm text-red-200">{deliverable.failureReason}</p>
-          </div>
-        )}
       </div>
     </BakinDrawer>
   )

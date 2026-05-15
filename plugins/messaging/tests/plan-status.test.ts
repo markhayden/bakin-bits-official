@@ -51,12 +51,12 @@ describe('derivePlanStatus', () => {
     expect(derivePlanStatus({ ...basePlan, status: 'needs_review' }, [])).toBe('needs_review')
   })
 
-  it('returns fanning_out after content prep kickoff even before proposals arrive', () => {
-    expect(derivePlanStatus({ ...basePlan, fanOutTaskId: 'task-1' }, [])).toBe('fanning_out')
+  it('returns planning before activation creates Deliverables', () => {
+    expect(derivePlanStatus(basePlan, [])).toBe('planning')
   })
 
-  it('returns fanning_out when content piece planning has proposed deliverables', () => {
-    expect(derivePlanStatus({ ...basePlan, fanOutTaskId: 'task-1' }, [deliverable('proposed')])).toBe('fanning_out')
+  it('keeps proposed Deliverables in planning until approved into the prep flow', () => {
+    expect(derivePlanStatus(basePlan, [deliverable('proposed')])).toBe('planning')
   })
 
   it('returns in_prep for planned, in_prep, or changes_requested work', () => {
@@ -81,12 +81,16 @@ describe('derivePlanStatus', () => {
     expect(derivePlanStatus(basePlan, [deliverable('published'), deliverable('approved')])).toBe('partially_published')
   })
 
-  it('returns done for mixed terminal states when at least one deliverable published', () => {
-    expect(derivePlanStatus(basePlan, [deliverable('published'), deliverable('failed'), deliverable('cancelled')])).toBe('done')
+  it('returns failed when any deliverable needs recovery', () => {
+    expect(derivePlanStatus(basePlan, [deliverable('published'), deliverable('failed'), deliverable('cancelled')])).toBe('failed')
   })
 
   it('returns failed when all deliverables are failed or cancelled and none published', () => {
     expect(derivePlanStatus(basePlan, [deliverable('failed'), deliverable('cancelled')])).toBe('failed')
+  })
+
+  it('recomputes a previously failed plan once no deliverables are failed', () => {
+    expect(derivePlanStatus({ ...basePlan, status: 'failed' }, [deliverable('approved')])).toBe('scheduled')
   })
 })
 

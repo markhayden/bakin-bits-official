@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import {
   AgentAvatar,
   AgentFilter,
@@ -40,6 +40,7 @@ const PROPOSAL_PANEL_MAX_WIDTH = 720
 const PROPOSAL_PANEL_DEFAULT_WIDTH = 460
 const PROPOSAL_PANEL_STORAGE_KEY = 'messaging-proposal-panel-width'
 const DELETE_REQUEST_TIMEOUT_MS = 10000
+const REJECT_BUTTON_CLASS = 'border-red-500/50 text-red-400 hover:border-red-400 hover:bg-red-500/10 hover:text-red-300'
 
 function clampProposalPanelWidth(width: number): number {
   return Math.min(PROPOSAL_PANEL_MAX_WIDTH, Math.max(PROPOSAL_PANEL_MIN_WIDTH, width))
@@ -231,6 +232,25 @@ function hasInlineProposalActions(proposal: PlanProposal): boolean {
   return !proposal.planId && (proposal.status === 'proposed' || proposal.status === 'revised')
 }
 
+function parseChannelInput(value: string): string[] {
+  return value
+    .split(/[,\n]/)
+    .map(channel => channel.trim())
+    .filter(Boolean)
+}
+
+function addUniqueChannels(existing: string[], incoming: string[]): string[] {
+  const seen = new Set(existing.map(channel => channel.toLowerCase()))
+  const next = [...existing]
+  for (const channel of incoming) {
+    const key = channel.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    next.push(channel)
+  }
+  return next
+}
+
 function ProposalDrawer({
   proposal,
   open,
@@ -245,7 +265,8 @@ function ProposalDrawer({
   const [title, setTitle] = useState('')
   const [targetDate, setTargetDate] = useState('')
   const [brief, setBrief] = useState('')
-  const [channels, setChannels] = useState('')
+  const [channels, setChannels] = useState<string[]>([])
+  const [channelDraft, setChannelDraft] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -253,7 +274,8 @@ function ProposalDrawer({
     setTitle(proposal.title)
     setTargetDate(proposal.targetDate)
     setBrief(proposal.brief)
-    setChannels((proposal.suggestedChannels ?? []).join(', '))
+    setChannels(addUniqueChannels([], proposal.suggestedChannels ?? []))
+    setChannelDraft('')
   }, [proposal])
 
   if (!proposal) return null
@@ -261,6 +283,44 @@ function ProposalDrawer({
   const disabled = Boolean(proposal.planId || saving)
   const canReject = !proposal.planId && proposal.status !== 'rejected'
   const canAccept = !proposal.planId && proposal.status !== 'approved'
+  const commitChannelDraft = () => {
+    const parsed = parseChannelInput(channelDraft)
+    if (parsed.length === 0) {
+      setChannelDraft('')
+      return
+    }
+    setChannels(current => addUniqueChannels(current, parsed))
+    setChannelDraft('')
+  }
+  const removeChannel = (channel: string) => {
+    setChannels(current => current.filter(item => item !== channel))
+  }
+  const handleChannelChange = (value: string) => {
+    if (/[,\n]/.test(value)) {
+      setChannels(current => addUniqueChannels(current, parseChannelInput(value)))
+      setChannelDraft('')
+      return
+    }
+    setChannelDraft(value)
+  }
+  const handleChannelKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter' || event.key === ',') {
+      event.preventDefault()
+      commitChannelDraft()
+      return
+    }
+    if (event.key === 'Backspace' && channelDraft === '' && channels.length > 0) {
+      setChannels(current => current.slice(0, -1))
+    }
+  }
+  const handleChannelPaste = (event: ClipboardEvent<HTMLInputElement>) => {
+    const text = event.clipboardData.getData('text')
+    if (!/[,\n]/.test(text)) return
+    event.preventDefault()
+    setChannels(current => addUniqueChannels(current, parseChannelInput(text)))
+    setChannelDraft('')
+  }
+  const currentChannels = () => addUniqueChannels(channels, parseChannelInput(channelDraft))
   const save = async (status?: PlanProposal['status']) => {
     setSaving(true)
     try {
@@ -268,7 +328,7 @@ function ProposalDrawer({
         title: title.trim() || proposal.title,
         targetDate: targetDate.trim() || proposal.targetDate,
         brief: brief.trim() || proposal.brief,
-        suggestedChannels: channels.split(',').map(channel => channel.trim()).filter(Boolean),
+        suggestedChannels: currentChannels(),
         ...(status ? { status } : {}),
       })
       if (status) onClose()
@@ -286,85 +346,105 @@ function ProposalDrawer({
       title={proposal.title}
       defaultWidth={520}
       storageKey="messaging-proposal-review"
-      actions={
-        <div className="flex items-center gap-2">
-          {!proposal.planId && (
-            <>
-              {canReject && (
-                <Button variant="outline" onClick={() => save('rejected')} disabled={saving}>
-                  <X className="size-4" />
-                  Reject
-                </Button>
-              )}
-              {canAccept && (
-                <Button onClick={() => save('approved')} disabled={saving}>
-                  <Check className="size-4" />
-                  Accept
-                </Button>
-              )}
-            </>
-          )}
-        </div>
-      }
     >
-      <div className="space-y-5">
-        <section className="rounded-md border border-border bg-surface p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <ProposalStatusBadge proposal={proposal} />
-            {proposal.suggestedChannels?.map(channel => (
-              <Badge key={channel} variant="outline">{channel}</Badge>
-            ))}
-          </div>
-          <p className="mt-3 text-sm text-muted-foreground">{proposal.brief}</p>
-        </section>
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          <div className="space-y-5 pb-5">
+            <section className="rounded-md border border-border bg-surface p-4">
+              <ProposalStatusBadge proposal={proposal} />
+              <p className="mt-3 text-sm text-muted-foreground">{proposal.brief}</p>
+            </section>
 
-        <section className="grid gap-4">
-          <label className="grid gap-1.5 text-sm font-medium">
-            Title
-            <Input value={title} disabled={disabled} onChange={(event) => setTitle(event.target.value)} />
-          </label>
-          <label className="grid gap-1.5 text-sm font-medium">
-            Target date
-            <Input type="date" value={targetDate} disabled={disabled} onChange={(event) => setTargetDate(event.target.value)} />
-          </label>
-          <label className="grid gap-1.5 text-sm font-medium">
-            Brief
-            <textarea
-              value={brief}
-              disabled={disabled}
-              onChange={(event) => setBrief(event.target.value)}
-              rows={6}
-              className="min-h-32 rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
-            />
-          </label>
-          <label className="grid gap-1.5 text-sm font-medium">
-            Suggested channels
-            <Input
-              value={channels}
-              disabled={disabled}
-              onChange={(event) => setChannels(event.target.value)}
-              placeholder="instagram, blog, youtube"
-            />
-          </label>
-        </section>
+            <section className="grid gap-4">
+              <label className="grid gap-1.5 text-sm font-medium">
+                Title
+                <Input value={title} disabled={disabled} onChange={(event) => setTitle(event.target.value)} />
+              </label>
+              <label className="grid gap-1.5 text-sm font-medium">
+                Target date
+                <Input type="date" value={targetDate} disabled={disabled} onChange={(event) => setTargetDate(event.target.value)} />
+              </label>
+              <label className="grid gap-1.5 text-sm font-medium">
+                Brief
+                <textarea
+                  value={brief}
+                  disabled={disabled}
+                  onChange={(event) => setBrief(event.target.value)}
+                  rows={6}
+                  className="min-h-32 rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+                />
+              </label>
+              <label className="grid gap-1.5 text-sm font-medium">
+                Suggested channels
+                <div
+                  className={`flex min-h-10 flex-wrap items-center gap-2 rounded-md border border-border bg-background px-2 py-1 text-sm outline-none transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 ${
+                    disabled ? 'cursor-not-allowed opacity-50' : ''
+                  }`}
+                >
+                  {channels.map(channel => (
+                    <span
+                      key={channel}
+                      className="inline-flex h-7 max-w-full items-center gap-1.5 rounded-md border border-border bg-surface px-2 text-xs font-medium"
+                    >
+                      <span className="truncate">{channel}</span>
+                      {!disabled && (
+                        <button
+                          type="button"
+                          aria-label={`Remove ${channel}`}
+                          onClick={() => removeChannel(channel)}
+                          className="rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                        >
+                          <X className="size-3" />
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                  <input
+                    value={channelDraft}
+                    disabled={disabled}
+                    onBlur={commitChannelDraft}
+                    onChange={(event) => handleChannelChange(event.target.value)}
+                    onKeyDown={handleChannelKeyDown}
+                    onPaste={handleChannelPaste}
+                    placeholder={channels.length === 0 ? 'instagram, blog, youtube' : ''}
+                    aria-label="Suggested channels"
+                    className="min-h-7 min-w-24 flex-1 bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+                  />
+                </div>
+              </label>
+              {!proposal.planId && (canReject || canAccept) && (
+                <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+                  {canReject && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className={REJECT_BUTTON_CLASS}
+                      onClick={() => save('rejected')}
+                      disabled={saving}
+                    >
+                      <X className="size-3.5" />
+                      Decline
+                    </Button>
+                  )}
+                  {canAccept && (
+                    <Button size="sm" onClick={() => save('approved')} disabled={saving}>
+                      <Check className="size-3.5" />
+                      Accept
+                    </Button>
+                  )}
+                </div>
+              )}
+            </section>
+          </div>
+        </div>
 
         {!proposal.planId && (
-          <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-4">
-            <Button variant="outline" onClick={() => save()} disabled={saving}>
-              Save changes
-            </Button>
-            {canReject && (
-              <Button variant="outline" onClick={() => save('rejected')} disabled={saving}>
-                <X className="size-4" />
-                Reject
+          <div className="shrink-0 border-t border-border bg-background/95 pt-4">
+            <div>
+              <Button className="w-full justify-center" variant="outline" onClick={() => save()} disabled={saving}>
+                Save changes
               </Button>
-            )}
-            {canAccept && (
-              <Button onClick={() => save('approved')} disabled={saving}>
-                <Check className="size-4" />
-                Accept
-              </Button>
-            )}
+            </div>
           </div>
         )}
       </div>
@@ -574,7 +654,7 @@ export function BrainstormView() {
     const timeout = window.setTimeout(() => controller.abort(), DELETE_REQUEST_TIMEOUT_MS)
     try {
       const encoded = encodeURIComponent(deleteSessionId)
-      const response = await fetch(`/api/plugins/messaging/sessions/${encoded}?id=${encoded}&deleteCreatedPlans=true&deleteLinkedTasks=true`, {
+      const response = await fetch(`/api/plugins/messaging/sessions/${encoded}?id=${encoded}`, {
         method: 'DELETE',
         signal: controller.signal,
       })
@@ -636,7 +716,7 @@ export function BrainstormView() {
       <div className="relative w-[420px] rounded-md border border-border bg-background p-5 shadow-2xl">
         <h2 className="text-sm font-semibold">Delete this brainstorm session?</h2>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          This removes the brainstorm, any plans prepared from accepted proposals, and linked board tasks for those plans.
+          This removes only the brainstorm. Plans already prepared from this session and their board tasks stay in place.
         </p>
         <p className="mt-3 truncate text-xs text-muted-foreground">{sessionPendingDelete.title}</p>
         <div className="mt-5 flex justify-end gap-2">
@@ -753,10 +833,23 @@ export function BrainstormView() {
                         </div>
                       )}
                       {hasInlineProposalActions(proposal) && (
-                        <div className="mt-3 flex flex-wrap gap-2">
+                        <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
                           <Button
                             type="button"
+                            size="sm"
                             variant="outline"
+                            className={`px-3 ${REJECT_BUTTON_CLASS}`}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              updateProposal(proposal, { status: 'rejected' })
+                            }}
+                          >
+                            <X className="size-3.5" data-icon="inline-start" />
+                            Decline
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
                             className="px-3"
                             onClick={(event) => {
                               event.stopPropagation()
@@ -765,18 +858,6 @@ export function BrainstormView() {
                           >
                             <Check className="size-3.5" data-icon="inline-start" />
                             Accept
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            className="px-3"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              updateProposal(proposal, { status: 'rejected' })
-                            }}
-                          >
-                            <X className="size-3.5" data-icon="inline-start" />
-                            Reject
                           </Button>
                         </div>
                       )}

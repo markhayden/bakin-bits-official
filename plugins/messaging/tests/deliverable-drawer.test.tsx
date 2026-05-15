@@ -75,6 +75,7 @@ function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
 
 beforeEach(() => {
   globalThis.fetch = mock(async () => ({ ok: true, json: async () => ({ ok: true }) })) as unknown as typeof fetch
+  globalThis.confirm = mock(() => true) as unknown as typeof confirm
 })
 
 afterEach(() => cleanup())
@@ -139,6 +140,84 @@ describe('DeliverableDrawer', () => {
       )
     })
     expect(onUpdated).toHaveBeenCalled()
+  })
+
+  it('restores approval from a workflow handoff failure', async () => {
+    const onClose = mock()
+    const onUpdated = mock()
+    render(
+      <DeliverableDrawer
+        deliverable={makeDeliverable({
+          status: 'failed',
+          contentType: 'blog',
+          failureReason: 'workflow.complete fired but messaging-side status was in_review',
+          failureStage: 'workflow_handoff',
+        })}
+        open
+        onClose={onClose}
+        onUpdated={onUpdated}
+      />,
+    )
+
+    fireEvent.click(screen.getByText('Restore approval'))
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        '/api/plugins/messaging/deliverables/deliverable-1/restore-approval?id=deliverable-1',
+        expect.objectContaining({ method: 'POST' }),
+      )
+    })
+    expect(onUpdated).toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('reopens prep from validation failures', async () => {
+    render(
+      <DeliverableDrawer
+        deliverable={makeDeliverable({
+          status: 'failed',
+          contentType: 'blog',
+          failureReason: 'Required image asset missing on Deliverable',
+          failureStage: 'validation',
+        })}
+        open
+        onClose={mock()}
+      />,
+    )
+
+    fireEvent.click(screen.getByText('Reopen prep'))
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        '/api/plugins/messaging/deliverables/deliverable-1/reopen-prep?id=deliverable-1',
+        expect.objectContaining({ method: 'POST' }),
+      )
+    })
+  })
+
+  it('confirms before retrying external delivery', async () => {
+    render(
+      <DeliverableDrawer
+        deliverable={makeDeliverable({
+          status: 'failed',
+          contentType: 'blog',
+          failureReason: 'Channel delivery failed: offline',
+          failureStage: 'delivery',
+        })}
+        open
+        onClose={mock()}
+      />,
+    )
+
+    fireEvent.click(screen.getByText('Retry delivery'))
+
+    expect(globalThis.confirm).toHaveBeenCalledWith('Retry delivery to general? This may publish or send the content externally.')
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        '/api/plugins/messaging/deliverables/deliverable-1/retry-delivery?id=deliverable-1',
+        expect.objectContaining({ method: 'POST' }),
+      )
+    })
   })
 
   it('deletes a scheduled content piece from the drawer', async () => {

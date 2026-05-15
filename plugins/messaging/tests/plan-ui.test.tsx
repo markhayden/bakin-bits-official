@@ -92,7 +92,13 @@ const PLAN: Plan = {
   targetDate: '2026-05-25',
   agent: 'basil',
   status: 'planning',
-  suggestedChannels: ['newsletter'],
+  channels: [{
+    id: 'newsletter',
+    channel: 'newsletter',
+    contentType: 'blog',
+    publishAt: '2026-05-25T16:00:00Z',
+    prepStartAt: '2026-05-22T16:00:00Z',
+  }],
   createdAt: '2026-05-10T00:00:00Z',
   updatedAt: '2026-05-10T00:00:00Z',
 }
@@ -114,17 +120,25 @@ const PROPOSED_DELIVERABLE: Deliverable = {
   updatedAt: '2026-05-10T00:00:00Z',
 }
 
-let fanOutStarted = false
+let activationStarted = false
 let planResponse: Plan = PLAN
 let deliverables: Deliverable[] = []
-const putBodies: Record<string, unknown>[] = []
 
 function installFetchMock() {
-  globalThis.fetch = mock().mockImplementation(async (url: string, init?: RequestInit) => {
-    if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/plans/plan-1/start-fanout')) {
-      fanOutStarted = true
-      planResponse = { ...planResponse, fanOutTaskId: 'task-1', status: 'fanning_out' }
-      return { ok: true, json: async () => ({ ok: true, plan: planResponse, taskId: 'task-1' }) }
+  globalThis.fetch = mock().mockImplementation(async (url: string) => {
+    if (typeof url === 'string' && url.startsWith('/api/plugin-settings/messaging')) {
+      return { ok: true, json: async () => ({ contentTypes: [{ id: 'blog', label: 'Blog post', prepLeadHours: 72 }] }) }
+    }
+    if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/plans/plan-1/activate')) {
+      activationStarted = true
+      planResponse = { ...planResponse, status: 'in_prep' }
+      deliverables = [{
+        ...PROPOSED_DELIVERABLE,
+        id: 'deliverable-activated',
+        status: 'planned',
+        taskId: 'task-1',
+      }]
+      return { ok: true, json: async () => ({ ok: true, plan: planResponse, deliverables, taskIds: ['task-1'], alreadyActivated: false }) }
     }
     if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/plans/plan-1')) {
       return {
@@ -138,25 +152,14 @@ function installFetchMock() {
     if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/plans')) {
       return { ok: true, json: async () => ({ plans: [planResponse] }) }
     }
-    if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/deliverables/deliverable-1')) {
-      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
-      putBodies.push(body)
-      deliverables = deliverables.map((deliverable) =>
-        deliverable.id === 'deliverable-1'
-          ? { ...deliverable, status: body.status as Deliverable['status'] }
-          : deliverable,
-      )
-      return { ok: true, json: async () => ({ ok: true, deliverable: deliverables[0] }) }
-    }
     return { ok: true, json: async () => ({}) }
   }) as unknown as typeof fetch
 }
 
 beforeEach(() => {
-  fanOutStarted = false
+  activationStarted = false
   planResponse = PLAN
-  deliverables = [PROPOSED_DELIVERABLE]
-  putBodies.length = 0
+  deliverables = []
   installFetchMock()
 })
 
@@ -180,10 +183,38 @@ describe('Plan client UI', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Tasks')).toBeDefined()
-      expect(screen.getByText('Content Piece Suggestions')).toBeDefined()
+      expect(screen.getByText('Content Pieces')).toBeDefined()
     })
     expect(screen.queryByText('Start fan-out')).toBeNull()
-    expect(fanOutStarted).toBe(false)
+    expect(activationStarted).toBe(false)
+  })
+
+  it('shows only selected channel rows after task-backed activation locks channels', async () => {
+    planResponse = {
+      ...PLAN,
+      channels: [{
+        id: 'instagram',
+        channel: 'instagram',
+        contentType: 'blog',
+        publishAt: '2026-05-25T16:00:00Z',
+        prepStartAt: '2026-05-22T16:00:00Z',
+      }],
+    }
+    deliverables = [{
+      ...PROPOSED_DELIVERABLE,
+      channel: 'instagram',
+      status: 'planned',
+      taskId: 'task-1',
+    }]
+
+    render(<PlanWorkspace planId="plan-1" />)
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Delete instagram channel')).toBeDefined()
+    })
+    expect(screen.queryByText('Select one or more channels')).toBeNull()
+    expect(screen.queryByText('Channel edits are locked after activation because linked board tasks already exist.')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Instagram' })).toBeNull()
   })
 
   it('requires an explicit kickoff before content prep starts', async () => {
@@ -194,25 +225,12 @@ describe('Plan client UI', () => {
     await waitFor(() => {
       expect(screen.getByText('Review this plan before work starts')).toBeDefined()
     })
-    expect(fanOutStarted).toBe(false)
+    expect(activationStarted).toBe(false)
 
     fireEvent.click(screen.getByText('Kickoff content prep'))
 
     await waitFor(() => {
-      expect(fanOutStarted).toBe(true)
-    })
-  })
-
-  it('approves proposed Deliverables into planned status', async () => {
-    render(<PlanWorkspace planId="plan-1" />)
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('Accept Soup blog')).toBeDefined()
-    })
-    fireEvent.click(screen.getByLabelText('Accept Soup blog'))
-
-    await waitFor(() => {
-      expect(putBodies[0]).toEqual({ status: 'planned' })
+      expect(activationStarted).toBe(true)
     })
   })
 

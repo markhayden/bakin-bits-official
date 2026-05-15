@@ -12,7 +12,6 @@ export const TONE_LABELS: Record<ContentTone, string> = {
 export const PLAN_STATUS_BADGE: Record<PlanStatus, string> = {
   needs_review: 'bg-amber-500/20 text-amber-300',
   planning: 'bg-zinc-500/20 text-zinc-400',
-  fanning_out: 'bg-violet-500/20 text-violet-300',
   in_prep: 'bg-amber-500/20 text-amber-300',
   in_review: 'bg-yellow-500/20 text-yellow-300',
   scheduled: 'bg-sky-500/20 text-sky-300',

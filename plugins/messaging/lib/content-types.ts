@@ -30,7 +30,6 @@ export async function normalizeContentTypes(
       const exists = await opts.workflowExists(merged.workflowId)
       if (!exists) {
         opts.onMissingWorkflow?.(merged.id, merged.workflowId)
-        delete merged.workflowId
       }
     }
 
@@ -60,7 +59,7 @@ export async function normalizeContentTypesForActivate(
       }
     },
     onMissingWorkflow: (contentTypeId, workflowId) => {
-      warn('Messaging content type workflow unavailable; falling back to bare-task lifecycle', {
+      warn('Messaging content type workflow unavailable during activate; retaining workflowId for task adapter', {
         contentTypeId,
         workflowId,
       })

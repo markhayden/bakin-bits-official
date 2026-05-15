@@ -176,6 +176,7 @@ describe('publishDeliverableNow', () => {
     const saved = store.getDeliverable(deliverable.id)!
     expect(saved.status).toBe('failed')
     expect(saved.failureReason).toBe('Required image asset missing on Deliverable')
+    expect(saved.failureStage).toBe('validation')
     expect(saved.failedAt).toBeTruthy()
     expect(ctx.runtime.channels.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
       channels: ['general'],
@@ -193,6 +194,7 @@ describe('publishDeliverableNow', () => {
     const saved = store.getDeliverable(deliverable.id)!
     expect(saved.status).toBe('failed')
     expect(saved.failureReason).toBe('Channel delivery failed: channel offline')
+    expect(saved.failureStage).toBe('delivery')
   }))
 
   it('marks failed when delivery returns no reference', async () => withStore(async (store) => {
@@ -205,5 +207,6 @@ describe('publishDeliverableNow', () => {
     const saved = store.getDeliverable(deliverable.id)!
     expect(saved.status).toBe('failed')
     expect(saved.failureReason).toBe('Channel delivery did not return a delivery reference')
+    expect(saved.failureStage).toBe('delivery')
   }))
 })

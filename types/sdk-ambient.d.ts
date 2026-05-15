@@ -373,6 +373,13 @@ declare module '@bakin/sdk/types' {
     data?: Record<string, unknown>
   }
 
+  export interface TaskSource {
+    pluginId: string
+    entityType?: string
+    entityId?: string
+    purpose?: string
+  }
+
   export interface Task {
     id: string
     title: string
@@ -383,10 +390,14 @@ declare module '@bakin/sdk/types' {
     date?: string
     blockedReason?: string
     description?: string
+    availableAt?: string
+    dueAt?: string
+    source?: TaskSource
     log?: TaskLogEntry[]
     dependsOn?: string
     parentId?: string | null
     workflowId?: string
+    skipWorkflowReason?: string
     scheduleJobId?: string
     projectId?: string
     order?: number
@@ -402,6 +413,9 @@ declare module '@bakin/sdk/types' {
     createdBy?: string
     column?: ColumnId
     date?: string
+    availableAt?: string
+    dueAt?: string
+    source?: TaskSource
     workflowId?: string
     projectId?: string
     parentId?: string | null
@@ -416,6 +430,9 @@ declare module '@bakin/sdk/types' {
     checked?: boolean
     column?: ColumnId
     date?: string
+    availableAt?: string
+    dueAt?: string
+    source?: TaskSource
     blockedReason?: string
     workflowId?: string
     scheduleJobId?: string
@@ -822,9 +839,11 @@ declare module '@bakin/sdk/components' {
   export const MarkdownEditor: SDKComponent
   export const PluginHeader: ComponentType<{
     title: string
+    subtitle?: string
     count?: number
     search?: Record<string, unknown>
     actions?: ReactNode
+    meta?: ReactNode
     children?: ReactNode
   }>
   export const SortableHead: ComponentType<Record<string, unknown> & { children?: ReactNode }>

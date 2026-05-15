@@ -163,6 +163,7 @@ const DELIVERABLES: Deliverable[] = [
     publishAt: '2026-04-15T10:00:00Z',
     prepStartAt: '2026-04-12T10:00:00Z',
     status: 'planned',
+    taskId: 'task-a',
     draft: { caption: 'Try this!', agentNotes: 'Use mango' },
     createdAt: '2026-04-01T00:00:00Z',
     updatedAt: '2026-04-01T00:00:00Z',
@@ -179,6 +180,7 @@ const DELIVERABLES: Deliverable[] = [
     publishAt: '2026-04-16T10:00:00Z',
     prepStartAt: '2026-04-16T06:00:00Z',
     status: 'approved',
+    taskId: 'task-b',
     draft: { caption: 'Hit the trails', agentNotes: 'mention shoes' },
     createdAt: '2026-04-01T00:00:00Z',
     updatedAt: '2026-04-01T00:00:00Z',
@@ -194,6 +196,38 @@ const DELIVERABLES: Deliverable[] = [
     brief: 'Box breathing intro',
     publishAt: '2026-04-17T10:00:00Z',
     prepStartAt: '2026-04-17T09:00:00Z',
+    status: 'planned',
+    draft: {},
+    createdAt: '2026-04-01T00:00:00Z',
+    updatedAt: '2026-04-01T00:00:00Z',
+  },
+  {
+    id: 'invalid-plan-owned',
+    planId: 'plan-bad',
+    channel: 'instagram',
+    contentType: 'image-social-post',
+    tone: 'calm',
+    agent: 'scout',
+    title: 'Invalid plan duplicate',
+    brief: 'This leaked before activation and should not show on the calendar.',
+    publishAt: '2026-04-18T10:00:00Z',
+    prepStartAt: '2026-04-17T09:00:00Z',
+    status: 'planned',
+    draft: {},
+    createdAt: '2026-04-01T00:00:00Z',
+    updatedAt: '2026-04-01T00:00:00Z',
+  },
+  {
+    id: 'proposal',
+    planId: null,
+    channel: 'reddit',
+    contentType: 'text-social-post',
+    tone: 'calm',
+    agent: 'scout',
+    title: 'Proposal only',
+    brief: 'Proposals are not scheduled calendar work.',
+    publishAt: '2026-04-19T10:00:00Z',
+    prepStartAt: '2026-04-18T09:00:00Z',
     status: 'proposed',
     draft: {},
     createdAt: '2026-04-01T00:00:00Z',
@@ -240,13 +274,15 @@ describe('ContentCalendar (Deliverable local filter)', () => {
     })
   })
 
-  it('shows all Deliverables when search query is empty', async () => {
+  it('shows only calendar-visible Deliverables when search query is empty', async () => {
     render(<ContentCalendar />)
     await waitFor(() => {
       expect(screen.getByTestId('calendar-deliverable-a')).toBeDefined()
     })
     expect(screen.getByTestId('calendar-deliverable-b')).toBeDefined()
     expect(screen.getByTestId('calendar-deliverable-c')).toBeDefined()
+    expect(screen.queryByTestId('calendar-deliverable-invalid-plan-owned')).toBeNull()
+    expect(screen.queryByTestId('calendar-deliverable-proposal')).toBeNull()
   })
 
   it('exposes the "Search calendar..." placeholder on the input', async () => {

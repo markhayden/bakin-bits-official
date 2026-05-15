@@ -46,7 +46,7 @@ describe('normalizeContentTypes', () => {
     })
   })
 
-  it('clears unavailable workflow definitions and reports them', async () => {
+  it('reports unavailable workflow definitions without clearing configured workflowIds', async () => {
     const onMissingWorkflow = mock()
     const result = await normalizeContentTypes([
       { id: 'blog', label: 'Blog post' },
@@ -57,7 +57,7 @@ describe('normalizeContentTypes', () => {
     })
 
     expect(result.contentTypes[0].workflowId).toBe('messaging-blog-prep')
-    expect(result.contentTypes[1].workflowId).toBeUndefined()
+    expect(result.contentTypes[1].workflowId).toBe('messaging-video-prep')
     expect(onMissingWorkflow).toHaveBeenCalledWith('video', 'messaging-video-prep')
   })
 })

@@ -1,5 +1,5 @@
 import type { AssetFileRef, PluginContext } from '@bakin/sdk/types'
-import type { ContentTypeOption, Deliverable } from '../types'
+import type { ContentTypeOption, Deliverable, DeliverableFailureStage } from '../types'
 import type { MessagingContentStorage } from './content-storage'
 
 export type BuildFilesResult =
@@ -67,11 +67,13 @@ async function markPublishFailed(
   store: MessagingContentStorage,
   deliverable: Deliverable,
   reason: string,
+  failureStage: DeliverableFailureStage,
   ctx: PluginContext,
 ): Promise<PublishDeliverableResult> {
   const failed = store.updateDeliverable(deliverable.id, {
     status: 'failed',
     failureReason: reason,
+    failureStage,
     failedAt: new Date().toISOString(),
   })
   ctx.activity.audit('deliverable.publish_failed', 'system', { deliverableId: deliverable.id, reason })
@@ -87,7 +89,7 @@ export async function publishDeliverableNow(
   ctx: PluginContext,
 ): Promise<PublishDeliverableResult> {
   const filesResult = await buildFilesFromDraft(deliverable, contentType, ctx)
-  if (!filesResult.ok) return markPublishFailed(store, deliverable, filesResult.reason, ctx)
+  if (!filesResult.ok) return markPublishFailed(store, deliverable, filesResult.reason, 'validation', ctx)
 
   try {
     const result = await ctx.runtime.channels.deliverContent({
@@ -105,13 +107,17 @@ export async function publishDeliverableNow(
     })
     const delivery = result.deliveries[0]
     if (!delivery?.ref) {
-      return markPublishFailed(store, deliverable, 'Channel delivery did not return a delivery reference', ctx)
+      return markPublishFailed(store, deliverable, 'Channel delivery did not return a delivery reference', 'delivery', ctx)
     }
 
     const published = store.updateDeliverable(deliverable.id, {
       status: 'published',
       publishedAt: new Date().toISOString(),
       publishedDeliveryRef: delivery.ref,
+      failureReason: null as never,
+      failureStage: null as never,
+      failedStep: null as never,
+      failedAt: null as never,
     })
     ctx.activity.audit('deliverable.published', 'system', { deliverableId: deliverable.id, deliveryRef: delivery.ref })
     ctx.activity.log(deliverable.agent, `Published "${deliverable.title}"`)
@@ -121,6 +127,7 @@ export async function publishDeliverableNow(
       store,
       deliverable,
       `Channel delivery failed: ${err instanceof Error ? err.message : String(err)}`,
+      'delivery',
       ctx,
     )
   }

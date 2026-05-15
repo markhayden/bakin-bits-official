@@ -18,7 +18,8 @@ messaging/deliverables/<deliverableId>.json
 - `BrainstormSession` stores visible chat messages, streamed runtime activity,
   Plan proposals, and the Plan ids created from the session.
 - `Plan` is one topic or date focus, such as "Taco Tuesday". A Plan has a
-  soft `targetDate`, a lead agent, optional campaign text, and planning status.
+  soft `targetDate`, a lead agent, optional campaign text, concrete channel
+  configuration, and planning status.
 - `Deliverable` is the channel-specific work item. It has exact `publishAt`
   and `prepStartAt` timestamps, a content type, status, draft fields, optional
   Bakin task and workflow ids, and publish/failure metadata.
@@ -45,25 +46,32 @@ The header-level Quick Post action creates a free-floating Deliverable with
    `title`, `targetDate`, `brief`, and optional `suggestedChannels`.
 2. Accept proposals and prepare Plans from them. No production work starts at
    this step. Prepared Plans start in `needs_review`.
-3. Review the Plan workspace. Confirm the angle, pick channels, and add
+3. Review the Plan workspace. Confirm the angle, configure concrete channels
+   with content type and publish timing, and add
    guidance in the embedded brainstorm.
-4. Kickoff content prep when the Plan is ready. This creates the planning task
-   that asks the lead agent to propose channel-specific content pieces.
-5. Shape the Plan into channel-specific content pieces. A Bakin task can ask
-   the lead agent to call `bakin_exec_messaging_propose_deliverable` once per
-   intended channel.
-6. Approve, edit, or reject proposed Deliverables in the Plan workspace.
-7. The sweep cron runs `bakin:messaging:sweep`. Planned Deliverables whose prep
-   window has opened become prep tasks. Content types with `workflowId` use
-   workflow-backed prep; others use bare Bakin tasks.
-8. Drafts move to review. Approval validates required assets before status
+4. Activate the Plan when it is ready. This is the only supported path for
+   creating Plan-owned Deliverables. Activation creates one Deliverable and
+   one Bakin kickoff task per configured channel. The kickoff task is scheduled
+   with `availableAt = prepStartAt`, `dueAt = publishAt`, and a `source`
+   pointing back to the Deliverable.
+5. The task dispatcher picks up each kickoff task only after `availableAt`.
+   Content types with `workflowId` use workflow-backed prep; others use bare
+   Bakin tasks.
+6. Drafts move to review. Approval validates required assets before status
    moves to `approved`.
-9. Approved bare-task Deliverables publish on the sweep when `publishAt` is due.
-   Workflow-backed Deliverables publish on `workflow.complete` after messaging
-   has approved the gate.
+7. Publishing happens through explicit workflow/channel behavior or explicit
+   user action. Messaging does not register a cron job or background sweep.
 
-Missed unapproved publish windows become `overdue`. Failed publishes store
-`failureReason` and `failedAt`.
+Missed unapproved publish windows become `overdue`. Failed Deliverables store
+`failureReason`, `failureStage`, `failedStep`, and `failedAt` so the drawer can
+offer one explicit recovery action:
+
+- `Restore approval` for workflow handoff failures where the workflow completed
+  but Messaging did not record the approved state.
+- `Reopen prep` for validation/workflow repair, preserving workflow-backed
+  Deliverables through `workflows.reopenFromStep`.
+- `Retry delivery` for channel delivery failures, with confirmation because it
+  may publish or send externally.
 
 ## Content Types
 
@@ -76,7 +84,10 @@ Missed unapproved publish windows become `overdue`. Failed publishes store
 - `defaultAgent` can route a type to a specialist.
 
 Defaults are seeded and normalized on activate. If a configured workflow cannot
-be loaded, Messaging clears that `workflowId` and falls back to bare-task prep.
+be loaded during activate, Messaging keeps the configured `workflowId`; runtime
+availability is resolved by the task/workflow adapters when kickoff tasks run.
+Tasks without a configured workflow include `skipWorkflowReason` so the board
+records why they use bare-task prep.
 
 ## Runtime Contract
 
@@ -104,7 +115,8 @@ Routes are mounted under `/api/plugins/messaging`.
   `POST /sessions/:id/messages`, `PUT /sessions/:id/proposals/:proposalId`,
   `POST /sessions/:id/materialize`
 - Plans: `GET /plans`, `GET /plans/:id`, `POST /plans`, `PUT /plans/:id`,
-  `DELETE /plans/:id`, `POST /plans/:id/start-fanout`
+  `DELETE /plans/:id`, `DELETE /plans/:id/channels/:channelId`,
+  `POST /plans/:id/activate`
 - Deliverables: `GET /deliverables`, `GET /deliverables/:id`,
   `POST /deliverables`, `PUT /deliverables/:id`,
   `POST /deliverables/:id/approve`, `POST /deliverables/:id/reject`,
@@ -132,15 +144,21 @@ Plan and Deliverable tools:
 - `bakin_exec_messaging_plan_list`
 - `bakin_exec_messaging_plan_get`
 - `bakin_exec_messaging_plan_create`
-- `bakin_exec_messaging_plan_start_fanout`
-- `bakin_exec_messaging_propose_deliverable`
+- `bakin_exec_messaging_plan_delete`
+- `bakin_exec_messaging_plan_channel_delete`
+- `bakin_exec_messaging_plan_activate`
 - `bakin_exec_messaging_deliverable_list`
 - `bakin_exec_messaging_deliverable_get`
-- `bakin_exec_messaging_deliverable_create`
+- `bakin_exec_messaging_deliverable_create` (Quick Posts only; Plan
+  Deliverables are created by Plan activation)
 - `bakin_exec_messaging_deliverable_update`
 - `bakin_exec_messaging_deliverable_ready_for_review`
 - `bakin_exec_messaging_deliverable_approve`
 - `bakin_exec_messaging_deliverable_reject`
+
+Agent-facing activation and approval tools are blocked by default. Enable
+`agentPlanActivationPolicy = allowed` or
+`agentDeliverableApprovalPolicy = allowed` only for trusted agents.
 
 ## Workflows
 
@@ -150,10 +168,15 @@ The plugin ships three default workflow definitions:
 - `messaging-video-prep`
 - `messaging-image-post-prep`
 
-Messaging never imports the workflows plugin directly. It creates prep tasks
-with `ctx.tasks.create({ workflowId })`, listens for `workflow.gate_reached`
+Messaging never imports the workflows plugin directly. It creates scheduled
+prep tasks with
+`ctx.tasks.create({ workflowId, skipWorkflowReason, availableAt, dueAt, source })`,
+listens for `workflow.gate_reached`
 and `workflow.complete`, and resolves gates through
 `ctx.hooks.invoke('workflows.approveGate' | 'workflows.rejectGate', ...)`.
+Recovery also goes through hooks: workflow-backed prep repair calls
+`ctx.hooks.invoke('workflows.reopenFromStep', ...)`; Messaging never edits
+workflow instance files directly.
 
 ## Tests
 
@@ -164,6 +187,6 @@ bun test --isolate --preload ./test/setup-dom.ts plugins/messaging/tests
 ```
 
 Relevant coverage includes storage and atomic writes, prompt building and SSE
-streaming, Plan preparation, content-piece planning, Deliverable review and
-publishing, workflow bridge behavior, default workflows, content-type refresh,
-calendar filters, Quick Post, and the Plan/brainstorm UI.
+streaming, Plan preparation and activation, scheduled kickoff task creation,
+Deliverable review and publishing, workflow bridge behavior, default workflows,
+content-type refresh, calendar filters, Quick Post, and the Plan/brainstorm UI.

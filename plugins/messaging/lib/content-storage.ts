@@ -45,6 +45,21 @@ function withoutUndefined<T extends Record<string, unknown>>(value: T): Partial<
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as Partial<T>
 }
 
+const CLEARABLE_DELIVERABLE_FIELDS = new Set<keyof Deliverable>([
+  'planChannelId',
+  'prepStartAtOverride',
+  'taskId',
+  'workflowInstanceId',
+  'pendingGateStepId',
+  'rejectionNote',
+  'failureReason',
+  'failureStage',
+  'failedStep',
+  'failedAt',
+  'publishedAt',
+  'publishedDeliveryRef',
+])
+
 export type CreateBrainstormSessionInput = Omit<BrainstormSession, 'id' | 'createdAt' | 'updatedAt' | 'messages' | 'proposals' | 'createdAtPlanIds' | 'status'> & {
   id?: string
   status?: BrainstormSession['status']
@@ -219,12 +234,17 @@ export function createMessagingContentStorage(storage: StorageAdapter): Messagin
     const existing = getDeliverable(id)
     if (!existing) throw new Error(`Deliverable ${id} not found`)
     const cleanPatch = withoutUndefined(patch as Record<string, unknown>) as Partial<Deliverable>
-    const next: Deliverable = {
+    const next = {
       ...existing,
       ...cleanPatch,
       id: existing.id,
       draft: patch.draft ? { ...existing.draft, ...patch.draft } : existing.draft,
       updatedAt: nowIso(),
+    } as Deliverable
+    for (const field of CLEARABLE_DELIVERABLE_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(patch, field) && (patch as Record<string, unknown>)[field] === null) {
+        delete (next as unknown as Record<string, unknown>)[field]
+      }
     }
     saveDeliverable(next)
     return next

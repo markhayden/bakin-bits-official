@@ -54,7 +54,7 @@ bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging@me
 
 | Plugin       | Status   | Description                                                        |
 | ------------ | -------- | ------------------------------------------------------------------ |
-| `messaging`  | active   | Content Plans, Deliverables, brainstorm sessions, prep sweeps, and publishing. |
+| `messaging`  | active   | Content Plans, Deliverables, brainstorm sessions, task-backed prep, and publishing. |
 | `projects`   | active   | Project specs, checklists, task links, and project MCP tools.      |
 | `_template`  | scaffold | Starter plugin layout for new contributors.                        |
 
@@ -100,10 +100,11 @@ For durable agent chat surfaces, use stable adapter-neutral thread IDs via
 and tool activity for UI hydration, but let the runtime adapter maintain
 conversation continuity for repeated `agentId + threadId` calls.
 
-For plugin-owned background jobs, register a hook and create a cron command
-using the `bakin:<pluginId>:<action>` convention. The Messaging plugin uses
-`bakin:messaging:sweep` to run its content sweep without creating a synthetic
-Bakin task on every tick.
+For plugin-owned recurring jobs, register a hook and create a cron command
+using the `bakin:<pluginId>:<action>` convention. Do not use cron for
+task-backed workflow timing. Messaging Plans use explicit activation and
+scheduled task records (`availableAt`) so dispatch remains the single wakeup
+path for content prep.
 
 ## Repository layout
 

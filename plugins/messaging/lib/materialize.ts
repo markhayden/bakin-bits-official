@@ -22,7 +22,6 @@ export function materializeApprovedProposals(
       agent: proposal.agentId,
       status: 'needs_review',
       sourceSessionId: session.id,
-      suggestedChannels: proposal.suggestedChannels,
     })
     proposal.planId = plan.id
     planIds.push(plan.id)

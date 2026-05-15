@@ -43,6 +43,9 @@ beforeEach(() => {
     const full = join(testDir, 'messaging', dir)
     if (existsSync(full)) rmSync(full, { recursive: true, force: true })
   }
+  plugin.ctx.getSettings = (() => ({})) as typeof plugin.ctx.getSettings
+  plugin.ctx.hooks.has = mock(() => false) as typeof plugin.ctx.hooks.has
+  plugin.ctx.hooks.invoke = mock(async () => undefined) as typeof plugin.ctx.hooks.invoke
   mock.clearAllMocks()
 })
 
@@ -79,7 +82,7 @@ async function createDeliverable(overrides: Record<string, unknown> = {}): Promi
 }
 
 describe('Deliverable routes', () => {
-  it('creates, lists, gets, updates, and deletes a planned Deliverable under a Plan', async () => {
+  it('rejects direct Plan Deliverable creation because activation owns Plan work', async () => {
     const plan = await createPlan()
     const createRoute = findRoute(plugin.routes, 'POST', '/deliverables')!
     const created = await callRoute(createRoute, plugin.ctx, {
@@ -95,50 +98,12 @@ describe('Deliverable routes', () => {
       },
     })
 
-    expect(created.status).toBe(200)
-    const deliverable = created.body.deliverable as Record<string, unknown>
-    expect(deliverable.status).toBe('planned')
-    expect(deliverable.prepStartAt).toBe('2026-05-22T16:00:00.000Z')
+    expect(created.status).toBe(409)
+    expect(created.body.error).toBe('Plan Deliverables are created only by Plan activation after channels are approved')
 
     const listRoute = findRoute(plugin.routes, 'GET', '/deliverables')!
-    const listed = await callRoute(listRoute, plugin.ctx, {
-      searchParams: {
-        planId: plan.id as string,
-        status: 'planned',
-        channel: 'general',
-        publishAfter: '2026-05-25T00:00:00Z',
-        publishBefore: '2026-05-26T00:00:00Z',
-      },
-    })
-    expect((listed.body.deliverables as unknown[]).length).toBe(1)
-
-    const getRoute = findRoute(plugin.routes, 'GET', '/deliverables/:id')!
-    const got = await callRoute(getRoute, plugin.ctx, { searchParams: { id: deliverable.id as string } })
-    expect((got.body.deliverable as Record<string, unknown>).title).toBe('Taco blog')
-
-    const updateRoute = findRoute(plugin.routes, 'PUT', '/deliverables/:id')!
-    await callRoute(updateRoute, plugin.ctx, {
-      searchParams: { id: deliverable.id as string },
-      body: { draft: { caption: 'First caption' } },
-    })
-    const updated = await callRoute(updateRoute, plugin.ctx, {
-      searchParams: { id: deliverable.id as string },
-      body: { title: 'Updated taco blog', draft: { imageFilename: 'taco.png' } },
-    })
-    expect((updated.body.deliverable as Record<string, unknown>).title).toBe('Updated taco blog')
-    expect((updated.body.deliverable as Record<string, unknown>).draft).toEqual({
-      caption: 'First caption',
-      imageFilename: 'taco.png',
-    })
-
-    const planRoute = findRoute(plugin.routes, 'GET', '/plans/:id')!
-    const recomputedPlan = await callRoute(planRoute, plugin.ctx, { searchParams: { id: plan.id as string } })
-    expect((recomputedPlan.body.plan as Record<string, unknown>).status).toBe('in_prep')
-
-    const deleteRoute = findRoute(plugin.routes, 'DELETE', '/deliverables/:id')!
-    const deleted = await callRoute(deleteRoute, plugin.ctx, { searchParams: { id: deliverable.id as string } })
-    expect(deleted.body.ok).toBe(true)
-    expect(plugin.ctx.storage.exists(`messaging/deliverables/${deliverable.id}.json`)).toBe(false)
+    const listed = await callRoute(listRoute, plugin.ctx, { searchParams: { planId: plan.id as string } })
+    expect(listed.body.deliverables).toEqual([])
   })
 
   it('deletes linked board tasks when deleting a Deliverable', async () => {
@@ -285,6 +250,179 @@ describe('Deliverable routes', () => {
       plugin.ctx.runtime.channels.deliverContent = originalDeliverContent
     }
   })
+
+  it('restores approval after workflow handoff failure without publishing', async () => {
+    const store = createMessagingContentStorage(plugin.ctx.storage)
+    const plan = store.createPlan({
+      id: 'plan-recover-approval',
+      title: 'Recovery plan',
+      brief: 'Recover it.',
+      targetDate: '2026-05-25',
+      agent: 'basil',
+      status: 'failed',
+    })
+    const deliverable = store.createDeliverable({
+      id: 'deliverable-restore',
+      planId: plan.id,
+      channel: 'general',
+      contentType: 'blog',
+      tone: 'conversational',
+      agent: 'basil',
+      title: 'Restore me',
+      brief: 'Restore approval.',
+      publishAt: '2026-05-25T16:00:00Z',
+      prepStartAt: '2026-05-25T12:00:00Z',
+      status: 'failed',
+      taskId: 'task-restore',
+      workflowInstanceId: 'workflow-instance-restore',
+      pendingGateStepId: 'review',
+      failureReason: 'workflow.complete fired but messaging-side status was in_review',
+      failureStage: 'workflow_handoff',
+      failedStep: 'review',
+    })
+    plugin.ctx.hooks.has = mock((name: string) => name === 'workflows.loadInstance') as typeof plugin.ctx.hooks.has
+    plugin.ctx.hooks.invoke = mock(async () => ({
+      taskId: deliverable.taskId,
+      instanceId: deliverable.workflowInstanceId,
+      status: 'complete',
+    })) as typeof plugin.ctx.hooks.invoke
+    const route = findRoute(plugin.routes, 'POST', '/deliverables/:id/restore-approval')!
+
+    const result = await callRoute(route, plugin.ctx, { searchParams: { id: deliverable.id } })
+
+    expect(result.status).toBe(200)
+    expect((result.body.deliverable as Record<string, unknown>).status).toBe('approved')
+    expect((result.body.deliverable as Record<string, unknown>).failureReason).toBeUndefined()
+    expect((result.body.deliverable as Record<string, unknown>).failureStage).toBeUndefined()
+    expect((result.body.plan as Record<string, unknown>).status).toBe('scheduled')
+    expect(plugin.ctx.runtime.channels.deliverContent).not.toHaveBeenCalled()
+  })
+
+  it('rejects approval restore when the workflow instance no longer matches', async () => {
+    const deliverable = await createDeliverable({
+      status: 'failed',
+    })
+    createMessagingContentStorage(plugin.ctx.storage).updateDeliverable(deliverable.id as string, {
+      taskId: 'task-restore-mismatch',
+      workflowInstanceId: 'workflow-instance-expected',
+      failureReason: 'workflow.complete fired but messaging-side status was in_review',
+      failureStage: 'workflow_handoff',
+      failedStep: 'review',
+    })
+    plugin.ctx.hooks.has = mock((name: string) => name === 'workflows.loadInstance') as typeof plugin.ctx.hooks.has
+    plugin.ctx.hooks.invoke = mock(async () => ({
+      taskId: 'task-restore-mismatch',
+      instanceId: 'workflow-instance-other',
+      status: 'complete',
+    })) as typeof plugin.ctx.hooks.invoke
+    const route = findRoute(plugin.routes, 'POST', '/deliverables/:id/restore-approval')!
+
+    const result = await callRoute(route, plugin.ctx, { searchParams: { id: deliverable.id as string } })
+
+    expect(result.status).toBe(409)
+    expect(result.body.error).toBe('Workflow instance does not match Deliverable. Reopen prep instead.')
+  })
+
+  it('reopens workflow-backed prep through the Workflow hook', async () => {
+    const store = createMessagingContentStorage(plugin.ctx.storage)
+    const plan = store.createPlan({
+      id: 'plan-reopen-workflow',
+      title: 'Recovery plan',
+      brief: 'Recover it.',
+      targetDate: '2026-05-25',
+      agent: 'basil',
+      status: 'failed',
+    })
+    const deliverable = store.createDeliverable({
+      id: 'deliverable-reopen-workflow',
+      planId: plan.id,
+      channel: 'general',
+      contentType: 'blog',
+      tone: 'conversational',
+      agent: 'basil',
+      title: 'Reopen me',
+      brief: 'Reopen prep.',
+      publishAt: '2026-05-25T16:00:00Z',
+      prepStartAt: '2026-05-25T12:00:00Z',
+      status: 'failed',
+      taskId: 'task-reopen',
+      workflowInstanceId: 'workflow-instance-reopen',
+      pendingGateStepId: 'review',
+      failureReason: 'workflow.complete fired but messaging-side status was in_review',
+      failureStage: 'workflow_handoff',
+      failedStep: 'review',
+    })
+    plugin.ctx.hooks.has = mock((name: string) => name === 'workflows.reopenFromStep') as typeof plugin.ctx.hooks.has
+    plugin.ctx.hooks.invoke = mock(async () => ({
+      success: true,
+      taskId: deliverable.taskId,
+      instanceId: deliverable.workflowInstanceId,
+      reopenedStepId: 'draft',
+    })) as typeof plugin.ctx.hooks.invoke
+    const route = findRoute(plugin.routes, 'POST', '/deliverables/:id/reopen-prep')!
+
+    const result = await callRoute(route, plugin.ctx, { searchParams: { id: deliverable.id } })
+
+    expect(result.status).toBe(200)
+    expect(plugin.ctx.hooks.invoke).toHaveBeenCalledWith('workflows.reopenFromStep', expect.objectContaining({
+      taskId: 'task-reopen',
+      instanceId: 'workflow-instance-reopen',
+      stepId: 'review',
+      reason: 'workflow.complete fired but messaging-side status was in_review',
+    }))
+    expect((result.body.deliverable as Record<string, unknown>).status).toBe('changes_requested')
+    expect((result.body.deliverable as Record<string, unknown>).failureReason).toBeUndefined()
+    expect((result.body.deliverable as Record<string, unknown>).pendingGateStepId).toBeUndefined()
+    expect((result.body.plan as Record<string, unknown>).status).toBe('in_prep')
+  })
+
+  it('reopens bare-task prep by creating a repair task when the old task is done', async () => {
+    const deliverable = await createDeliverable({
+      status: 'failed',
+      taskId: 'task-done',
+    })
+    createMessagingContentStorage(plugin.ctx.storage).updateDeliverable(deliverable.id as string, {
+      failureReason: 'Required image asset missing on Deliverable',
+      failureStage: 'validation',
+    })
+    await plugin.ctx.tasks.create({ id: 'task-done', title: 'Old task', column: 'done', agent: 'basil', createdBy: 'test' })
+    const route = findRoute(plugin.routes, 'POST', '/deliverables/:id/reopen-prep')!
+
+    const result = await callRoute(route, plugin.ctx, { searchParams: { id: deliverable.id as string } })
+
+    expect(result.status).toBe(200)
+    expect(plugin.ctx.tasks.create).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Repair content prep: Taco blog',
+      column: 'inProgress',
+      source: expect.objectContaining({ purpose: 'repair' }),
+    }))
+    expect((result.body.deliverable as Record<string, unknown>).status).toBe('changes_requested')
+    expect((result.body.deliverable as Record<string, unknown>).taskId).not.toBe('task-done')
+  })
+
+  it('retries delivery failures and publishes through the existing channel adapter', async () => {
+    const deliverable = await createDeliverable({
+      status: 'failed',
+      draft: { caption: 'Retry this.' },
+    })
+    createMessagingContentStorage(plugin.ctx.storage).updateDeliverable(deliverable.id as string, {
+      failureReason: 'Channel delivery failed: channel offline',
+      failureStage: 'delivery',
+    })
+    const route = findRoute(plugin.routes, 'POST', '/deliverables/:id/retry-delivery')!
+
+    const result = await callRoute(route, plugin.ctx, { searchParams: { id: deliverable.id as string } })
+
+    expect(result.status).toBe(200)
+    expect(result.body.published).toBe(true)
+    expect(plugin.ctx.runtime.channels.deliverContent).toHaveBeenCalledWith(expect.objectContaining({
+      channels: ['general'],
+      content: expect.objectContaining({ body: 'Retry this.' }),
+    }))
+    expect((result.body.deliverable as Record<string, unknown>).status).toBe('published')
+    expect((result.body.deliverable as Record<string, unknown>).failureReason).toBeUndefined()
+    expect((result.body.deliverable as Record<string, unknown>).failureStage).toBeUndefined()
+  })
 })
 
 describe('Deliverable exec tools', () => {
@@ -323,7 +461,66 @@ describe('Deliverable exec tools', () => {
     })
   })
 
+  it('blocks agent status bypasses through the generic Deliverable update tool', async () => {
+    const deliverable = await createDeliverable({ status: 'in_review' })
+    const update = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_update')!
+
+    const result = await callTool(update, { deliverableId: deliverable.id, status: 'approved' }, 'main')
+
+    expect(result).toEqual({
+      ok: false,
+      status: 403,
+      error: 'Deliverable lifecycle status changes must use review tools',
+    })
+    const store = createMessagingContentStorage(plugin.ctx.storage)
+    expect(store.getDeliverable(deliverable.id as string)?.status).toBe('in_review')
+  })
+
+  it('blocks agent-created Quick Posts from starting in terminal or review statuses', async () => {
+    const create = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_create')!
+
+    const result = await callTool(create, {
+      planId: null,
+      channel: 'general',
+      contentType: 'blog',
+      tone: 'conversational',
+      agent: 'basil',
+      title: 'Bypass post',
+      brief: 'Should not start approved.',
+      publishAt: '2026-05-25T16:00:00Z',
+      status: 'approved',
+    }, 'main')
+
+    expect(result).toEqual({
+      ok: false,
+      status: 403,
+      error: 'Deliverable lifecycle status changes must use review tools',
+    })
+  })
+
+  it('rejects direct Plan Deliverable creation through exec tools', async () => {
+    const plan = await createPlan('Exec blocked plan')
+    const create = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_create')!
+
+    const result = await callTool(create, {
+      planId: plan.id,
+      channel: 'x',
+      contentType: 'x-post',
+      tone: 'conversational',
+      agent: 'basil',
+      title: 'Bypass attempt',
+      brief: 'This should only happen through activation.',
+      publishAt: '2026-05-25T16:00:00Z',
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Plan Deliverables are created only by Plan activation after channels are approved',
+    })
+  })
+
   it('moves bare-task Deliverables through ready, reject, and approve tools', async () => {
+    plugin.ctx.getSettings = (() => ({ agentDeliverableApprovalPolicy: 'allowed' })) as typeof plugin.ctx.getSettings
     const create = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_create')!
     const created = await callTool(create, {
       planId: null,
@@ -350,15 +547,44 @@ describe('Deliverable exec tools', () => {
     expect((readyResult.deliverable as Record<string, unknown>).status).toBe('in_review')
 
     const reject = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_reject')!
-    const rejected = await callTool(reject, { deliverableId, note: 'Try a stronger opener.' })
+    const rejected = await callTool(reject, { deliverableId, note: 'Try a stronger opener.' }, 'main')
     expect((rejected.deliverable as Record<string, unknown>).status).toBe('changes_requested')
+    expect(plugin.ctx.activity.audit).toHaveBeenCalledWith('deliverable.rejected', 'main', {
+      deliverableId,
+      note: 'Try a stronger opener.',
+    })
 
     const readyAgain = await callTool(ready, { deliverableId })
     expect((readyAgain.deliverable as Record<string, unknown>).status).toBe('in_review')
 
     const approve = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_approve')!
-    const approved = await callTool(approve, { deliverableId })
+    const approved = await callTool(approve, { deliverableId }, 'main')
     expect((approved.deliverable as Record<string, unknown>).status).toBe('approved')
+    expect(plugin.ctx.activity.audit).toHaveBeenCalledWith('deliverable.approved', 'main', { deliverableId })
+  })
+
+  it('blocks agent Deliverable approval and rejection by default', async () => {
+    const deliverable = await createDeliverable({ status: 'in_review' })
+    const approve = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_approve')!
+    const reject = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_reject')!
+
+    const blockedApprove = await callTool(approve, { deliverableId: deliverable.id }, 'main')
+    const blockedReject = await callTool(reject, { deliverableId: deliverable.id, note: 'Needs work.' }, 'main')
+
+    expect(blockedApprove).toEqual({
+      ok: false,
+      status: 403,
+      error: 'Deliverable approval requires human approval',
+    })
+    expect(blockedReject).toEqual({
+      ok: false,
+      status: 403,
+      error: 'Deliverable approval requires human approval',
+    })
+    const store = createMessagingContentStorage(plugin.ctx.storage)
+    expect(store.getDeliverable(deliverable.id as string)?.status).toBe('in_review')
+    expect(plugin.ctx.activity.audit).not.toHaveBeenCalledWith('deliverable.approved', expect.anything(), expect.anything())
+    expect(plugin.ctx.activity.audit).not.toHaveBeenCalledWith('deliverable.rejected', expect.anything(), expect.anything())
   })
 
   it('auto-approves ready Deliverables when approval is not required', async () => {

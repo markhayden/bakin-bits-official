@@ -43,14 +43,19 @@ describe('createMessagingContentStorage', () => {
         brief: 'A weekly taco feature.',
         targetDate: '2026-05-05',
         agent: 'basil',
-        suggestedChannels: ['general'],
+        channels: [{
+          id: 'general',
+          channel: 'general',
+          contentType: 'blog',
+          publishAt: '2026-05-05T16:00:00Z',
+        }],
       })
 
-      const updated = store.updatePlan('plan-1', { status: 'fanning_out', fanOutTaskId: 'task-1', brief: undefined })
+      const updated = store.updatePlan('plan-1', { status: 'needs_review', brief: undefined })
 
-      expect(updated.status).toBe('fanning_out')
-      expect(updated.fanOutTaskId).toBe('task-1')
+      expect(updated.status).toBe('needs_review')
       expect(updated.brief).toBe('A weekly taco feature.')
+      expect(updated.channels?.[0]?.channel).toBe('general')
       expect(store.listPlans().map(plan => plan.id)).toEqual(['plan-1'])
 
       store.deletePlan('plan-1')

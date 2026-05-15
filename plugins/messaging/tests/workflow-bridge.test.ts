@@ -8,6 +8,8 @@ import { createMessagingContentStorage } from '../lib/content-storage'
 import {
   approveWorkflowGateForDeliverable,
   handleWorkflowComplete,
+  handleWorkflowGateApproved,
+  handleWorkflowGateRejected,
   registerMessagingWorkflowBridge,
   rejectWorkflowGateForDeliverable,
 } from '../lib/workflow-bridge'
@@ -92,6 +94,71 @@ describe('messaging workflow bridge', () => {
     expect(store.getPlan('plan-1')?.status).toBe('in_review')
   }))
 
+  it('accepts workflow gate approval events from the generic workflow surface before completion', async () => withStore(async (store, ctx) => {
+    seedWorkflowDeliverable(store, {
+      status: 'in_review',
+      pendingGateStepId: 'review-copy',
+      draft: { caption: 'Ready from generic workflow gate.' },
+    })
+    registerMessagingWorkflowBridge(store, ctx, () => settings, { warn: mock(), error: mock() })
+
+    ctx.events.emit('workflow.gate_approved', {
+      taskId: 'task-1',
+      stepId: 'review-copy',
+      approver: { id: 'roscoe', source: 'web', displayName: 'roscoe' },
+    })
+    await flushEvents()
+
+    const approved = store.getDeliverable('deliverable-1')!
+    expect(approved.status).toBe('approved')
+    expect(store.getPlan('plan-1')?.status).toBe('scheduled')
+
+    ctx.events.emit('workflow.complete', { taskId: 'task-1' })
+    await flushEvents()
+
+    expect(store.getDeliverable('deliverable-1')?.status).toBe('published')
+    expect(ctx.runtime.channels.deliverContent).toHaveBeenCalledWith(expect.objectContaining({
+      channels: ['general'],
+      content: expect.objectContaining({ body: 'Ready from generic workflow gate.' }),
+    }))
+  }))
+
+  it('records workflow gate rejection events from the generic workflow surface', async () => withStore(async (store, ctx) => {
+    seedWorkflowDeliverable(store, {
+      status: 'in_review',
+      pendingGateStepId: 'review-copy',
+    })
+
+    await handleWorkflowGateRejected(store, ctx, {
+      taskId: 'task-1',
+      stepId: 'review-copy',
+      reason: 'Make the opening stronger.',
+      approver: { id: 'roscoe', source: 'web' },
+    })
+
+    const saved = store.getDeliverable('deliverable-1')!
+    expect(saved.status).toBe('changes_requested')
+    expect(saved.rejectionNote).toBe('Make the opening stronger.')
+    expect(store.getPlan('plan-1')?.status).toBe('in_prep')
+  }))
+
+  it('ignores generic gate decisions for stale workflow steps', async () => withStore(async (store, ctx) => {
+    seedWorkflowDeliverable(store, {
+      status: 'in_review',
+      pendingGateStepId: 'review-copy',
+    })
+    store.updatePlan('plan-1', { status: 'in_review' })
+
+    await handleWorkflowGateApproved(store, ctx, {
+      taskId: 'task-1',
+      stepId: 'other-review',
+      approver: { id: 'roscoe', source: 'web' },
+    })
+
+    expect(store.getDeliverable('deliverable-1')?.status).toBe('in_review')
+    expect(store.getPlan('plan-1')?.status).toBe('in_review')
+  }))
+
   it('publishes approved workflow-backed Deliverables when the workflow completes', async () => withStore(async (store, ctx) => {
     seedWorkflowDeliverable(store, {
       status: 'approved',
@@ -125,17 +192,20 @@ describe('messaging workflow bridge', () => {
     const saved = store.getDeliverable('deliverable-1')!
     expect(saved.status).toBe('failed')
     expect(saved.failureReason).toBe('Required image asset missing on Deliverable')
+    expect(saved.failureStage).toBe('validation')
     expect(store.getPlan('plan-1')?.status).toBe('failed')
   }))
 
   it('marks workflow completion before approval as failed', async () => withStore(async (store, ctx) => {
-    seedWorkflowDeliverable(store, { status: 'in_review' })
+    seedWorkflowDeliverable(store, { status: 'in_review', pendingGateStepId: 'review-gate' })
 
     await handleWorkflowComplete(store, ctx, settings, { taskId: 'task-1' })
 
     const saved = store.getDeliverable('deliverable-1')!
     expect(saved.status).toBe('failed')
     expect(saved.failureReason).toBe('workflow.complete fired but messaging-side status was in_review')
+    expect(saved.failureStage).toBe('workflow_handoff')
+    expect(saved.failedStep).toBe('review-gate')
     expect(ctx.runtime.channels.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
       channels: ['general'],
       message: expect.objectContaining({ title: 'Workflow publish failed: Taco blog' }),

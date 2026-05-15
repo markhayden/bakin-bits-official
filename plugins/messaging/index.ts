@@ -15,6 +15,7 @@ import type {
   DeliverableDraft,
   DeliverableStatus,
   Plan,
+  PlanChannel,
   PlanProposal,
   PlanStatus,
   ProposalStatus,
@@ -22,7 +23,7 @@ import type {
   MessagingSettings,
 } from './types'
 import { DEFAULT_CHANNEL, DEFAULT_CONTENT_TYPES } from './types'
-import { buildMessages } from './lib/prompt-builder'
+import { buildMessages, buildPlanRefinementMessages } from './lib/prompt-builder'
 import {
   buildDoc as buildBrainstormDoc,
   sessionKey,
@@ -37,13 +38,17 @@ import {
   approveDeliverable,
   markDeliverableReadyForReview,
   rejectDeliverable,
+  reopenDeliverablePrep,
+  restoreDeliverableApproval,
+  retryDeliverableDelivery,
 } from './lib/deliverable-lifecycle'
 import { materializeApprovedProposals } from './lib/materialize'
 import type { MessagingContentStorage } from './lib/content-storage'
 import { recomputePlanStatus } from './lib/plan-status'
-import { runMessagingContentSweep } from './lib/sweep'
-import { registerMessagingWorkflowBridge } from './lib/workflow-bridge'
+import { activatePlan } from './lib/plan-activation'
+import { registerMessagingWorkflowBridge, type ApprovalActor } from './lib/workflow-bridge'
 import { generateId } from './lib/ids'
+import { getDistributionChannelDefinition } from './lib/distribution-channels'
 
 const log = {
   info: (...args: unknown[]) => console.info('[messaging]', ...args),
@@ -51,10 +56,13 @@ const log = {
   error: (...args: unknown[]) => console.error('[messaging]', ...args),
 }
 
-const SWEEP_CRON_ID = 'messaging-content-sweep'
-const SWEEP_CRON_COMMAND = 'bakin:messaging:sweep'
-const DEFAULT_SWEEP_CRON_SCHEDULE = '*/5 * * * *'
 const LINKED_TASK_DELETE_TIMEOUT_MS = 2000
+const PLAN_DELIVERABLE_CREATION_ERROR = 'Plan Deliverables are created only by Plan activation after channels are approved'
+const AGENT_PLAN_ACTIVATION_ERROR = 'Plan activation requires human approval'
+const AGENT_DELIVERABLE_APPROVAL_ERROR = 'Deliverable approval requires human approval'
+const AGENT_DELIVERABLE_STATUS_ERROR = 'Deliverable lifecycle status changes must use review tools'
+const AGENT_CREATABLE_DELIVERABLE_STATUSES = new Set<DeliverableStatus>(['proposed', 'planned', 'in_prep'])
+let cleanupWorkflowBridge: (() => void) | undefined
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -65,6 +73,22 @@ function json(data: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   })
+}
+
+function agentPlanActivationAllowed(settings: MessagingSettings): boolean {
+  return settings.agentPlanActivationPolicy === 'allowed'
+}
+
+function agentDeliverableApprovalAllowed(settings: MessagingSettings): boolean {
+  return settings.agentDeliverableApprovalPolicy === 'allowed'
+}
+
+function execApprovalActor(agent: string): ApprovalActor {
+  return { id: agent || 'unknown-agent', source: 'mcp' }
+}
+
+function agentCanCreateDeliverableWithStatus(status: DeliverableStatus | undefined): boolean {
+  return !status || AGENT_CREATABLE_DELIVERABLE_STATUSES.has(status)
 }
 
 async function readBody<T>(req: Request): Promise<T> {
@@ -120,102 +144,13 @@ function filterDeliverablesBySearchParams(
   return filtered
 }
 
+function hasLinkedPlanWork(contentStore: MessagingContentStorage, planId: string): boolean {
+  return contentStore.listDeliverables({ planId })
+    .some(deliverable => deliverable.status !== 'cancelled' && Boolean(deliverable.taskId))
+}
+
 function recomputeLinkedPlan(contentStore: MessagingContentStorage, planId: string | null | undefined): void {
   if (planId) recomputePlanStatus(contentStore, planId)
-}
-
-async function ensureMessagingSweepCron(ctx: PluginContext, schedule: string): Promise<void> {
-  const job = {
-    jobId: SWEEP_CRON_ID,
-    name: 'Messaging content sweep',
-    schedule,
-    command: SWEEP_CRON_COMMAND,
-    enabled: true,
-    description: 'Sweeps messaging Deliverables for prep, overdue, and publish transitions.',
-    metadata: {
-      source: 'bakin',
-      isBakinJob: true,
-      pluginId: 'messaging',
-      description: 'Sweeps messaging Deliverables for prep, overdue, and publish transitions.',
-    },
-  }
-
-  try {
-    if (ctx.hooks.has('schedule.ensureBakinJob')) {
-      const result = await ctx.hooks.invoke<{ ok: boolean; error?: string }>('schedule.ensureBakinJob', job)
-      if (!result?.ok) throw new Error(result?.error ?? 'schedule.ensureBakinJob failed')
-      return
-    }
-
-    const fallbackJob = {
-      name: job.name,
-      schedule: job.schedule,
-      command: job.command,
-      enabled: job.enabled,
-      metadata: {
-        ...job.metadata,
-        scheduleType: 'cron',
-        bakinSchedule: true,
-      },
-    }
-    const existing = await ctx.runtime.cron.get(SWEEP_CRON_ID)
-    if (existing) await ctx.runtime.cron.update(SWEEP_CRON_ID, fallbackJob)
-    else await ctx.runtime.cron.create({ id: SWEEP_CRON_ID, ...fallbackJob })
-  } catch (err) {
-    log.warn('Messaging content sweep cron registration failed', { err: err instanceof Error ? err.message : String(err) })
-  }
-}
-
-function buildPlanFanOutDescription(plan: Plan): string {
-  const lines = [
-    plan.brief || `Develop deliverables for "${plan.title}".`,
-    `Plan ID: ${plan.id}`,
-    `Target date: ${plan.targetDate}`,
-    plan.campaign ? `Campaign: ${plan.campaign}` : undefined,
-    plan.suggestedChannels?.length
-      ? `Suggested channels: ${plan.suggestedChannels.join(', ')}`
-      : 'Choose the right channels for this Plan.',
-    'Use bakin_exec_messaging_plan_get to read full Plan context.',
-    'Call bakin_exec_messaging_propose_deliverable once for each channel you intend to produce.',
-  ]
-  return lines.filter((line): line is string => Boolean(line)).join('\n')
-}
-
-type StartPlanFanOutResult =
-  | {
-    ok: true
-    plan: Plan
-    taskId: string
-    alreadyStarted: boolean
-    task?: Awaited<ReturnType<PluginContext['tasks']['create']>>
-  }
-  | { ok: false; error: string; status: number }
-
-async function startPlanFanOut(
-  ctx: PluginContext,
-  contentStore: MessagingContentStorage,
-  planId: string,
-): Promise<StartPlanFanOutResult> {
-  const plan = contentStore.getPlan(planId)
-  if (!plan) return { ok: false, error: 'Plan not found', status: 404 }
-  if (plan.fanOutTaskId) {
-    return { ok: true, plan, taskId: plan.fanOutTaskId, alreadyStarted: true }
-  }
-
-  const task = await ctx.tasks.create({
-    parentId: null,
-    agent: plan.agent,
-    column: 'todo',
-    title: `Plan: ${plan.title}`,
-    description: buildPlanFanOutDescription(plan),
-  })
-  const updated = contentStore.updatePlan(plan.id, {
-    fanOutTaskId: task.id,
-    status: 'fanning_out',
-  })
-  ctx.activity.audit('plan.content_piece_planning_started', plan.agent, { planId: plan.id, taskId: task.id })
-  ctx.activity.log(plan.agent, `Started content piece planning for "${plan.title}"`)
-  return { ok: true, plan: updated, task, taskId: task.id, alreadyStarted: false }
 }
 
 async function removeLinkedTask(ctx: PluginContext, taskId: string): Promise<boolean> {
@@ -264,7 +199,6 @@ async function deletePlanAndLinkedWork(
 
   const deliverables = contentStore.listDeliverables({ planId })
   const linkedTaskIds = [
-    ...(plan.fanOutTaskId ? [plan.fanOutTaskId] : []),
     ...deliverables.map((deliverable) => deliverable.taskId).filter((taskId): taskId is string => Boolean(taskId)),
   ]
 
@@ -276,6 +210,43 @@ async function deletePlanAndLinkedWork(
   const removedTaskIds = opts.deleteLinkedTasks === false ? [] : await removeLinkedTasks(ctx, linkedTaskIds)
   return {
     deleted: true,
+    deliverableIds: deliverables.map((deliverable) => deliverable.id),
+    taskIds: removedTaskIds,
+  }
+}
+
+async function deletePlanChannelAndLinkedWork(
+  ctx: PluginContext,
+  contentStore: MessagingContentStorage,
+  planId: string,
+  channelId: string,
+  opts: { deleteLinkedTasks?: boolean } = {},
+): Promise<{ deleted: boolean; plan: Plan | null; deliverableIds: string[]; taskIds: string[] }> {
+  const plan = contentStore.getPlan(planId)
+  if (!plan) return { deleted: false, plan: null, deliverableIds: [], taskIds: [] }
+
+  const channel = (plan.channels ?? []).find(item => item.id === channelId)
+  if (!channel) return { deleted: false, plan, deliverableIds: [], taskIds: [] }
+
+  const deliverables = contentStore.listDeliverables({ planId })
+    .filter(deliverable =>
+      deliverable.planChannelId === channelId ||
+      (!deliverable.planChannelId && deliverable.channel === channel.channel && deliverable.contentType === channel.contentType)
+    )
+  const linkedTaskIds = deliverables.map((deliverable) => deliverable.taskId).filter((taskId): taskId is string => Boolean(taskId))
+
+  for (const deliverable of deliverables) {
+    contentStore.deleteDeliverable(deliverable.id)
+  }
+
+  contentStore.updatePlan(planId, {
+    channels: (plan.channels ?? []).filter(item => item.id !== channelId),
+  })
+  const updatedPlan = recomputePlanStatus(contentStore, planId)
+  const removedTaskIds = opts.deleteLinkedTasks === false ? [] : await removeLinkedTasks(ctx, linkedTaskIds)
+  return {
+    deleted: true,
+    plan: updatedPlan,
     deliverableIds: deliverables.map((deliverable) => deliverable.id),
     taskIds: removedTaskIds,
   }
@@ -325,6 +296,149 @@ function normalizeOptionalChannels(value: unknown): string[] | undefined {
     .map(channel => channel.trim())
     .filter(Boolean)
   return channels.length > 0 ? channels : undefined
+}
+
+function normalizePlanChannels(value: unknown): PlanChannel[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const channels = value
+    .map((item): PlanChannel | null => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return null
+      const record = item as Record<string, unknown>
+      if (typeof record.channel !== 'string' || typeof record.contentType !== 'string' || typeof record.publishAt !== 'string') {
+        return null
+      }
+      return {
+        id: typeof record.id === 'string' && record.id.length > 0 ? record.id : generateId(),
+        channel: record.channel,
+        contentType: record.contentType,
+        publishAt: record.publishAt,
+        prepStartAt: typeof record.prepStartAt === 'string' ? record.prepStartAt : undefined,
+        workflowId: typeof record.workflowId === 'string' ? record.workflowId : undefined,
+        agent: typeof record.agent === 'string' ? record.agent : undefined,
+        tone: typeof record.tone === 'string' ? record.tone as ContentTone : undefined,
+        title: typeof record.title === 'string' ? record.title : undefined,
+        brief: typeof record.brief === 'string' ? record.brief : undefined,
+      }
+    })
+    .filter((channel): channel is PlanChannel => channel !== null)
+  return channels
+}
+
+function defaultPlanChannelPublishAt(targetDate: string): string {
+  return `${targetDate}T16:00:00Z`
+}
+
+function normalizePlanRefinementChannel(value: unknown, plan: Plan): PlanChannel | null {
+  let record: Record<string, unknown>
+  if (typeof value === 'string') {
+    record = { channel: value }
+  } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+    record = value as Record<string, unknown>
+  } else {
+    return null
+  }
+
+  const rawChannel = typeof record.channel === 'string'
+    ? record.channel
+    : typeof record.id === 'string'
+      ? record.id
+      : ''
+  const channelId = rawChannel.trim().toLowerCase()
+  if (!channelId) return null
+
+  const definition = getDistributionChannelDefinition(channelId)
+  const contentType = typeof record.contentType === 'string' && record.contentType.trim()
+    ? record.contentType.trim()
+    : definition.contentType
+  const publishAt = typeof record.publishAt === 'string' && record.publishAt.trim()
+    ? record.publishAt.trim()
+    : defaultPlanChannelPublishAt(plan.targetDate)
+
+  return {
+    id: typeof record.id === 'string' && record.id.trim() ? record.id.trim() : channelId,
+    channel: channelId,
+    contentType,
+    publishAt,
+    prepStartAt: typeof record.prepStartAt === 'string' ? record.prepStartAt : undefined,
+    workflowId: typeof record.workflowId === 'string' ? record.workflowId : undefined,
+    agent: typeof record.agent === 'string' ? record.agent : undefined,
+    tone: typeof record.tone === 'string' ? record.tone as ContentTone : undefined,
+    title: typeof record.title === 'string' ? record.title : undefined,
+    brief: typeof record.brief === 'string' ? record.brief : undefined,
+  }
+}
+
+function normalizePlanRefinementChannels(value: unknown, plan: Plan): PlanChannel[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const byChannel = new Map<string, PlanChannel>()
+  for (const item of value) {
+    const channel = normalizePlanRefinementChannel(item, plan)
+    if (channel) byChannel.set(channel.channel, channel)
+  }
+  return [...byChannel.values()]
+}
+
+interface PlanRefinementUpdate {
+  title?: string
+  brief?: string
+  targetDate?: string
+  channels?: PlanChannel[]
+}
+
+function normalizePlanRefinementUpdate(value: unknown, plan: Plan): PlanRefinementUpdate | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const root = value as Record<string, unknown>
+  const rawUpdate = root.planUpdate ?? root.update
+  if (!rawUpdate || typeof rawUpdate !== 'object' || Array.isArray(rawUpdate)) return null
+  const update = rawUpdate as Record<string, unknown>
+  const normalized: PlanRefinementUpdate = {}
+  if (typeof update.title === 'string') normalized.title = update.title
+  if (typeof update.brief === 'string') normalized.brief = update.brief
+  if (typeof update.targetDate === 'string') normalized.targetDate = update.targetDate
+  if (Object.prototype.hasOwnProperty.call(update, 'channels')) {
+    const channels = normalizePlanRefinementChannels(update.channels, plan)
+    if (channels !== undefined) normalized.channels = channels
+  }
+  return Object.keys(normalized).length > 0 ? normalized : null
+}
+
+function extractJsonBlocks(content: string): unknown[] {
+  const values: unknown[] = []
+  const blockRegex = /```json\s*([\s\S]*?)```/g
+  let match: RegExpExecArray | null
+  while ((match = blockRegex.exec(content)) !== null) {
+    try {
+      values.push(JSON.parse(match[1].trim()))
+    } catch {
+      // Ignore malformed assistant JSON. The visible prose is still persisted.
+    }
+  }
+  return values
+}
+
+function applyPlanRefinementUpdates(
+  contentStore: MessagingContentStorage,
+  plan: Plan,
+  values: unknown[],
+): Plan | null {
+  let updatedPlan = plan
+  let changed = false
+  for (const value of values) {
+    const update = normalizePlanRefinementUpdate(value, updatedPlan)
+    if (!update) continue
+    const channelsProvided = Object.prototype.hasOwnProperty.call(update, 'channels')
+    if (channelsProvided && hasLinkedPlanWork(contentStore, updatedPlan.id)) {
+      throw new Error('Plan channels are locked after activation; delete individual channels instead')
+    }
+    updatedPlan = contentStore.updatePlan(updatedPlan.id, {
+      title: update.title,
+      brief: update.brief,
+      targetDate: update.targetDate,
+      channels: channelsProvided ? update.channels : undefined,
+    })
+    changed = true
+  }
+  return changed ? updatedPlan : null
 }
 
 function normalizeProposalInput(item: unknown): NormalizedProposalInput | null {
@@ -588,6 +702,28 @@ const messagingPlugin: BakinPlugin = {
       { key: 'showScheduleJobs', type: 'boolean', label: 'Show schedule jobs', description: 'Display recurring schedule jobs on the content calendar', default: false },
       { key: 'channels', type: 'string', label: 'Channels', description: 'Comma-separated runtime channel IDs available for distribution (e.g., general,announcements,email)', default: DEFAULT_CHANNEL },
       {
+        key: 'agentPlanActivationPolicy',
+        type: 'select',
+        label: 'Agent plan activation',
+        description: 'Controls whether MCP agents can activate Plans and create kickoff tasks.',
+        options: [
+          { value: 'blocked', label: 'Require human approval' },
+          { value: 'allowed', label: 'Allow trusted agents' },
+        ],
+        default: 'blocked',
+      },
+      {
+        key: 'agentDeliverableApprovalPolicy',
+        type: 'select',
+        label: 'Agent deliverable approval',
+        description: 'Controls whether MCP agents can approve or reject Deliverables.',
+        options: [
+          { value: 'blocked', label: 'Require human approval' },
+          { value: 'allowed', label: 'Allow trusted agents' },
+        ],
+        default: 'blocked',
+      },
+      {
         key: 'contentTypes',
         type: 'list',
         label: 'Content types',
@@ -654,13 +790,8 @@ const messagingPlugin: BakinPlugin = {
       log.info(`Normalized ${normalizedSettings.contentTypes.length} messaging content types`)
     }
 
-    ctx.hooks.register('messaging.sweep.run', async () => runMessagingContentSweep(contentStore, ctx, ctx.getSettings<MessagingSettings>()), {
-      hookKind: 'rpc',
-      label: 'Run messaging content sweep',
-      summary: 'Run messaging content sweep',
-    })
-    registerMessagingWorkflowBridge(contentStore, ctx, () => ctx.getSettings<MessagingSettings>(), log)
-    await ensureMessagingSweepCron(ctx, currentSettings.sweepCronSchedule ?? DEFAULT_SWEEP_CRON_SCHEDULE)
+    cleanupWorkflowBridge?.()
+    cleanupWorkflowBridge = registerMessagingWorkflowBridge(contentStore, ctx, () => ctx.getSettings<MessagingSettings>(), log)
 
     // ── Search Content Type Registration ─────────────────────────────
     // Brainstorm sessions are indexed for cross-plugin search. Calendar and
@@ -773,7 +904,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
             messages: [{ role: 'user', content: fullPrompt }],
           })
 
-          let suggestions: Array<{
+          const suggestions: Array<{
             title: string
             targetDate: string
             brief: string
@@ -876,52 +1007,18 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
     ctx.registerRoute({
       path: '/sessions/:id',
       method: 'DELETE',
-      description: 'Delete a planning session and optionally the Plans prepared from it',
+      description: 'Delete a planning session without deleting Plans prepared from it',
       handler: async (req: Request) => {
         const url = new URL(req.url)
-        const hasQueryOptions = url.searchParams.has('id')
-          && url.searchParams.has('deleteCreatedPlans')
-          && url.searchParams.has('deleteLinkedTasks')
-        const body: {
-          id?: string
-          deleteCreatedPlans?: boolean
-          deleteLinkedTasks?: boolean
-        } = hasQueryOptions ? {} : await readBody<{
-          id?: string
-          deleteCreatedPlans?: boolean
-          deleteLinkedTasks?: boolean
-        }>(req).catch(() => ({} as {
-          id?: string
-          deleteCreatedPlans?: boolean
-          deleteLinkedTasks?: boolean
-        }))
+        const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
         const session = contentStore.getBrainstormSession(id)
         if (!session) return json({ error: 'Session not found' }, 404)
-        const deleteCreatedPlans = parseBooleanSearchParam(url.searchParams.get('deleteCreatedPlans')) ?? body.deleteCreatedPlans
-        const deleteLinkedTasks = parseBooleanSearchParam(url.searchParams.get('deleteLinkedTasks')) ?? body.deleteLinkedTasks
-        const deletedPlanIds: string[] = []
-        const deletedTaskIds: string[] = []
-        if (deleteCreatedPlans !== false) {
-          const planIds = new Set([
-            ...session.createdAtPlanIds,
-            ...contentStore.listPlans()
-              .filter((plan) => plan.sourceSessionId === session.id)
-              .map((plan) => plan.id),
-          ])
-          for (const planId of planIds) {
-            const result = await deletePlanAndLinkedWork(ctx, contentStore, planId, {
-              deleteLinkedTasks,
-            })
-            if (result.deleted) deletedPlanIds.push(planId)
-            deletedTaskIds.push(...result.taskIds)
-          }
-        }
         contentStore.deleteBrainstormSession(id)
-        ctx.activity.audit('session.deleted', 'system', { sessionId: id, deletedPlanIds, deletedTaskIds })
+        ctx.activity.audit('session.deleted', 'system', { sessionId: id })
         ctx.activity.log('system', `Deleted planning session ${id}`)
-        return json({ ok: true, planIds: deletedPlanIds, taskIds: deletedTaskIds })
+        return json({ ok: true, planIds: [], taskIds: [] })
       },
     })
 
@@ -932,7 +1029,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       description: 'Send a message in a planning session (SSE streaming)',
       handler: async (req: Request) => {
         const url = new URL(req.url)
-        const body = await readBody<{ id?: string; message?: string }>(req)
+        const body = await readBody<{ id?: string; message?: string; planId?: string }>(req)
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
         if (!body.message) return json({ error: 'message required' }, 400)
@@ -940,6 +1037,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const session = contentStore.getBrainstormSession(id)
         if (!session) return json({ error: 'Session not found' }, 404)
         if (session.status === 'archived') return json({ error: 'Session is archived' }, 400)
+        const plan = body.planId ? contentStore.getPlan(body.planId) : null
+        if (body.planId && !plan) return json({ error: 'Plan not found' }, 404)
+        if (plan && plan.sourceSessionId !== id) return json({ error: 'Plan is not linked to this session' }, 400)
 
         // Append user message
         appendBrainstormMessage(contentStore, id, { role: 'user', content: body.message })
@@ -947,8 +1047,12 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         // Build current-turn prompt; durable history is held by the runtime
         // adapter through the stable threadId.
         const promptOptions = await resolvePromptOptions(ctx, session.agentId)
-        const messages = buildMessages(session, body.message, promptOptions)
-        const sessionKey = brainstormThreadId('messaging', id, session.agentId)
+        const messages = plan
+          ? buildPlanRefinementMessages(session, plan, body.message, promptOptions)
+          : buildMessages(session, body.message, promptOptions)
+        const sessionKey = plan
+          ? brainstormThreadId('messaging-plan', plan.id, session.agentId)
+          : brainstormThreadId('messaging', id, session.agentId)
 
         // Create a ReadableStream that pipes runtime SSE to the client
         const stream = new ReadableStream({
@@ -964,6 +1068,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
               // Track proposals emitted incrementally during streaming
               const streamedProposalIds: string[] = []
               const sessionId = id as string // narrowed by early return above
+              let refinedPlan: Plan | null = null
 
               /**
                * Check fullContent for newly completed ```json blocks.
@@ -971,6 +1076,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
                * Uses a temp message ID during streaming; patched to real ID after.
                */
               function checkForCompletedBlocks(): void {
+                if (plan) return
                 // Find all complete ```json...``` blocks we haven't processed yet
                 const processed = streamedProposalIds.length
                 const blockRegex = /```json\s*\n([\s\S]*?)```/g
@@ -1056,7 +1162,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
               checkForCompletedBlocks()
 
               // Also handle legacy array format (single block with [...])
-              if (streamedProposalIds.length === 0) {
+              if (!plan && streamedProposalIds.length === 0) {
                 const jsonMatch = fullContent.match(/```json\s*([\s\S]*?)\s*```/)
                 if (jsonMatch) {
                   try {
@@ -1068,6 +1174,14 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
                       send('proposal', { proposal: p })
                     }
                   } catch { /* ignore malformed JSON */ }
+                }
+              }
+
+              if (plan) {
+                refinedPlan = applyPlanRefinementUpdates(contentStore, plan, extractJsonBlocks(fullContent))
+                if (refinedPlan) {
+                  ctx.activity.audit('plan.updated', 'system', { planId: refinedPlan.id, source: 'brainstorm' })
+                  send('plan_update', { plan: refinedPlan })
                 }
               }
 
@@ -1241,7 +1355,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
           targetDate: body.targetDate as string,
           agent: body.agent as string,
           campaign: body.campaign as string | undefined,
-          suggestedChannels: body.suggestedChannels as string[] | undefined,
+          channels: normalizePlanChannels(body.channels),
         })
         ctx.activity.audit('plan.created', body.agent as string, { planId: plan.id, title: plan.title })
         ctx.activity.log(body.agent as string, `Created content Plan "${plan.title}"`)
@@ -1259,6 +1373,12 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const id = url.searchParams.get('id') || body.id as string | undefined
         if (!id) return json({ error: 'id required' }, 400)
         try {
+          const channelsProvided = Object.prototype.hasOwnProperty.call(body, 'channels')
+          const existing = contentStore.getPlan(id)
+          if (!existing) return json({ error: 'Plan not found' }, 404)
+          if (channelsProvided && hasLinkedPlanWork(contentStore, id)) {
+            return json({ error: 'Plan channels are locked after activation; delete individual channels instead' }, 409)
+          }
           const plan = contentStore.updatePlan(id, {
             title: body.title as string | undefined,
             brief: body.brief as string | undefined,
@@ -1266,7 +1386,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
             agent: body.agent as string | undefined,
             status: body.status as PlanStatus | undefined,
             campaign: body.campaign as string | undefined,
-            suggestedChannels: body.suggestedChannels as string[] | undefined,
+            channels: channelsProvided ? normalizePlanChannels(body.channels) : undefined,
           })
           ctx.activity.audit('plan.updated', 'system', { planId: id })
           return json({ ok: true, plan })
@@ -1298,15 +1418,45 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
     })
 
     ctx.registerRoute({
-      path: '/plans/:id/start-fanout',
+      path: '/plans/:id/channels/:channelId',
+      method: 'DELETE',
+      description: 'Delete one configured Plan channel, its Deliverables, and linked board tasks',
+      handler: async (req: Request) => {
+        const url = new URL(req.url)
+        const hasQueryOptions = url.searchParams.has('id')
+          && url.searchParams.has('channelId')
+          && url.searchParams.has('deleteLinkedTasks')
+        const body: { id?: string; channelId?: string; deleteLinkedTasks?: boolean } = hasQueryOptions ? {} : await readBody<{ id?: string; channelId?: string; deleteLinkedTasks?: boolean }>(req)
+          .catch((): { id?: string; channelId?: string; deleteLinkedTasks?: boolean } => ({}))
+        const id = url.searchParams.get('id') || body.id
+        const channelId = url.searchParams.get('channelId') || body.channelId
+        if (!id || !channelId) return json({ error: 'id and channelId required' }, 400)
+        const deleteLinkedTasks = parseBooleanSearchParam(url.searchParams.get('deleteLinkedTasks')) ?? body.deleteLinkedTasks
+        const result = await deletePlanChannelAndLinkedWork(ctx, contentStore, id, channelId, {
+          deleteLinkedTasks,
+        })
+        if (!result.plan) return json({ error: 'Plan not found' }, 404)
+        if (!result.deleted) return json({ error: 'Plan channel not found' }, 404)
+        ctx.activity.audit('plan.channel.deleted', 'system', {
+          planId: id,
+          channelId,
+          deliverableIds: result.deliverableIds,
+          taskIds: result.taskIds,
+        })
+        return json({ ok: true, plan: result.plan, deliverableIds: result.deliverableIds, taskIds: result.taskIds })
+      },
+    })
+
+    ctx.registerRoute({
+      path: '/plans/:id/activate',
       method: 'POST',
-      description: 'Create the content piece planning task for a content Plan',
+      description: 'Activate a content Plan and create scheduled kickoff tasks for its configured channels',
       handler: async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
-        const result = await startPlanFanOut(ctx, contentStore, id)
+        const result = await activatePlan(ctx, contentStore, id, ctx.getSettings<MessagingSettings>())
         if (!result.ok) return json({ error: result.error }, result.status)
         return json(result)
       },
@@ -1341,7 +1491,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
     ctx.registerRoute({
       path: '/deliverables',
       method: 'POST',
-      description: 'Create a content Deliverable',
+      description: 'Create a Quick Post Deliverable. Plan Deliverables are created only by Plan activation.',
       handler: async (req: Request) => {
         const body = await readBody<Record<string, unknown>>(req)
         if (!body.title || !body.brief || !body.channel || !body.contentType || !body.tone || !body.agent || !body.publishAt) {
@@ -1349,6 +1499,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         }
         const planId = parseNullablePlanId(body.planId) ?? null
         if (planId && !contentStore.getPlan(planId)) return json({ error: 'Plan not found' }, 404)
+        if (planId) return json({ error: PLAN_DELIVERABLE_CREATION_ERROR }, 409)
         try {
           const contentType = body.contentType as string
           const publishAt = body.publishAt as string
@@ -1389,6 +1540,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         if (!existing) return json({ error: 'Deliverable not found' }, 404)
         const planId = parseNullablePlanId(body.planId)
         if (planId && !contentStore.getPlan(planId)) return json({ error: 'Plan not found' }, 404)
+        if (planId && planId !== existing.planId) return json({ error: PLAN_DELIVERABLE_CREATION_ERROR }, 409)
         const contentType = body.contentType as string | undefined
         const publishAt = body.publishAt as string | undefined
         const shouldDerivePrepStartAt = !body.prepStartAt && (contentType || publishAt)
@@ -1485,6 +1637,54 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       },
     })
 
+    ctx.registerRoute({
+      path: '/deliverables/:id/restore-approval',
+      method: 'POST',
+      description: 'Recover a workflow-backed Deliverable by restoring approved state after workflow handoff failure',
+      handler: async (req: Request) => {
+        const url = new URL(req.url)
+        const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
+        const id = url.searchParams.get('id') || body.id
+        if (!id) return json({ error: 'id required' }, 400)
+        const result = await restoreDeliverableApproval(contentStore, ctx, ctx.getSettings<MessagingSettings>(), id)
+        const plan = result.deliverable?.planId ? contentStore.getPlan(result.deliverable.planId) : null
+        if (!result.ok) return json({ error: result.error, deliverable: result.deliverable, plan }, result.status)
+        return json({ ok: true, deliverable: result.deliverable, plan })
+      },
+    })
+
+    ctx.registerRoute({
+      path: '/deliverables/:id/reopen-prep',
+      method: 'POST',
+      description: 'Recover a failed Deliverable by reopening content prep',
+      handler: async (req: Request) => {
+        const url = new URL(req.url)
+        const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
+        const id = url.searchParams.get('id') || body.id
+        if (!id) return json({ error: 'id required' }, 400)
+        const result = await reopenDeliverablePrep(contentStore, ctx, id)
+        const plan = result.deliverable?.planId ? contentStore.getPlan(result.deliverable.planId) : null
+        if (!result.ok) return json({ error: result.error, deliverable: result.deliverable, plan }, result.status)
+        return json({ ok: true, deliverable: result.deliverable, plan })
+      },
+    })
+
+    ctx.registerRoute({
+      path: '/deliverables/:id/retry-delivery',
+      method: 'POST',
+      description: 'Retry external delivery for a failed Deliverable',
+      handler: async (req: Request) => {
+        const url = new URL(req.url)
+        const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
+        const id = url.searchParams.get('id') || body.id
+        if (!id) return json({ error: 'id required' }, 400)
+        const result = await retryDeliverableDelivery(contentStore, ctx, ctx.getSettings<MessagingSettings>(), id)
+        const plan = result.deliverable?.planId ? contentStore.getPlan(result.deliverable.planId) : null
+        if (!result.ok) return json({ error: result.error, deliverable: result.deliverable, plan }, result.status)
+        return json({ ok: true, deliverable: result.deliverable, plan, published: result.published })
+      },
+    })
+
     // ── Exec Tools (agent-facing) ─────────────────────────────────────
 
     ctx.registerExecTool({
@@ -1531,7 +1731,18 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         agent: z.string().describe('Lead agent'),
         brief: z.string().optional().describe('Plan brief'),
         campaign: z.string().optional().describe('Campaign tag'),
-        suggestedChannels: z.array(z.string()).optional().describe('Suggested channel IDs'),
+        channels: z.array(z.object({
+          id: z.string().optional(),
+          channel: z.string(),
+          contentType: z.string(),
+          publishAt: z.string(),
+          prepStartAt: z.string().optional(),
+          workflowId: z.string().optional(),
+          agent: z.string().optional(),
+          tone: z.string().optional(),
+          title: z.string().optional(),
+          brief: z.string().optional(),
+        }).passthrough()).optional().describe('Concrete channel deliverables to create when the Plan is activated'),
       },
       handler: async (params: Record<string, unknown>) => {
         if (!params.title || !params.targetDate || !params.agent) {
@@ -1543,7 +1754,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
           targetDate: params.targetDate as string,
           agent: params.agent as string,
           campaign: params.campaign as string | undefined,
-          suggestedChannels: params.suggestedChannels as string[] | undefined,
+          channels: normalizePlanChannels(params.channels),
         })
         ctx.activity.audit('plan.created', params.agent as string, { planId: plan.id, title: plan.title })
         return { ok: true, plan }
@@ -1575,70 +1786,49 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
     })
 
     ctx.registerExecTool({
-      name: 'bakin_exec_messaging_plan_start_fanout',
-      label: 'Started content piece planning',
+      name: 'bakin_exec_messaging_plan_channel_delete',
+      label: 'Deleted content plan channel',
       activityDuplicate: true,
-      description: 'Create the content piece planning task for a content Plan',
+      description: 'Delete one configured Plan channel, its Deliverables, and linked board tasks.',
       parameters: {
         planId: z.string().describe('Plan ID (required)'),
+        channelId: z.string().describe('Plan channel ID (required)'),
+        deleteLinkedTasks: z.boolean().optional().describe('Delete linked board tasks; defaults to true'),
       },
       handler: async (params: Record<string, unknown>) => {
-        if (!params.planId) return { ok: false, error: 'planId required' }
-        const result = await startPlanFanOut(ctx, contentStore, params.planId as string)
-        if (!result.ok) return { ok: false, error: result.error }
-        return result
+        if (!params.planId || !params.channelId) return { ok: false, error: 'planId and channelId required' }
+        const result = await deletePlanChannelAndLinkedWork(ctx, contentStore, params.planId as string, params.channelId as string, {
+          deleteLinkedTasks: params.deleteLinkedTasks as boolean | undefined,
+        })
+        if (!result.plan) return { ok: false, error: 'Plan not found' }
+        if (!result.deleted) return { ok: false, error: 'Plan channel not found' }
+        ctx.activity.audit('plan.channel.deleted', 'system', {
+          planId: params.planId,
+          channelId: params.channelId,
+          deliverableIds: result.deliverableIds,
+          taskIds: result.taskIds,
+        })
+        return { ok: true, plan: result.plan, deliverableIds: result.deliverableIds, taskIds: result.taskIds }
       },
     })
 
     ctx.registerExecTool({
-      name: 'bakin_exec_messaging_propose_deliverable',
-      label: 'Proposed content deliverable',
+      name: 'bakin_exec_messaging_plan_activate',
+      label: 'Activated content plan',
       activityDuplicate: true,
-      description: 'Propose a channel-specific content piece for a content Plan.',
+      description: 'Activate a content Plan and create scheduled kickoff tasks for its configured channels.',
       parameters: {
         planId: z.string().describe('Plan ID (required)'),
-        channel: z.string().describe('Runtime channel ID'),
-        contentType: z.string().describe('Messaging content type ID'),
-        tone: z.string().describe('Tone'),
-        title: z.string().describe('Deliverable title'),
-        brief: z.string().describe('Deliverable brief'),
-        publishAt: z.string().describe('Publish datetime'),
-        agent: z.string().optional().describe('Optional prep agent; defaults to Plan agent'),
-        prepStartAt: z.string().optional().describe('Optional explicit prep start datetime'),
-        prepStartAtOverride: z.string().optional().describe('Optional prep start override datetime'),
-        draft: z.object({}).passthrough().optional().describe('Optional draft fields'),
       },
-      handler: async (params: Record<string, unknown>) => {
-        if (!params.planId || !params.channel || !params.contentType || !params.tone || !params.title || !params.brief || !params.publishAt) {
-          return { ok: false, error: 'planId, channel, contentType, tone, title, brief, and publishAt required' }
+      handler: async (params: Record<string, unknown>, _agent: string) => {
+        if (!params.planId) return { ok: false, error: 'planId required' }
+        const settings = ctx.getSettings<MessagingSettings>()
+        if (!agentPlanActivationAllowed(settings)) {
+          return { ok: false, status: 403, error: AGENT_PLAN_ACTIVATION_ERROR }
         }
-        const plan = contentStore.getPlan(params.planId as string)
-        if (!plan) return { ok: false, error: 'Plan not found' }
-        try {
-          const contentType = params.contentType as string
-          const publishAt = params.publishAt as string
-          const agent = (params.agent as string | undefined) ?? plan.agent
-          const deliverable = contentStore.createDeliverable({
-            planId: plan.id,
-            channel: params.channel as string,
-            contentType,
-            tone: params.tone as ContentTone,
-            agent,
-            title: params.title as string,
-            brief: params.brief as string,
-            publishAt,
-            prepStartAt: (params.prepStartAt as string | undefined) ?? derivePrepStartAt(ctx, publishAt, contentType),
-            prepStartAtOverride: params.prepStartAtOverride as string | undefined,
-            status: 'proposed',
-            draft: parseDraft(params.draft),
-          })
-          recomputeLinkedPlan(contentStore, plan.id)
-          ctx.activity.audit('deliverable.proposed', agent, { deliverableId: deliverable.id, planId: plan.id })
-          ctx.activity.log(agent, `Proposed content Deliverable "${deliverable.title}"`)
-          return { ok: true, deliverable }
-        } catch (err) {
-          return { ok: false, error: err instanceof Error ? err.message : String(err) }
-        }
+        const result = await activatePlan(ctx, contentStore, params.planId as string, settings)
+        if (!result.ok) return { ok: false, error: result.error, status: result.status }
+        return result
       },
     })
 
@@ -1684,7 +1874,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       name: 'bakin_exec_messaging_deliverable_create',
       label: 'Created content deliverable',
       activityDuplicate: true,
-      description: 'Create a content Deliverable. Omit planId or pass null for a Quick Post.',
+      description: 'Create a Quick Post Deliverable. Plan Deliverables are created only by Plan activation.',
       parameters: {
         planId: z.union([z.string(), z.null()]).optional().describe('Optional Plan ID; null creates a Quick Post'),
         channel: z.string().describe('Runtime channel ID'),
@@ -1705,9 +1895,14 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         }
         const planId = parseNullablePlanId(params.planId) ?? null
         if (planId && !contentStore.getPlan(planId)) return { ok: false, error: 'Plan not found' }
+        if (planId) return { ok: false, error: PLAN_DELIVERABLE_CREATION_ERROR }
         try {
           const contentType = params.contentType as string
           const publishAt = params.publishAt as string
+          const status = params.status as DeliverableStatus | undefined
+          if (!agentCanCreateDeliverableWithStatus(status)) {
+            return { ok: false, status: 403, error: AGENT_DELIVERABLE_STATUS_ERROR }
+          }
           const deliverable = contentStore.createDeliverable({
             planId,
             channel: params.channel as string,
@@ -1719,7 +1914,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
             publishAt,
             prepStartAt: (params.prepStartAt as string | undefined) ?? derivePrepStartAt(ctx, publishAt, contentType),
             prepStartAtOverride: params.prepStartAtOverride as string | undefined,
-            status: (params.status as DeliverableStatus | undefined) ?? 'planned',
+            status: status ?? 'planned',
             draft: parseDraft(params.draft),
           })
           recomputeLinkedPlan(contentStore, planId)
@@ -1754,11 +1949,13 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       },
       handler: async (params: Record<string, unknown>) => {
         if (!params.deliverableId) return { ok: false, error: 'deliverableId required' }
+        if (params.status) return { ok: false, status: 403, error: AGENT_DELIVERABLE_STATUS_ERROR }
         const id = params.deliverableId as string
         const existing = contentStore.getDeliverable(id)
         if (!existing) return { ok: false, error: 'Deliverable not found' }
         const planId = parseNullablePlanId(params.planId)
         if (planId && !contentStore.getPlan(planId)) return { ok: false, error: 'Plan not found' }
+        if (planId && planId !== existing.planId) return { ok: false, error: PLAN_DELIVERABLE_CREATION_ERROR }
         const contentType = params.contentType as string | undefined
         const publishAt = params.publishAt as string | undefined
         const shouldDerivePrepStartAt = !params.prepStartAt && (contentType || publishAt)
@@ -1812,9 +2009,13 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       parameters: {
         deliverableId: z.string().describe('Deliverable ID (required)'),
       },
-      handler: async (params: Record<string, unknown>) => {
+      handler: async (params: Record<string, unknown>, agent: string) => {
         if (!params.deliverableId) return { ok: false, error: 'deliverableId required' }
-        const result = await approveDeliverable(contentStore, ctx, ctx.getSettings<MessagingSettings>(), params.deliverableId as string)
+        const settings = ctx.getSettings<MessagingSettings>()
+        if (!agentDeliverableApprovalAllowed(settings)) {
+          return { ok: false, status: 403, error: AGENT_DELIVERABLE_APPROVAL_ERROR }
+        }
+        const result = await approveDeliverable(contentStore, ctx, settings, params.deliverableId as string, execApprovalActor(agent))
         return result.ok ? { ok: true, deliverable: result.deliverable } : { ok: false, error: result.error, status: result.status, deliverable: result.deliverable }
       },
     })
@@ -1828,9 +2029,13 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         deliverableId: z.string().describe('Deliverable ID (required)'),
         note: z.string().optional().describe('Review note for the prep agent'),
       },
-      handler: async (params: Record<string, unknown>) => {
+      handler: async (params: Record<string, unknown>, agent: string) => {
         if (!params.deliverableId) return { ok: false, error: 'deliverableId required' }
-        const result = await rejectDeliverable(contentStore, ctx, params.deliverableId as string, (params.note as string | undefined) ?? '')
+        const settings = ctx.getSettings<MessagingSettings>()
+        if (!agentDeliverableApprovalAllowed(settings)) {
+          return { ok: false, status: 403, error: AGENT_DELIVERABLE_APPROVAL_ERROR }
+        }
+        const result = await rejectDeliverable(contentStore, ctx, params.deliverableId as string, (params.note as string | undefined) ?? '', execApprovalActor(agent))
         return result.ok ? { ok: true, deliverable: result.deliverable } : { ok: false, error: result.error, status: result.status, deliverable: result.deliverable }
       },
     })
@@ -1919,40 +2124,17 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       name: 'bakin_exec_messaging_session_delete',
       label: 'Deleted brainstorm session',
       activityDuplicate: true,
-      description: 'Delete a planning session and optionally the Plans prepared from it.',
+      description: 'Delete a planning session without deleting Plans prepared from it.',
       parameters: {
         sessionId: z.string().describe('Session ID (required)'),
-        deleteCreatedPlans: z.boolean().optional().describe('Delete Plans created from the session; defaults to true'),
-        deleteLinkedTasks: z.boolean().optional().describe('Delete linked board tasks; defaults to true'),
       },
       handler: async (params: Record<string, unknown>) => {
         if (!params.sessionId) return { ok: false, error: 'sessionId required' }
         const session = contentStore.getBrainstormSession(params.sessionId as string)
         if (!session) return { ok: false, error: 'Session not found' }
-        const deletedPlanIds: string[] = []
-        const deletedTaskIds: string[] = []
-        if (params.deleteCreatedPlans !== false) {
-          const planIds = new Set([
-            ...session.createdAtPlanIds,
-            ...contentStore.listPlans()
-              .filter((plan) => plan.sourceSessionId === session.id)
-              .map((plan) => plan.id),
-          ])
-          for (const planId of planIds) {
-            const result = await deletePlanAndLinkedWork(ctx, contentStore, planId, {
-              deleteLinkedTasks: params.deleteLinkedTasks as boolean | undefined,
-            })
-            if (result.deleted) deletedPlanIds.push(planId)
-            deletedTaskIds.push(...result.taskIds)
-          }
-        }
         contentStore.deleteBrainstormSession(params.sessionId as string)
-        ctx.activity.audit('session.deleted', 'system', {
-          sessionId: params.sessionId,
-          deletedPlanIds,
-          deletedTaskIds,
-        })
-        return { ok: true, planIds: deletedPlanIds, taskIds: deletedTaskIds }
+        ctx.activity.audit('session.deleted', 'system', { sessionId: params.sessionId })
+        return { ok: true, planIds: [], taskIds: [] }
       },
     })
 
@@ -2088,6 +2270,8 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
   },
 
   onShutdown() {
+    cleanupWorkflowBridge?.()
+    cleanupWorkflowBridge = undefined
     log.info('Messaging plugin shutting down')
   },
 }

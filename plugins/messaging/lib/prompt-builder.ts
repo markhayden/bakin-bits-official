@@ -11,7 +11,8 @@
  * roster validation + user settings) and passed in via options. No
  * filesystem access here.
  */
-import type { BrainstormSession, ContentTypeOption } from '../types'
+import type { BrainstormSession, ContentTypeOption, Plan } from '../types'
+import { MESSAGING_DISTRIBUTION_CHANNELS } from './distribution-channels'
 
 export interface PromptBuilderOptions {
   /** Display name for the agent. Falls back to agentId when omitted (orphaned reference). */
@@ -48,6 +49,20 @@ function buildPlanState(session: BrainstormSession): string {
   lines.push(`\nSummary: ${approved} approved, ${rejected} rejected, ${proposed} pending`)
 
   return lines.join('\n')
+}
+
+function buildDistributionChannelCatalog(): string {
+  return MESSAGING_DISTRIBUTION_CHANNELS
+    .map((channel) => `- ${channel.id}: ${channel.label}; default contentType: ${channel.contentType}`)
+    .join('\n')
+}
+
+function buildPlanChannelState(plan: Plan): string {
+  const channels = plan.channels ?? []
+  if (channels.length === 0) return 'No channels are configured yet.'
+  return channels
+    .map((channel) => `- ${channel.channel}; contentType: ${channel.contentType}; publishAt: ${channel.publishAt}`)
+    .join('\n')
 }
 
 /**
@@ -196,4 +211,78 @@ export function buildMessages(
   })
 
   return messages
+}
+
+export function buildPlanRefinementMessages(
+  session: BrainstormSession,
+  plan: Plan,
+  newMessage: string,
+  options: PromptBuilderOptions,
+): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
+  const agentName = options.agentName || session.agentId
+  const sections: string[] = [`You are ${agentName}.`]
+
+  if (options.persona) {
+    sections.push(`## Your Persona\n\n${options.persona}`)
+  }
+
+  sections.push(`## Plan Refinement Mode
+
+You are helping Mark refine one existing Messaging Plan. You are no longer in
+proposal brainstorming mode.
+
+HARD RULES:
+- Do not create new Plan proposal JSON blocks.
+- Do not inspect Schedule, cron jobs, schedule runs, task dispatch state, or any external system.
+- Do not use tools for channel recommendations or Plan refinement. The Plan record below is the source of truth.
+- Keep replies concise and focused on the Plan.
+
+When Mark asks which channels you recommend, choose the channels and emit a
+single fenced JSON block that updates this Plan. The UI will apply that block
+to the existing Plan.
+
+Plan update block format:
+
+\`\`\`json
+{
+  "planUpdate": {
+    "channels": [
+      { "channel": "x", "contentType": "x-post" },
+      { "channel": "instagram", "contentType": "image" }
+    ]
+  }
+}
+\`\`\`
+
+Allowed planUpdate fields:
+- title: optional updated Plan title
+- brief: optional updated Plan brief
+- targetDate: optional ISO date
+- channels: optional full replacement channel list
+
+Channel rules:
+- Use only the available channel ids below unless Mark explicitly asks for a custom destination.
+- For custom destinations, use channel "custom".
+- If publishAt is omitted, the system will default it from the Plan target date.
+- If the Plan already has channels, preserve them unless Mark asks for a change.`)
+
+  sections.push(`## Existing Plan
+
+ID: ${plan.id}
+Title: ${plan.title}
+Status: ${plan.status}
+Target date: ${plan.targetDate}
+Brief: ${plan.brief || '(empty)'}
+
+Configured channels:
+${buildPlanChannelState(plan)}`)
+
+  sections.push(`## Available Channels
+
+${buildDistributionChannelCatalog()}`)
+
+  return [
+    { role: 'system', content: sections.join('\n\n---\n\n') },
+    { role: 'user', content: newMessage },
+  ]
 }

@@ -182,6 +182,37 @@ async function sendMessage(sessionId: string, message: string): Promise<Response
   return route.handler(req, plugin.ctx)
 }
 
+async function sendPlanMessage(sessionId: string, planId: string, message: string): Promise<Response> {
+  const route = findRoute(plugin.routes, 'POST', '/sessions/:id/messages')!
+  const req = makeRequest('/sessions/:id/messages', {
+    method: 'POST',
+    body: { message, planId },
+    searchParams: { id: sessionId },
+  })
+  return route.handler(req, plugin.ctx)
+}
+
+async function createMaterializedPlan(sessionId: string): Promise<string> {
+  streamRuntimeResponse(`Plan option:\n\`\`\`json\n{"title":"Trail safety Monday","targetDate":"2026-05-18","brief":"Beginner survival tip about leaving a trip plan."}\n\`\`\``)
+  await (await sendMessage(sessionId, 'Plan one topic')).text()
+
+  const getSession = findRoute(plugin.routes, 'GET', '/sessions/:id')!
+  const sessionResult = await callRoute(getSession, plugin.ctx, { searchParams: { id: sessionId } })
+  const session = sessionResult.body.session as Record<string, unknown>
+  const proposals = session.proposals as Array<Record<string, unknown>>
+  const proposalId = proposals[0].id as string
+
+  const updateProposal = findRoute(plugin.routes, 'PUT', '/sessions/:id/proposals/:proposalId')!
+  await callRoute(updateProposal, plugin.ctx, {
+    searchParams: { id: sessionId, proposalId },
+    body: { status: 'approved' },
+  })
+
+  const materialize = findRoute(plugin.routes, 'POST', '/sessions/:id/materialize')!
+  const result = await callRoute(materialize, plugin.ctx, { searchParams: { id: sessionId } })
+  return (result.body.planIds as string[])[0]
+}
+
 // ===========================================================================
 // TESTS
 // ===========================================================================
@@ -332,6 +363,39 @@ describe('Streaming endpoint', () => {
     const proposal = proposalEvents[0].data.proposal as Record<string, unknown>
     expect(proposal.title).toBe('Monday Recipe')
     expect(proposal.status).toBe('proposed')
+  })
+
+  it('applies Plan refinement JSON without creating new brainstorm proposals', async () => {
+    const sessionId = await createTestSession()
+    const planId = await createMaterializedPlan(sessionId)
+    streamRuntimeResponse(`I'd use X for the short public take, Instagram for visual packaging, and TikTok for reach.\n\n\`\`\`json\n{"planUpdate":{"channels":[{"channel":"x"},{"channel":"instagram"},{"channel":"tiktok"}]}}\n\`\`\``)
+
+    const res = await sendPlanMessage(sessionId, planId, 'what channels do you recommend?')
+    const events = parseSSEEvents(await res.text())
+
+    expect(events.filter(e => e.event === 'proposal')).toHaveLength(0)
+    const planUpdateEvents = events.filter(e => e.event === 'plan_update')
+    expect(planUpdateEvents).toHaveLength(1)
+    const refinedPlan = planUpdateEvents[0].data.plan as Record<string, unknown>
+    expect((refinedPlan.channels as Array<Record<string, unknown>>).map(channel => channel.channel)).toEqual(['x', 'instagram', 'tiktok'])
+    expect((refinedPlan.channels as Array<Record<string, unknown>>).map(channel => channel.contentType)).toEqual(['x-post', 'image', 'video'])
+
+    const prompt = mockRuntimeStream.mock.calls.at(-1)?.[0]?.content as string
+    expect(prompt).toContain('Plan Refinement Mode')
+    expect(prompt).toContain('Do not inspect Schedule, cron jobs, schedule runs')
+    expect(prompt).toContain('USER:\nwhat channels do you recommend?')
+    expect(prompt).not.toContain('Your job is to propose **content topics** as Plan proposals')
+
+    const getPlan = findRoute(plugin.routes, 'GET', '/plans/:id')!
+    const gotPlan = await callRoute(getPlan, plugin.ctx, { searchParams: { id: planId } })
+    const storedPlan = gotPlan.body.plan as Record<string, unknown>
+    expect((storedPlan.channels as Array<Record<string, unknown>>).map(channel => channel.channel)).toEqual(['x', 'instagram', 'tiktok'])
+    expect((storedPlan.channels as Array<Record<string, unknown>>)[0].publishAt).toBe('2026-05-18T16:00:00Z')
+
+    const getSession = findRoute(plugin.routes, 'GET', '/sessions/:id')!
+    const gotSession = await callRoute(getSession, plugin.ctx, { searchParams: { id: sessionId } })
+    const session = gotSession.body.session as Record<string, unknown>
+    expect((session.proposals as unknown[]).length).toBe(1)
   })
 
   it('persists user and assistant messages to session file', async () => {

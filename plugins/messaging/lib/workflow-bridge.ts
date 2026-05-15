@@ -4,6 +4,7 @@ import type { MessagingContentStorage } from './content-storage'
 import { contentTypeFor } from './content-type-lookup'
 import { recomputePlanStatus } from './plan-status'
 import { publishDeliverableNow } from './publish'
+import { isDeliverableTerminal } from './status-machine'
 
 export interface ApprovalActor {
   id: string
@@ -25,6 +26,22 @@ interface WorkflowBridgeLogger {
 function stringField(data: Record<string, unknown>, key: string): string | null {
   const value = data[key]
   return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function approvalActorFromEvent(data: Record<string, unknown>): ApprovalActor {
+  const value = data.approver
+  if (value && typeof value === 'object') {
+    const approver = value as Record<string, unknown>
+    const id = typeof approver.id === 'string' && approver.id.length > 0 ? approver.id : null
+    if (id) {
+      return {
+        id,
+        source: typeof approver.source === 'string' && approver.source.length > 0 ? approver.source : 'workflow',
+        displayName: typeof approver.displayName === 'string' && approver.displayName.length > 0 ? approver.displayName : undefined,
+      }
+    }
+  }
+  return { id: 'workflow', source: 'workflow' }
 }
 
 function findDeliverableByTaskId(store: MessagingContentStorage, taskId: string): Deliverable | null {
@@ -96,6 +113,66 @@ export async function handleWorkflowGateReached(
   return updated
 }
 
+export async function handleWorkflowGateApproved(
+  store: MessagingContentStorage,
+  ctx: PluginContext,
+  data: Record<string, unknown>,
+): Promise<Deliverable | null> {
+  const taskId = stringField(data, 'taskId')
+  const stepId = stringField(data, 'stepId')
+  if (!taskId || !stepId) return null
+
+  const deliverable = findDeliverableByTaskId(store, taskId)
+  if (!deliverable?.workflowInstanceId) return null
+  if (deliverable.pendingGateStepId && deliverable.pendingGateStepId !== stepId) return null
+  if (deliverable.status === 'approved' || deliverable.status === 'published') return deliverable
+  if (isDeliverableTerminal(deliverable.status)) return deliverable
+
+  const approver = approvalActorFromEvent(data)
+  const updated = store.updateDeliverable(deliverable.id, { status: 'approved' })
+  recomputeDeliverablePlan(store, updated)
+  ctx.activity.audit('deliverable.workflow_gate_approved', approver.id, {
+    deliverableId: updated.id,
+    taskId,
+    stepId,
+    source: approver.source,
+  })
+  ctx.activity.log(updated.agent, `Workflow gate approved for "${updated.title}"`, { taskId, category: 'messaging' })
+  return updated
+}
+
+export async function handleWorkflowGateRejected(
+  store: MessagingContentStorage,
+  ctx: PluginContext,
+  data: Record<string, unknown>,
+): Promise<Deliverable | null> {
+  const taskId = stringField(data, 'taskId')
+  const stepId = stringField(data, 'stepId')
+  if (!taskId || !stepId) return null
+
+  const deliverable = findDeliverableByTaskId(store, taskId)
+  if (!deliverable?.workflowInstanceId) return null
+  if (deliverable.pendingGateStepId && deliverable.pendingGateStepId !== stepId) return null
+  if (isDeliverableTerminal(deliverable.status)) return deliverable
+
+  const approver = approvalActorFromEvent(data)
+  const reason = stringField(data, 'reason') ?? ''
+  const updated = store.updateDeliverable(deliverable.id, {
+    status: 'changes_requested',
+    rejectionNote: reason || deliverable.rejectionNote,
+  })
+  recomputeDeliverablePlan(store, updated)
+  ctx.activity.audit('deliverable.workflow_gate_rejected', approver.id, {
+    deliverableId: updated.id,
+    taskId,
+    stepId,
+    reason,
+    source: approver.source,
+  })
+  ctx.activity.log(updated.agent, `Workflow gate rejected for "${updated.title}"${reason ? `: ${reason}` : ''}`, { taskId, category: 'messaging' })
+  return updated
+}
+
 export async function handleWorkflowComplete(
   store: MessagingContentStorage,
   ctx: PluginContext,
@@ -120,6 +197,8 @@ export async function handleWorkflowComplete(
     const failed = store.updateDeliverable(deliverable.id, {
       status: 'failed',
       failureReason: reason,
+      failureStage: 'workflow_handoff',
+      failedStep: deliverable.pendingGateStepId,
       failedAt: new Date().toISOString(),
     })
     recomputeDeliverablePlan(store, failed)
@@ -149,6 +228,16 @@ export function registerMessagingWorkflowBridge(
       logger.error('Messaging workflow gate handler failed', { err: err instanceof Error ? err.message : String(err) })
     })
   })
+  const offGateApproved = ctx.events.on('workflow.gate_approved', (_event, data) => {
+    void handleWorkflowGateApproved(store, ctx, data).catch(err => {
+      logger.error('Messaging workflow gate approval handler failed', { err: err instanceof Error ? err.message : String(err) })
+    })
+  })
+  const offGateRejected = ctx.events.on('workflow.gate_rejected', (_event, data) => {
+    void handleWorkflowGateRejected(store, ctx, data).catch(err => {
+      logger.error('Messaging workflow gate rejection handler failed', { err: err instanceof Error ? err.message : String(err) })
+    })
+  })
   const offComplete = ctx.events.on('workflow.complete', (_event, data) => {
     void handleWorkflowComplete(store, ctx, getSettings(), data).catch(err => {
       logger.error('Messaging workflow complete handler failed', { err: err instanceof Error ? err.message : String(err) })
@@ -157,6 +246,8 @@ export function registerMessagingWorkflowBridge(
 
   return () => {
     offGateReached()
+    offGateApproved()
+    offGateRejected()
     offComplete()
   }
 }

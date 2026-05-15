@@ -7,7 +7,7 @@ import { FacetFilter } from "@bakin/sdk/components"
 import { PluginHeader } from "@bakin/sdk/components"
 import { AgentAvatar } from "@bakin/sdk/components"
 import { Skeleton } from "@bakin/sdk/ui"
-import { CalendarDays, ClipboardList, Circle, Search } from 'lucide-react'
+import { ClipboardList, Circle, Search } from 'lucide-react'
 import { Input } from "@bakin/sdk/ui"
 import { useAgentIds } from "@bakin/sdk/hooks"
 import { useQueryArrayState, useQueryState } from "@bakin/sdk/hooks"
@@ -18,7 +18,6 @@ import { usePlans } from '../hooks/use-plans'
 const PLAN_STATUS_OPTIONS: Array<{ value: PlanStatus; label: string; icon: React.ReactNode }> = [
   { value: 'needs_review', label: 'Needs review', icon: <Circle className="size-3" /> },
   { value: 'planning', label: 'Planning', icon: <Circle className="size-3" /> },
-  { value: 'fanning_out', label: 'Planning content pieces', icon: <Circle className="size-3" /> },
   { value: 'in_prep', label: 'In production', icon: <Circle className="size-3" /> },
   { value: 'in_review', label: 'In review', icon: <Circle className="size-3" /> },
   { value: 'scheduled', label: 'Scheduled', icon: <Circle className="size-3" /> },
@@ -159,8 +158,8 @@ export function PlanList({ onSelectPlan }: PlanListProps) {
                               <AgentAvatar agentId={plan.agent} size="xs" />
                               {plan.agent}
                             </span>
-                            {plan.suggestedChannels && plan.suggestedChannels.length > 0 && (
-                              <span>{plan.suggestedChannels.join(', ')}</span>
+                            {plan.channels && plan.channels.length > 0 && (
+                              <span>{plan.channels.map((channel) => channel.channel).join(', ')}</span>
                             )}
                             {plan.campaign && <span>{plan.campaign}</span>}
                             {plan.sourceSessionId && <span>From brainstorm</span>}

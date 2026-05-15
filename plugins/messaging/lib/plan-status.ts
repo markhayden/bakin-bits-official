@@ -7,10 +7,11 @@ const PRE_SCHEDULE_STATUSES = new Set(['proposed', 'planned', 'in_prep', 'change
 
 export function derivePlanStatus(plan: Plan, deliverables: Deliverable[]): PlanStatus {
   if (plan.status === 'cancelled') return 'cancelled'
-  if (plan.status === 'failed') return 'failed'
-  if (deliverables.length === 0) return plan.fanOutTaskId ? 'fanning_out' : plan.status === 'needs_review' ? 'needs_review' : 'planning'
+  if (deliverables.length === 0) return plan.status === 'needs_review' ? 'needs_review' : 'planning'
 
   const statuses = deliverables.map(deliverable => deliverable.status)
+  if (statuses.includes('failed')) return 'failed'
+
   const allTerminal = statuses.every(isDeliverableTerminal)
   const hasPublished = statuses.includes('published')
   const hasNonTerminal = statuses.some(status => !isDeliverableTerminal(status))
@@ -42,8 +43,6 @@ export function derivePlanStatus(plan: Plan, deliverables: Deliverable[]): PlanS
   if (nonTerminal.length > 0 && nonTerminal.every(deliverable => deliverable.status === 'approved')) {
     return 'scheduled'
   }
-
-  if (plan.fanOutTaskId && statuses.includes('proposed')) return 'fanning_out'
 
   return 'planning'
 }

@@ -101,6 +101,12 @@ function appendMissingIds(baseIds: string[], referencedIds: string[]): string[] 
   return result
 }
 
+function isCalendarVisibleDeliverable(deliverable: Deliverable): boolean {
+  if (deliverable.status === 'cancelled' || deliverable.status === 'proposed') return false
+  if (deliverable.planId && !deliverable.taskId) return false
+  return true
+}
+
 export function ContentCalendar() {
   const { deliverables, loading, refresh } = useDeliverables()
   const contentTypes = useContentTypes()
@@ -113,26 +119,30 @@ export function ContentCalendar() {
   const [search, setSearch] = useQueryState('q', '')
   const [visibleMonth, setVisibleMonth] = useState<string | null>(null)
   const [selectedDeliverable, setSelectedDeliverable] = useState<Deliverable | null>(null)
+  const calendarDeliverables = useMemo(
+    () => deliverables.filter(isCalendarVisibleDeliverable),
+    [deliverables],
+  )
 
   const calendarAgentIds = useMemo(
-    () => appendMissingIds(agentIds, deliverables.map((deliverable) => deliverable.agent)),
-    [agentIds, deliverables],
+    () => appendMissingIds(agentIds, calendarDeliverables.map((deliverable) => deliverable.agent)),
+    [agentIds, calendarDeliverables],
   )
   const typeOptions = useMemo(() => {
     const options = new Map(contentTypes.map((type) => [type.id, { value: type.id, label: type.label }]))
-    for (const deliverable of deliverables) {
+    for (const deliverable of calendarDeliverables) {
       if (!options.has(deliverable.contentType)) {
         options.set(deliverable.contentType, { value: deliverable.contentType, label: deliverable.contentType })
       }
     }
     return Array.from(options.values())
-  }, [contentTypes, deliverables])
+  }, [calendarDeliverables, contentTypes])
   const channelOptions = useMemo(() => {
     const options = new Map(channels.map((channel) => [
       channel.id,
       { value: channel.id, label: channel.label, icon: <ChannelIcon channelId={channel.id} className="size-3.5" /> },
     ]))
-    for (const deliverable of deliverables) {
+    for (const deliverable of calendarDeliverables) {
       if (!options.has(deliverable.channel)) {
         options.set(deliverable.channel, {
           value: deliverable.channel,
@@ -142,17 +152,17 @@ export function ContentCalendar() {
       }
     }
     return Array.from(options.values())
-  }, [channels, deliverables])
+  }, [calendarDeliverables, channels])
 
   const filteredDeliverables = useMemo(() => {
-    return deliverables.filter((deliverable) => {
+    return calendarDeliverables.filter((deliverable) => {
       if (agentFilter !== 'all' && deliverable.agent !== agentFilter) return false
       if (statusFilter.length > 0 && !statusFilter.includes(deliverable.status)) return false
       if (typeFilter.length > 0 && !typeFilter.includes(deliverable.contentType)) return false
       if (channelFilter.length > 0 && !channelFilter.includes(deliverable.channel)) return false
       return matchesSearch(deliverable, search)
     })
-  }, [agentFilter, channelFilter, deliverables, search, statusFilter, typeFilter])
+  }, [agentFilter, calendarDeliverables, channelFilter, search, statusFilter, typeFilter])
 
   const activeMonth = visibleMonth ?? defaultCalendarMonth(filteredDeliverables)
   const calendarDays = useMemo(() => {

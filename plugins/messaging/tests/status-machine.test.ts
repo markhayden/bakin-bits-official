@@ -31,10 +31,14 @@ describe('messaging content-planning schemas', () => {
       ...baseDeliverable,
       status: 'failed',
       failureReason: 'Required video asset missing on Deliverable',
+      failureStage: 'validation',
+      failedStep: 'asset-check',
       failedAt: '2026-05-05T16:01:00Z',
     })
 
     expect(parsed.failureReason).toBe('Required video asset missing on Deliverable')
+    expect(parsed.failureStage).toBe('validation')
+    expect(parsed.failedStep).toBe('asset-check')
     expect(parsed.failedAt).toBe('2026-05-05T16:01:00Z')
   })
 
@@ -46,7 +50,12 @@ describe('messaging content-planning schemas', () => {
       targetDate: '2026-05-05',
       agent: 'basil',
       status: 'planning',
-      suggestedChannels: ['general'],
+      channels: [{
+        id: 'general',
+        channel: 'general',
+        contentType: 'blog',
+        publishAt: '2026-05-05T16:00:00Z',
+      }],
       createdAt: '2026-05-01T00:00:00Z',
       updatedAt: '2026-05-01T00:00:00Z',
     })
@@ -61,7 +70,7 @@ describe('messaging status machine helpers', () => {
     expect(DELIVERABLE_STATUSES).toContain('overdue')
     expect(PLAN_STATUSES).toContain('needs_review')
     expect(PLAN_STATUSES).toContain('partially_published')
-    expect(PLAN_STATUSES).toContain('fanning_out')
+    expect(PLAN_STATUSES).not.toContain('fanning_out' as never)
   })
 
   it('identifies terminal deliverable and plan statuses', () => {
@@ -72,10 +81,15 @@ describe('messaging status machine helpers', () => {
   })
 
   it('marks a deliverable failed with durable failure metadata', () => {
-    const failed = markDeliverableFailed(baseDeliverable, 'delivery failed', new Date('2026-05-05T17:00:00Z'))
+    const failed = markDeliverableFailed(baseDeliverable, 'delivery failed', 'delivery', {
+      failedStep: 'deliver-content',
+      now: new Date('2026-05-05T17:00:00Z'),
+    })
 
     expect(failed.status).toBe('failed')
     expect(failed.failureReason).toBe('delivery failed')
+    expect(failed.failureStage).toBe('delivery')
+    expect(failed.failedStep).toBe('deliver-content')
     expect(failed.failedAt).toBe('2026-05-05T17:00:00.000Z')
     expect(failed.updatedAt).toBe('2026-05-05T17:00:00.000Z')
   })

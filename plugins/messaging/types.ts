@@ -15,12 +15,12 @@ export type ContentAgent = string
 export type ContentChannel = string
 export type ContentType = string
 export type ContentTone = 'energetic' | 'calm' | 'educational' | 'humorous' | 'inspiring' | 'conversational'
+export type AgentMutationPolicy = 'blocked' | 'allowed'
 
 export type AssetRequirement = 'none' | 'optional-image' | 'image' | 'optional-video' | 'video'
 export type PlanStatus =
   | 'needs_review'
   | 'planning'
-  | 'fanning_out'
   | 'in_prep'
   | 'in_review'
   | 'scheduled'
@@ -40,6 +40,11 @@ export type DeliverableStatus =
   | 'overdue'
   | 'cancelled'
   | 'failed'
+export type DeliverableFailureStage =
+  | 'workflow_handoff'
+  | 'validation'
+  | 'delivery'
+  | 'workflow'
 
 // ---------------------------------------------------------------------------
 // Content planning domain
@@ -59,6 +64,19 @@ export interface PlanProposal {
   status: ProposalStatus
   planId?: string
   rejectionNote?: string
+}
+
+export interface PlanChannel {
+  id: string
+  channel: ContentChannel
+  contentType: ContentType
+  publishAt: string
+  prepStartAt?: string
+  workflowId?: string
+  agent?: ContentAgent
+  tone?: ContentTone
+  title?: string
+  brief?: string
 }
 
 export interface SessionMessage {
@@ -92,10 +110,9 @@ export interface Plan {
   targetDate: string
   agent: ContentAgent
   status: PlanStatus
-  fanOutTaskId?: string
   sourceSessionId?: string
   campaign?: string
-  suggestedChannels?: ContentChannel[]
+  channels?: PlanChannel[]
   createdAt: string
   updatedAt: string
 }
@@ -112,6 +129,7 @@ export interface DeliverableDraft {
 export interface Deliverable {
   id: string
   planId: string | null
+  planChannelId?: string
   channel: ContentChannel
   contentType: ContentType
   tone: ContentTone
@@ -128,6 +146,8 @@ export interface Deliverable {
   draft: DeliverableDraft
   rejectionNote?: string
   failureReason?: string
+  failureStage?: DeliverableFailureStage
+  failedStep?: string
   failedAt?: string
   publishedAt?: string
   publishedDeliveryRef?: string
@@ -156,7 +176,8 @@ export interface MessagingSettings {
   showScheduleJobs?: boolean
   channels?: string
   contentTypes?: ContentTypeOption[]
-  sweepCronSchedule?: string
+  agentPlanActivationPolicy?: AgentMutationPolicy
+  agentDeliverableApprovalPolicy?: AgentMutationPolicy
 }
 
 /**
@@ -172,9 +193,11 @@ export const DEFAULT_CONTENT_TYPES: ContentTypeOption[] = [
 ]
 
 export const ContentToneSchema = z.enum(['energetic', 'calm', 'educational', 'humorous', 'inspiring', 'conversational'])
+export const AgentMutationPolicySchema = z.enum(['blocked', 'allowed'])
 export const ProposalStatusSchema = z.enum(['proposed', 'approved', 'rejected', 'revised'])
+export const DeliverableFailureStageSchema = z.enum(['workflow_handoff', 'validation', 'delivery', 'workflow'])
 export const AssetRequirementSchema = z.enum(['none', 'optional-image', 'image', 'optional-video', 'video'])
-export const PlanStatusSchema = z.enum(['needs_review', 'planning', 'fanning_out', 'in_prep', 'in_review', 'scheduled', 'overdue', 'partially_published', 'done', 'cancelled', 'failed'])
+export const PlanStatusSchema = z.enum(['needs_review', 'planning', 'in_prep', 'in_review', 'scheduled', 'overdue', 'partially_published', 'done', 'cancelled', 'failed'])
 export const DeliverableStatusSchema = z.enum(['proposed', 'planned', 'in_prep', 'in_review', 'changes_requested', 'approved', 'published', 'overdue', 'cancelled', 'failed'])
 
 export const SessionMessageSchema = z.object({
@@ -202,6 +225,19 @@ export const PlanProposalSchema = z.object({
   rejectionNote: z.string().optional(),
 })
 
+export const PlanChannelSchema = z.object({
+  id: z.string().min(1),
+  channel: z.string().min(1),
+  contentType: z.string().min(1),
+  publishAt: z.string().min(1),
+  prepStartAt: z.string().optional(),
+  workflowId: z.string().optional(),
+  agent: z.string().optional(),
+  tone: ContentToneSchema.optional(),
+  title: z.string().optional(),
+  brief: z.string().optional(),
+})
+
 export const BrainstormSessionSchema = z.object({
   id: z.string().min(1),
   agentId: z.string().min(1),
@@ -222,10 +258,9 @@ export const PlanSchema = z.object({
   targetDate: z.string().min(1),
   agent: z.string().min(1),
   status: PlanStatusSchema,
-  fanOutTaskId: z.string().optional(),
   sourceSessionId: z.string().optional(),
   campaign: z.string().optional(),
-  suggestedChannels: z.array(z.string()).optional(),
+  channels: z.array(PlanChannelSchema).optional(),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
 })
@@ -242,6 +277,7 @@ export const DeliverableDraftSchema = z.object({
 export const DeliverableSchema = z.object({
   id: z.string().min(1),
   planId: z.string().nullable(),
+  planChannelId: z.string().optional(),
   channel: z.string().min(1),
   contentType: z.string().min(1),
   tone: ContentToneSchema,
@@ -258,6 +294,8 @@ export const DeliverableSchema = z.object({
   draft: DeliverableDraftSchema,
   rejectionNote: z.string().optional(),
   failureReason: z.string().optional(),
+  failureStage: DeliverableFailureStageSchema.optional(),
+  failedStep: z.string().optional(),
   failedAt: z.string().optional(),
   publishedAt: z.string().optional(),
   publishedDeliveryRef: z.string().optional(),
@@ -280,5 +318,6 @@ export const MessagingSettingsSchema = z.object({
   showScheduleJobs: z.boolean().optional(),
   channels: z.string().optional(),
   contentTypes: z.array(ContentTypeOptionSchema).optional(),
-  sweepCronSchedule: z.string().optional(),
+  agentPlanActivationPolicy: AgentMutationPolicySchema.optional(),
+  agentDeliverableApprovalPolicy: AgentMutationPolicySchema.optional(),
 })

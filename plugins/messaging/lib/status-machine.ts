@@ -1,4 +1,4 @@
-import type { Deliverable, DeliverableStatus, PlanStatus } from '../types'
+import type { Deliverable, DeliverableFailureStage, DeliverableStatus, PlanStatus } from '../types'
 
 export const DELIVERABLE_STATUSES: readonly DeliverableStatus[] = [
   'proposed',
@@ -16,7 +16,6 @@ export const DELIVERABLE_STATUSES: readonly DeliverableStatus[] = [
 export const PLAN_STATUSES: readonly PlanStatus[] = [
   'needs_review',
   'planning',
-  'fanning_out',
   'in_prep',
   'in_review',
   'scheduled',
@@ -41,13 +40,25 @@ export function isPlanTerminal(status: PlanStatus): boolean {
 export function markDeliverableFailed(
   deliverable: Deliverable,
   failureReason: string,
-  now = new Date(),
+  failureStage: DeliverableFailureStage,
+  options: { failedStep?: string; now?: Date } = {},
 ): Deliverable {
+  const now = options.now ?? new Date()
   return {
     ...deliverable,
     status: 'failed',
     failureReason,
+    failureStage,
+    failedStep: options.failedStep,
     failedAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  }
+}
+
+export function clearDeliverableFailure(deliverable: Deliverable, now = new Date()): Deliverable {
+  const { failureReason: _failureReason, failureStage: _failureStage, failedStep: _failedStep, failedAt: _failedAt, ...rest } = deliverable
+  return {
+    ...rest,
     updatedAt: now.toISOString(),
   }
 }

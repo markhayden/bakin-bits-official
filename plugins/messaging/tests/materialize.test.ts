@@ -59,8 +59,8 @@ describe('materializeApprovedProposals', () => {
         agent: 'basil',
         status: 'needs_review',
         sourceSessionId: 'session-1',
-        suggestedChannels: ['blog', 'x'],
       })
+      expect(plan.channels).toBeUndefined()
       expect(session.proposals[0].planId).toBe(plan.id)
       expect(session.createdAtPlanIds).toEqual([plan.id])
     } finally {
