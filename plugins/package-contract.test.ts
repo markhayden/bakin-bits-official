@@ -58,6 +58,15 @@ function packageName(specifier: string): string | null {
   return bare.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0]
 }
 
+function registeredRoutes(pluginDir: string): string[] {
+  const source = readFileSync(join(pluginDir, 'index.ts'), 'utf-8')
+  const routes: string[] = []
+  const re = /ctx\.registerRoute\(\{\s*path:\s*['"]([^'"]+)['"][\s\S]*?method:\s*['"]([^'"]+)['"]/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(source))) routes.push(`${match[2].toUpperCase()} ${match[1]}`)
+  return routes.sort()
+}
+
 describe('official plugin package contracts', () => {
   for (const plugin of PLUGINS) {
     it(`${plugin} declares every non-host runtime package it imports`, () => {
@@ -99,6 +108,21 @@ describe('official plugin package contracts', () => {
       expect(manifest.contributes?.apiRoutes).toContainEqual(
         expect.objectContaining({ method: 'GET', path: '/search' }),
       )
+    })
+
+    it(`${plugin} declares every registered API route`, () => {
+      const pluginDir = join(import.meta.dir, plugin)
+      const manifest = JSON.parse(readFileSync(join(pluginDir, 'bakin-plugin.json'), 'utf-8')) as {
+        contributes?: {
+          apiRoutes?: Array<{ method?: string; path?: string }>
+        }
+      }
+      const declared = new Set(
+        (manifest.contributes?.apiRoutes ?? []).map(route => `${route.method?.toUpperCase()} ${route.path}`),
+      )
+      const missing = registeredRoutes(pluginDir).filter(route => !declared.has(route))
+
+      expect(missing).toEqual([])
     })
   }
 })
