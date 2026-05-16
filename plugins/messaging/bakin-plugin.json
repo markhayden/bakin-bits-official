@@ -59,6 +59,9 @@
       { "method": "POST", "path": "/deliverables/:id/approve", "summary": "Approve content Deliverable", "permissions": ["storage.write", "assets.read"] },
       { "method": "POST", "path": "/deliverables/:id/reject", "summary": "Request changes for content Deliverable", "permissions": ["storage.write", "tasks.write"] },
       { "method": "POST", "path": "/deliverables/:id/approve-and-publish-now", "summary": "Approve and immediately publish a bare-task Deliverable", "permissions": ["storage.write", "runtime.channels", "assets.read"] },
+      { "method": "POST", "path": "/deliverables/:id/restore-approval", "summary": "Restore approval after workflow handoff failure", "permissions": ["storage.write", "assets.read"] },
+      { "method": "POST", "path": "/deliverables/:id/reopen-prep", "summary": "Reopen failed content prep", "permissions": ["storage.write", "tasks.write"] },
+      { "method": "POST", "path": "/deliverables/:id/retry-delivery", "summary": "Retry failed external delivery", "permissions": ["storage.write", "runtime.channels", "assets.read"] },
       { "method": "DELETE", "path": "/deliverables/:id", "summary": "Delete content Deliverable and linked board task", "permissions": ["storage.write", "tasks.write"] },
       { "method": "GET", "path": "/search", "summary": "Search messaging brainstorm sessions", "permissions": ["search.read"] }
     ],

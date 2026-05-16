@@ -121,6 +121,9 @@ Routes are mounted under `/api/plugins/messaging`.
   `POST /deliverables`, `PUT /deliverables/:id`,
   `POST /deliverables/:id/approve`, `POST /deliverables/:id/reject`,
   `POST /deliverables/:id/approve-and-publish-now`,
+  `POST /deliverables/:id/restore-approval`,
+  `POST /deliverables/:id/reopen-prep`,
+  `POST /deliverables/:id/retry-delivery`,
   `DELETE /deliverables/:id`
 
 `GET /search` is registered by the search subsystem for indexed brainstorm
