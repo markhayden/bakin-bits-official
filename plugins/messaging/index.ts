@@ -3,7 +3,7 @@
  * Manages content Plans, Deliverables, brainstorm sessions, prep tasks, and publishing.
  */
 import { z } from 'zod'
-import type { BakinPlugin, PluginContext } from '@makinbakin/sdk/types'
+import type { BakinPlugin, PluginContext, PluginLogger } from '@makinbakin/sdk/types'
 import {
   brainstormThreadId,
   normalizeBrainstormActivityForStorage,
@@ -30,7 +30,7 @@ import {
   SESSION_FILE_PATTERN,
 } from './lib/brainstorm-search'
 import { archiveLegacyMessagingFile } from './lib/legacy-archive'
-import { normalizeContentTypesForActivate } from './lib/content-types'
+import { normalizeContentTypes, normalizeContentTypesForActivate, validateContentTypeWorkflows } from './lib/content-types'
 import { createMessagingContentStorage } from './lib/content-storage'
 import { registerMessagingDefaultWorkflows } from './lib/default-workflows'
 import {
@@ -50,10 +50,22 @@ import { registerMessagingWorkflowBridge, type ApprovalActor } from './lib/workf
 import { generateId } from './lib/ids'
 import { getDistributionChannelDefinition } from './lib/distribution-channels'
 
-const log = {
-  info: (...args: unknown[]) => console.info('[messaging]', ...args),
-  warn: (...args: unknown[]) => console.warn('[messaging]', ...args),
-  error: (...args: unknown[]) => console.error('[messaging]', ...args),
+function writeFallbackConsole(method: 'debug' | 'info' | 'warn' | 'error', message: string, ...rest: unknown[]): void {
+  const args = rest.filter((value) => value !== undefined)
+  console[method]('[messaging]', message, ...args)
+}
+
+const fallbackLog: PluginLogger = {
+  debug: (message, data) => writeFallbackConsole('debug', message, data),
+  info: (message, data) => writeFallbackConsole('info', message, data),
+  warn: (message, errorOrData, data) => writeFallbackConsole('warn', message, errorOrData, data),
+  error: (message, errorOrData, data) => writeFallbackConsole('error', message, errorOrData, data),
+}
+
+let log: PluginLogger = fallbackLog
+
+function bindLogger(ctx: PluginContext): void {
+  log = ctx.log ?? fallbackLog
 }
 
 const LINKED_TASK_DELETE_TIMEOUT_MS = 2000
@@ -63,6 +75,7 @@ const AGENT_DELIVERABLE_APPROVAL_ERROR = 'Deliverable approval requires human ap
 const AGENT_DELIVERABLE_STATUS_ERROR = 'Deliverable lifecycle status changes must use review tools'
 const AGENT_CREATABLE_DELIVERABLE_STATUSES = new Set<DeliverableStatus>(['proposed', 'planned', 'in_prep'])
 let cleanupWorkflowBridge: (() => void) | undefined
+let activeCtx: PluginContext | undefined
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -763,10 +776,13 @@ const messagingPlugin: BakinPlugin = {
   contentFiles: [],
 
   async activate(ctx: PluginContext) {
+    bindLogger(ctx)
+    activeCtx = ctx
+
     const legacyArchive = archiveLegacyMessagingFile(ctx.storage)
     if (legacyArchive.archived) {
       ctx.activity.audit('legacy.archived', 'system', { from: legacyArchive.from, to: legacyArchive.to })
-      log.info('Archived legacy messaging.json', legacyArchive)
+      log.info('Archived legacy messaging.json', { ...legacyArchive })
     }
 
     const contentStore = createMessagingContentStorage(ctx.storage)
@@ -783,7 +799,7 @@ const messagingPlugin: BakinPlugin = {
     const normalizedSettings = await normalizeContentTypesForActivate(
       ctx,
       currentSettings.contentTypes,
-      (message, data) => log.warn(message, data),
+      log,
     )
     if (normalizedSettings.changed) {
       ctx.updateSettings({ contentTypes: normalizedSettings.contentTypes })
@@ -2265,13 +2281,18 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
     log.info('Messaging plugin activated')
   },
 
-  onReady() {
+  async onReady() {
     log.info('Ready')
+    if (!activeCtx) return
+    const currentSettings = activeCtx.getSettings<MessagingSettings>()
+    const normalizedSettings = await normalizeContentTypes(currentSettings.contentTypes)
+    await validateContentTypeWorkflows(activeCtx, normalizedSettings.contentTypes, log, 'ready')
   },
 
   onShutdown() {
     cleanupWorkflowBridge?.()
     cleanupWorkflowBridge = undefined
+    activeCtx = undefined
     log.info('Messaging plugin shutting down')
   },
 }

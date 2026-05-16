@@ -111,6 +111,12 @@ For durable agent chat surfaces, use stable adapter-neutral thread IDs via
 and tool activity for UI hydration, but let the runtime adapter maintain
 conversation continuity for repeated `agentId + threadId` calls.
 
+For server-side diagnostics and lifecycle messages, use `ctx.log` from the
+plugin context. It emits through Bakin's plugin-scoped structured logger and
+keeps reload, activation, and shutdown output in the normal log channels.
+Reserve `ctx.activity.log` for user-visible activity feed entries, and avoid
+`console.*` in plugin server code except as a compatibility fallback.
+
 For plugin-owned recurring jobs, register a hook and create a cron command
 using the `bakin:<pluginId>:<action>` convention. Do not use cron for
 task-backed workflow timing. Messaging Plans use explicit activation and

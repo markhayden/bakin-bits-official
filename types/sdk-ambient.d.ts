@@ -193,6 +193,13 @@ declare module '@makinbakin/sdk/types' {
     audit(event: string, agent: string, data?: Record<string, unknown>): void
   }
 
+  export interface PluginLogger {
+    debug(message: string, data?: Record<string, unknown>): void
+    info(message: string, data?: Record<string, unknown>): void
+    warn(message: string, errorOrData?: unknown, data?: Record<string, unknown>): void
+    error(message: string, errorOrData?: unknown, data?: Record<string, unknown>): void
+  }
+
   export type HookKind = 'rpc' | 'event' | 'waterfall'
 
   export interface HookRegistrationMetadata {
@@ -666,6 +673,7 @@ declare module '@makinbakin/sdk/types' {
     getSettings<T = Record<string, unknown>>(): T
     updateSettings(patch: Record<string, unknown>): void
     activity: ActivityAPI
+    log?: PluginLogger
     hooks: HookAPI
     search: SearchAPI
   }

@@ -314,6 +314,12 @@ export function createTestContext(pluginId: string, testDir: string): ActivatedP
       log: mock(),
       audit: mock(),
     },
+    log: {
+      debug: mock(),
+      info: mock(),
+      warn: mock(),
+      error: mock(),
+    },
     search: {
       registerContentType: mock(() => maybeAutoRegisterSearchRoute()),
       registerFileBackedContentType: mock((def: FileBackedContentTypeDefinition) => {

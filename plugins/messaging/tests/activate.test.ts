@@ -87,6 +87,54 @@ describe('messaging plugin — activate', () => {
     expect(updateSpy).toHaveBeenCalledWith({ contentTypes: DEFAULT_CONTENT_TYPES })
   })
 
+  it('uses the plugin-scoped logger for activation and shutdown logs', async () => {
+    const { ctx } = createTestContext('messaging', testDir)
+
+    await messagingPlugin.activate(ctx)
+    ;(messagingPlugin as typeof messagingPluginType).onShutdown?.()
+
+    expect(ctx.log?.info).toHaveBeenCalledWith('Registered 3 messaging workflow(s)', {
+      ids: ['messaging-blog-prep', 'messaging-image-post-prep', 'messaging-video-prep'],
+    })
+    expect(ctx.log?.info).toHaveBeenCalledWith('Messaging content type workflow validation deferred until ready', {
+      phase: 'activate',
+      workflowIds: ['messaging-blog-prep', 'messaging-video-prep', 'messaging-image-post-prep'],
+    })
+    expect(ctx.log?.info).toHaveBeenCalledWith('Messaging plugin activated')
+    expect(ctx.log?.info).toHaveBeenCalledWith('Messaging plugin shutting down')
+  })
+
+  it('warns on ready only when workflow definitions are actually missing', async () => {
+    const { ctx } = createTestContext('messaging', testDir)
+    ctx.hooks.has = mock((name: string) => [
+      'workflows.loadDefinition',
+      'workflows.approveGate',
+      'workflows.rejectGate',
+    ].includes(name)) as typeof ctx.hooks.has
+    ctx.hooks.invoke = mock(async (_name: string, data: unknown) => {
+      const workflowId = (data as { workflowId?: string }).workflowId
+      return workflowId === 'messaging-blog-prep' ? { id: workflowId } : null
+    }) as typeof ctx.hooks.invoke
+
+    await messagingPlugin.activate(ctx)
+
+    expect(ctx.log?.warn).not.toHaveBeenCalledWith(
+      'Messaging content type references missing workflow definition; retaining workflowId for task adapter',
+      expect.anything(),
+    )
+
+    await (messagingPlugin as typeof messagingPluginType).onReady?.()
+
+    expect(ctx.log?.warn).toHaveBeenCalledWith(
+      'Messaging content type references missing workflow definition; retaining workflowId for task adapter',
+      expect.objectContaining({ phase: 'ready', contentTypeId: 'video', workflowId: 'messaging-video-prep' }),
+    )
+    expect(ctx.log?.warn).toHaveBeenCalledWith(
+      'Messaging content type references missing workflow definition; retaining workflowId for task adapter',
+      expect.objectContaining({ phase: 'ready', contentTypeId: 'image', workflowId: 'messaging-image-post-prep' }),
+    )
+  })
+
   it('keeps default workflowIds when workflow definitions are loadable', async () => {
     const { ctx } = createTestContext('messaging', testDir)
     ctx.hooks.has = mock((name: string) => [
