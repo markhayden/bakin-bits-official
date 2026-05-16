@@ -9,8 +9,88 @@ export interface NormalizeContentTypesOptions {
   onMissingWorkflow?: (contentTypeId: string, workflowId: string) => void
 }
 
+export type ContentTypeWorkflowValidationPhase = 'activate' | 'ready'
+
+export interface ContentTypeWorkflowValidationResult {
+  status: 'validated' | 'deferred'
+  missing: Array<{ contentTypeId: string; workflowId: string }>
+}
+
+interface ContentTypeWorkflowLogger {
+  info(message: string, data?: Record<string, unknown>): void
+  warn(message: string, data?: Record<string, unknown>): void
+}
+
 function withoutUndefined<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T
+}
+
+function workflowRefs(contentTypes: ContentTypeOption[]): Array<{ contentTypeId: string; workflowId: string }> {
+  return contentTypes
+    .filter((type): type is ContentTypeOption & { workflowId: string } => Boolean(type.workflowId))
+    .map(type => ({ contentTypeId: type.id, workflowId: type.workflowId }))
+}
+
+function hasWorkflowValidationHooks(ctx: PluginContext): boolean {
+  return ctx.hooks.has('workflows.loadDefinition') &&
+    ctx.hooks.has('workflows.approveGate') &&
+    ctx.hooks.has('workflows.rejectGate')
+}
+
+export async function validateContentTypeWorkflows(
+  ctx: PluginContext,
+  contentTypes: ContentTypeOption[],
+  log: ContentTypeWorkflowLogger,
+  phase: ContentTypeWorkflowValidationPhase,
+): Promise<ContentTypeWorkflowValidationResult> {
+  const refs = workflowRefs(contentTypes)
+  if (refs.length === 0) return { status: 'validated', missing: [] }
+
+  if (!hasWorkflowValidationHooks(ctx)) {
+    log.info(
+      phase === 'activate'
+        ? 'Messaging content type workflow validation deferred until ready'
+        : 'Messaging content type workflow validation skipped; workflow hooks unavailable',
+      {
+        phase,
+        workflowIds: [...new Set(refs.map(ref => ref.workflowId))],
+      },
+    )
+    return { status: 'deferred', missing: [] }
+  }
+
+  const missing: Array<{ contentTypeId: string; workflowId: string }> = []
+  for (const ref of refs) {
+    try {
+      const definition = await ctx.hooks.invoke('workflows.loadDefinition', { workflowId: ref.workflowId })
+      if (!definition) missing.push(ref)
+    } catch (err) {
+      log.info('Messaging content type workflow validation failed; retaining workflowId for task adapter', {
+        phase,
+        contentTypeId: ref.contentTypeId,
+        workflowId: ref.workflowId,
+        err: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  if (missing.length > 0) {
+    if (phase === 'ready') {
+      for (const ref of missing) {
+        log.warn('Messaging content type references missing workflow definition; retaining workflowId for task adapter', {
+          phase,
+          ...ref,
+        })
+      }
+    } else {
+      log.info('Messaging content type workflow validation found unavailable definitions during activate; will recheck on ready', {
+        phase,
+        missing,
+      })
+    }
+  }
+
+  return { status: 'validated', missing }
 }
 
 export async function normalizeContentTypes(
@@ -45,24 +125,11 @@ export async function normalizeContentTypes(
 export async function normalizeContentTypesForActivate(
   ctx: PluginContext,
   existing: ContentTypeOption[] | undefined,
-  warn: (message: string, data?: Record<string, unknown>) => void,
-): Promise<{ contentTypes: ContentTypeOption[]; changed: boolean }> {
-  return normalizeContentTypes(existing, {
-    workflowExists: async (workflowId) => {
-      if (!ctx.hooks.has('workflows.loadDefinition')) return false
-      if (!ctx.hooks.has('workflows.approveGate') || !ctx.hooks.has('workflows.rejectGate')) return false
-      try {
-        const definition = await ctx.hooks.invoke('workflows.loadDefinition', { workflowId })
-        return !!definition
-      } catch {
-        return false
-      }
-    },
-    onMissingWorkflow: (contentTypeId, workflowId) => {
-      warn('Messaging content type workflow unavailable during activate; retaining workflowId for task adapter', {
-        contentTypeId,
-        workflowId,
-      })
-    },
-  })
+  log: ContentTypeWorkflowLogger,
+): Promise<{ contentTypes: ContentTypeOption[]; changed: boolean; workflowValidation: ContentTypeWorkflowValidationResult }> {
+  const normalized = await normalizeContentTypes(existing)
+  return {
+    ...normalized,
+    workflowValidation: await validateContentTypeWorkflows(ctx, normalized.contentTypes, log, 'activate'),
+  }
 }

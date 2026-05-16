@@ -30,7 +30,7 @@ import {
   SESSION_FILE_PATTERN,
 } from './lib/brainstorm-search'
 import { archiveLegacyMessagingFile } from './lib/legacy-archive'
-import { normalizeContentTypesForActivate } from './lib/content-types'
+import { normalizeContentTypes, normalizeContentTypesForActivate, validateContentTypeWorkflows } from './lib/content-types'
 import { createMessagingContentStorage } from './lib/content-storage'
 import { registerMessagingDefaultWorkflows } from './lib/default-workflows'
 import {
@@ -75,6 +75,7 @@ const AGENT_DELIVERABLE_APPROVAL_ERROR = 'Deliverable approval requires human ap
 const AGENT_DELIVERABLE_STATUS_ERROR = 'Deliverable lifecycle status changes must use review tools'
 const AGENT_CREATABLE_DELIVERABLE_STATUSES = new Set<DeliverableStatus>(['proposed', 'planned', 'in_prep'])
 let cleanupWorkflowBridge: (() => void) | undefined
+let activeCtx: PluginContext | undefined
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -776,6 +777,7 @@ const messagingPlugin: BakinPlugin = {
 
   async activate(ctx: PluginContext) {
     bindLogger(ctx)
+    activeCtx = ctx
 
     const legacyArchive = archiveLegacyMessagingFile(ctx.storage)
     if (legacyArchive.archived) {
@@ -797,7 +799,7 @@ const messagingPlugin: BakinPlugin = {
     const normalizedSettings = await normalizeContentTypesForActivate(
       ctx,
       currentSettings.contentTypes,
-      (message, data) => log.warn(message, data),
+      log,
     )
     if (normalizedSettings.changed) {
       ctx.updateSettings({ contentTypes: normalizedSettings.contentTypes })
@@ -2279,13 +2281,18 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
     log.info('Messaging plugin activated')
   },
 
-  onReady() {
+  async onReady() {
     log.info('Ready')
+    if (!activeCtx) return
+    const currentSettings = activeCtx.getSettings<MessagingSettings>()
+    const normalizedSettings = await normalizeContentTypes(currentSettings.contentTypes)
+    await validateContentTypeWorkflows(activeCtx, normalizedSettings.contentTypes, log, 'ready')
   },
 
   onShutdown() {
     cleanupWorkflowBridge?.()
     cleanupWorkflowBridge = undefined
+    activeCtx = undefined
     log.info('Messaging plugin shutting down')
   },
 }
