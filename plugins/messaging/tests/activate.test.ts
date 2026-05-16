@@ -87,6 +87,23 @@ describe('messaging plugin — activate', () => {
     expect(updateSpy).toHaveBeenCalledWith({ contentTypes: DEFAULT_CONTENT_TYPES })
   })
 
+  it('uses the plugin-scoped logger for activation and shutdown logs', async () => {
+    const { ctx } = createTestContext('messaging', testDir)
+
+    await messagingPlugin.activate(ctx)
+    ;(messagingPlugin as typeof messagingPluginType).onShutdown?.()
+
+    expect(ctx.log?.info).toHaveBeenCalledWith('Registered 3 messaging workflow(s)', {
+      ids: ['messaging-blog-prep', 'messaging-image-post-prep', 'messaging-video-prep'],
+    })
+    expect(ctx.log?.warn).toHaveBeenCalledWith(
+      'Messaging content type workflow unavailable during activate; retaining workflowId for task adapter',
+      expect.objectContaining({ contentTypeId: 'image', workflowId: 'messaging-image-post-prep' }),
+    )
+    expect(ctx.log?.info).toHaveBeenCalledWith('Messaging plugin activated')
+    expect(ctx.log?.info).toHaveBeenCalledWith('Messaging plugin shutting down')
+  })
+
   it('keeps default workflowIds when workflow definitions are loadable', async () => {
     const { ctx } = createTestContext('messaging', testDir)
     ctx.hooks.has = mock((name: string) => [

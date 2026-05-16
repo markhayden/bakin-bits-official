@@ -3,7 +3,7 @@
  * Manages content Plans, Deliverables, brainstorm sessions, prep tasks, and publishing.
  */
 import { z } from 'zod'
-import type { BakinPlugin, PluginContext } from '@makinbakin/sdk/types'
+import type { BakinPlugin, PluginContext, PluginLogger } from '@makinbakin/sdk/types'
 import {
   brainstormThreadId,
   normalizeBrainstormActivityForStorage,
@@ -50,10 +50,22 @@ import { registerMessagingWorkflowBridge, type ApprovalActor } from './lib/workf
 import { generateId } from './lib/ids'
 import { getDistributionChannelDefinition } from './lib/distribution-channels'
 
-const log = {
-  info: (...args: unknown[]) => console.info('[messaging]', ...args),
-  warn: (...args: unknown[]) => console.warn('[messaging]', ...args),
-  error: (...args: unknown[]) => console.error('[messaging]', ...args),
+function writeFallbackConsole(method: 'debug' | 'info' | 'warn' | 'error', message: string, ...rest: unknown[]): void {
+  const args = rest.filter((value) => value !== undefined)
+  console[method]('[messaging]', message, ...args)
+}
+
+const fallbackLog: PluginLogger = {
+  debug: (message, data) => writeFallbackConsole('debug', message, data),
+  info: (message, data) => writeFallbackConsole('info', message, data),
+  warn: (message, errorOrData, data) => writeFallbackConsole('warn', message, errorOrData, data),
+  error: (message, errorOrData, data) => writeFallbackConsole('error', message, errorOrData, data),
+}
+
+let log: PluginLogger = fallbackLog
+
+function bindLogger(ctx: PluginContext): void {
+  log = ctx.log ?? fallbackLog
 }
 
 const LINKED_TASK_DELETE_TIMEOUT_MS = 2000
@@ -763,10 +775,12 @@ const messagingPlugin: BakinPlugin = {
   contentFiles: [],
 
   async activate(ctx: PluginContext) {
+    bindLogger(ctx)
+
     const legacyArchive = archiveLegacyMessagingFile(ctx.storage)
     if (legacyArchive.archived) {
       ctx.activity.audit('legacy.archived', 'system', { from: legacyArchive.from, to: legacyArchive.to })
-      log.info('Archived legacy messaging.json', legacyArchive)
+      log.info('Archived legacy messaging.json', { ...legacyArchive })
     }
 
     const contentStore = createMessagingContentStorage(ctx.storage)
