@@ -2,9 +2,9 @@
   "id": "patch",
   "kind": "agent",
   "name": "Patch",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Developer agent — API integrations, automation, debugging, tool extensions.",
-  "bakin": "^1.0.0",
+  "bakin": ">=0.0.1-rc.1",
   "author": "Made in Wyo",
   "agent": {
     "identity": {

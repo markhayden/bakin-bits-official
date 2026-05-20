@@ -2,9 +2,9 @@
   "id": "jessica-fetcher",
   "kind": "agent",
   "name": "Jessica Fetcher",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Research agent — multi-source discovery, evidence gathering, synthesis support.",
-  "bakin": "^1.0.0",
+  "bakin": ">=0.0.1-rc.1",
   "author": "Made in Wyo",
   "agent": {
     "identity": {
