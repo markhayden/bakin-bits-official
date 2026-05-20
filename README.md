@@ -50,7 +50,7 @@ hot-reload or end-to-end development.
 Pin to a released version with the `@<ref>` suffix:
 
 ```sh
-bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging@messaging-v1.0.0
+bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging@messaging-v0.0.1
 ```
 
 ## Available packages

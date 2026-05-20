@@ -100,8 +100,8 @@ starting point.
 Tag in this repo using the `<plugin-id>-v<semver>` convention:
 
 ```sh
-git tag messaging-v1.0.0
-git push origin messaging-v1.0.0
+git tag messaging-v0.0.1
+git push origin messaging-v0.0.1
 ```
 
 Bakin's `bakin plugins install` and `bakin plugins upgrade` round-trip

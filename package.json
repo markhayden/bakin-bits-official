@@ -1,6 +1,6 @@
 {
   "name": "bakin-bits-official",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "description": "Official Bakin plugin collection — community-maintained plugins distributed independently of the Bakin core.",
   "license": "MIT",

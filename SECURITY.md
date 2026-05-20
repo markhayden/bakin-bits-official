@@ -4,7 +4,7 @@
 
 This project distributes plugins and agent packages by git ref. Only the
 current `main` branch is actively supported. Older tagged releases of
-individual plugins (e.g. `messaging-v1.0.0`) receive fixes on a best-effort
+individual plugins (e.g. `messaging-v0.0.1`) receive fixes on a best-effort
 basis when a vulnerability is reported.
 
 | Branch / ref      | Supported          |

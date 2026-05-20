@@ -1,13 +1,13 @@
 {
   "name": "@bakin-bits/projects",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "private": true,
   "type": "module",
   "main": "./index.ts",
   "peerDependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "@makinbakin/sdk": "^0.1.0"
+    "@makinbakin/sdk": ">=0.0.1-rc.1"
   },
   "dependencies": {
     "js-yaml": "^4.1.1",

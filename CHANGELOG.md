@@ -8,6 +8,11 @@ on a per-plugin basis: each plugin tags its own releases as
 
 ## [Unreleased]
 
+### Changed
+- Reset official plugin and agent package versions to `0.0.1` for the Bakin `0.0.1` release train.
+- Allow Bakin `0.0.1-rc.1` and newer in official plugin and agent package compatibility ranges.
+- Align official plugin SDK peer dependency ranges with the `@makinbakin/sdk` release candidate.
+
 ### Added
 - OSS governance files: `LICENSE`, `CODE_OF_CONDUCT.md`, `SECURITY.md`,
   `CHANGELOG.md`, GitHub issue and PR templates.
