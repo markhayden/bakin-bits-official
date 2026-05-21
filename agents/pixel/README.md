@@ -20,8 +20,7 @@ agents/pixel/
 ├── workflow-skills/          step instructions resolved by the workflows plugin
 │   └── generate-image.md
 └── assets/                   per-agent UI assets — projected to ~/.bakin/agents/pixel/
-    ├── avatar.jpg
-    └── avatar-full.png
+    └── avatar.jpg
 ```
 
 ## Notable choices

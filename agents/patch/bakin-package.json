@@ -2,7 +2,7 @@
   "id": "patch",
   "kind": "agent",
   "name": "Patch",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Developer agent — API integrations, automation, debugging, tool extensions.",
   "bakin": ">=0.0.1-rc.1",
   "author": "Made in Wyo",
@@ -49,8 +49,7 @@
       "lessons/dev-discipline.md"
     ],
     "assets": [
-      "assets/avatar.jpg",
-      "assets/avatar-full.png"
+      "assets/avatar.jpg"
     ]
   }
 }
