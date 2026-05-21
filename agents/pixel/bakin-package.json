@@ -45,6 +45,6 @@
       "lessons/visual-styles.md",
       "lessons/social-media-craft.md"
     ],
-    "assets": ["assets/avatar.jpg", "assets/avatar-full.png"]
+    "assets": ["assets/avatar.jpg"]
   }
 }
