@@ -17,7 +17,7 @@ bakin agents install github:markhayden/bakin-bits-official#agents/<agent-id>
 | `patch` | active | Developer agent with git-isolation skill, dev discipline lessons, and workspace templates. |
 | `pixel` | active | Image artist agent with visual prompt lessons, image-generation workflow skills, and workspace templates. |
 | `rolo` | active | Video producer agent with video/audio craft lessons and declared Runway/ElevenLabs runtime secrets. |
-| `jessica-fetcher` | active | Research agent with source-hierarchy lessons and evidence-gathering workspace templates. |
+| `jessica` | active | Research agent with source-hierarchy lessons and evidence-gathering workspace templates. |
 
 ## Layout
 

@@ -1,11 +1,11 @@
-# Jessica Fetcher — agent package
+# Jessica — agent package
 
 Reference agent package for Bakin's research / multi-source discovery agent.
 
 ## Layout
 
 ```
-agents/jessica-fetcher/
+agents/jessica/
 ├── bakin-package.json
 ├── workspace/                 SOUL/IDENTITY/AGENTS/TOOLS templates
 ├── lessons/
@@ -23,5 +23,5 @@ agents/jessica-fetcher/
 ## Install
 
 ```bash
-bakin agents install ./agents/jessica-fetcher
+bakin agents install ./agents/jessica
 ```
