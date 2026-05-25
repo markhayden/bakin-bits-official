@@ -20,6 +20,8 @@ on a per-plugin basis: each plugin tags its own releases as
 
 ### Plugins
 
+- `messaging`: brainstorm workspace layout modes with resizable columns and
+  tabbed proposal review; plugin version bumped to `2.1.0`.
 - `messaging`: API route OpenAPI metadata types (#9).
 - `projects`: API route OpenAPI metadata types (#9); declared official
   plugin routes (#7); chat top padding fix (#6); titled-project guard
