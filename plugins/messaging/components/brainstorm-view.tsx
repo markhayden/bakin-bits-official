@@ -817,8 +817,8 @@ export function BrainstormView() {
         />
       </div>
     )
-    const renderProposalPanel = (showResizeHandle: boolean) => (
-      <aside className="relative flex min-h-0 flex-col overflow-hidden border-l border-border px-4">
+    const renderProposalPanel = ({ showHeader, showResizeHandle }: { showHeader: boolean; showResizeHandle: boolean }) => (
+      <aside className={`relative flex min-h-0 flex-col overflow-hidden ${showHeader ? 'border-l border-border px-4' : ''}`}>
         {showResizeHandle && (
           <div
             role="separator"
@@ -828,10 +828,12 @@ export function BrainstormView() {
             onMouseDown={startProposalPanelResize}
           />
         )}
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold">Plan proposals</h2>
-          <Badge variant="outline" className="text-[11px]">{activeSession.proposals.length}</Badge>
-        </div>
+        {showHeader && (
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold">Plan proposals</h2>
+            <Badge variant="outline" className="text-[11px]">{activeSession.proposals.length}</Badge>
+          </div>
+        )}
         <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1">
           {activeSession.proposals.length === 0 ? (
             <EmptyState icon={ClipboardList} title="No proposals yet" />
@@ -915,7 +917,7 @@ export function BrainstormView() {
         style={{ '--proposal-panel-width': `${proposalPanelWidth}px` } as CSSProperties}
       >
         {brainstormPane}
-        {renderProposalPanel(true)}
+        {renderProposalPanel({ showHeader: true, showResizeHandle: true })}
       </div>
     ) : (
       <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -938,7 +940,12 @@ export function BrainstormView() {
                     : 'border-transparent text-muted-foreground hover:text-foreground'
                 }`}
               >
-                {tab.label}
+                <span>{tab.label}</span>
+                {tab.id === 'proposals' && (
+                  <Badge variant="outline" className="ml-1 text-[11px]">
+                    {activeSession.proposals.length}
+                  </Badge>
+                )}
               </button>
             )
           })}
@@ -949,7 +956,7 @@ export function BrainstormView() {
           </div>
         ) : (
           <div className="min-h-0 flex-1 pt-4" role="tabpanel" aria-label="Plan proposals">
-            {renderProposalPanel(false)}
+            {renderProposalPanel({ showHeader: false, showResizeHandle: false })}
           </div>
         )}
       </div>

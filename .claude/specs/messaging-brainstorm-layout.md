@@ -86,8 +86,11 @@ side-by-side columns and `SquareStack` for tabbed/single-pane focus.
 - Persist the selected layout mode in localStorage so the user preference
   survives reloads.
 - `tabs` mode renders a tablist for `Brainstorm` and `Plan proposals`.
+- `tabs` mode shows the proposal count in the `Plan proposals` tab label.
 - `tabs` mode shows one full-width pane at a time so narrow screens avoid a
   cramped split.
+- `tabs` mode does not repeat the Plan proposals section header or side-column
+  chrome inside the tab panel.
 - Switching modes does not reset selected proposal, messages, proposal status,
   or materialization behavior.
 

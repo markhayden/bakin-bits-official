@@ -396,9 +396,10 @@ describe('BrainstormView (search consumer)', () => {
     expect(screen.getByRole('tablist', { name: 'Brainstorm layout sections' })).toBeDefined()
     expect(screen.getByRole('tabpanel', { name: 'Brainstorm' })).toBeDefined()
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Plan proposals' }))
+    fireEvent.click(screen.getByRole('tab', { name: /Plan proposals 1/ }))
 
     expect(screen.getByRole('tabpanel', { name: 'Plan proposals' })).toBeDefined()
+    expect(screen.queryByRole('heading', { name: 'Plan proposals' })).toBeNull()
     expect(screen.getByText('Launch Week')).toBeDefined()
   })
 })
