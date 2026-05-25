@@ -168,6 +168,38 @@ const SESSIONS = [
   },
 ]
 
+const ACTIVE_SESSION = {
+  id: 'sess-recipes',
+  agentId: 'basil',
+  title: 'Week 16 recipes',
+  status: 'active' as const,
+  createdAt: '2026-04-07T10:00:00Z',
+  updatedAt: '2026-04-09T15:00:00Z',
+  messages: [
+    {
+      id: 'msg-1',
+      role: 'assistant' as const,
+      content: 'Launch week ideas are ready.',
+      timestamp: '2026-04-09T15:00:00Z',
+    },
+  ],
+  proposals: [
+    {
+      id: 'proposal-1',
+      title: 'Launch Week',
+      targetDate: '2026-05-25',
+      brief: 'Announce the launch and show the adaptable workflow.',
+      suggestedChannels: ['linkedin'],
+      status: 'proposed' as const,
+      createdAt: '2026-04-09T15:00:00Z',
+      updatedAt: '2026-04-09T15:00:00Z',
+    },
+  ],
+  planIds: [],
+}
+
+let searchParams = new URLSearchParams()
+
 function mockFetchSessions() {
   globalThis.fetch = mock().mockImplementation((url: string, init?: RequestInit) => {
     if (typeof url === 'string' && url === '/api/plugins/messaging/sessions' && init?.method === 'POST') {
@@ -185,7 +217,13 @@ function mockFetchSessions() {
         }),
       })
     }
-    if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/sessions')) {
+    if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/sessions/sess-recipes')) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ session: ACTIVE_SESSION }),
+      })
+    }
+    if (typeof url === 'string' && url === '/api/plugins/messaging/sessions') {
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve({ sessions: SESSIONS }),
@@ -196,6 +234,8 @@ function mockFetchSessions() {
 }
 
 beforeEach(() => {
+  searchParams = new URLSearchParams()
+  window.localStorage.clear()
   hookState.results = []
   hookState.search.mockClear()
   hookState.clear.mockClear()
@@ -207,6 +247,13 @@ beforeEach(() => {
       { id: 'basil', name: 'Basil' },
       { id: 'scout', name: 'Scout' },
     ],
+    useSearchParams: () => searchParams,
+    usePathname: () => '/messaging/brainstorm',
+    useRouter: () => ({
+      push: mock(),
+      replace: mock(),
+      back: mock(),
+    }),
   }
   mockFetchSessions()
 })
@@ -316,5 +363,43 @@ describe('BrainstormView (search consumer)', () => {
         }),
       )
     })
+  })
+
+  it('defaults active brainstorm sessions to resizable side-by-side columns', async () => {
+    searchParams = new URLSearchParams('session=sess-recipes')
+
+    render(<BrainstormView />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Launch Week')).toBeDefined()
+    })
+
+    expect(screen.getByRole('button', { name: 'Columns layout' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('brainstorm-workspace-columns')).toBeDefined()
+    expect(screen.getByTestId('integrated-brainstorm')).toBeDefined()
+    expect(screen.getByRole('separator', { name: 'Resize proposal panel' })).toBeDefined()
+  })
+
+  it('switches active brainstorm sessions to full-width tabbed panes', async () => {
+    searchParams = new URLSearchParams('session=sess-recipes')
+
+    render(<BrainstormView />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Launch Week')).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tabs layout' }))
+
+    expect(screen.getByRole('button', { name: 'Tabs layout' }).getAttribute('aria-pressed')).toBe('true')
+    expect(window.localStorage.getItem('messaging-brainstorm-layout')).toBe('tabs')
+    expect(screen.getByRole('tablist', { name: 'Brainstorm layout sections' })).toBeDefined()
+    expect(screen.getByRole('tabpanel', { name: 'Brainstorm' })).toBeDefined()
+
+    fireEvent.click(screen.getByRole('tab', { name: /Plan proposals 1/ }))
+
+    expect(screen.getByRole('tabpanel', { name: 'Plan proposals' })).toBeDefined()
+    expect(screen.queryByRole('heading', { name: 'Plan proposals' })).toBeNull()
+    expect(screen.getByText('Launch Week')).toBeDefined()
   })
 })

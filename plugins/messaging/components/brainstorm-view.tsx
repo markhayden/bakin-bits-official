@@ -16,7 +16,7 @@ import { Badge } from "@makinbakin/sdk/ui"
 import { Button } from "@makinbakin/sdk/ui"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@makinbakin/sdk/ui"
 import { Input } from "@makinbakin/sdk/ui"
-import { ArrowLeft, CalendarDays, Check, ClipboardList, Plus, Trash2, X } from 'lucide-react'
+import { ArrowLeft, CalendarDays, Check, ClipboardList, Columns2, Plus, SquareStack, Trash2, X } from 'lucide-react'
 import type { BrainstormSession, PlanProposal, SessionMessage } from '../types'
 
 interface SessionSummary {
@@ -39,8 +39,12 @@ const PROPOSAL_PANEL_MIN_WIDTH = 360
 const PROPOSAL_PANEL_MAX_WIDTH = 720
 const PROPOSAL_PANEL_DEFAULT_WIDTH = 460
 const PROPOSAL_PANEL_STORAGE_KEY = 'messaging-proposal-panel-width'
+const BRAINSTORM_LAYOUT_STORAGE_KEY = 'messaging-brainstorm-layout'
 const DELETE_REQUEST_TIMEOUT_MS = 10000
 const REJECT_BUTTON_CLASS = 'border-red-500/50 text-red-400 hover:border-red-400 hover:bg-red-500/10 hover:text-red-300'
+
+type BrainstormLayoutMode = 'columns' | 'tabs'
+type BrainstormWorkspaceTab = 'brainstorm' | 'proposals'
 
 function clampProposalPanelWidth(width: number): number {
   return Math.min(PROPOSAL_PANEL_MAX_WIDTH, Math.max(PROPOSAL_PANEL_MIN_WIDTH, width))
@@ -67,6 +71,24 @@ function persistProposalPanelWidth(width: number): void {
   }
 }
 
+function getStoredBrainstormLayoutMode(): BrainstormLayoutMode {
+  if (typeof window === 'undefined') return 'columns'
+  try {
+    return window.localStorage.getItem(BRAINSTORM_LAYOUT_STORAGE_KEY) === 'tabs' ? 'tabs' : 'columns'
+  } catch {
+    return 'columns'
+  }
+}
+
+function persistBrainstormLayoutMode(mode: BrainstormLayoutMode): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(BRAINSTORM_LAYOUT_STORAGE_KEY, mode)
+  } catch {
+    // Layout switching should continue to work even if localStorage is unavailable.
+  }
+}
+
 function toBrainstorm(agentId: string, message: SessionMessage): BrainstormMessage {
   return {
     id: message.id,
@@ -77,6 +99,44 @@ function toBrainstorm(agentId: string, message: SessionMessage): BrainstormMessa
     agentId: message.role === 'assistant' ? agentId : message.agentId,
     timestamp: message.timestamp,
   }
+}
+
+function BrainstormLayoutToggle({
+  value,
+  onChange,
+}: {
+  value: BrainstormLayoutMode
+  onChange: (mode: BrainstormLayoutMode) => void
+}) {
+  const options = [
+    { id: 'columns' as const, label: 'Columns', ariaLabel: 'Columns layout', icon: Columns2 },
+    { id: 'tabs' as const, label: 'Tabs', ariaLabel: 'Tabs layout', icon: SquareStack },
+  ]
+
+  return (
+    <div className="inline-flex h-8 items-center overflow-hidden rounded-md border border-border bg-surface" aria-label="Brainstorm layout">
+      {options.map((option) => {
+        const Icon = option.icon
+        const selected = value === option.id
+        return (
+          <button
+            key={option.id}
+            type="button"
+            aria-label={option.ariaLabel}
+            aria-pressed={selected}
+            title={option.label}
+            onClick={() => onChange(option.id)}
+            className={`inline-flex h-full items-center gap-1.5 px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
+              selected ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+            }`}
+          >
+            <Icon className="size-3.5" aria-hidden="true" />
+            <span>{option.label}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -474,6 +534,8 @@ export function BrainstormView() {
   const [deletingSession, setDeletingSession] = useState(false)
   const [selectedProposalId, setSelectedProposalId] = useState<string | null>(null)
   const [proposalPanelWidth, setProposalPanelWidth] = useState(getStoredProposalPanelWidth)
+  const [layoutMode, setLayoutMode] = useState<BrainstormLayoutMode>(getStoredBrainstormLayoutMode)
+  const [workspaceTab, setWorkspaceTab] = useState<BrainstormWorkspaceTab>('brainstorm')
   const proposalPanelWidthRef = useRef(proposalPanelWidth)
   const searchHook = useSearch({ plugin: 'messaging', facets: ['status', 'agent_id'], debounce: 300 })
 
@@ -504,6 +566,11 @@ export function BrainstormView() {
     document.addEventListener('mouseup', handleMouseUp)
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
+  }, [])
+
+  const changeLayoutMode = useCallback((mode: BrainstormLayoutMode) => {
+    setLayoutMode(mode)
+    persistBrainstormLayoutMode(mode)
   }, [])
 
   useEffect(() => {
@@ -734,6 +801,167 @@ export function BrainstormView() {
   if (sessionId && activeSession) {
     const approvedCount = activeSession.proposals.filter(proposal => proposal.status === 'approved' && !proposal.planId).length
     const selectedProposal = activeSession.proposals.find(proposal => proposal.id === selectedProposalId) ?? null
+    const brainstormPane = (
+      <div className="min-h-0">
+        <IntegratedBrainstorm
+          messages={messages}
+          onMessagesChange={setMessages}
+          onSend={onSend}
+          agentId={activeSession.agentId}
+          placeholder="Ask for content topics, campaign ideas, or revisions..."
+          transformAssistantMessage={transformAssistantReply}
+          readOnly={activeSession.status === 'archived'}
+          readOnlyNotice={<Badge variant="outline">Archived session</Badge>}
+          fitParent
+          showHeader={false}
+        />
+      </div>
+    )
+    const renderProposalPanel = ({ showHeader, showResizeHandle }: { showHeader: boolean; showResizeHandle: boolean }) => (
+      <aside className={`relative flex min-h-0 flex-col overflow-hidden ${showHeader ? 'border-l border-border px-4' : ''}`}>
+        {showResizeHandle && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize proposal panel"
+            className="absolute inset-y-0 left-0 z-10 w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-accent/50 active:bg-accent"
+            onMouseDown={startProposalPanelResize}
+          />
+        )}
+        {showHeader && (
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold">Plan proposals</h2>
+            <Badge variant="outline" className="text-[11px]">{activeSession.proposals.length}</Badge>
+          </div>
+        )}
+        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1">
+          {activeSession.proposals.length === 0 ? (
+            <EmptyState icon={ClipboardList} title="No proposals yet" />
+          ) : (
+            <div className="grid gap-2">
+              {activeSession.proposals.map(proposal => (
+                <article
+                  key={proposal.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelectedProposalId(proposal.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      setSelectedProposalId(proposal.id)
+                    }
+                  }}
+                  className="w-full overflow-hidden rounded-md border border-border bg-card p-3 text-left transition-colors hover:bg-muted/30 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="line-clamp-2 text-sm font-medium">{proposal.title}</h3>
+                      <p className="mt-1 text-xs text-muted-foreground">{formatDate(proposal.targetDate)}</p>
+                    </div>
+                    <ProposalStatusBadge proposal={proposal} />
+                  </div>
+                  <p className="mt-2 line-clamp-3 text-sm text-muted-foreground">{proposal.brief}</p>
+                  {proposal.suggestedChannels && proposal.suggestedChannels.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {proposal.suggestedChannels.map(channel => (
+                        <Badge key={channel} variant="outline" className="text-[10px]">{channel}</Badge>
+                      ))}
+                    </div>
+                  )}
+                  {hasInlineProposalActions(proposal) && (
+                    <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className={`px-3 ${REJECT_BUTTON_CLASS}`}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          updateProposal(proposal, { status: 'rejected' })
+                        }}
+                      >
+                        <X className="size-3.5" data-icon="inline-start" />
+                        Decline
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="px-3"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          updateProposal(proposal, { status: 'approved' })
+                        }}
+                      >
+                        <Check className="size-3.5" data-icon="inline-start" />
+                        Accept
+                      </Button>
+                    </div>
+                  )}
+                </article>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="mt-3 border-t border-border pt-3">
+          <Button className="w-full justify-center" disabled={approvedCount === 0 || materializing} onClick={materialize}>
+            <ClipboardList className="size-4" />
+            Complete session and prepare plans
+          </Button>
+        </div>
+      </aside>
+    )
+    const workspace = layoutMode === 'columns' ? (
+      <div
+        data-testid="brainstorm-workspace-columns"
+        className="mt-4 grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_var(--proposal-panel-width)] gap-4 overflow-hidden"
+        style={{ '--proposal-panel-width': `${proposalPanelWidth}px` } as CSSProperties}
+      >
+        {brainstormPane}
+        {renderProposalPanel({ showHeader: true, showResizeHandle: true })}
+      </div>
+    ) : (
+      <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="flex shrink-0 items-center gap-1 border-b border-border" role="tablist" aria-label="Brainstorm layout sections">
+          {[
+            { id: 'brainstorm' as const, label: 'Brainstorm' },
+            { id: 'proposals' as const, label: 'Plan proposals' },
+          ].map((tab) => {
+            const selected = workspaceTab === tab.id
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => setWorkspaceTab(tab.id)}
+                className={`border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+                  selected
+                    ? 'border-foreground text-foreground'
+                    : 'border-transparent text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <span>{tab.label}</span>
+                {tab.id === 'proposals' && (
+                  <Badge variant="outline" className="ml-1 text-[11px]">
+                    {activeSession.proposals.length}
+                  </Badge>
+                )}
+              </button>
+            )
+          })}
+        </div>
+        {workspaceTab === 'brainstorm' ? (
+          <div className="min-h-0 flex-1 pt-4" role="tabpanel" aria-label="Brainstorm">
+            {brainstormPane}
+          </div>
+        ) : (
+          <div className="min-h-0 flex-1 pt-4" role="tabpanel" aria-label="Plan proposals">
+            {renderProposalPanel({ showHeader: false, showResizeHandle: false })}
+          </div>
+        )}
+      </div>
+    )
+
     return (
       <div className="flex h-full min-h-0 flex-col">
         <div className="flex items-center gap-3">
@@ -752,128 +980,25 @@ export function BrainstormView() {
               title={activeSession.title}
               count={activeSession.proposals.length}
               actions={
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="text-muted-foreground hover:text-red-400"
-                  aria-label="Delete brainstorm session"
-                  title="Delete brainstorm session"
-                  onClick={() => setDeleteSessionId(activeSession.id)}
-                >
-                  <Trash2 className="size-4" aria-hidden="true" />
-                </Button>
+                <div className="flex items-center gap-2">
+                  <BrainstormLayoutToggle value={layoutMode} onChange={changeLayoutMode} />
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-muted-foreground hover:text-red-400"
+                    aria-label="Delete brainstorm session"
+                    title="Delete brainstorm session"
+                    onClick={() => setDeleteSessionId(activeSession.id)}
+                  >
+                    <Trash2 className="size-4" aria-hidden="true" />
+                  </Button>
+                </div>
               }
             />
           </div>
         </div>
 
-        <div
-          className="mt-4 grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_var(--proposal-panel-width)]"
-          style={{ '--proposal-panel-width': `${proposalPanelWidth}px` } as CSSProperties}
-        >
-          <div className="min-h-0">
-            <IntegratedBrainstorm
-              messages={messages}
-              onMessagesChange={setMessages}
-              onSend={onSend}
-              agentId={activeSession.agentId}
-              placeholder="Ask for content topics, campaign ideas, or revisions..."
-              transformAssistantMessage={transformAssistantReply}
-              readOnly={activeSession.status === 'archived'}
-              readOnlyNotice={<Badge variant="outline">Archived session</Badge>}
-              fitParent
-              showHeader={false}
-            />
-          </div>
-
-          <aside className="relative flex min-h-0 flex-col overflow-hidden border-l border-border px-4">
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize proposal panel"
-              className="absolute inset-y-0 left-0 z-10 hidden w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-accent/50 active:bg-accent xl:block"
-              onMouseDown={startProposalPanelResize}
-            />
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">Plan proposals</h2>
-              <Badge variant="outline" className="text-[11px]">{activeSession.proposals.length}</Badge>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1">
-              {activeSession.proposals.length === 0 ? (
-                <EmptyState icon={ClipboardList} title="No proposals yet" />
-              ) : (
-                <div className="grid gap-2">
-                  {activeSession.proposals.map(proposal => (
-                    <article
-                      key={proposal.id}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => setSelectedProposalId(proposal.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault()
-                          setSelectedProposalId(proposal.id)
-                        }
-                      }}
-                      className="w-full overflow-hidden rounded-md border border-border bg-card p-3 text-left transition-colors hover:bg-muted/30 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <h3 className="line-clamp-2 text-sm font-medium">{proposal.title}</h3>
-                          <p className="mt-1 text-xs text-muted-foreground">{formatDate(proposal.targetDate)}</p>
-                        </div>
-                        <ProposalStatusBadge proposal={proposal} />
-                      </div>
-                      <p className="mt-2 line-clamp-3 text-sm text-muted-foreground">{proposal.brief}</p>
-                      {proposal.suggestedChannels && proposal.suggestedChannels.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {proposal.suggestedChannels.map(channel => (
-                            <Badge key={channel} variant="outline" className="text-[10px]">{channel}</Badge>
-                          ))}
-                        </div>
-                      )}
-                      {hasInlineProposalActions(proposal) && (
-                        <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            className={`px-3 ${REJECT_BUTTON_CLASS}`}
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              updateProposal(proposal, { status: 'rejected' })
-                            }}
-                          >
-                            <X className="size-3.5" data-icon="inline-start" />
-                            Decline
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            className="px-3"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              updateProposal(proposal, { status: 'approved' })
-                            }}
-                          >
-                            <Check className="size-3.5" data-icon="inline-start" />
-                            Accept
-                          </Button>
-                        </div>
-                      )}
-                    </article>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="mt-3 border-t border-border pt-3">
-              <Button className="w-full justify-center" disabled={approvedCount === 0 || materializing} onClick={materialize}>
-                <ClipboardList className="size-4" />
-                Complete session and prepare plans
-              </Button>
-            </div>
-          </aside>
-        </div>
+        {workspace}
 
         <ProposalDrawer
           proposal={selectedProposal}
