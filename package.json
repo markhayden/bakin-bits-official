@@ -9,6 +9,7 @@
     "plugins/*"
   ],
   "scripts": {
+    "build": "bun run scripts/build-plugins.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test --isolate --preload ./test/setup-dom.ts",
     "test:coverage": "bun test --isolate --preload ./test/setup-dom.ts --coverage --coverage-reporter=lcov",

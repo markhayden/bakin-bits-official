@@ -1,35 +1,35 @@
-// ../bakin-bits-official/plugins/projects/client.tsx
+// client.tsx
 import { registerPlugin } from "@makinbakin/sdk";
 import { useRouter as useRouter3 } from "@makinbakin/sdk/hooks";
 import { Suspense, useEffect as useEffect4 } from "react";
 
-// ../bakin-bits-official/plugins/projects/components/project-grid.tsx
+// components/project-grid.tsx
 import { useState as useState2, useEffect as useEffect2, useCallback, useMemo } from "react";
 import { useRouter } from "@makinbakin/sdk/hooks";
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/createLucideIcon.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/createLucideIcon.js
 import { forwardRef as forwardRef2, createElement as createElement2 } from "react";
 
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/mergeClasses.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/mergeClasses.js
 var mergeClasses = (...classes) => classes.filter((className, index, array) => {
   return Boolean(className) && className.trim() !== "" && array.indexOf(className) === index;
 }).join(" ").trim();
 
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/toKebabCase.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/toKebabCase.js
 var toKebabCase = (string) => string.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
 
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/toCamelCase.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/toCamelCase.js
 var toCamelCase = (string) => string.replace(/^([A-Z])|[\s-_]+(\w)/g, (match, p1, p2) => p2 ? p2.toUpperCase() : p1.toLowerCase());
 
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/toPascalCase.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/toPascalCase.js
 var toPascalCase = (string) => {
   const camelCase = toCamelCase(string);
   return camelCase.charAt(0).toUpperCase() + camelCase.slice(1);
 };
 
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/Icon.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/Icon.js
 import { forwardRef, createElement } from "react";
 
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/defaultAttributes.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/defaultAttributes.js
 var defaultAttributes = {
   xmlns: "http://www.w3.org/2000/svg",
   width: 24,
@@ -42,7 +42,7 @@ var defaultAttributes = {
   strokeLinejoin: "round"
 };
 
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/hasA11yProp.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/hasA11yProp.js
 var hasA11yProp = (props) => {
   for (const prop in props) {
     if (prop.startsWith("aria-") || prop === "role" || prop === "title") {
@@ -52,7 +52,7 @@ var hasA11yProp = (props) => {
   return false;
 };
 
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/Icon.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/Icon.js
 var Icon = forwardRef(({
   color = "currentColor",
   size = 24,
@@ -77,7 +77,7 @@ var Icon = forwardRef(({
   ...Array.isArray(children) ? children : [children]
 ]));
 
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/createLucideIcon.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/createLucideIcon.js
 var createLucideIcon = (iconName, iconNode) => {
   const Component = forwardRef2(({ className, ...props }, ref) => createElement2(Icon, {
     ref,
@@ -89,26 +89,26 @@ var createLucideIcon = (iconName, iconNode) => {
   return Component;
 };
 
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/arrow-left.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/arrow-left.js
 var __iconNode = [
   ["path", { d: "m12 19-7-7 7-7", key: "1l729n" }],
   ["path", { d: "M19 12H5", key: "x3x0zl" }]
 ];
 var ArrowLeft = createLucideIcon("arrow-left", __iconNode);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/chevron-down.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/chevron-down.js
 var __iconNode2 = [["path", { d: "m6 9 6 6 6-6", key: "qrunsl" }]];
 var ChevronDown = createLucideIcon("chevron-down", __iconNode2);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/chevron-right.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/chevron-right.js
 var __iconNode3 = [["path", { d: "m9 18 6-6-6-6", key: "mthhwq" }]];
 var ChevronRight = createLucideIcon("chevron-right", __iconNode3);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/external-link.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/external-link.js
 var __iconNode4 = [
   ["path", { d: "M15 3h6v6", key: "1q9fwt" }],
   ["path", { d: "M10 14 21 3", key: "gplh6r" }],
   ["path", { d: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6", key: "a6xqqp" }]
 ];
 var ExternalLink = createLucideIcon("external-link", __iconNode4);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/file-text.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/file-text.js
 var __iconNode5 = [
   [
     "path",
@@ -123,7 +123,7 @@ var __iconNode5 = [
   ["path", { d: "M16 17H8", key: "z1uh3a" }]
 ];
 var FileText = createLucideIcon("file-text", __iconNode5);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/file.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/file.js
 var __iconNode6 = [
   [
     "path",
@@ -135,7 +135,7 @@ var __iconNode6 = [
   ["path", { d: "M14 2v5a1 1 0 0 0 1 1h5", key: "wfsgrz" }]
 ];
 var File = createLucideIcon("file", __iconNode6);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/film.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/film.js
 var __iconNode7 = [
   ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", key: "afitv7" }],
   ["path", { d: "M7 3v18", key: "bbkbws" }],
@@ -147,7 +147,7 @@ var __iconNode7 = [
   ["path", { d: "M17 16.5h4", key: "go4c1d" }]
 ];
 var Film = createLucideIcon("film", __iconNode7);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/folder-kanban.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/folder-kanban.js
 var __iconNode8 = [
   [
     "path",
@@ -161,35 +161,35 @@ var __iconNode8 = [
   ["path", { d: "M16 10v6", key: "1d6xys" }]
 ];
 var FolderKanban = createLucideIcon("folder-kanban", __iconNode8);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/image.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/image.js
 var __iconNode9 = [
   ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", ry: "2", key: "1m3agn" }],
   ["circle", { cx: "9", cy: "9", r: "2", key: "af1f0g" }],
   ["path", { d: "m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21", key: "1xmnt7" }]
 ];
 var Image = createLucideIcon("image", __iconNode9);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/link-2.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/link-2.js
 var __iconNode10 = [
   ["path", { d: "M9 17H7A5 5 0 0 1 7 7h2", key: "8i5ue5" }],
   ["path", { d: "M15 7h2a5 5 0 1 1 0 10h-2", key: "1b9ql8" }],
   ["line", { x1: "8", x2: "16", y1: "12", y2: "12", key: "1jonct" }]
 ];
 var Link2 = createLucideIcon("link-2", __iconNode10);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/list-filter.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/list-filter.js
 var __iconNode11 = [
   ["path", { d: "M2 5h20", key: "1fs1ex" }],
   ["path", { d: "M6 12h12", key: "8npq4p" }],
   ["path", { d: "M9 19h6", key: "456am0" }]
 ];
 var ListFilter = createLucideIcon("list-filter", __iconNode11);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/music.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/music.js
 var __iconNode12 = [
   ["path", { d: "M9 18V5l12-2v13", key: "1jmyc2" }],
   ["circle", { cx: "6", cy: "18", r: "3", key: "fqmcym" }],
   ["circle", { cx: "18", cy: "16", r: "3", key: "1hluhg" }]
 ];
 var Music = createLucideIcon("music", __iconNode12);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/paperclip.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/paperclip.js
 var __iconNode13 = [
   [
     "path",
@@ -200,7 +200,7 @@ var __iconNode13 = [
   ]
 ];
 var Paperclip = createLucideIcon("paperclip", __iconNode13);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/pencil.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/pencil.js
 var __iconNode14 = [
   [
     "path",
@@ -212,19 +212,19 @@ var __iconNode14 = [
   ["path", { d: "m15 5 4 4", key: "1mk7zo" }]
 ];
 var Pencil = createLucideIcon("pencil", __iconNode14);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/plus.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/plus.js
 var __iconNode15 = [
   ["path", { d: "M5 12h14", key: "1ays0h" }],
   ["path", { d: "M12 5v14", key: "s699le" }]
 ];
 var Plus = createLucideIcon("plus", __iconNode15);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/search.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/search.js
 var __iconNode16 = [
   ["path", { d: "m21 21-4.34-4.34", key: "14j7rj" }],
   ["circle", { cx: "11", cy: "11", r: "8", key: "4ej97u" }]
 ];
 var Search = createLucideIcon("search", __iconNode16);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/trash-2.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/trash-2.js
 var __iconNode17 = [
   ["path", { d: "M10 11v6", key: "nco0om" }],
   ["path", { d: "M14 11v6", key: "outv1u" }],
@@ -233,7 +233,7 @@ var __iconNode17 = [
   ["path", { d: "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2", key: "e791ji" }]
 ];
 var Trash2 = createLucideIcon("trash-2", __iconNode17);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/unlink.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/unlink.js
 var __iconNode18 = [
   [
     "path",
@@ -255,13 +255,13 @@ var __iconNode18 = [
   ["line", { x1: "19", x2: "22", y1: "16", y2: "16", key: "ox905f" }]
 ];
 var Unlink = createLucideIcon("unlink", __iconNode18);
-// ../bakin-bits-official/node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/x.js
+// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/x.js
 var __iconNode19 = [
   ["path", { d: "M18 6 6 18", key: "1bl5f8" }],
   ["path", { d: "m6 6 12 12", key: "d8bk6v" }]
 ];
 var X = createLucideIcon("x", __iconNode19);
-// ../bakin-bits-official/plugins/projects/components/project-grid.tsx
+// components/project-grid.tsx
 import { Button as Button2 } from "@makinbakin/sdk/ui";
 import { PluginHeader } from "@makinbakin/sdk/components";
 import { EmptyState } from "@makinbakin/sdk/components";
@@ -270,7 +270,7 @@ import { useQueryState } from "@makinbakin/sdk/hooks";
 import { useSearch } from "@makinbakin/sdk/hooks";
 import { useDebug } from "@makinbakin/sdk/hooks";
 
-// ../bakin-bits-official/plugins/projects/components/project-status-badge.tsx
+// components/project-status-badge.tsx
 import { jsxDEV } from "react/jsx-dev-runtime";
 "use client";
 var STATUS_STYLES = {
@@ -288,7 +288,7 @@ function ProjectStatusBadge({ status, onClick }) {
   }, undefined, false, undefined, this);
 }
 
-// ../bakin-bits-official/plugins/projects/components/project-card.tsx
+// components/project-card.tsx
 import { jsxDEV as jsxDEV2 } from "react/jsx-dev-runtime";
 "use client";
 function ProgressBar({ value }) {
@@ -354,7 +354,7 @@ function ProjectCard({ project, onClick }) {
   }, undefined, true, undefined, this);
 }
 
-// ../bakin-bits-official/plugins/projects/components/new-project-dialog.tsx
+// components/new-project-dialog.tsx
 import { useEffect, useState } from "react";
 import {
   Dialog,
@@ -438,7 +438,7 @@ function NewProjectDialog({
   }, undefined, false, undefined, this);
 }
 
-// ../bakin-bits-official/plugins/projects/components/project-grid.tsx
+// components/project-grid.tsx
 import { jsxDEV as jsxDEV4 } from "react/jsx-dev-runtime";
 "use client";
 var STATUS_TABS = [
@@ -629,14 +629,14 @@ function ProjectGrid() {
   }, undefined, true, undefined, this);
 }
 
-// ../bakin-bits-official/plugins/projects/components/project-detail.tsx
+// components/project-detail.tsx
 import { useState as useState4, useCallback as useCallback2, useRef, useEffect as useEffect3 } from "react";
 import { useRouter as useRouter2 } from "@makinbakin/sdk/hooks";
 import { useMainAgentId } from "@makinbakin/sdk/hooks";
 import { AgentSelect, IntegratedBrainstorm, readBrainstormSseResponse } from "@makinbakin/sdk/components";
 import { Slot } from "@makinbakin/sdk/slots";
 
-// ../bakin-bits-official/plugins/projects/components/project-checklist.tsx
+// components/project-checklist.tsx
 import { useState as useState3 } from "react";
 import { jsxDEV as jsxDEV5 } from "react/jsx-dev-runtime";
 "use client";
@@ -847,7 +847,7 @@ function ProjectChecklist({
   }, undefined, true, undefined, this);
 }
 
-// ../bakin-bits-official/plugins/projects/components/project-editor.tsx
+// components/project-editor.tsx
 import { MarkdownEditor } from "@makinbakin/sdk/components";
 import { jsxDEV as jsxDEV6 } from "react/jsx-dev-runtime";
 "use client";
@@ -861,7 +861,7 @@ function ProjectEditor({ body, editing, onChange }) {
   }, undefined, false, undefined, this);
 }
 
-// ../bakin-bits-official/plugins/projects/components/project-detail.tsx
+// components/project-detail.tsx
 import { Skeleton as Skeleton2 } from "@makinbakin/sdk/ui";
 import { jsxDEV as jsxDEV7, Fragment } from "react/jsx-dev-runtime";
 "use client";
@@ -1653,7 +1653,7 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
   }, undefined, true, undefined, this);
 }
 
-// ../bakin-bits-official/plugins/projects/client.tsx
+// client.tsx
 import { jsxDEV as jsxDEV8 } from "react/jsx-dev-runtime";
 var navItems = [
   { id: "projects", label: "Projects", icon: "Compass", href: "/projects", order: 30 }
