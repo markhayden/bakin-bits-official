@@ -2,19 +2,28 @@
 /**
  * Build prebuilt dist/ artifacts for every plugin under plugins/*.
  *
- * Mirrors the externals + naming used by Bakin's in-binary user-plugin
- * builder (packages/host/src/plugin-host/user-plugin-builder.ts) so the
- * artifacts we ship here drop straight into ~/.bakin/plugins/<id>/dist/
- * without re-bundling on install/upgrade.
+ * Mirrors Bakin's in-binary user-plugin builder
+ * (packages/host/src/plugin-host/user-plugin-builder.ts) so the artifacts
+ * we ship here drop straight into ~/.bakin/plugins/<id>/dist/ without
+ * re-bundling on install/upgrade.
+ *
+ * Key invariant: the SERVER bundle inlines the SDK. The plugin's runtime
+ * import path on a user's machine is `<bakin-binary>/<dynamic-import>/dist/index.js`
+ * — Node's resolver can't find @makinbakin/sdk there because it lives in
+ * a build-only scratch dir on the publisher's machine. Externalizing the
+ * SDK server-side would produce a bundle that throws ResolveMessage on
+ * activation. The CLIENT bundle DOES externalize the SDK because the
+ * host shell's import map wires @makinbakin/sdk/* → /vendor/*.js in the
+ * browser.
  *
  * Run with: bun run build
  */
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { spawn } from 'node:child_process'
 
 const REPO_ROOT = resolve(import.meta.dir, '..')
 const PLUGINS_ROOT = join(REPO_ROOT, 'plugins')
+const BUILD_SDK_ROOT = join(REPO_ROOT, '.build-sdk', 'node_modules', '@makinbakin', 'sdk')
 
 const CLIENT_EXTERNAL = [
   'react', 'react-dom', 'react-dom/client',
@@ -30,29 +39,45 @@ const SERVER_EXTERNAL = [
   'react', 'react-dom', 'react-dom/client',
   'react/jsx-runtime', 'react/jsx-dev-runtime',
   '@tanstack/react-router',
-  '@makinbakin/sdk', '@makinbakin/sdk/ui', '@makinbakin/sdk/hooks',
-  '@makinbakin/sdk/components', '@makinbakin/sdk/slots',
-  '@makinbakin/sdk/types', '@makinbakin/sdk/utils',
-  '@makinbakin/sdk/metadata', '@makinbakin/sdk/routing',
 ]
 
-interface RunResult {
-  exitCode: number
-  stderr: string
-  stdout: string
+/**
+ * Map @makinbakin/sdk[/subpath] specifiers to the real npm package
+ * installed under .build-sdk/. Used by server builds so the SDK gets
+ * bundled into dist/index.js. The mapping mirrors the package's
+ * exports field — keep it in sync if the SDK adds new sub-paths.
+ */
+const SDK_ENTRYPOINTS: Record<string, string> = {
+  '@makinbakin/sdk': join(BUILD_SDK_ROOT, 'index.js'),
+  '@makinbakin/sdk/ui': join(BUILD_SDK_ROOT, 'ui', 'index.js'),
+  '@makinbakin/sdk/hooks': join(BUILD_SDK_ROOT, 'hooks', 'index.js'),
+  '@makinbakin/sdk/components': join(BUILD_SDK_ROOT, 'components', 'index.js'),
+  '@makinbakin/sdk/slots': join(BUILD_SDK_ROOT, 'slots', 'index.js'),
+  '@makinbakin/sdk/types': join(BUILD_SDK_ROOT, 'types', 'index.js'),
+  '@makinbakin/sdk/utils': join(BUILD_SDK_ROOT, 'utils', 'index.js'),
+  '@makinbakin/sdk/metadata': join(BUILD_SDK_ROOT, 'metadata', 'index.js'),
+  '@makinbakin/sdk/routing': join(BUILD_SDK_ROOT, 'routing', 'index.js'),
 }
 
-function runSubprocess(cmd: string, args: string[], cwd: string): Promise<RunResult> {
-  return new Promise((resolvePromise) => {
-    const child = spawn(cmd, args, { cwd })
-    let stderr = ''
-    let stdout = ''
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString() })
-    child.stdout.on('data', (chunk) => { stdout += chunk.toString() })
-    child.on('close', (code) => {
-      resolvePromise({ exitCode: code ?? 0, stderr, stdout })
+const sdkResolverPlugin = {
+  name: 'makinbakin-sdk-resolver',
+  setup(build: { onResolve: (filter: { filter: RegExp }, callback: (args: { path: string }) => { path: string } | undefined) => void }) {
+    build.onResolve({ filter: /^@makinbakin\/sdk(\/.*)?$/ }, (args) => {
+      const target = SDK_ENTRYPOINTS[args.path]
+      if (!target) return
+      return { path: target }
     })
-  })
+  },
+}
+
+function assertBuildSdkPresent(): void {
+  if (!existsSync(join(BUILD_SDK_ROOT, 'package.json'))) {
+    throw new Error(
+      `Missing .build-sdk install. Run:\n` +
+      `  (cd .build-sdk && bun install)\n` +
+      `Or first-time setup: see scripts/build-plugins.ts header.`,
+    )
+  }
 }
 
 async function buildPlugin(pluginDir: string): Promise<void> {
@@ -70,30 +95,31 @@ async function buildPlugin(pluginDir: string): Promise<void> {
   console.log(`[build] ${name}`)
 
   if (hasServer) {
-    const result = await runSubprocess('bun', [
-      'build', serverEntry,
-      '--outdir', distDir,
-      '--target', 'bun',
-      '--format', 'esm',
-      '--entry-naming', 'index.[ext]',
-      ...SERVER_EXTERNAL.flatMap((e) => ['--external', e]),
-    ], pluginDir)
-    if (result.exitCode !== 0) {
-      throw new Error(`server build failed for ${name}:\n${result.stderr}`)
+    const result = await Bun.build({
+      entrypoints: [serverEntry],
+      outdir: distDir,
+      target: 'bun',
+      format: 'esm',
+      naming: 'index.[ext]',
+      external: SERVER_EXTERNAL,
+      plugins: [sdkResolverPlugin],
+    })
+    if (!result.success) {
+      throw new Error(`server build failed for ${name}:\n${result.logs.join('\n')}`)
     }
   }
 
   if (hasClient) {
-    const result = await runSubprocess('bun', [
-      'build', clientEntry,
-      '--outdir', distDir,
-      '--target', 'browser',
-      '--format', 'esm',
-      '--entry-naming', 'client.[ext]',
-      ...CLIENT_EXTERNAL.flatMap((e) => ['--external', e]),
-    ], pluginDir)
-    if (result.exitCode !== 0) {
-      throw new Error(`client build failed for ${name}:\n${result.stderr}`)
+    const result = await Bun.build({
+      entrypoints: [clientEntry],
+      outdir: distDir,
+      target: 'browser',
+      format: 'esm',
+      naming: 'client.[ext]',
+      external: CLIENT_EXTERNAL,
+    })
+    if (!result.success) {
+      throw new Error(`client build failed for ${name}:\n${result.logs.join('\n')}`)
     }
   }
 }
@@ -103,6 +129,8 @@ async function main(): Promise<void> {
     console.error(`plugins/ not found at ${PLUGINS_ROOT}`)
     process.exit(1)
   }
+  assertBuildSdkPresent()
+
   const entries = readdirSync(PLUGINS_ROOT)
   const pluginDirs = entries
     .filter((name) => !name.startsWith('_') && !name.startsWith('.'))
