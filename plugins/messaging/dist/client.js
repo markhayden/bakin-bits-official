@@ -13,12 +13,12 @@ var __export = (target, all) => {
     });
 };
 
-// client.tsx
+// plugins/messaging/client.tsx
 import { registerPlugin } from "@makinbakin/sdk";
 import { useRouter as useRouter2 } from "@makinbakin/sdk/hooks";
 import { Suspense, useEffect as useEffect10 } from "react";
 
-// components/content-calendar.tsx
+// plugins/messaging/components/content-calendar.tsx
 import { useMemo as useMemo4, useState as useState5 } from "react";
 import { AgentFilter } from "@makinbakin/sdk/components";
 import { EmptyState } from "@makinbakin/sdk/components";
@@ -30,30 +30,30 @@ import { Badge as Badge3 } from "@makinbakin/sdk/ui";
 import { Button as Button3 } from "@makinbakin/sdk/ui";
 import { Input as Input2 } from "@makinbakin/sdk/ui";
 import { Skeleton } from "@makinbakin/sdk/ui";
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/createLucideIcon.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/createLucideIcon.js
 import { forwardRef as forwardRef2, createElement as createElement2 } from "react";
 
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/mergeClasses.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/mergeClasses.js
 var mergeClasses = (...classes) => classes.filter((className, index, array) => {
   return Boolean(className) && className.trim() !== "" && array.indexOf(className) === index;
 }).join(" ").trim();
 
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/toKebabCase.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/toKebabCase.js
 var toKebabCase = (string) => string.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
 
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/toCamelCase.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/toCamelCase.js
 var toCamelCase = (string) => string.replace(/^([A-Z])|[\s-_]+(\w)/g, (match, p1, p2) => p2 ? p2.toUpperCase() : p1.toLowerCase());
 
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/toPascalCase.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/toPascalCase.js
 var toPascalCase = (string) => {
   const camelCase = toCamelCase(string);
   return camelCase.charAt(0).toUpperCase() + camelCase.slice(1);
 };
 
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/Icon.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/Icon.js
 import { forwardRef, createElement } from "react";
 
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/defaultAttributes.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/defaultAttributes.js
 var defaultAttributes = {
   xmlns: "http://www.w3.org/2000/svg",
   width: 24,
@@ -66,7 +66,7 @@ var defaultAttributes = {
   strokeLinejoin: "round"
 };
 
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/hasA11yProp.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/shared/src/utils/hasA11yProp.js
 var hasA11yProp = (props) => {
   for (const prop in props) {
     if (prop.startsWith("aria-") || prop === "role" || prop === "title") {
@@ -76,7 +76,7 @@ var hasA11yProp = (props) => {
   return false;
 };
 
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/Icon.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/Icon.js
 var Icon = forwardRef(({
   color = "currentColor",
   size = 24,
@@ -101,7 +101,7 @@ var Icon = forwardRef(({
   ...Array.isArray(children) ? children : [children]
 ]));
 
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/createLucideIcon.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/createLucideIcon.js
 var createLucideIcon = (iconName, iconNode) => {
   const Component = forwardRef2(({ className, ...props }, ref) => createElement2(Icon, {
     ref,
@@ -113,26 +113,26 @@ var createLucideIcon = (iconName, iconNode) => {
   return Component;
 };
 
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/circle-alert.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/circle-alert.js
 var __iconNode = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["line", { x1: "12", x2: "12", y1: "8", y2: "12", key: "1pkeuh" }],
   ["line", { x1: "12", x2: "12.01", y1: "16", y2: "16", key: "4dfq90" }]
 ];
 var CircleAlert = createLucideIcon("circle-alert", __iconNode);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/circle-check.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/circle-check.js
 var __iconNode2 = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["path", { d: "m9 12 2 2 4-4", key: "dzmm74" }]
 ];
 var CircleCheck = createLucideIcon("circle-check", __iconNode2);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/columns-2.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/columns-2.js
 var __iconNode3 = [
   ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", key: "afitv7" }],
   ["path", { d: "M12 3v18", key: "108xh3" }]
 ];
 var Columns2 = createLucideIcon("columns-2", __iconNode3);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/earth.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/earth.js
 var __iconNode4 = [
   ["path", { d: "M21.54 15H17a2 2 0 0 0-2 2v4.54", key: "1djwo0" }],
   [
@@ -146,13 +146,13 @@ var __iconNode4 = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }]
 ];
 var Earth = createLucideIcon("earth", __iconNode4);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/arrow-left.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/arrow-left.js
 var __iconNode5 = [
   ["path", { d: "m12 19-7-7 7-7", key: "1l729n" }],
   ["path", { d: "M19 12H5", key: "x3x0zl" }]
 ];
 var ArrowLeft = createLucideIcon("arrow-left", __iconNode5);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/calendar-days.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/calendar-days.js
 var __iconNode6 = [
   ["path", { d: "M8 2v4", key: "1cmpym" }],
   ["path", { d: "M16 2v4", key: "4m81vk" }],
@@ -166,19 +166,19 @@ var __iconNode6 = [
   ["path", { d: "M16 18h.01", key: "kzsmim" }]
 ];
 var CalendarDays = createLucideIcon("calendar-days", __iconNode6);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/check.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/check.js
 var __iconNode7 = [["path", { d: "M20 6 9 17l-5-5", key: "1gmf2c" }]];
 var Check = createLucideIcon("check", __iconNode7);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/chevron-left.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/chevron-left.js
 var __iconNode8 = [["path", { d: "m15 18-6-6 6-6", key: "1wnfg3" }]];
 var ChevronLeft = createLucideIcon("chevron-left", __iconNode8);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/chevron-right.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/chevron-right.js
 var __iconNode9 = [["path", { d: "m9 18 6-6-6-6", key: "mthhwq" }]];
 var ChevronRight = createLucideIcon("chevron-right", __iconNode9);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/circle.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/circle.js
 var __iconNode10 = [["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }]];
 var Circle = createLucideIcon("circle", __iconNode10);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/clipboard-list.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/clipboard-list.js
 var __iconNode11 = [
   ["rect", { width: "8", height: "4", x: "8", y: "2", rx: "1", ry: "1", key: "tgr4d6" }],
   [
@@ -194,20 +194,20 @@ var __iconNode11 = [
   ["path", { d: "M8 16h.01", key: "18s6g9" }]
 ];
 var ClipboardList = createLucideIcon("clipboard-list", __iconNode11);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/clock.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/clock.js
 var __iconNode12 = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["path", { d: "M12 6v6l4 2", key: "mmk7yg" }]
 ];
 var Clock = createLucideIcon("clock", __iconNode12);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/external-link.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/external-link.js
 var __iconNode13 = [
   ["path", { d: "M15 3h6v6", key: "1q9fwt" }],
   ["path", { d: "M10 14 21 3", key: "gplh6r" }],
   ["path", { d: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6", key: "a6xqqp" }]
 ];
 var ExternalLink = createLucideIcon("external-link", __iconNode13);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/file-text.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/file-text.js
 var __iconNode14 = [
   [
     "path",
@@ -222,28 +222,28 @@ var __iconNode14 = [
   ["path", { d: "M16 17H8", key: "z1uh3a" }]
 ];
 var FileText = createLucideIcon("file-text", __iconNode14);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/image.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/image.js
 var __iconNode15 = [
   ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2", ry: "2", key: "1m3agn" }],
   ["circle", { cx: "9", cy: "9", r: "2", key: "af1f0g" }],
   ["path", { d: "m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21", key: "1xmnt7" }]
 ];
 var Image = createLucideIcon("image", __iconNode15);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/info.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/info.js
 var __iconNode16 = [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["path", { d: "M12 16v-4", key: "1dtifu" }],
   ["path", { d: "M12 8h.01", key: "e9boi3" }]
 ];
 var Info = createLucideIcon("info", __iconNode16);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/instagram.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/instagram.js
 var __iconNode17 = [
   ["rect", { width: "20", height: "20", x: "2", y: "2", rx: "5", ry: "5", key: "2e1cvw" }],
   ["path", { d: "M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z", key: "9exkf1" }],
   ["line", { x1: "17.5", x2: "17.51", y1: "6.5", y2: "6.5", key: "r4j83e" }]
 ];
 var Instagram = createLucideIcon("instagram", __iconNode17);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/message-circle.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/message-circle.js
 var __iconNode18 = [
   [
     "path",
@@ -254,7 +254,7 @@ var __iconNode18 = [
   ]
 ];
 var MessageCircle = createLucideIcon("message-circle", __iconNode18);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/message-square-text.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/message-square-text.js
 var __iconNode19 = [
   [
     "path",
@@ -268,13 +268,13 @@ var __iconNode19 = [
   ["path", { d: "M7 7h8", key: "af5zfr" }]
 ];
 var MessageSquareText = createLucideIcon("message-square-text", __iconNode19);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/music-2.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/music-2.js
 var __iconNode20 = [
   ["circle", { cx: "8", cy: "18", r: "4", key: "1fc0mg" }],
   ["path", { d: "M12 18V2l7 4", key: "g04rme" }]
 ];
 var Music2 = createLucideIcon("music-2", __iconNode20);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/paperclip.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/paperclip.js
 var __iconNode21 = [
   [
     "path",
@@ -285,13 +285,13 @@ var __iconNode21 = [
   ]
 ];
 var Paperclip = createLucideIcon("paperclip", __iconNode21);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/plus.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/plus.js
 var __iconNode22 = [
   ["path", { d: "M5 12h14", key: "1ays0h" }],
   ["path", { d: "M12 5v14", key: "s699le" }]
 ];
 var Plus = createLucideIcon("plus", __iconNode22);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/refresh-ccw.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/refresh-ccw.js
 var __iconNode23 = [
   ["path", { d: "M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", key: "14sxne" }],
   ["path", { d: "M3 3v5h5", key: "1xhq8a" }],
@@ -299,7 +299,7 @@ var __iconNode23 = [
   ["path", { d: "M16 16h5v5", key: "ccwih5" }]
 ];
 var RefreshCcw = createLucideIcon("refresh-ccw", __iconNode23);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/rocket.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/rocket.js
 var __iconNode24 = [
   ["path", { d: "M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5", key: "qeys4" }],
   [
@@ -319,19 +319,19 @@ var __iconNode24 = [
   ["path", { d: "M9 12H4s.55-3.03 2-4c1.62-1.08 5 .05 5 .05", key: "92ym6u" }]
 ];
 var Rocket = createLucideIcon("rocket", __iconNode24);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/rotate-ccw.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/rotate-ccw.js
 var __iconNode25 = [
   ["path", { d: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", key: "1357e3" }],
   ["path", { d: "M3 3v5h5", key: "1xhq8a" }]
 ];
 var RotateCcw = createLucideIcon("rotate-ccw", __iconNode25);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/search.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/search.js
 var __iconNode26 = [
   ["path", { d: "m21 21-4.34-4.34", key: "14j7rj" }],
   ["circle", { cx: "11", cy: "11", r: "8", key: "4ej97u" }]
 ];
 var Search = createLucideIcon("search", __iconNode26);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/slack.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/slack.js
 var __iconNode27 = [
   ["rect", { width: "3", height: "8", x: "13", y: "2", rx: "1.5", key: "diqz80" }],
   ["path", { d: "M19 8.5V10h1.5A1.5 1.5 0 1 0 19 8.5", key: "183iwg" }],
@@ -343,14 +343,14 @@ var __iconNode27 = [
   ["path", { d: "M8.5 5H10V3.5A1.5 1.5 0 1 0 8.5 5", key: "16f3cl" }]
 ];
 var Slack = createLucideIcon("slack", __iconNode27);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/square-stack.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/square-stack.js
 var __iconNode28 = [
   ["path", { d: "M4 10c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2", key: "4i38lg" }],
   ["path", { d: "M10 16c-1.1 0-2-.9-2-2v-4c0-1.1.9-2 2-2h4c1.1 0 2 .9 2 2", key: "mlte4a" }],
   ["rect", { width: "8", height: "8", x: "14", y: "14", rx: "2", key: "1fa9i4" }]
 ];
 var SquareStack = createLucideIcon("square-stack", __iconNode28);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/trash-2.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/trash-2.js
 var __iconNode29 = [
   ["path", { d: "M10 11v6", key: "nco0om" }],
   ["path", { d: "M14 11v6", key: "outv1u" }],
@@ -359,7 +359,7 @@ var __iconNode29 = [
   ["path", { d: "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2", key: "e791ji" }]
 ];
 var Trash2 = createLucideIcon("trash-2", __iconNode29);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/twitter.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/twitter.js
 var __iconNode30 = [
   [
     "path",
@@ -370,7 +370,7 @@ var __iconNode30 = [
   ]
 ];
 var Twitter = createLucideIcon("twitter", __iconNode30);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/video.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/video.js
 var __iconNode31 = [
   [
     "path",
@@ -382,21 +382,21 @@ var __iconNode31 = [
   ["rect", { x: "2", y: "6", width: "14", height: "12", rx: "2", key: "158x01" }]
 ];
 var Video = createLucideIcon("video", __iconNode31);
-// ../../node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/x.js
+// node_modules/.bun/lucide-react@0.577.0+3f10a4be4e334a9b/node_modules/lucide-react/dist/esm/icons/x.js
 var __iconNode32 = [
   ["path", { d: "M18 6 6 18", key: "1bl5f8" }],
   ["path", { d: "m6 6 12 12", key: "d8bk6v" }]
 ];
 var X = createLucideIcon("x", __iconNode32);
-// components/content-calendar.tsx
+// plugins/messaging/components/content-calendar.tsx
 import { useAgentIds as useAgentIds2 } from "@makinbakin/sdk/hooks";
 import { useNotificationChannels as useNotificationChannels2 } from "@makinbakin/sdk/hooks";
 import { useQueryArrayState, useQueryState } from "@makinbakin/sdk/hooks";
 
-// hooks/use-content-types.ts
+// plugins/messaging/hooks/use-content-types.ts
 import { useEffect, useState } from "react";
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/external.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/external.js
 var exports_external = {};
 __export(exports_external, {
   xor: () => xor,
@@ -637,7 +637,7 @@ __export(exports_external, {
   $brand: () => $brand
 });
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/index.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/index.js
 var exports_core2 = {};
 __export(exports_core2, {
   version: () => version,
@@ -915,7 +915,7 @@ __export(exports_core2, {
   $ZodAny: () => $ZodAny
 });
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/core.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/core.js
 var NEVER = Object.freeze({
   status: "aborted"
 });
@@ -991,7 +991,7 @@ function config(newConfig) {
     Object.assign(globalConfig, newConfig);
   return globalConfig;
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/util.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/util.js
 var exports_util = {};
 __export(exports_util, {
   unwrapMessage: () => unwrapMessage,
@@ -1665,7 +1665,7 @@ class Class {
   constructor(..._args) {}
 }
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/errors.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/errors.js
 var initializer = (inst, def) => {
   inst.name = "$ZodError";
   Object.defineProperty(inst, "_zod", {
@@ -1802,7 +1802,7 @@ function prettifyError(error) {
 `);
 }
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/parse.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/parse.js
 var _parse = (_Err) => (schema, value, _ctx, _params) => {
   const ctx = _ctx ? Object.assign(_ctx, { async: false }) : { async: false };
   const result = schema._zod.run({ value, issues: [] }, ctx);
@@ -1889,7 +1889,7 @@ var _safeDecodeAsync = (_Err) => async (schema, value, _ctx) => {
   return _safeParseAsync(_Err)(schema, value, _ctx);
 };
 var safeDecodeAsync = /* @__PURE__ */ _safeDecodeAsync($ZodRealError);
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/regexes.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/regexes.js
 var exports_regexes = {};
 __export(exports_regexes, {
   xid: () => xid,
@@ -2046,7 +2046,7 @@ var sha512_hex = /^[0-9a-fA-F]{128}$/;
 var sha512_base64 = /* @__PURE__ */ fixedBase64(86, "==");
 var sha512_base64url = /* @__PURE__ */ fixedBase64url(86);
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/checks.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/checks.js
 var $ZodCheck = /* @__PURE__ */ $constructor("$ZodCheck", (inst, def) => {
   var _a;
   inst._zod ?? (inst._zod = {});
@@ -2593,7 +2593,7 @@ var $ZodCheckOverwrite = /* @__PURE__ */ $constructor("$ZodCheckOverwrite", (ins
   };
 });
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/doc.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/doc.js
 class Doc {
   constructor(args = []) {
     this.content = [];
@@ -2631,14 +2631,14 @@ class Doc {
   }
 }
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/versions.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/versions.js
 var version = {
   major: 4,
   minor: 3,
   patch: 6
 };
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/schemas.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/schemas.js
 var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
   var _a;
   inst ?? (inst = {});
@@ -4600,7 +4600,7 @@ function handleRefineResult(result, payload, input, inst) {
     payload.issues.push(issue(_iss));
   }
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/index.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/index.js
 var exports_locales = {};
 __export(exports_locales, {
   zhTW: () => zh_TW_default,
@@ -4654,7 +4654,7 @@ __export(exports_locales, {
   ar: () => ar_default
 });
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ar.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ar.js
 var error = () => {
   const Sizable = {
     string: { unit: "حرف", verb: "أن يحوي" },
@@ -4760,7 +4760,7 @@ function ar_default() {
     localeError: error()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/az.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/az.js
 var error2 = () => {
   const Sizable = {
     string: { unit: "simvol", verb: "olmalıdır" },
@@ -4865,7 +4865,7 @@ function az_default() {
     localeError: error2()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/be.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/be.js
 function getBelarusianPlural(count, one, few, many) {
   const absCount = Math.abs(count);
   const lastDigit = absCount % 10;
@@ -5021,7 +5021,7 @@ function be_default() {
     localeError: error3()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/bg.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/bg.js
 var error4 = () => {
   const Sizable = {
     string: { unit: "символа", verb: "да съдържа" },
@@ -5141,7 +5141,7 @@ function bg_default() {
     localeError: error4()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ca.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ca.js
 var error5 = () => {
   const Sizable = {
     string: { unit: "caràcters", verb: "contenir" },
@@ -5248,7 +5248,7 @@ function ca_default() {
     localeError: error5()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/cs.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/cs.js
 var error6 = () => {
   const Sizable = {
     string: { unit: "znaků", verb: "mít" },
@@ -5359,7 +5359,7 @@ function cs_default() {
     localeError: error6()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/da.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/da.js
 var error7 = () => {
   const Sizable = {
     string: { unit: "tegn", verb: "havde" },
@@ -5474,7 +5474,7 @@ function da_default() {
     localeError: error7()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/de.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/de.js
 var error8 = () => {
   const Sizable = {
     string: { unit: "Zeichen", verb: "zu haben" },
@@ -5582,7 +5582,7 @@ function de_default() {
     localeError: error8()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/en.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/en.js
 var error9 = () => {
   const Sizable = {
     string: { unit: "characters", verb: "to have" },
@@ -5688,7 +5688,7 @@ function en_default() {
     localeError: error9()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/eo.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/eo.js
 var error10 = () => {
   const Sizable = {
     string: { unit: "karaktrojn", verb: "havi" },
@@ -5797,7 +5797,7 @@ function eo_default() {
     localeError: error10()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/es.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/es.js
 var error11 = () => {
   const Sizable = {
     string: { unit: "caracteres", verb: "tener" },
@@ -5929,7 +5929,7 @@ function es_default() {
     localeError: error11()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/fa.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/fa.js
 var error12 = () => {
   const Sizable = {
     string: { unit: "کاراکتر", verb: "داشته باشد" },
@@ -6043,7 +6043,7 @@ function fa_default() {
     localeError: error12()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/fi.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/fi.js
 var error13 = () => {
   const Sizable = {
     string: { unit: "merkkiä", subject: "merkkijonon" },
@@ -6155,7 +6155,7 @@ function fi_default() {
     localeError: error13()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/fr.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/fr.js
 var error14 = () => {
   const Sizable = {
     string: { unit: "caractères", verb: "avoir" },
@@ -6263,7 +6263,7 @@ function fr_default() {
     localeError: error14()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/fr-CA.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/fr-CA.js
 var error15 = () => {
   const Sizable = {
     string: { unit: "caractères", verb: "avoir" },
@@ -6370,7 +6370,7 @@ function fr_CA_default() {
     localeError: error15()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/he.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/he.js
 var error16 = () => {
   const TypeNames = {
     string: { label: "מחרוזת", gender: "f" },
@@ -6563,7 +6563,7 @@ function he_default() {
     localeError: error16()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/hu.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/hu.js
 var error17 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "legyen" },
@@ -6671,7 +6671,7 @@ function hu_default() {
     localeError: error17()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/hy.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/hy.js
 function getArmenianPlural(count, one, many) {
   return Math.abs(count) === 1 ? one : many;
 }
@@ -6818,7 +6818,7 @@ function hy_default() {
     localeError: error18()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/id.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/id.js
 var error19 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "memiliki" },
@@ -6924,7 +6924,7 @@ function id_default() {
     localeError: error19()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/is.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/is.js
 var error20 = () => {
   const Sizable = {
     string: { unit: "stafi", verb: "að hafa" },
@@ -7033,7 +7033,7 @@ function is_default() {
     localeError: error20()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/it.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/it.js
 var error21 = () => {
   const Sizable = {
     string: { unit: "caratteri", verb: "avere" },
@@ -7141,7 +7141,7 @@ function it_default() {
     localeError: error21()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ja.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ja.js
 var error22 = () => {
   const Sizable = {
     string: { unit: "文字", verb: "である" },
@@ -7248,7 +7248,7 @@ function ja_default() {
     localeError: error22()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ka.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ka.js
 var error23 = () => {
   const Sizable = {
     string: { unit: "სიმბოლო", verb: "უნდა შეიცავდეს" },
@@ -7360,7 +7360,7 @@ function ka_default() {
     localeError: error23()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/km.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/km.js
 var error24 = () => {
   const Sizable = {
     string: { unit: "តួអក្សរ", verb: "គួរមាន" },
@@ -7471,11 +7471,11 @@ function km_default() {
   };
 }
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/kh.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/kh.js
 function kh_default() {
   return km_default();
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ko.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ko.js
 var error25 = () => {
   const Sizable = {
     string: { unit: "문자", verb: "to have" },
@@ -7586,7 +7586,7 @@ function ko_default() {
     localeError: error25()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/lt.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/lt.js
 var capitalizeFirstCharacter = (text) => {
   return text.charAt(0).toUpperCase() + text.slice(1);
 };
@@ -7789,7 +7789,7 @@ function lt_default() {
     localeError: error26()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/mk.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/mk.js
 var error27 = () => {
   const Sizable = {
     string: { unit: "знаци", verb: "да имаат" },
@@ -7898,7 +7898,7 @@ function mk_default() {
     localeError: error27()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ms.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ms.js
 var error28 = () => {
   const Sizable = {
     string: { unit: "aksara", verb: "mempunyai" },
@@ -8005,7 +8005,7 @@ function ms_default() {
     localeError: error28()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/nl.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/nl.js
 var error29 = () => {
   const Sizable = {
     string: { unit: "tekens", verb: "heeft" },
@@ -8115,7 +8115,7 @@ function nl_default() {
     localeError: error29()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/no.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/no.js
 var error30 = () => {
   const Sizable = {
     string: { unit: "tegn", verb: "å ha" },
@@ -8223,7 +8223,7 @@ function no_default() {
     localeError: error30()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ota.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ota.js
 var error31 = () => {
   const Sizable = {
     string: { unit: "harf", verb: "olmalıdır" },
@@ -8332,7 +8332,7 @@ function ota_default() {
     localeError: error31()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ps.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ps.js
 var error32 = () => {
   const Sizable = {
     string: { unit: "توکي", verb: "ولري" },
@@ -8446,7 +8446,7 @@ function ps_default() {
     localeError: error32()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/pl.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/pl.js
 var error33 = () => {
   const Sizable = {
     string: { unit: "znaków", verb: "mieć" },
@@ -8555,7 +8555,7 @@ function pl_default() {
     localeError: error33()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/pt.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/pt.js
 var error34 = () => {
   const Sizable = {
     string: { unit: "caracteres", verb: "ter" },
@@ -8663,7 +8663,7 @@ function pt_default() {
     localeError: error34()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ru.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ru.js
 function getRussianPlural(count, one, few, many) {
   const absCount = Math.abs(count);
   const lastDigit = absCount % 10;
@@ -8819,7 +8819,7 @@ function ru_default() {
     localeError: error35()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/sl.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/sl.js
 var error36 = () => {
   const Sizable = {
     string: { unit: "znakov", verb: "imeti" },
@@ -8928,7 +8928,7 @@ function sl_default() {
     localeError: error36()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/sv.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/sv.js
 var error37 = () => {
   const Sizable = {
     string: { unit: "tecken", verb: "att ha" },
@@ -9038,7 +9038,7 @@ function sv_default() {
     localeError: error37()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ta.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ta.js
 var error38 = () => {
   const Sizable = {
     string: { unit: "எழுத்துக்கள்", verb: "கொண்டிருக்க வேண்டும்" },
@@ -9148,7 +9148,7 @@ function ta_default() {
     localeError: error38()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/th.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/th.js
 var error39 = () => {
   const Sizable = {
     string: { unit: "ตัวอักษร", verb: "ควรมี" },
@@ -9258,7 +9258,7 @@ function th_default() {
     localeError: error39()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/tr.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/tr.js
 var error40 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "olmalı" },
@@ -9363,7 +9363,7 @@ function tr_default() {
     localeError: error40()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/uk.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/uk.js
 var error41 = () => {
   const Sizable = {
     string: { unit: "символів", verb: "матиме" },
@@ -9472,11 +9472,11 @@ function uk_default() {
   };
 }
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ua.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ua.js
 function ua_default() {
   return uk_default();
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ur.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/ur.js
 var error42 = () => {
   const Sizable = {
     string: { unit: "حروف", verb: "ہونا" },
@@ -9586,7 +9586,7 @@ function ur_default() {
     localeError: error42()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/uz.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/uz.js
 var error43 = () => {
   const Sizable = {
     string: { unit: "belgi", verb: "bo‘lishi kerak" },
@@ -9695,7 +9695,7 @@ function uz_default() {
     localeError: error43()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/vi.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/vi.js
 var error44 = () => {
   const Sizable = {
     string: { unit: "ký tự", verb: "có" },
@@ -9803,7 +9803,7 @@ function vi_default() {
     localeError: error44()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/zh-CN.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/zh-CN.js
 var error45 = () => {
   const Sizable = {
     string: { unit: "字符", verb: "包含" },
@@ -9912,7 +9912,7 @@ function zh_CN_default() {
     localeError: error45()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/zh-TW.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/zh-TW.js
 var error46 = () => {
   const Sizable = {
     string: { unit: "字元", verb: "擁有" },
@@ -10019,7 +10019,7 @@ function zh_TW_default() {
     localeError: error46()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/yo.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/locales/yo.js
 var error47 = () => {
   const Sizable = {
     string: { unit: "àmi", verb: "ní" },
@@ -10126,7 +10126,7 @@ function yo_default() {
     localeError: error47()
   };
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/registries.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/registries.js
 var _a;
 var $output = Symbol("ZodOutput");
 var $input = Symbol("ZodInput");
@@ -10176,7 +10176,7 @@ function registry() {
 }
 (_a = globalThis).__zod_globalRegistry ?? (_a.__zod_globalRegistry = registry());
 var globalRegistry = globalThis.__zod_globalRegistry;
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/api.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/api.js
 function _string(Class2, params) {
   return new Class2({
     type: "string",
@@ -11096,7 +11096,7 @@ function _stringFormat(Class2, format, fnOrRegex, _params = {}) {
   const inst = new Class2(def);
   return inst;
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/to-json-schema.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/to-json-schema.js
 function initializeContext(params) {
   let target = params?.target ?? "draft-2020-12";
   if (target === "draft-4")
@@ -11441,7 +11441,7 @@ var createStandardJSONSchemaMethod = (schema, io, processors = {}) => (params) =
   extractDefs(ctx, schema);
   return finalize(ctx, schema);
 };
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/json-schema-processors.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/json-schema-processors.js
 var formatMap = {
   guid: "uuid",
   url: "uri",
@@ -11986,7 +11986,7 @@ function toJSONSchema(input, params) {
   extractDefs(ctx, input);
   return finalize(ctx, input);
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/json-schema-generator.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/json-schema-generator.js
 class JSONSchemaGenerator {
   get metadataRegistry() {
     return this.ctx.metadataRegistry;
@@ -12045,9 +12045,9 @@ class JSONSchemaGenerator {
     return plainResult;
   }
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/json-schema.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/core/json-schema.js
 var exports_json_schema = {};
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/schemas.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/schemas.js
 var exports_schemas2 = {};
 __export(exports_schemas2, {
   xor: () => xor,
@@ -12216,7 +12216,7 @@ __export(exports_schemas2, {
   ZodAny: () => ZodAny
 });
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/checks.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/checks.js
 var exports_checks2 = {};
 __export(exports_checks2, {
   uppercase: () => _uppercase,
@@ -12250,7 +12250,7 @@ __export(exports_checks2, {
   endsWith: () => _endsWith
 });
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/iso.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/iso.js
 var exports_iso = {};
 __export(exports_iso, {
   time: () => time2,
@@ -12291,7 +12291,7 @@ function duration2(params) {
   return _isoDuration(ZodISODuration, params);
 }
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/errors.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/errors.js
 var initializer2 = (inst, issues) => {
   $ZodError.init(inst, issues);
   inst.name = "ZodError";
@@ -12326,7 +12326,7 @@ var ZodRealError = $constructor("ZodError", initializer2, {
   Parent: Error
 });
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/parse.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/parse.js
 var parse3 = /* @__PURE__ */ _parse(ZodRealError);
 var parseAsync2 = /* @__PURE__ */ _parseAsync(ZodRealError);
 var safeParse2 = /* @__PURE__ */ _safeParse(ZodRealError);
@@ -12340,7 +12340,7 @@ var safeDecode2 = /* @__PURE__ */ _safeDecode(ZodRealError);
 var safeEncodeAsync2 = /* @__PURE__ */ _safeEncodeAsync(ZodRealError);
 var safeDecodeAsync2 = /* @__PURE__ */ _safeDecodeAsync(ZodRealError);
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/schemas.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/schemas.js
 var ZodType = /* @__PURE__ */ $constructor("ZodType", (inst, def) => {
   $ZodType.init(inst, def);
   Object.assign(inst["~standard"], {
@@ -13416,7 +13416,7 @@ function json(params) {
 function preprocess(fn, schema) {
   return pipe(transform(fn), schema);
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/compat.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/compat.js
 var ZodIssueCode = {
   invalid_type: "invalid_type",
   too_big: "too_big",
@@ -13440,7 +13440,7 @@ function getErrorMap() {
 }
 var ZodFirstPartyTypeKind;
 (function(ZodFirstPartyTypeKind2) {})(ZodFirstPartyTypeKind || (ZodFirstPartyTypeKind = {}));
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/from-json-schema.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/from-json-schema.js
 var z = {
   ...exports_schemas2,
   ...exports_checks2,
@@ -13901,7 +13901,7 @@ function fromJSONSchema(schema, params) {
   };
   return convertSchema(schema, ctx);
 }
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/coerce.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/coerce.js
 var exports_coerce = {};
 __export(exports_coerce, {
   string: () => string3,
@@ -13926,9 +13926,9 @@ function date4(params) {
   return _coercedDate(ZodDate, params);
 }
 
-// ../../node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/external.js
+// node_modules/.bun/zod@4.3.6/node_modules/zod/v4/classic/external.js
 config(en_default());
-// types.ts
+// plugins/messaging/types.ts
 var DEFAULT_CHANNEL = "general";
 var DEFAULT_CONTENT_TYPES = [
   { id: "blog", label: "Blog post", prepLeadHours: 72, workflowId: "messaging-blog-prep", requiresApproval: true, assetRequirement: "optional-image" },
@@ -14058,7 +14058,7 @@ var MessagingSettingsSchema = exports_external.object({
   agentDeliverableApprovalPolicy: AgentMutationPolicySchema.optional()
 });
 
-// hooks/use-content-types.ts
+// plugins/messaging/hooks/use-content-types.ts
 "use client";
 var cached2 = null;
 var inFlight = null;
@@ -14118,10 +14118,10 @@ function getContentTypeLabel(id, types) {
   return types.find((t) => t.id === id)?.label ?? id;
 }
 
-// hooks/use-deliverables.ts
+// plugins/messaging/hooks/use-deliverables.ts
 import { useCallback, useEffect as useEffect3, useMemo, useState as useState2 } from "react";
 
-// hooks/use-messaging-refresh.ts
+// plugins/messaging/hooks/use-messaging-refresh.ts
 import { useEffect as useEffect2 } from "react";
 "use client";
 function useMessagingContentRefresh(refresh, prefixes) {
@@ -14141,7 +14141,7 @@ function useMessagingContentRefresh(refresh, prefixes) {
   }, [prefixes, refresh]);
 }
 
-// hooks/use-deliverables.ts
+// plugins/messaging/hooks/use-deliverables.ts
 "use client";
 var DELIVERABLE_REFRESH_PREFIXES = ["messaging/deliverables/"];
 function deliverablesUrl(options) {
@@ -14197,7 +14197,7 @@ function useDeliverables(options = {}) {
   return { deliverables, loading, error: error48, refresh };
 }
 
-// components/deliverable-drawer.tsx
+// plugins/messaging/components/deliverable-drawer.tsx
 import { useEffect as useEffect4, useMemo as useMemo2, useState as useState3 } from "react";
 import { AgentAvatar } from "@makinbakin/sdk/components";
 import { BakinDrawer } from "@makinbakin/sdk/components";
@@ -14206,10 +14206,10 @@ import { Button } from "@makinbakin/sdk/ui";
 import { Textarea } from "@makinbakin/sdk/ui";
 import { Separator } from "@makinbakin/sdk/ui";
 
-// components/deliverable-status-badge.tsx
+// plugins/messaging/components/deliverable-status-badge.tsx
 import { Badge } from "@makinbakin/sdk/ui";
 
-// constants.ts
+// plugins/messaging/constants.ts
 var TONE_LABELS = {
   energetic: "Energetic",
   calm: "Calm",
@@ -14243,7 +14243,7 @@ var DELIVERABLE_STATUS_BADGE = {
   failed: "bg-red-500/20 text-red-400"
 };
 
-// components/deliverable-status-badge.tsx
+// plugins/messaging/components/deliverable-status-badge.tsx
 import { jsxDEV } from "react/jsx-dev-runtime";
 "use client";
 function formatStatus(status) {
@@ -14256,7 +14256,7 @@ function DeliverableStatusBadge({ status, className = "" }) {
   }, undefined, false, undefined, this);
 }
 
-// components/deliverable-drawer.tsx
+// plugins/messaging/components/deliverable-drawer.tsx
 import { jsxDEV as jsxDEV2 } from "react/jsx-dev-runtime";
 "use client";
 function formatDateTime(value) {
@@ -14766,7 +14766,7 @@ function DeliverableDrawer({ deliverable, open, onClose, onUpdated }) {
   }, undefined, false, undefined, this);
 }
 
-// components/quick-post-button.tsx
+// plugins/messaging/components/quick-post-button.tsx
 import { useEffect as useEffect5, useMemo as useMemo3, useState as useState4 } from "react";
 import { AgentSelect } from "@makinbakin/sdk/components";
 import { ChannelIcon } from "@makinbakin/sdk/components";
@@ -15134,7 +15134,7 @@ function QuickPostButton({ onCreated }) {
   }, undefined, true, undefined, this);
 }
 
-// components/content-calendar.tsx
+// plugins/messaging/components/content-calendar.tsx
 import { jsxDEV as jsxDEV4 } from "react/jsx-dev-runtime";
 "use client";
 var STATUS_OPTIONS = [
@@ -15519,7 +15519,7 @@ function ContentCalendar() {
   }, undefined, true, undefined, this);
 }
 
-// components/brainstorm-view.tsx
+// plugins/messaging/components/brainstorm-view.tsx
 import { useCallback as useCallback2, useEffect as useEffect6, useMemo as useMemo5, useRef, useState as useState6 } from "react";
 import {
   AgentAvatar as AgentAvatar3,
@@ -16719,7 +16719,7 @@ function BrainstormView() {
   }, undefined, true, undefined, this);
 }
 
-// components/plan-list.tsx
+// plugins/messaging/components/plan-list.tsx
 import { useMemo as useMemo7 } from "react";
 import { AgentFilter as AgentFilter3 } from "@makinbakin/sdk/components";
 import { EmptyState as EmptyState3 } from "@makinbakin/sdk/components";
@@ -16731,7 +16731,7 @@ import { Input as Input4 } from "@makinbakin/sdk/ui";
 import { useAgentIds as useAgentIds4 } from "@makinbakin/sdk/hooks";
 import { useQueryArrayState as useQueryArrayState2, useQueryState as useQueryState3 } from "@makinbakin/sdk/hooks";
 
-// hooks/use-plans.ts
+// plugins/messaging/hooks/use-plans.ts
 import { useCallback as useCallback3, useEffect as useEffect7, useMemo as useMemo6, useState as useState7 } from "react";
 "use client";
 var PLAN_REFRESH_PREFIXES = ["messaging/plans/"];
@@ -16782,7 +16782,7 @@ function usePlans(options = {}) {
   return { plans, loading, error: error48, refresh };
 }
 
-// components/plan-list.tsx
+// plugins/messaging/components/plan-list.tsx
 import { jsxDEV as jsxDEV6 } from "react/jsx-dev-runtime";
 "use client";
 var PLAN_STATUS_OPTIONS = [
@@ -17001,7 +17001,7 @@ function PlanList({ onSelectPlan }) {
   }, undefined, true, undefined, this);
 }
 
-// components/plan-workspace.tsx
+// plugins/messaging/components/plan-workspace.tsx
 import { useCallback as useCallback5, useEffect as useEffect9, useMemo as useMemo8, useState as useState9 } from "react";
 import {
   AgentAvatar as AgentAvatar5,
@@ -17014,7 +17014,7 @@ import { Badge as Badge5 } from "@makinbakin/sdk/ui";
 import { Button as Button5 } from "@makinbakin/sdk/ui";
 import { Skeleton as Skeleton3 } from "@makinbakin/sdk/ui";
 
-// hooks/use-plan.ts
+// plugins/messaging/hooks/use-plan.ts
 import { useCallback as useCallback4, useEffect as useEffect8, useState as useState8 } from "react";
 "use client";
 var PLAN_DETAIL_REFRESH_PREFIXES = ["messaging/plans/", "messaging/deliverables/"];
@@ -17059,7 +17059,7 @@ function usePlan(planId) {
   return { plan, deliverables, loading, error: error48, refresh };
 }
 
-// lib/distribution-channels.ts
+// plugins/messaging/lib/distribution-channels.ts
 var MESSAGING_DISTRIBUTION_CHANNELS = [
   { id: "blog", label: "Blog", contentType: "blog" },
   { id: "x", label: "X", contentType: "x-post" },
@@ -17075,7 +17075,7 @@ function getDistributionChannelDefinition(channelId) {
   return MESSAGING_DISTRIBUTION_CHANNELS.find((channel) => channel.id === channelId) ?? { id: channelId, label: channelId, contentType: "announcement" };
 }
 
-// components/plan-workspace.tsx
+// plugins/messaging/components/plan-workspace.tsx
 import { jsxDEV as jsxDEV7 } from "react/jsx-dev-runtime";
 "use client";
 var PLAN_STATUS_LABELS = {
@@ -18172,7 +18172,7 @@ function PlanWorkspace({ planId, onBack, onDeleted }) {
   }, undefined, true, undefined, this);
 }
 
-// client.tsx
+// plugins/messaging/client.tsx
 import { jsxDEV as jsxDEV8 } from "react/jsx-dev-runtime";
 var navItems = [
   {

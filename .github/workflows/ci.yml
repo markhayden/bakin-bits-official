@@ -29,6 +29,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Install build-only SDK
+        run: cd .build-sdk && bun install --frozen-lockfile
+
       - name: Typecheck
         run: bun run typecheck
 
