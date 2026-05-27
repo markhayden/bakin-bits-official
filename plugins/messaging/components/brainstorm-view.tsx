@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import {
   AgentAvatar,
   AgentFilter,
@@ -913,8 +913,8 @@ export function BrainstormView() {
     const workspace = layoutMode === 'columns' ? (
       <div
         data-testid="brainstorm-workspace-columns"
-        className="mt-4 grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_var(--proposal-panel-width)] gap-4 overflow-hidden"
-        style={{ '--proposal-panel-width': `${proposalPanelWidth}px` } as CSSProperties}
+        className="mt-4 grid min-h-0 flex-1 gap-4 overflow-hidden"
+        style={{ gridTemplateColumns: `minmax(0, 1fr) ${proposalPanelWidth}px` }}
       >
         {brainstormPane}
         {renderProposalPanel({ showHeader: true, showResizeHandle: true })}
