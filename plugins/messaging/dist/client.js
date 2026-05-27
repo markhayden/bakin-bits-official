@@ -16506,8 +16506,8 @@ function BrainstormView() {
     }, undefined, true, undefined, this);
     const workspace = layoutMode === "columns" ? /* @__PURE__ */ jsxDEV5("div", {
       "data-testid": "brainstorm-workspace-columns",
-      className: "mt-4 grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_var(--proposal-panel-width)] gap-4 overflow-hidden",
-      style: { "--proposal-panel-width": `${proposalPanelWidth}px` },
+      className: "mt-4 grid min-h-0 flex-1 gap-4 overflow-hidden",
+      style: { gridTemplateColumns: `minmax(0, 1fr) ${proposalPanelWidth}px` },
       children: [
         brainstormPane,
         renderProposalPanel({ showHeader: true, showResizeHandle: true })
