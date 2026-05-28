@@ -1342,6 +1342,21 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       },
     })
 
+    // Cheap counts for the Plans nav badge — returns only numbers, never
+    // full Plan bodies, so the sidebar badge can refresh on every SSE tick
+    // without paying for the list payload. The host route matcher prefers
+    // this exact path over the `/plans/:id` param route.
+    ctx.registerRoute({
+      path: '/plans/summary',
+      method: 'GET',
+      description: 'Counts of Plans by review status (nav-badge source)',
+      handler: async () => {
+        const plans = contentStore.listPlans()
+        const needsReview = plans.filter(plan => plan.status === 'needs_review').length
+        return json({ needsReview, total: plans.length })
+      },
+    })
+
     ctx.registerRoute({
       path: '/plans/:id',
       method: 'GET',
