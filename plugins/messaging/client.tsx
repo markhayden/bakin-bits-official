@@ -9,6 +9,7 @@ import { ContentCalendar } from './components/content-calendar'
 import { BrainstormView } from './components/brainstorm-view'
 import { PlanList } from './components/plan-list'
 import { PlanWorkspace } from './components/plan-workspace'
+import { PlansBadgeProvider } from './components/plans-badge-provider'
 
 const navItems: NavItem[] = [
   {
@@ -111,5 +112,10 @@ registerPlugin({
     '/messaging/plans': MessagingPlansRoute,
     '/messaging/plans/[id]': MessagingPlanWorkspaceRoute,
     '/messaging/brainstorm': MessagingBrainstormRoute,
+  },
+  // Background runner that keeps the Plans nav badge in sync with the
+  // needs_review count. Stays mounted while the plugin is registered.
+  slots: {
+    'nav-badge-providers': PlansBadgeProvider,
   },
 })

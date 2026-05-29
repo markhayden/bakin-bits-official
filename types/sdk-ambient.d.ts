@@ -222,6 +222,13 @@ declare module '@makinbakin/sdk/types' {
     invoke<R>(name: string, data: unknown): Promise<R | undefined>
   }
 
+  export type NavBadgeTone = 'attention' | 'info' | 'success'
+
+  export interface NavBadge {
+    count?: number
+    tone?: NavBadgeTone
+  }
+
   export interface NavItem {
     id: string
     label: string
@@ -230,6 +237,7 @@ declare module '@makinbakin/sdk/types' {
     order?: number
     children?: NavItem[]
     alwaysExpanded?: boolean
+    badge?: NavBadge
   }
 
   export interface APIRoute {
@@ -696,7 +704,7 @@ declare module '@makinbakin/sdk/types' {
 declare module '@makinbakin/sdk' {
   export * from '@makinbakin/sdk/types'
   import type { ComponentType } from 'react'
-  import type { NavItem } from '@makinbakin/sdk/types'
+  import type { NavBadge, NavItem } from '@makinbakin/sdk/types'
 
   export interface ClientRouteEntry {
     path: string
@@ -713,6 +721,8 @@ declare module '@makinbakin/sdk' {
   export function registerPlugin(def: PluginRegistration): void
   export function unregisterPlugin(id: string): void
   export function getAllNavItems(): NavItem[]
+  /** Set or clear a runtime badge on a plugin-owned nav item (bakin #265). */
+  export function setNavBadge(pluginId: string, navItemId: string, badge: NavBadge | null): void
 }
 
 declare module '@makinbakin/sdk/ui' {

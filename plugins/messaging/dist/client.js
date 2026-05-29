@@ -16,7 +16,7 @@ var __export = (target, all) => {
 // plugins/messaging/client.tsx
 import { registerPlugin } from "@makinbakin/sdk";
 import { useRouter as useRouter2 } from "@makinbakin/sdk/hooks";
-import { Suspense, useEffect as useEffect10 } from "react";
+import { Suspense, useEffect as useEffect12 } from "react";
 
 // plugins/messaging/components/content-calendar.tsx
 import { useMemo as useMemo4, useState as useState5 } from "react";
@@ -18172,6 +18172,60 @@ function PlanWorkspace({ planId, onBack, onDeleted }) {
   }, undefined, true, undefined, this);
 }
 
+// plugins/messaging/components/plans-badge-provider.tsx
+import { useEffect as useEffect11 } from "react";
+import { setNavBadge } from "@makinbakin/sdk";
+
+// plugins/messaging/hooks/use-plans-summary.ts
+import { useCallback as useCallback6, useEffect as useEffect10, useState as useState10 } from "react";
+"use client";
+var PLAN_REFRESH_PREFIXES2 = ["messaging/plans/"];
+function usePlansSummary() {
+  const [summary, setSummary] = useState10(null);
+  const [loading, setLoading] = useState10(true);
+  const [error48, setError] = useState10(null);
+  const refresh = useCallback6(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/plugins/messaging/plans/summary");
+      if (!response.ok)
+        throw new Error(`Failed to load Plans summary (${response.status})`);
+      const data = await response.json();
+      setSummary({
+        needsReview: typeof data.needsReview === "number" ? data.needsReview : 0,
+        total: typeof data.total === "number" ? data.total : 0
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setSummary(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  const refreshFromEvent = useCallback6(() => {
+    refresh();
+  }, [refresh]);
+  useEffect10(() => {
+    refresh();
+  }, [refresh]);
+  useMessagingContentRefresh(refreshFromEvent, PLAN_REFRESH_PREFIXES2);
+  return { summary, loading, error: error48, refresh };
+}
+
+// plugins/messaging/components/plans-badge-provider.tsx
+"use client";
+function PlansBadgeProvider() {
+  const { summary } = usePlansSummary();
+  useEffect11(() => {
+    if (!summary)
+      return;
+    const badge = summary.needsReview > 0 ? { count: summary.needsReview, tone: "attention" } : null;
+    setNavBadge("messaging", "messaging-plans", badge);
+  }, [summary]);
+  return null;
+}
+
 // plugins/messaging/client.tsx
 import { jsxDEV as jsxDEV8 } from "react/jsx-dev-runtime";
 var navItems = [
@@ -18191,7 +18245,7 @@ var navItems = [
 ];
 function MessagingIndexRoute() {
   const router = useRouter2();
-  useEffect10(() => {
+  useEffect12(() => {
     router.replace("/messaging/calendar");
   }, [router]);
   return null;
@@ -18219,7 +18273,7 @@ function MessagingPlansRoute() {
 }
 function MessagingPlansRedirectRoute() {
   const router = useRouter2();
-  useEffect10(() => {
+  useEffect12(() => {
     router.replace("/messaging/plans");
   }, [router]);
   return null;
@@ -18251,5 +18305,8 @@ registerPlugin({
     "/messaging/plans": MessagingPlansRoute,
     "/messaging/plans/[id]": MessagingPlanWorkspaceRoute,
     "/messaging/brainstorm": MessagingBrainstormRoute
+  },
+  slots: {
+    "nav-badge-providers": PlansBadgeProvider
   }
 });

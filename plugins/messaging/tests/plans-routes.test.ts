@@ -408,6 +408,27 @@ describe('Plan routes', () => {
     expect(status).toBe(400)
     expect(body.error).toBe('title, targetDate, and agent required')
   })
+
+  describe('GET /plans/summary', () => {
+    it('counts only needs_review plans and reports the total', async () => {
+      const store = createMessagingContentStorage(plugin.ctx.storage)
+      store.createPlan({ title: 'A', brief: '', targetDate: '2026-05-19', agent: 'basil', status: 'needs_review' })
+      store.createPlan({ title: 'B', brief: '', targetDate: '2026-05-20', agent: 'basil', status: 'needs_review' })
+      store.createPlan({ title: 'C', brief: '', targetDate: '2026-05-21', agent: 'basil', status: 'planning' })
+
+      const route = findRoute(plugin.routes, 'GET', '/plans/summary')!
+      const { status, body } = await callRoute(route, plugin.ctx)
+      expect(status).toBe(200)
+      expect(body).toEqual({ needsReview: 2, total: 3 })
+    })
+
+    it('reports zero needsReview when no plans need review', async () => {
+      const route = findRoute(plugin.routes, 'GET', '/plans/summary')!
+      const { status, body } = await callRoute(route, plugin.ctx)
+      expect(status).toBe(200)
+      expect(body).toEqual({ needsReview: 0, total: 0 })
+    })
+  })
 })
 
 describe('Plan exec tools', () => {
