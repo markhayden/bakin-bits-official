@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { setNavBadge } from './index.js'
 
 const defaultAgents = [
   { id: 'basil', name: 'Basil' },
@@ -146,4 +147,13 @@ export function useToastStore() {
   const override = hookOverride('useToastStore')
   if (override) return override()
   return {}
+}
+
+export function useNavBadge(pluginId, navItemId, badge) {
+  const override = hookOverride('useNavBadge')
+  if (override) return override(pluginId, navItemId, badge)
+  const key = badge ? `${badge.count ?? ''}:${badge.tone ?? ''}` : 'null'
+  useEffect(() => {
+    setNavBadge(pluginId, navItemId, badge)
+  }, [pluginId, navItemId, key])
 }

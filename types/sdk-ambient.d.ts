@@ -917,6 +917,12 @@ declare module '@makinbakin/sdk/hooks' {
   export function useNotificationChannels(): NotificationChannel[]
   export function getChannelLabel(channelId: string, channels?: NotificationChannel[]): string
   export function toast(message: string, type?: 'success' | 'error' | 'info' | 'warning'): void
+  /** Sync a nav item's badge to a derived value; the recommended provider glue. */
+  export function useNavBadge(
+    pluginId: string,
+    navItemId: string,
+    badge: import('@makinbakin/sdk/types').NavBadge | null,
+  ): void
 }
 
 declare module '@makinbakin/sdk/slots' {
