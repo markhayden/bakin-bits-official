@@ -16,7 +16,7 @@ var __export = (target, all) => {
 // plugins/messaging/client.tsx
 import { registerPlugin } from "@makinbakin/sdk";
 import { useRouter as useRouter2 } from "@makinbakin/sdk/hooks";
-import { Suspense, useEffect as useEffect12 } from "react";
+import { Suspense, useEffect as useEffect11 } from "react";
 
 // plugins/messaging/components/content-calendar.tsx
 import { useMemo as useMemo4, useState as useState5 } from "react";
@@ -18173,8 +18173,7 @@ function PlanWorkspace({ planId, onBack, onDeleted }) {
 }
 
 // plugins/messaging/components/plans-badge-provider.tsx
-import { useEffect as useEffect11 } from "react";
-import { setNavBadge } from "@makinbakin/sdk";
+import { useNavBadge } from "@makinbakin/sdk/hooks";
 
 // plugins/messaging/hooks/use-plans-summary.ts
 import { useCallback as useCallback6, useEffect as useEffect10, useState as useState10 } from "react";
@@ -18217,12 +18216,8 @@ function usePlansSummary() {
 "use client";
 function PlansBadgeProvider() {
   const { summary } = usePlansSummary();
-  useEffect11(() => {
-    if (!summary)
-      return;
-    const badge = summary.needsReview > 0 ? { count: summary.needsReview, tone: "attention" } : null;
-    setNavBadge("messaging", "messaging-plans", badge);
-  }, [summary]);
+  const badge = summary && summary.needsReview > 0 ? { count: summary.needsReview, tone: "attention" } : null;
+  useNavBadge("messaging", "messaging-plans", badge);
   return null;
 }
 
@@ -18245,7 +18240,7 @@ var navItems = [
 ];
 function MessagingIndexRoute() {
   const router = useRouter2();
-  useEffect12(() => {
+  useEffect11(() => {
     router.replace("/messaging/calendar");
   }, [router]);
   return null;
@@ -18273,7 +18268,7 @@ function MessagingPlansRoute() {
 }
 function MessagingPlansRedirectRoute() {
   const router = useRouter2();
-  useEffect12(() => {
+  useEffect11(() => {
     router.replace("/messaging/plans");
   }, [router]);
   return null;

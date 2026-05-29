@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect } from 'react'
-import { setNavBadge } from '@makinbakin/sdk'
+import type { NavBadge } from '@makinbakin/sdk'
+import { useNavBadge } from '@makinbakin/sdk/hooks'
 import { usePlansSummary } from '../hooks/use-plans-summary'
 
 /**
@@ -14,13 +14,11 @@ import { usePlansSummary } from '../hooks/use-plans-summary'
 export function PlansBadgeProvider() {
   const { summary } = usePlansSummary()
 
-  useEffect(() => {
-    if (!summary) return
-    const badge = summary.needsReview > 0
-      ? { count: summary.needsReview, tone: 'attention' as const }
-      : null
-    setNavBadge('messaging', 'messaging-plans', badge)
-  }, [summary])
+  const badge: NavBadge | null = summary && summary.needsReview > 0
+    ? { count: summary.needsReview, tone: 'attention' }
+    : null
+
+  useNavBadge('messaging', 'messaging-plans', badge)
 
   return null
 }
