@@ -36,5 +36,16 @@ on a per-plugin basis: each plugin tags its own releases as
   returns the managed `image_filename` with generation provenance; nano-banana
   retained for edits and multi-image composition (then imported as a managed
   asset). Package version bumped to `0.1.0` (#41).
+- `pixel`: adopt `bakin_exec_images_edit` for single-image edits (multi-image
+  composition still falls back to the native nano-banana flow, then imports the
+  result as a managed asset). Package version bumped to `0.2.0`.
+- `jessica`, `pixel`, `rolo`: clear the `allowedTools` allowlist (set to `[]`,
+  which the MCP tool policy treats as unrestricted). The per-agent allowlists
+  were silently denying legitimate tool calls and forcing native fallbacks —
+  more harm than good at this stage. Agents now have unrestricted exec-tool
+  access; tighter per-agent scoping will be revisited once a denial surfaces
+  to the agent instead of failing silently. (`patch` was already unrestricted.)
+  Versions bumped: `jessica` → `0.0.3`, `rolo` → `0.0.3` (`pixel` stays at the
+  unreleased `0.2.0`).
 
 [Unreleased]: https://github.com/markhayden/bakin-bits-official/commits/main

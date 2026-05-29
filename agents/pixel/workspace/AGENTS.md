@@ -22,32 +22,30 @@ mcporter call bakin-pixel.bakin_exec_images_generate \
 ```
 Optionally call `bakin_exec_images_recommend` first to pick a provider/model/surface, or pass `provider` / `model` / `width` / `height` / `quality` explicitly. No need to discover paths or write sidecars — the tool saves the managed asset and returns `image_filename`.
 
-### Edit / iterate on an existing image (no Bakin edit tool yet → native, then import):
+### Edit / iterate on an existing image — preferred:
+Use **`bakin_exec_images_edit`** — same routing/provenance/managed-asset benefits as generate, for editing one source image.
 ```bash
-GEMINI_API_KEY=<key> uv run /opt/homebrew/lib/node_modules/openclaw/skills/nano-banana-pro/scripts/generate_image.py \
-  --prompt "edit instructions, e.g. add a capybara in the foreground" \
-  --filename "/tmp/<name>-v2.png" \
-  -i "/path/to/source/image.png" \
-  --resolution 2K
+mcporter call bakin-pixel.bakin_exec_images_edit \
+  taskId=<task-id> \
+  filename=<source managed-asset image_filename> \
+  prompt="edit instructions, e.g. add a capybara in the foreground"
 ```
-Then register the result as a managed asset and use the returned `image_filename`:
-```bash
-mcporter call bakin-pixel.bakin_exec_images_import taskId=<task-id> filePath="/tmp/<name>-v2.png"
-```
+Pass `sourcePath=<abs path>` instead of `filename` to edit a local file that isn't a managed asset yet. Returns the edited `image_filename`.
 
-### Multi-image composition (combine up to 14 images) — native, then import:
+### Multi-image composition (combine multiple sources) — native, then import:
+Bakin's edit tool is single-source for now, so compose with the native skill, then register the result:
 ```bash
 GEMINI_API_KEY=<key> uv run /opt/homebrew/lib/node_modules/openclaw/skills/nano-banana-pro/scripts/generate_image.py \
   --prompt "combine these into one scene" \
   --filename "/tmp/output.png" \
   -i img1.png -i img2.png -i img3.png
 ```
-Then `bakin_exec_images_import` to get a managed `image_filename`.
+Then `bakin_exec_images_import taskId=<task-id> filePath="/tmp/output.png"` to get a managed `image_filename`.
 
 ## Task Card Format for Image Tasks
 
 When a task is assigned to you, the card may include:
-- `source_image:` — path to an existing image to edit (native edit, then import)
+- `source_image:` — an existing image to edit (`bakin_exec_images_edit`; multiple sources = native compose + import)
 - `surface:` — target surface profile for a new image
 - `prompt:` — the edit instruction or new image description
 - No `source_image` = generate fresh via `bakin_exec_images_generate`

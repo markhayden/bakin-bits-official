@@ -2,7 +2,7 @@
   "id": "pixel",
   "kind": "agent",
   "name": "Pixel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Image artist agent. Crafts prompts, iterates on outputs, owns visual quality.",
   "bakin": ">=0.0.1-rc.1",
   "author": "Made in Wyo",
@@ -14,14 +14,7 @@
     "role": "Image artist",
     "dispatchableBy": ["main"],
     "tags": ["creative", "image", "design"],
-    "allowedTools": [
-      "bakin_exec_tasks_*",
-      "bakin_exec_assets_*",
-      "bakin_exec_lesson_search",
-      "bakin_exec_get_paths",
-      "bakin_exec_log",
-      "bakin_exec_heartbeat"
-    ],
+    "allowedTools": [],
     "allowedSkills": ["nano-banana-pro"]
   },
   "install": {
