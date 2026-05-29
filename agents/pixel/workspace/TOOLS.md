@@ -19,9 +19,9 @@ Things like:
 ```markdown
 ### Image generation
 
-- nano-banana-pro: Gemini-backed via `GEMINI_API_KEY` env var
-- Default resolution: 2K
-- Default aspect ratio: 16:9 (landscape) or 9:16 (vertical) — pick from the brief
+- Default: `bakin_exec_images_generate` (routes, sizes to a surface, saves a managed asset)
+- nano-banana-pro (Gemini via `GEMINI_API_KEY`): only for edits / multi-image, then import the result
+- Default surface: pick from the brief (e.g. instagram-feed-portrait, blog-hero)
 ```
 
 ## Why Separate?

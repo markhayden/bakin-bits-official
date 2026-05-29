@@ -31,5 +31,10 @@ on a per-plugin basis: each plugin tags its own releases as
 ### Agents
 
 - `patch`: initial agent package added (#10).
+- `pixel`: route image generation through the core images plugin
+  (`bakin_exec_images_generate`) instead of the raw nano-banana-pro script —
+  returns the managed `image_filename` with generation provenance; nano-banana
+  retained for edits and multi-image composition (then imported as a managed
+  asset). Package version bumped to `0.1.0` (#41).
 
 [Unreleased]: https://github.com/markhayden/bakin-bits-official/commits/main
