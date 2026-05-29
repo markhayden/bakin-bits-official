@@ -19220,6 +19220,16 @@ data: ${JSON.stringify(data)}
       }
     });
     ctx.registerRoute({
+      path: "/plans/summary",
+      method: "GET",
+      description: "Counts of Plans by review status (nav-badge source)",
+      handler: async () => {
+        const plans = contentStore.listPlans();
+        const needsReview = plans.filter((plan) => plan.status === "needs_review").length;
+        return json3({ needsReview, total: plans.length });
+      }
+    });
+    ctx.registerRoute({
       path: "/plans/:id",
       method: "GET",
       description: "Get a content Plan",
