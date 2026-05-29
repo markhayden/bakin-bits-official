@@ -14,15 +14,7 @@
     "role": "Image artist",
     "dispatchableBy": ["main"],
     "tags": ["creative", "image", "design"],
-    "allowedTools": [
-      "bakin_exec_tasks_*",
-      "bakin_exec_assets_*",
-      "bakin_exec_images_*",
-      "bakin_exec_lesson_search",
-      "bakin_exec_get_paths",
-      "bakin_exec_log",
-      "bakin_exec_heartbeat"
-    ],
+    "allowedTools": [],
     "allowedSkills": ["nano-banana-pro"]
   },
   "install": {

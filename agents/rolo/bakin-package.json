@@ -2,7 +2,7 @@
   "id": "rolo",
   "kind": "agent",
   "name": "Rolo",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Video producer agent. Generates video + audio, mixes finished assets.",
   "bakin": ">=0.0.1-rc.1",
   "author": "Made in Wyo",
@@ -26,14 +26,7 @@
     "role": "Video producer",
     "dispatchableBy": ["main"],
     "tags": ["creative", "video", "audio"],
-    "allowedTools": [
-      "bakin_exec_tasks_*",
-      "bakin_exec_assets_*",
-      "bakin_exec_lesson_search",
-      "bakin_exec_get_paths",
-      "bakin_exec_log",
-      "bakin_exec_heartbeat"
-    ],
+    "allowedTools": [],
     "allowedSkills": ["runway", "elevenlabs"]
   },
   "install": {

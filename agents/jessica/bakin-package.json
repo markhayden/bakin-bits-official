@@ -2,7 +2,7 @@
   "id": "jessica",
   "kind": "agent",
   "name": "Jessica",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Research agent — multi-source discovery, evidence gathering, synthesis support.",
   "bakin": ">=0.0.1-rc.1",
   "author": "Made in Wyo",
@@ -14,15 +14,7 @@
     "role": "Research agent",
     "dispatchableBy": ["main"],
     "tags": ["research", "synthesis", "fact-finding"],
-    "allowedTools": [
-      "bakin_exec_tasks_*",
-      "bakin_exec_assets_*",
-      "bakin_exec_search_*",
-      "bakin_exec_lesson_search",
-      "bakin_exec_get_paths",
-      "bakin_exec_log",
-      "bakin_exec_heartbeat"
-    ],
+    "allowedTools": [],
     "allowedSkills": []
   },
   "install": {
