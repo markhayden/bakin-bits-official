@@ -49,7 +49,7 @@ mcporter call bakin-pixel.bakin_exec_images_generate \
 
 Optional: call `bakin_exec_images_recommend` first to pick a provider/model/surface, or pass `provider` / `model` / `width` / `height` / `quality` explicitly. The tool returns the canonical **`image_filename`** (plus `routeSource`, `provider`, `model`) — capture `image_filename` for your step output. No manual `get_paths`, directory, or sidecar handling — the tool does all of it.
 
-**Edits** (`source_image` present): Bakin does not yet expose an image *edit* tool, so fall back to your native nano-banana flow per AGENTS.md for the edit itself, then register the result with **`bakin_exec_images_import`** to get a managed `image_filename`.
+**Edits** (`source_image` present): use **`bakin_exec_images_edit`** (`filename=<managed asset>` or `sourcePath=<local file>`, plus the edit `prompt`) — it routes and saves the managed result just like generate. Only multi-image composition still falls back to the native nano-banana flow per AGENTS.md (then `bakin_exec_images_import`).
 
 ### 4. Submit step output
 

@@ -36,5 +36,9 @@ on a per-plugin basis: each plugin tags its own releases as
   returns the managed `image_filename` with generation provenance; nano-banana
   retained for edits and multi-image composition (then imported as a managed
   asset). Package version bumped to `0.1.0` (#41).
+- `pixel`: add `bakin_exec_images_*` to `allowedTools` so the agent can actually
+  call the images plugin (it was denied by package policy and fell back to
+  native generation); adopt `bakin_exec_images_edit` for single-image edits
+  (multi-image composition still native). Package version bumped to `0.2.0`.
 
 [Unreleased]: https://github.com/markhayden/bakin-bits-official/commits/main
