@@ -89,7 +89,7 @@ export interface PromoteItemOpts {
 }
 
 export interface ResolvedAsset {
-  filename: string
+  assetId: string
   label?: string
   type: string
   description?: string
@@ -110,9 +110,9 @@ export interface ProjectService {
   updateChecklistItem(projectId: string, taskItemId: string, updates: { title?: string; description?: string }): Promise<void>
   removeChecklistItem(projectId: string, taskItemId: string): Promise<void>
   linkChecklistItem(projectId: string, taskItemId: string, boardTaskId: string): Promise<void>
-  attachAsset(projectId: string, filename: string, label?: string): Promise<void>
-  detachAsset(projectId: string, filename: string): Promise<void>
-  updateAssetLabel(projectId: string, filename: string, label: string): Promise<void>
+  attachAsset(projectId: string, assetId: string, label?: string): Promise<void>
+  detachAsset(projectId: string, assetId: string): Promise<void>
+  updateAssetLabel(projectId: string, assetId: string, label: string): Promise<void>
   promoteItemToTask(projectId: string, taskItemId: string, opts?: PromoteItemOpts): Promise<{ taskId: string }>
   autoCheckLinkedItem(boardTaskId: string): Promise<void>
   autoUnlinkTask(boardTaskId: string): Promise<void>
@@ -351,37 +351,37 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     })
   }
 
-  async function attachAsset(projectId: string, filename: string, label?: string): Promise<void> {
+  async function attachAsset(projectId: string, assetId: string, label?: string): Promise<void> {
     return withProjectLock(() => {
       const project = repo.readProject(projectId)
       if (!project) throw new Error(`Project not found: ${projectId}`)
-      if (project.assets.some(a => a.filename === filename)) return
-      project.assets.push({ filename, label })
+      if (project.assets.some(a => a.assetId === assetId)) return
+      project.assets.push({ assetId, label })
       project.updated = new Date().toISOString()
       repo.writeProject(project)
-      broadcast({ type: 'project.asset_changed', projectId, action: 'attach', filename })
+      broadcast({ type: 'project.asset_changed', projectId, action: 'attach', assetId })
     })
   }
 
-  async function detachAsset(projectId: string, filename: string): Promise<void> {
+  async function detachAsset(projectId: string, assetId: string): Promise<void> {
     return withProjectLock(() => {
       const project = repo.readProject(projectId)
       if (!project) throw new Error(`Project not found: ${projectId}`)
-      const idx = project.assets.findIndex(a => a.filename === filename)
+      const idx = project.assets.findIndex(a => a.assetId === assetId)
       if (idx === -1) return
       project.assets.splice(idx, 1)
       project.updated = new Date().toISOString()
       repo.writeProject(project)
-      broadcast({ type: 'project.asset_changed', projectId, action: 'detach', filename })
+      broadcast({ type: 'project.asset_changed', projectId, action: 'detach', assetId })
     })
   }
 
-  async function updateAssetLabel(projectId: string, filename: string, label: string): Promise<void> {
+  async function updateAssetLabel(projectId: string, assetId: string, label: string): Promise<void> {
     return withProjectLock(() => {
       const project = repo.readProject(projectId)
       if (!project) throw new Error(`Project not found: ${projectId}`)
-      const asset = project.assets.find(a => a.filename === filename)
-      if (!asset) throw new Error(`Asset not attached: ${filename}`)
+      const asset = project.assets.find(a => a.assetId === assetId)
+      if (!asset) throw new Error(`Asset not attached: ${assetId}`)
       asset.label = label || undefined
       project.updated = new Date().toISOString()
       repo.writeProject(project)
@@ -451,14 +451,14 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     }
 
     const resolvedAssets = await Promise.all(project.assets.map(async (asset) => {
-      const indexed = await ctx.assets.getByFilename(asset.filename)
-      if (!indexed) return { filename: asset.filename, label: asset.label, type: 'unknown', missing: true }
+      const indexed = await ctx.assets.getAsset(asset.assetId)
+      if (!indexed) return { assetId: asset.assetId, label: asset.label, type: 'unknown', missing: true }
       return {
-        filename: asset.filename,
+        assetId: asset.assetId,
         label: asset.label,
         type: indexed.type,
-        description: indexed.metadata?.description,
-        tags: indexed.metadata?.tags,
+        description: indexed.description,
+        tags: indexed.tags,
       }
     }))
 

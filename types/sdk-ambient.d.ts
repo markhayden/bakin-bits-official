@@ -633,8 +633,27 @@ declare module '@makinbakin/sdk/types' {
     version: number
   }
 
+  export interface AssetSummary {
+    assetId: string
+    type: AssetTypeName
+    agent: string
+    taskId: string | null
+    created: string
+    updated: string
+    currentVersion: number
+    versionCount: number
+    description: string
+    tags: string[]
+    mimeType: string
+    width: number | null
+    height: number | null
+    size: number
+    hasThumb: boolean
+  }
+
   export interface AssetsAPI {
     createAsset(input: AssetCreateInput): Promise<VersionedAssetRef>
+    getAsset(assetId: string): Promise<AssetSummary | null>
     addVersion(assetId: string, input: AssetVersionCreateInput): Promise<VersionedAssetRef>
     addExport(assetId: string, input: AssetExportRequest): Promise<{ name: string; file: string }>
     resolveVersionFile(assetId: string, version?: number): Promise<AssetVersionFileRef | null>

@@ -13,7 +13,7 @@ export interface ProjectTask {
 }
 
 export interface ProjectAsset {
-  filename: string        // globally-unique asset filename (e.g., "20260327-hero-a1b2c3d4.png")
+  assetId: string         // managed asset id (e.g., "20260327-hero-a1b2c3d4"); stable across versions
   label?: string          // optional human label / summary
 }
 

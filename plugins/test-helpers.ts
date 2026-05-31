@@ -293,6 +293,7 @@ export function createTestContext(pluginId: string, testDir: string): ActivatedP
     tasks: createMockBakinTaskStore(),
     assets: {
       createAsset: mock(async () => ({ assetId: 'test-asset', version: 1 })),
+      getAsset: mock(async () => null),
       addVersion: mock(async () => ({ assetId: 'test-asset', version: 2 })),
       addExport: mock(async () => ({ name: 'export', file: 'exports/export.jpg' })),
       resolveVersionFile: mock(async (assetId: string) => ({ absPath: `/store/${assetId}/v1.png`, mimeType: 'image/png', version: 1 })),

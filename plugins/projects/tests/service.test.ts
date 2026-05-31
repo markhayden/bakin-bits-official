@@ -72,10 +72,11 @@ function buildCtx(): PluginContext {
       appendLog: mock(async () => {}),
     },
     assets: {
-      getByFilename: mock(async () => null),
-      list: mock(async () => []),
-      exists: mock(async () => false),
-      fileRef: mock(async (filename: string) => ({ kind: 'asset' as const, filename })),
+      createAsset: mock(async () => ({ assetId: 'test-asset', version: 1 })),
+      getAsset: mock(async () => null),
+      addVersion: mock(async () => ({ assetId: 'test-asset', version: 2 })),
+      addExport: mock(async () => ({ name: 'export', file: 'exports/export.jpg' })),
+      resolveVersionFile: mock(async () => null),
     },
     registerNav: mock(),
     registerRoute: mock(),
@@ -404,7 +405,7 @@ describe('attachAsset / detachAsset', () => {
     await attachAsset(id, '20260401-logo-a1b2c3d4.png', 'Logo')
     let project = readProject(id)
     expect(project!.assets).toHaveLength(1)
-    expect(project!.assets[0]).toEqual({ filename: '20260401-logo-a1b2c3d4.png', label: 'Logo' })
+    expect(project!.assets[0]).toEqual({ assetId: '20260401-logo-a1b2c3d4.png', label: 'Logo' })
 
     // Duplicate attach is ignored
     await attachAsset(id, '20260401-logo-a1b2c3d4.png')

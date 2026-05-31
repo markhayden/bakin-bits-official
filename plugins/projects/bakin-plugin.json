@@ -50,7 +50,7 @@
       { "method": "POST", "path": "/:projectId/checklist/:itemId/link", "summary": "Link a checklist item to a task", "permissions": ["storage.write", "tasks.read"] },
       { "method": "POST", "path": "/:projectId/checklist/:itemId/promote", "summary": "Promote a checklist item to a task", "permissions": ["storage.write", "tasks.write"] },
       { "method": "POST", "path": "/:projectId/assets", "summary": "Attach an asset", "permissions": ["storage.write", "assets.read"] },
-      { "method": "DELETE", "path": "/:projectId/assets/:filename", "summary": "Detach an asset", "permissions": ["storage.write"] },
+      { "method": "DELETE", "path": "/:projectId/assets/:assetId", "summary": "Detach an asset", "permissions": ["storage.write"] },
       { "method": "POST", "path": "/:projectId/ask", "summary": "Ask an agent about a project", "permissions": ["runtime.messaging", "storage.read", "storage.write"] },
       { "method": "GET", "path": "/search", "summary": "Search projects", "permissions": ["search.read"] }
     ],
@@ -85,8 +85,8 @@
       { "name": "projects:remove-item", "usage": "bakin projects remove-item <projectId> <taskItemId>", "summary": "Remove a checklist item", "dispatch": { "type": "execTool", "name": "bakin_exec_projects_remove_item" } },
       { "name": "projects:link-item", "usage": "bakin projects link-item <projectId> <taskItemId> <taskId>", "summary": "Link a checklist item to a task", "dispatch": { "type": "execTool", "name": "bakin_exec_projects_link_item" } },
       { "name": "projects:promote-item", "usage": "bakin projects promote-item <projectId> <taskItemId>", "summary": "Promote a checklist item to a task", "dispatch": { "type": "execTool", "name": "bakin_exec_projects_promote_item" } },
-      { "name": "projects:attach-asset", "usage": "bakin projects attach-asset <projectId> <filename>", "summary": "Attach an asset to a project", "dispatch": { "type": "execTool", "name": "bakin_exec_projects_attach_asset" } },
-      { "name": "projects:detach-asset", "usage": "bakin projects detach-asset <projectId> <filename>", "summary": "Detach an asset from a project", "dispatch": { "type": "execTool", "name": "bakin_exec_projects_detach_asset" } },
+      { "name": "projects:attach-asset", "usage": "bakin projects attach-asset <projectId> <assetId>", "summary": "Attach an asset to a project", "dispatch": { "type": "execTool", "name": "bakin_exec_projects_attach_asset" } },
+      { "name": "projects:detach-asset", "usage": "bakin projects detach-asset <projectId> <assetId>", "summary": "Detach an asset from a project", "dispatch": { "type": "execTool", "name": "bakin_exec_projects_detach_asset" } },
       { "name": "projects:ask", "usage": "bakin projects ask <projectId> <message>", "summary": "Ask an agent about a project", "dispatch": { "type": "execTool", "name": "bakin_exec_projects_ask" } }
     ],
     "settings": [
