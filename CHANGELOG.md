@@ -9,6 +9,11 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- `pixel`: cut the image workflow skill + workspace docs over to Bakin's
+  versioned-asset model — image tools now return/take a stable `assetId`
+  (not a filename), `bakin_exec_images_edit` takes `assetId` (import a loose
+  local file first), edits append a new version to the same asset, and Pixel
+  reports `assetId` back to the invoking agent. Package bumped to `0.2.1`.
 - Reset official plugin and agent package versions to `0.0.1` for the Bakin `0.0.1` release train.
 - Allow Bakin `0.0.1-rc.1` and newer in official plugin and agent package compatibility ranges.
 - Align official plugin SDK peer dependency ranges with the `@makinbakin/sdk` release candidate.
