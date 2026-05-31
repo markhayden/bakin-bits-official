@@ -634,7 +634,6 @@ import { useState as useState4, useCallback as useCallback2, useRef, useEffect a
 import { useRouter as useRouter2 } from "@makinbakin/sdk/hooks";
 import { useMainAgentId } from "@makinbakin/sdk/hooks";
 import { AgentSelect, IntegratedBrainstorm, readBrainstormSseResponse } from "@makinbakin/sdk/components";
-import { Slot } from "@makinbakin/sdk/slots";
 
 // plugins/projects/components/project-checklist.tsx
 import { useState as useState3 } from "react";
@@ -888,8 +887,8 @@ function AssetThumb({ asset }) {
   const [err, setErr] = useState4(false);
   if (IMAGE_TYPES.has(asset.type) && !asset.missing && !err) {
     return /* @__PURE__ */ jsxDEV7("img", {
-      src: `/api/assets/${encodeURIComponent(asset.filename)}`,
-      alt: asset.filename,
+      src: `/api/assets/${encodeURIComponent(asset.assetId)}`,
+      alt: asset.assetId,
       onError: () => setErr(true),
       className: "size-8 rounded object-cover shrink-0 bg-zinc-800"
     }, undefined, false, undefined, this);
@@ -905,8 +904,8 @@ function PickerThumb({ asset }) {
   const [err, setErr] = useState4(false);
   if (IMAGE_TYPES.has(asset.type) && !err) {
     return /* @__PURE__ */ jsxDEV7("img", {
-      src: `/api/assets/${encodeURIComponent(asset.filename)}`,
-      alt: asset.filename,
+      src: `/api/assets/${encodeURIComponent(asset.assetId)}`,
+      alt: asset.assetId,
       onError: () => setErr(true),
       className: "size-7 rounded object-cover shrink-0 bg-zinc-800"
     }, undefined, false, undefined, this);
@@ -937,7 +936,7 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
   const [assetPickerOpen, setAssetPickerOpen] = useState4(false);
   const [assetSearch, setAssetSearch] = useState4("");
   const [availableAssets, setAvailableAssets] = useState4([]);
-  const [previewFilename, setPreviewFilename] = useState4(null);
+  const [previewAssetId, setPreviewAssetId] = useState4(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState4(false);
   const [deleting, setDeleting] = useState4(false);
   const fetchProject = useCallback2(async (enterEdit2) => {
@@ -1091,38 +1090,38 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
       return;
     }
     try {
-      const res = await fetch("/api/plugins/assets/?grouped=false");
+      const res = await fetch("/api/plugins/assets/versioned");
       if (res.ok) {
         const data = await res.json();
-        const attached = new Set(project?.assets.map((a) => a.filename) || []);
-        setAvailableAssets((data.assets || []).filter((a) => !attached.has(a.filename)).map((a) => ({
-          filename: a.filename,
+        const attached = new Set(project?.assets.map((a) => a.assetId) || []);
+        setAvailableAssets((data.assets || []).filter((a) => !attached.has(a.assetId)).map((a) => ({
+          assetId: a.assetId,
           type: a.type,
-          description: a.metadata?.description
+          description: a.description
         })));
         setAssetSearch("");
         setAssetPickerOpen(true);
       }
     } catch {}
   };
-  const handleAttachAsset = async (filename) => {
+  const handleAttachAsset = async (assetId) => {
     if (!currentId)
       return;
-    await fetch(`/api/plugins/projects/${currentId}/assets`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ filename }) });
+    await fetch(`/api/plugins/projects/${currentId}/assets`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ assetId }) });
     setAssetPickerOpen(false);
     fetchProject();
   };
-  const handleDetachAsset = async (filename) => {
+  const handleDetachAsset = async (assetId) => {
     if (!currentId)
       return;
-    await fetch(`/api/plugins/projects/${currentId}/assets/${encodeURIComponent(filename)}`, { method: "DELETE", headers: { "Content-Type": "application/json" } });
+    await fetch(`/api/plugins/projects/${currentId}/assets/${encodeURIComponent(assetId)}`, { method: "DELETE", headers: { "Content-Type": "application/json" } });
     fetchProject();
   };
   const filteredPickerAssets = availableAssets.filter((a) => {
     if (!assetSearch.trim())
       return true;
     const q = assetSearch.toLowerCase();
-    return a.filename.toLowerCase().includes(q) || a.type.toLowerCase().includes(q) || (a.description || "").toLowerCase().includes(q);
+    return a.assetId.toLowerCase().includes(q) || a.type.toLowerCase().includes(q) || (a.description || "").toLowerCase().includes(q);
   });
   const linkedTaskCount = project?.tasks.filter((t) => t.taskId).length ?? 0;
   const handleDelete = async (deleteLinkedTasks) => {
@@ -1474,7 +1473,7 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
                     className: "space-y-1.5",
                     children: project.resolvedAssets.map((asset) => /* @__PURE__ */ jsxDEV7("div", {
                       className: `group flex items-start gap-2.5 p-1.5 rounded-lg hover:bg-zinc-800/40 transition-colors ${asset.missing ? "opacity-40 pointer-events-none" : "cursor-pointer"}`,
-                      onClick: () => !asset.missing && setPreviewFilename(asset.filename),
+                      onClick: () => !asset.missing && setPreviewAssetId(asset.assetId),
                       children: [
                         /* @__PURE__ */ jsxDEV7(AssetThumb, {
                           asset
@@ -1484,7 +1483,7 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
                           children: [
                             /* @__PURE__ */ jsxDEV7("p", {
                               className: "text-[11px] text-zinc-300 truncate leading-tight",
-                              children: asset.label || asset.filename
+                              children: asset.label || asset.assetId
                             }, undefined, false, undefined, this),
                             asset.description && /* @__PURE__ */ jsxDEV7("p", {
                               className: "text-[10px] text-zinc-600 truncate mt-0.5",
@@ -1506,7 +1505,7 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
                         /* @__PURE__ */ jsxDEV7("button", {
                           onClick: (e) => {
                             e.stopPropagation();
-                            handleDetachAsset(asset.filename);
+                            handleDetachAsset(asset.assetId);
                           },
                           className: "opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 transition-all shrink-0 mt-1",
                           children: /* @__PURE__ */ jsxDEV7(X, {
@@ -1514,7 +1513,7 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
                           }, undefined, false, undefined, this)
                         }, undefined, false, undefined, this)
                       ]
-                    }, asset.filename, true, undefined, this))
+                    }, asset.assetId, true, undefined, this))
                   }, undefined, false, undefined, this),
                   assetPickerOpen && /* @__PURE__ */ jsxDEV7("div", {
                     ref: assetPickerRef,
@@ -1561,7 +1560,7 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
                           className: "text-[11px] text-zinc-600 p-3 text-center",
                           children: availableAssets.length === 0 ? "No assets available." : "No matches."
                         }, undefined, false, undefined, this) : filteredPickerAssets.map((asset) => /* @__PURE__ */ jsxDEV7("button", {
-                          onClick: () => handleAttachAsset(asset.filename),
+                          onClick: () => handleAttachAsset(asset.assetId),
                           className: "w-full text-left px-2.5 py-2 text-[11px] hover:bg-zinc-800/60 transition-colors flex items-center gap-2.5 border-b border-[rgba(255,255,255,0.04)] last:border-0",
                           children: [
                             /* @__PURE__ */ jsxDEV7(PickerThumb, {
@@ -1572,7 +1571,7 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
                               children: [
                                 /* @__PURE__ */ jsxDEV7("span", {
                                   className: "text-zinc-300 truncate block",
-                                  children: asset.filename
+                                  children: asset.assetId
                                 }, undefined, false, undefined, this),
                                 asset.description && /* @__PURE__ */ jsxDEV7("span", {
                                   className: "text-zinc-600 truncate block text-[10px]",
@@ -1581,7 +1580,7 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
                               ]
                             }, undefined, true, undefined, this)
                           ]
-                        }, asset.filename, true, undefined, this))
+                        }, asset.assetId, true, undefined, this))
                       }, undefined, false, undefined, this)
                     ]
                   }, undefined, true, undefined, this)
@@ -1644,11 +1643,39 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
           }, undefined, true, undefined, this)
         ]
       }, undefined, true, undefined, this),
-      previewFilename && /* @__PURE__ */ jsxDEV7(Slot, {
-        name: "asset-detail-modal",
-        filename: previewFilename,
-        onClose: () => setPreviewFilename(null)
-      }, undefined, false, undefined, this)
+      previewAssetId && /* @__PURE__ */ jsxDEV7("div", {
+        className: "fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/80 p-8",
+        onClick: () => setPreviewAssetId(null),
+        children: [
+          /* @__PURE__ */ jsxDEV7("img", {
+            src: `/api/assets/${encodeURIComponent(previewAssetId)}`,
+            alt: previewAssetId,
+            className: "max-h-[80vh] max-w-[90vw] rounded object-contain",
+            onClick: (e) => e.stopPropagation()
+          }, undefined, false, undefined, this),
+          /* @__PURE__ */ jsxDEV7("div", {
+            className: "flex items-center gap-4 text-sm text-zinc-300",
+            onClick: (e) => e.stopPropagation(),
+            children: [
+              /* @__PURE__ */ jsxDEV7("a", {
+                href: `/assets/${encodeURIComponent(previewAssetId)}`,
+                className: "underline hover:text-white",
+                children: "View asset →"
+              }, undefined, false, undefined, this),
+              /* @__PURE__ */ jsxDEV7("button", {
+                onClick: () => setPreviewAssetId(null),
+                className: "flex items-center gap-1 hover:text-white",
+                children: [
+                  /* @__PURE__ */ jsxDEV7(X, {
+                    className: "size-4"
+                  }, undefined, false, undefined, this),
+                  " Close"
+                ]
+              }, undefined, true, undefined, this)
+            ]
+          }, undefined, true, undefined, this)
+        ]
+      }, undefined, true, undefined, this)
     ]
   }, undefined, true, undefined, this);
 }

@@ -16363,7 +16363,7 @@ function parseProject(content) {
     checked: Boolean(t.checked)
   })) : [];
   const assets = Array.isArray(raw.assets) ? raw.assets.map((a) => ({
-    filename: String(a.filename || ""),
+    assetId: String(a.assetId || ""),
     label: a.label ? String(a.label) : undefined
   })) : [];
   const fm = {
@@ -16393,7 +16393,7 @@ function serializeProject(project) {
     return item;
   });
   const cleanAssets = fm.assets.length > 0 ? fm.assets.map((a) => {
-    const item = { filename: a.filename };
+    const item = { assetId: a.assetId };
     if (a.label)
       item.label = a.label;
     return item;
@@ -16761,41 +16761,41 @@ function createProjectService(ctx, repo) {
       broadcast({ type: "project.checklist_changed", projectId, action: "link", taskItemId, boardTaskId });
     });
   }
-  async function attachAsset(projectId, filename, label) {
+  async function attachAsset(projectId, assetId, label) {
     return withProjectLock(() => {
       const project = repo.readProject(projectId);
       if (!project)
         throw new Error(`Project not found: ${projectId}`);
-      if (project.assets.some((a) => a.filename === filename))
+      if (project.assets.some((a) => a.assetId === assetId))
         return;
-      project.assets.push({ filename, label });
+      project.assets.push({ assetId, label });
       project.updated = new Date().toISOString();
       repo.writeProject(project);
-      broadcast({ type: "project.asset_changed", projectId, action: "attach", filename });
+      broadcast({ type: "project.asset_changed", projectId, action: "attach", assetId });
     });
   }
-  async function detachAsset(projectId, filename) {
+  async function detachAsset(projectId, assetId) {
     return withProjectLock(() => {
       const project = repo.readProject(projectId);
       if (!project)
         throw new Error(`Project not found: ${projectId}`);
-      const idx = project.assets.findIndex((a) => a.filename === filename);
+      const idx = project.assets.findIndex((a) => a.assetId === assetId);
       if (idx === -1)
         return;
       project.assets.splice(idx, 1);
       project.updated = new Date().toISOString();
       repo.writeProject(project);
-      broadcast({ type: "project.asset_changed", projectId, action: "detach", filename });
+      broadcast({ type: "project.asset_changed", projectId, action: "detach", assetId });
     });
   }
-  async function updateAssetLabel(projectId, filename, label) {
+  async function updateAssetLabel(projectId, assetId, label) {
     return withProjectLock(() => {
       const project = repo.readProject(projectId);
       if (!project)
         throw new Error(`Project not found: ${projectId}`);
-      const asset = project.assets.find((a) => a.filename === filename);
+      const asset = project.assets.find((a) => a.assetId === assetId);
       if (!asset)
-        throw new Error(`Asset not attached: ${filename}`);
+        throw new Error(`Asset not attached: ${assetId}`);
       asset.label = label || undefined;
       project.updated = new Date().toISOString();
       repo.writeProject(project);
@@ -16862,15 +16862,15 @@ function createProjectService(ctx, repo) {
       resolved[taskId] = task ? { column: task.column, title: task.title } : null;
     }
     const resolvedAssets = await Promise.all(project.assets.map(async (asset) => {
-      const indexed = await ctx.assets.getByFilename(asset.filename);
+      const indexed = await ctx.assets.getAsset(asset.assetId);
       if (!indexed)
-        return { filename: asset.filename, label: asset.label, type: "unknown", missing: true };
+        return { assetId: asset.assetId, label: asset.label, type: "unknown", missing: true };
       return {
-        filename: asset.filename,
+        assetId: asset.assetId,
         label: asset.label,
         type: indexed.type,
-        description: indexed.metadata?.description,
-        tags: indexed.metadata?.tags
+        description: indexed.description,
+        tags: indexed.tags
       };
     }));
     return { ...project, resolvedTasks: resolved, resolvedAssets };
@@ -17268,10 +17268,10 @@ var projectsPlugin = {
       const url2 = new URL(req.url, "http://localhost");
       const body = await readBody(req);
       const projectId = url2.searchParams.get("projectId") || body.projectId;
-      if (!projectId || !body.filename)
-        return json3({ error: "Missing projectId or filename" }, 400);
-      await attachAsset(projectId, body.filename, body.label);
-      ctx.activity.audit("asset.attached", "system", { projectId, filename: body.filename });
+      if (!projectId || !body.assetId)
+        return json3({ error: "Missing projectId or assetId" }, 400);
+      await attachAsset(projectId, body.assetId, body.label);
+      ctx.activity.audit("asset.attached", "system", { projectId, assetId: body.assetId });
       ctx.activity.log("system", "Attached asset to project", { taskId: projectId });
       indexProject(projectId).catch(() => {});
       return json3({ ok: true });
@@ -17281,16 +17281,16 @@ var projectsPlugin = {
       const url2 = new URL(req.url, "http://localhost");
       const body = await readBody(req).catch(() => ({}));
       const projectId = url2.searchParams.get("projectId") || body.projectId;
-      const filename = url2.searchParams.get("filename") || body.filename;
-      if (!projectId || !filename)
-        return json3({ error: "Missing projectId or filename" }, 400);
-      await detachAsset(projectId, filename);
-      ctx.activity.audit("asset.detached", "system", { projectId, filename });
+      const assetId = url2.searchParams.get("assetId") || body.assetId;
+      if (!projectId || !assetId)
+        return json3({ error: "Missing projectId or assetId" }, 400);
+      await detachAsset(projectId, assetId);
+      ctx.activity.audit("asset.detached", "system", { projectId, assetId });
       ctx.activity.log("system", "Detached asset from project", { taskId: projectId });
       indexProject(projectId).catch(() => {});
       return json3({ ok: true });
     };
-    ctx.registerRoute({ path: "/:projectId/assets/:filename", method: "DELETE", description: "Detach asset", handler: detachHandler });
+    ctx.registerRoute({ path: "/:projectId/assets/:assetId", method: "DELETE", description: "Detach asset", handler: detachHandler });
     ctx.registerRoute({
       path: "/:projectId/ask",
       method: "POST",
@@ -17304,7 +17304,7 @@ var projectsPlugin = {
           return json3({ error: "Project not found" }, 404);
         const agentId = body.agent || await getRuntimeMainAgentId(ctx);
         let persistedMessages = hydrateBrainstormMessages(readBrainstormMessages(body.projectId), body.history, agentId);
-        const assetLines = project.assets.length > 0 ? ["", "Attached assets (summaries \u2014 use asset tools to read full content if needed):", ...project.assets.map((a) => `- ${a.filename}${a.label ? ` \u2014 ${a.label}` : ""}`)] : [];
+        const assetLines = project.assets.length > 0 ? ["", "Attached assets (summaries \u2014 use asset tools to read full content if needed):", ...project.assets.map((a) => `- ${a.assetId}${a.label ? ` \u2014 ${a.label}` : ""}`)] : [];
         const context = [
           `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
           `Progress: ${project.progress}% (${project.tasks.filter((t) => t.checked).length}/${project.tasks.length} items checked)`,
@@ -17630,15 +17630,15 @@ data: ${JSON.stringify(data)}
     ctx.registerExecTool({
       name: "bakin_exec_projects_attach_asset",
       label: "Attached asset to project",
-      description: "Attach an existing asset to a project by filename. Assets provide additional context (specs, designs, docs) that agents can reference. Only summaries are included in projects_get \u2014 use asset tools to read full content when needed.",
+      description: "Attach an existing asset to a project by assetId. Assets provide additional context (specs, designs, docs) that agents can reference. Only summaries are included in projects_get \u2014 use asset tools to read full content when needed.",
       parameters: {
         projectId: exports_external.string().describe("Project ID"),
-        filename: exports_external.string().describe('Asset filename (e.g., "20260327-hero-a1b2c3d4.png") \u2014 globally unique, stable across retype/relink'),
+        assetId: exports_external.string().describe('Asset id (e.g., "20260327-hero-a1b2c3d4") \u2014 stable across versions'),
         label: exports_external.string().optional().describe("Human-readable label or summary of what this asset contains")
       },
       handler: async (params) => {
         try {
-          await attachAsset(params.projectId, params.filename, params.label);
+          await attachAsset(params.projectId, params.assetId, params.label);
           indexProject(params.projectId).catch(() => {});
           return { ok: true };
         } catch (err) {
@@ -17649,14 +17649,14 @@ data: ${JSON.stringify(data)}
     ctx.registerExecTool({
       name: "bakin_exec_projects_detach_asset",
       label: "Detached asset from project",
-      description: "Remove an asset reference from a project by filename. Does not delete the asset itself.",
+      description: "Remove an asset reference from a project by assetId. Does not delete the asset itself.",
       parameters: {
         projectId: exports_external.string().describe("Project ID"),
-        filename: exports_external.string().describe("Asset filename to detach")
+        assetId: exports_external.string().describe("Asset id to detach")
       },
       handler: async (params) => {
         try {
-          await detachAsset(params.projectId, params.filename);
+          await detachAsset(params.projectId, params.assetId);
           indexProject(params.projectId).catch(() => {});
           return { ok: true };
         } catch (err) {
@@ -17727,7 +17727,7 @@ data: ${JSON.stringify(data)}
         const project = readProject(projectId);
         if (!project)
           return { ok: false, error: `Project not found: ${projectId}` };
-        const assetLines = project.assets.length > 0 ? ["", "Attached assets (summaries \u2014 use asset tools to read full content if needed):", ...project.assets.map((a) => `- ${a.filename}${a.label ? ` \u2014 ${a.label}` : ""}`)] : [];
+        const assetLines = project.assets.length > 0 ? ["", "Attached assets (summaries \u2014 use asset tools to read full content if needed):", ...project.assets.map((a) => `- ${a.assetId}${a.label ? ` \u2014 ${a.label}` : ""}`)] : [];
         const context = [
           `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
           `Progress: ${project.progress}% (${project.tasks.filter((t) => t.checked).length}/${project.tasks.length} items checked)`,

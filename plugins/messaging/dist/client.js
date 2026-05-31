@@ -14008,8 +14008,8 @@ var DeliverableDraftSchema = exports_external.object({
   caption: exports_external.string().nullable().optional(),
   imagePrompt: exports_external.string().nullable().optional(),
   videoPrompt: exports_external.string().nullable().optional(),
-  imageFilename: exports_external.string().nullable().optional(),
-  videoFilename: exports_external.string().nullable().optional(),
+  imageAssetId: exports_external.string().nullable().optional(),
+  videoAssetId: exports_external.string().nullable().optional(),
   agentNotes: exports_external.string().nullable().optional()
 });
 var DeliverableSchema = exports_external.object({
@@ -14272,14 +14272,14 @@ function formatDateTime(value) {
   });
 }
 function requirementMissing(deliverable, requirement) {
-  if (requirement === "image" && !deliverable.draft.imageFilename)
+  if (requirement === "image" && !deliverable.draft.imageAssetId)
     return "Required image asset missing";
-  if (requirement === "video" && !deliverable.draft.videoFilename)
+  if (requirement === "video" && !deliverable.draft.videoAssetId)
     return "Required video asset missing";
   return null;
 }
-function assetUrl(filename) {
-  return `/api/assets/${encodeURIComponent(filename)}`;
+function assetUrl(assetId) {
+  return `/api/assets/${encodeURIComponent(assetId)}`;
 }
 function contentTypeFor(deliverable, contentTypes) {
   return contentTypes.find((type) => type.id === deliverable.contentType) ?? { id: deliverable.contentType, label: deliverable.contentType, assetRequirement: "none" };
@@ -14693,7 +14693,7 @@ function DeliverableDrawer({ deliverable, open, onClose, onUpdated }) {
                 }, undefined, false, undefined, this)
               ]
             }, undefined, true, undefined, this),
-            deliverable.draft.imageFilename && /* @__PURE__ */ jsxDEV2("div", {
+            deliverable.draft.imageAssetId && /* @__PURE__ */ jsxDEV2("div", {
               children: [
                 /* @__PURE__ */ jsxDEV2("div", {
                   className: "mb-1 flex items-center gap-1.5 text-xs text-muted-foreground",
@@ -14701,17 +14701,17 @@ function DeliverableDrawer({ deliverable, open, onClose, onUpdated }) {
                     /* @__PURE__ */ jsxDEV2(Image, {
                       className: "size-3.5"
                     }, undefined, false, undefined, this),
-                    deliverable.draft.imageFilename
+                    deliverable.draft.imageAssetId
                   ]
                 }, undefined, true, undefined, this),
                 /* @__PURE__ */ jsxDEV2("img", {
-                  src: assetUrl(deliverable.draft.imageFilename),
-                  alt: deliverable.draft.imageFilename,
+                  src: assetUrl(deliverable.draft.imageAssetId),
+                  alt: deliverable.draft.imageAssetId,
                   className: "max-h-72 rounded-md object-cover"
                 }, undefined, false, undefined, this)
               ]
             }, undefined, true, undefined, this),
-            deliverable.draft.videoFilename && /* @__PURE__ */ jsxDEV2("div", {
+            deliverable.draft.videoAssetId && /* @__PURE__ */ jsxDEV2("div", {
               children: [
                 /* @__PURE__ */ jsxDEV2("div", {
                   className: "mb-1 flex items-center gap-1.5 text-xs text-muted-foreground",
@@ -14719,11 +14719,11 @@ function DeliverableDrawer({ deliverable, open, onClose, onUpdated }) {
                     /* @__PURE__ */ jsxDEV2(Video, {
                       className: "size-3.5"
                     }, undefined, false, undefined, this),
-                    deliverable.draft.videoFilename
+                    deliverable.draft.videoAssetId
                   ]
                 }, undefined, true, undefined, this),
                 /* @__PURE__ */ jsxDEV2("video", {
-                  src: assetUrl(deliverable.draft.videoFilename),
+                  src: assetUrl(deliverable.draft.videoAssetId),
                   controls: true,
                   className: "max-h-72 rounded-md"
                 }, undefined, false, undefined, this)
@@ -14742,7 +14742,7 @@ function DeliverableDrawer({ deliverable, open, onClose, onUpdated }) {
                 }, undefined, false, undefined, this)
               ]
             }, undefined, true, undefined, this),
-            !deliverable.draft.caption && !deliverable.draft.imagePrompt && !deliverable.draft.videoPrompt && !deliverable.draft.imageFilename && !deliverable.draft.videoFilename && !deliverable.draft.agentNotes && /* @__PURE__ */ jsxDEV2("p", {
+            !deliverable.draft.caption && !deliverable.draft.imagePrompt && !deliverable.draft.videoPrompt && !deliverable.draft.imageAssetId && !deliverable.draft.videoAssetId && !deliverable.draft.agentNotes && /* @__PURE__ */ jsxDEV2("p", {
               className: "text-sm text-muted-foreground",
               children: "No draft yet"
             }, undefined, false, undefined, this)
@@ -14789,8 +14789,8 @@ function datetimeLocalValue(date5 = new Date(Date.now() + 60 * 60 * 1000)) {
 }
 function assetDraftField(asset, requirement) {
   if ((requirement ?? "").includes("video") || asset.type?.startsWith("video"))
-    return "videoFilename";
-  return "imageFilename";
+    return "videoAssetId";
+  return "imageAssetId";
 }
 function QuickPostButton({ onCreated }) {
   const contentTypes = useContentTypes();
@@ -14828,11 +14828,11 @@ function QuickPostButton({ onCreated }) {
   };
   const loadAssets = async () => {
     try {
-      const response = await fetch("/api/plugins/assets/?grouped=false");
+      const response = await fetch("/api/plugins/assets/versioned");
       if (!response.ok)
         return;
       const data = await response.json();
-      setAssets(Array.isArray(data.assets) ? data.assets : []);
+      setAssets(Array.isArray(data.assets) ? data.assets.map((a) => ({ assetId: a.assetId, type: a.type, description: a.description })) : []);
       setAssetPickerOpen(true);
     } catch {
       setAssets([]);
@@ -14843,7 +14843,7 @@ function QuickPostButton({ onCreated }) {
     if (!assetSearch.trim())
       return true;
     const query = assetSearch.toLowerCase();
-    return asset.filename.toLowerCase().includes(query) || (asset.description ?? "").toLowerCase().includes(query);
+    return asset.assetId.toLowerCase().includes(query) || (asset.description ?? "").toLowerCase().includes(query);
   });
   const handleCreate = async () => {
     if (!title.trim() || !brief.trim() || !agent || !channel || !selectedContentType)
@@ -14852,7 +14852,7 @@ function QuickPostButton({ onCreated }) {
     try {
       const draft = {};
       if (selectedAsset) {
-        draft[assetDraftField(selectedAsset, selectedContentType.assetRequirement)] = selectedAsset.filename;
+        draft[assetDraftField(selectedAsset, selectedContentType.assetRequirement)] = selectedAsset.assetId;
       }
       await fetch("/api/plugins/messaging/deliverables", {
         method: "POST",
@@ -15053,7 +15053,7 @@ function QuickPostButton({ onCreated }) {
                       children: [
                         /* @__PURE__ */ jsxDEV3("span", {
                           className: "truncate",
-                          children: selectedAsset.filename
+                          children: selectedAsset.description || selectedAsset.assetId
                         }, undefined, false, undefined, this),
                         /* @__PURE__ */ jsxDEV3("button", {
                           type: "button",
@@ -15097,14 +15097,14 @@ function QuickPostButton({ onCreated }) {
                             children: [
                               /* @__PURE__ */ jsxDEV3("span", {
                                 className: "block truncate",
-                                children: asset.filename
+                                children: asset.assetId
                               }, undefined, false, undefined, this),
                               asset.description && /* @__PURE__ */ jsxDEV3("span", {
                                 className: "block truncate text-xs text-muted-foreground",
                                 children: asset.description
                               }, undefined, false, undefined, this)
                             ]
-                          }, asset.filename, true, undefined, this))
+                          }, asset.assetId, true, undefined, this))
                         }, undefined, false, undefined, this)
                       ]
                     }, undefined, true, undefined, this)

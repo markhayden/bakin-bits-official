@@ -13720,8 +13720,8 @@ var DeliverableDraftSchema = exports_external.object({
   caption: exports_external.string().nullable().optional(),
   imagePrompt: exports_external.string().nullable().optional(),
   videoPrompt: exports_external.string().nullable().optional(),
-  imageFilename: exports_external.string().nullable().optional(),
-  videoFilename: exports_external.string().nullable().optional(),
+  imageAssetId: exports_external.string().nullable().optional(),
+  videoAssetId: exports_external.string().nullable().optional(),
   agentNotes: exports_external.string().nullable().optional()
 });
 var DeliverableSchema = exports_external.object({
@@ -17260,8 +17260,9 @@ function recomputePlanStatus(store, planId) {
 }
 
 // plugins/messaging/lib/publish.ts
-function draftFilename(deliverable, kind) {
-  return kind === "image" ? deliverable.draft.imageFilename ?? undefined : deliverable.draft.videoFilename ?? undefined;
+import { basename, extname } from "path";
+function draftAssetId(deliverable, kind) {
+  return kind === "image" ? deliverable.draft.imageAssetId ?? undefined : deliverable.draft.videoAssetId ?? undefined;
 }
 function isRequiredAsset(contentType, kind) {
   return (contentType.assetRequirement ?? "none") === kind;
@@ -17269,16 +17270,13 @@ function isRequiredAsset(contentType, kind) {
 async function buildFilesFromDraft(deliverable, contentType, ctx) {
   const files = [];
   for (const kind of ["image", "video"]) {
-    const filename = draftFilename(deliverable, kind);
-    if (filename) {
-      try {
-        files.push(await ctx.assets.fileRef(filename));
-      } catch (err) {
-        return {
-          ok: false,
-          reason: `Asset ${filename} (${kind}) not resolvable: ${err instanceof Error ? err.message : String(err)}`
-        };
+    const assetId = draftAssetId(deliverable, kind);
+    if (assetId) {
+      const ref = await ctx.assets.resolveVersionFile(assetId);
+      if (!ref) {
+        return { ok: false, reason: `Asset ${assetId} (${kind}) not resolvable` };
       }
+      files.push({ name: `${assetId}${extname(ref.absPath) || extname(basename(ref.absPath))}`, path: ref.absPath, contentType: ref.mimeType });
     } else if (isRequiredAsset(contentType, kind)) {
       return { ok: false, reason: `Required ${kind} asset missing on Deliverable` };
     }
@@ -17993,10 +17991,10 @@ function prepInstruction(contentType) {
   const requirement = contentType.assetRequirement ?? "none";
   const base = "Write your draft. Then call bakin_exec_messaging_deliverable_update with { draft: { caption } }, then call bakin_exec_messaging_deliverable_ready_for_review.";
   if (requirement === "image" || requirement === "optional-image") {
-    return `${base} If an image is needed, call bakin_exec_assets_save { filePath, taskId, type: 'images' }, then include the returned filename in your update: { draft: { caption, imageFilename } }.`;
+    return `${base} If an image is needed, call bakin_exec_assets_save { filePath, taskId, type: 'images' }, then include the returned assetId in your update: { draft: { caption, imageAssetId } }.`;
   }
   if (requirement === "video" || requirement === "optional-video") {
-    return `${base} If a video is needed, call bakin_exec_assets_save { filePath, taskId, type: 'video' }, then include the returned filename in your update: { draft: { caption, videoFilename } }.`;
+    return `${base} If a video is needed, call bakin_exec_assets_save { filePath, taskId, type: 'video' }, then include the returned assetId in your update: { draft: { caption, videoAssetId } }.`;
   }
   return base;
 }
