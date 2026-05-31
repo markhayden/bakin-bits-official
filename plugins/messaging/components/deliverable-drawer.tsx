@@ -32,13 +32,13 @@ function formatDateTime(value: string): string {
 }
 
 function requirementMissing(deliverable: Deliverable, requirement: AssetRequirement | undefined): string | null {
-  if (requirement === 'image' && !deliverable.draft.imageFilename) return 'Required image asset missing'
-  if (requirement === 'video' && !deliverable.draft.videoFilename) return 'Required video asset missing'
+  if (requirement === 'image' && !deliverable.draft.imageAssetId) return 'Required image asset missing'
+  if (requirement === 'video' && !deliverable.draft.videoAssetId) return 'Required video asset missing'
   return null
 }
 
-function assetUrl(filename: string): string {
-  return `/api/assets/${encodeURIComponent(filename)}`
+function assetUrl(assetId: string): string {
+  return `/api/assets/${encodeURIComponent(assetId)}`
 }
 
 function contentTypeFor(deliverable: Deliverable, contentTypes: ContentTypeOption[]): ContentTypeOption {
@@ -359,27 +359,27 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
               <p className="mt-1 text-sm">{deliverable.draft.videoPrompt}</p>
             </div>
           )}
-          {deliverable.draft.imageFilename && (
+          {deliverable.draft.imageAssetId && (
             <div>
               <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                 <ImageIcon className="size-3.5" />
-                {deliverable.draft.imageFilename}
+                {deliverable.draft.imageAssetId}
               </div>
               <img
-                src={assetUrl(deliverable.draft.imageFilename)}
-                alt={deliverable.draft.imageFilename}
+                src={assetUrl(deliverable.draft.imageAssetId)}
+                alt={deliverable.draft.imageAssetId}
                 className="max-h-72 rounded-md object-cover"
               />
             </div>
           )}
-          {deliverable.draft.videoFilename && (
+          {deliverable.draft.videoAssetId && (
             <div>
               <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Video className="size-3.5" />
-                {deliverable.draft.videoFilename}
+                {deliverable.draft.videoAssetId}
               </div>
               <video
-                src={assetUrl(deliverable.draft.videoFilename)}
+                src={assetUrl(deliverable.draft.videoAssetId)}
                 controls
                 className="max-h-72 rounded-md"
               />
@@ -394,8 +394,8 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
           {!deliverable.draft.caption &&
             !deliverable.draft.imagePrompt &&
             !deliverable.draft.videoPrompt &&
-            !deliverable.draft.imageFilename &&
-            !deliverable.draft.videoFilename &&
+            !deliverable.draft.imageAssetId &&
+            !deliverable.draft.videoAssetId &&
             !deliverable.draft.agentNotes && (
               <p className="text-sm text-muted-foreground">No draft yet</p>
             )}

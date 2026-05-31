@@ -74,7 +74,7 @@ beforeEach(() => {
       return {
         ok: true,
         json: async () => ({
-          assets: [{ filename: 'hero.png', type: 'image/png', description: 'Hero image' }],
+          assets: [{ assetId: '20260525-hero-a1b2c3d4', type: 'images', description: 'Hero image' }],
         }),
       }
     }
@@ -103,9 +103,9 @@ describe('QuickPostButton', () => {
     fireEvent.click(screen.getByText('Attach'))
 
     await waitFor(() => {
-      expect(screen.getByText('hero.png')).toBeDefined()
+      expect(screen.getByText('20260525-hero-a1b2c3d4')).toBeDefined()
     })
-    fireEvent.click(screen.getByText('hero.png'))
+    fireEvent.click(screen.getByText('20260525-hero-a1b2c3d4'))
     fireEvent.click(screen.getByText('Create'))
 
     await waitFor(() => {
@@ -119,7 +119,7 @@ describe('QuickPostButton', () => {
       agent: 'basil',
       title: 'Quick image',
       brief: 'Publish a quick image.',
-      draft: { imageFilename: 'hero.png' },
+      draft: { imageAssetId: '20260525-hero-a1b2c3d4' },
     })
     expect(typeof createBody?.publishAt).toBe('string')
     expect(onCreated).toHaveBeenCalled()

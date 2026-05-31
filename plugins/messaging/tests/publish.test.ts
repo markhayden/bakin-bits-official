@@ -2,7 +2,9 @@ import { describe, expect, it, mock } from 'bun:test'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import type { AssetFileRef, PluginContext } from '@makinbakin/sdk/types'
+import type { PluginContext } from '@makinbakin/sdk/types'
+
+type VersionFileRef = { absPath: string; mimeType: string; version: number }
 import type { ContentTypeOption, Deliverable } from '../types'
 import { MarkdownStorageAdapter } from '../test-helpers'
 import { createMessagingContentStorage } from '../lib/content-storage'
@@ -33,13 +35,13 @@ function contentType(overrides: Partial<ContentTypeOption> = {}): ContentTypeOpt
 }
 
 function createCtx(opts: {
-  fileRef?: (filename: string) => Promise<AssetFileRef>
+  resolveVersionFile?: (assetId: string) => Promise<VersionFileRef | null>
   deliverContent?: (input: { channels: string[] }) => Promise<{ deliveries: Array<{ channelId: string; ref: string; renderedAt: string }> }>
   sendMessage?: (input: { channels: string[] }) => Promise<{ deliveries: Array<{ channelId: string; ref: string; renderedAt: string }> }>
 } = {}): PluginContext {
   return {
     assets: {
-      fileRef: mock(opts.fileRef ?? (async (filename: string): Promise<AssetFileRef> => ({ kind: 'asset', filename }))),
+      resolveVersionFile: mock(opts.resolveVersionFile ?? (async (assetId: string): Promise<VersionFileRef | null> => ({ absPath: `/store/${assetId}/v1.png`, mimeType: 'image/png', version: 1 }))),
     },
     runtime: {
       channels: {
@@ -81,18 +83,18 @@ describe('buildFilesFromDraft', () => {
     expect((await buildFilesFromDraft(makeDeliverable(), contentType({ assetRequirement: 'optional-video' }), ctx)).ok).toBe(true)
 
     const image = await buildFilesFromDraft(
-      makeDeliverable({ draft: { imageFilename: 'hero.png' } }),
+      makeDeliverable({ draft: { imageAssetId: 'hero' } }),
       contentType({ assetRequirement: 'image' }),
       ctx,
     )
-    expect(image.ok && image.files.map(file => file.filename)).toEqual(['hero.png'])
+    expect(image.ok && image.files.map(file => file.path)).toEqual(['/store/hero/v1.png'])
 
     const video = await buildFilesFromDraft(
-      makeDeliverable({ draft: { videoFilename: 'clip.mp4' } }),
+      makeDeliverable({ draft: { videoAssetId: 'clip' } }),
       contentType({ assetRequirement: 'video' }),
       ctx,
     )
-    expect(video.ok && video.files.map(file => file.filename)).toEqual(['clip.mp4'])
+    expect(video.ok && video.files.map(file => file.path)).toEqual(['/store/clip/v1.png'])
   })
 
   it('fails when required assets are missing', async () => {
@@ -111,32 +113,32 @@ describe('buildFilesFromDraft', () => {
   it('resolves both image and video draft files when present', async () => {
     const ctx = createCtx()
     const result = await buildFilesFromDraft(
-      makeDeliverable({ draft: { imageFilename: 'hero.png', videoFilename: 'clip.mp4' } }),
+      makeDeliverable({ draft: { imageAssetId: 'hero', videoAssetId: 'clip' } }),
       contentType({ assetRequirement: 'none' }),
       ctx,
     )
 
-    expect(result.ok && result.files.map(file => file.filename)).toEqual(['hero.png', 'clip.mp4'])
+    expect(result.ok && result.files.map(file => file.path)).toEqual(['/store/hero/v1.png', '/store/clip/v1.png'])
   })
 
-  it('fails when image or video fileRef resolution fails', async () => {
-    const imageCtx = createCtx({ fileRef: async () => { throw new Error('missing image') } })
+  it('fails when an image or video asset cannot be resolved', async () => {
+    const imageCtx = createCtx({ resolveVersionFile: async () => null })
     const image = await buildFilesFromDraft(
-      makeDeliverable({ draft: { imageFilename: 'hero.png' } }),
+      makeDeliverable({ draft: { imageAssetId: 'hero' } }),
       contentType({ assetRequirement: 'optional-image' }),
       imageCtx,
     )
     expect(image.ok).toBe(false)
-    expect(!image.ok && image.reason).toContain('Asset hero.png (image) not resolvable: missing image')
+    expect(!image.ok && image.reason).toContain('Asset hero (image) not resolvable')
 
-    const videoCtx = createCtx({ fileRef: async () => { throw new Error('missing video') } })
+    const videoCtx = createCtx({ resolveVersionFile: async () => null })
     const video = await buildFilesFromDraft(
-      makeDeliverable({ draft: { videoFilename: 'clip.mp4' } }),
+      makeDeliverable({ draft: { videoAssetId: 'clip' } }),
       contentType({ assetRequirement: 'optional-video' }),
       videoCtx,
     )
     expect(video.ok).toBe(false)
-    expect(!video.ok && video.reason).toContain('Asset clip.mp4 (video) not resolvable: missing video')
+    expect(!video.ok && video.reason).toContain('Asset clip (video) not resolvable')
   })
 })
 
@@ -144,7 +146,7 @@ describe('publishDeliverableNow', () => {
   it('delivers content, persists published metadata, and audits success', async () => withStore(async (store) => {
     const ctx = createCtx()
     const deliverable = store.createDeliverable({
-      ...makeDeliverable({ draft: { caption: 'A published caption.', imageFilename: 'hero.png' } }),
+      ...makeDeliverable({ draft: { caption: 'A published caption.', imageAssetId: 'hero' } }),
     })
 
     const result = await publishDeliverableNow(store, deliverable, contentType({ assetRequirement: 'optional-image' }), ctx)
@@ -160,7 +162,7 @@ describe('publishDeliverableNow', () => {
       content: expect.objectContaining({
         title: 'Taco post',
         body: 'A published caption.',
-        files: [{ kind: 'asset', filename: 'hero.png' }],
+        files: [{ name: 'hero.png', path: '/store/hero/v1.png', contentType: 'image/png' }],
       }),
     }))
     expect(ctx.activity.audit).toHaveBeenCalledWith('deliverable.published', 'system', expect.objectContaining({ deliverableId: deliverable.id }))

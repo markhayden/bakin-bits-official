@@ -106,7 +106,7 @@ describe('DeliverableDrawer', () => {
       <DeliverableDrawer
         deliverable={makeDeliverable({
           status: 'failed',
-          draft: { imageFilename: 'hero image.png', caption: 'Caption' },
+          draft: { imageAssetId: 'hero image.png', caption: 'Caption' },
           failureReason: 'Asset hero image.png (image) not resolvable: missing',
         })}
         open
@@ -124,7 +124,7 @@ describe('DeliverableDrawer', () => {
     const onUpdated = mock()
     render(
       <DeliverableDrawer
-        deliverable={makeDeliverable({ draft: { imageFilename: 'hero.png' } })}
+        deliverable={makeDeliverable({ draft: { imageAssetId: 'hero.png' } })}
         open
         onClose={mock()}
         onUpdated={onUpdated}

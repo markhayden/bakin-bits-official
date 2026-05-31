@@ -19,18 +19,18 @@ steps:
       Produce or attach a video asset matching the script. Required steps:
         1. Save the video asset:
              bakin_exec_assets_save { filePath, taskId, type: 'video' }
-           returns { filename }
-        2. Push the filename to the Deliverable so messaging can publish it:
+           returns { assetId }
+        2. Push the assetId to the Deliverable so messaging can publish it:
              bakin_exec_messaging_deliverable_update {
                deliverableId: <from task description>,
-               draft: { videoFilename }
+               draft: { videoAssetId }
              }
-        3. Set this step's output to the same filename.
+        3. Set this step's output to the same assetId.
       If you skip step 2 the workflow will still complete, but messaging's
       asset validation will fail the Deliverable at publish time.
     outputs:
-      - id: videoFilename
-        type: file
+      - id: videoAssetId
+        type: string
   - id: review
     label: Review final video
     type: gate
@@ -38,7 +38,7 @@ steps:
     approval_required: true
     preview:
       - script.outputs.script
-      - record.outputs.videoFilename
+      - record.outputs.videoAssetId
     on_approve: complete
     on_reject:
       goto: script

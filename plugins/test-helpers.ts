@@ -4,7 +4,6 @@ import { mock } from 'bun:test'
 import type {
   AgentRuntimeAdapter,
   APIRoute,
-  AssetFileRef,
   BakinPlugin,
   ExecToolDefinition,
   FileBackedContentTypeDefinition,
@@ -293,10 +292,10 @@ export function createTestContext(pluginId: string, testDir: string): ActivatedP
     runtime: createMockRuntimeAdapter(),
     tasks: createMockBakinTaskStore(),
     assets: {
-      getByFilename: mock(async () => null),
-      list: mock(async () => []),
-      exists: mock(async () => false),
-      fileRef: mock(async (filename: string): Promise<AssetFileRef> => ({ kind: 'asset', filename })),
+      createAsset: mock(async () => ({ assetId: 'test-asset', version: 1 })),
+      addVersion: mock(async () => ({ assetId: 'test-asset', version: 2 })),
+      addExport: mock(async () => ({ name: 'export', file: 'exports/export.jpg' })),
+      resolveVersionFile: mock(async (assetId: string) => ({ absPath: `/store/${assetId}/v1.png`, mimeType: 'image/png', version: 1 })),
     },
     registerNav: mock(),
     registerRoute: route => routes.push(route),

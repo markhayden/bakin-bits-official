@@ -21,7 +21,7 @@ import { useAgentIds } from "@makinbakin/sdk/hooks"
 import { useNotificationChannels } from "@makinbakin/sdk/hooks"
 
 interface AssetOption {
-  filename: string
+  assetId: string
   type?: string
   description?: string
 }
@@ -36,8 +36,8 @@ function datetimeLocalValue(date = new Date(Date.now() + 60 * 60 * 1000)): strin
 }
 
 function assetDraftField(asset: AssetOption, requirement: string | undefined): keyof DeliverableDraft {
-  if ((requirement ?? '').includes('video') || asset.type?.startsWith('video')) return 'videoFilename'
-  return 'imageFilename'
+  if ((requirement ?? '').includes('video') || asset.type?.startsWith('video')) return 'videoAssetId'
+  return 'imageAssetId'
 }
 
 export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
@@ -82,10 +82,10 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
 
   const loadAssets = async () => {
     try {
-      const response = await fetch('/api/plugins/assets/?grouped=false')
+      const response = await fetch('/api/plugins/assets/versioned')
       if (!response.ok) return
-      const data = await response.json() as { assets?: AssetOption[] }
-      setAssets(Array.isArray(data.assets) ? data.assets : [])
+      const data = await response.json() as { assets?: Array<{ assetId: string; type?: string; description?: string }> }
+      setAssets(Array.isArray(data.assets) ? data.assets.map((a) => ({ assetId: a.assetId, type: a.type, description: a.description })) : [])
       setAssetPickerOpen(true)
     } catch {
       setAssets([])
@@ -96,7 +96,7 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
   const filteredAssets = assets.filter((asset) => {
     if (!assetSearch.trim()) return true
     const query = assetSearch.toLowerCase()
-    return asset.filename.toLowerCase().includes(query) || (asset.description ?? '').toLowerCase().includes(query)
+    return asset.assetId.toLowerCase().includes(query) || (asset.description ?? '').toLowerCase().includes(query)
   })
 
   const handleCreate = async () => {
@@ -105,7 +105,7 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
     try {
       const draft: DeliverableDraft = {}
       if (selectedAsset) {
-        draft[assetDraftField(selectedAsset, selectedContentType.assetRequirement)] = selectedAsset.filename
+        draft[assetDraftField(selectedAsset, selectedContentType.assetRequirement)] = selectedAsset.assetId
       }
       await fetch('/api/plugins/messaging/deliverables', {
         method: 'POST',
@@ -230,7 +230,7 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
               </div>
               {selectedAsset && (
                 <div className="flex items-center justify-between rounded-md border border-border bg-surface px-3 py-2 text-sm">
-                  <span className="truncate">{selectedAsset.filename}</span>
+                  <span className="truncate">{selectedAsset.description || selectedAsset.assetId}</span>
                   <button type="button" onClick={() => setSelectedAsset(null)} aria-label="Remove selected asset">
                     <X className="size-4" />
                   </button>
@@ -253,7 +253,7 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
                     ) : (
                       filteredAssets.map((asset) => (
                         <button
-                          key={asset.filename}
+                          key={asset.assetId}
                           type="button"
                           onClick={() => {
                             setSelectedAsset(asset)
@@ -261,7 +261,7 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
                           }}
                           className="block w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/50"
                         >
-                          <span className="block truncate">{asset.filename}</span>
+                          <span className="block truncate">{asset.assetId}</span>
                           {asset.description && (
                             <span className="block truncate text-xs text-muted-foreground">{asset.description}</span>
                           )}

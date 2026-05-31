@@ -17,11 +17,11 @@ steps:
       Optional, if you want a hero image:
         1. Save the image asset:
              bakin_exec_assets_save { filePath, taskId, type: 'images' }
-           returns { filename }
-        2. Push the filename to the Deliverable:
+           returns { assetId }
+        2. Push the assetId to the Deliverable:
              bakin_exec_messaging_deliverable_update {
                deliverableId,
-               draft: { imageFilename }
+               draft: { imageAssetId }
              }
       Then set this step's output and the workflow will advance to review.
     outputs:

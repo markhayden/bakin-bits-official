@@ -361,7 +361,7 @@ declare module '@makinbakin/sdk/types' {
           title: string
           body?: string
           url?: string
-          files?: AssetFileRef[]
+          files?: Array<{ name: string; path: string; contentType?: string }>
           metadata?: Record<string, unknown>
         }
       }): Promise<{ deliveries: Array<{ channelId: string; ref: string; renderedAt: string }> }>
@@ -575,11 +575,69 @@ declare module '@makinbakin/sdk/types' {
     variants?: AssetVariantMeta[]
   }
 
+  export type AssetTypeName = 'text' | 'images' | 'video' | 'audio' | 'plans' | 'research' | 'pdf' | 'data' | 'other'
+
+  export interface AssetGenerationInfo {
+    provider: string
+    model: string
+    surface: string
+    quality: string
+    routeSource: string
+    routeReason?: string
+  }
+
+  export interface AssetCreateInput {
+    sourceFilePath: string
+    type: AssetTypeName
+    agent: string
+    taskId: string | null
+    slug?: string
+    op?: 'generate' | 'upload' | 'import'
+    tool?: string | null
+    prompt?: string | null
+    promptHash?: string | null
+    description?: string
+    tags?: string[]
+    source?: { kind: 'generated' | 'upload' | 'import' | 'clipboard' | 'workspace-file'; path: string | null }
+    generation?: AssetGenerationInfo | null
+  }
+
+  export interface AssetVersionCreateInput {
+    sourceFilePath: string
+    op?: 'edit' | 'generate' | 'upload' | 'import'
+    tool?: string | null
+    prompt?: string | null
+    promptHash?: string | null
+    description?: string
+    tags?: string[]
+    generation?: AssetGenerationInfo | null
+  }
+
+  export interface AssetExportRequest {
+    fromVersion?: number
+    surface: string
+    format: 'jpg' | 'png' | 'webp'
+    width: number
+    height: number
+    quality?: number
+  }
+
+  export interface VersionedAssetRef {
+    assetId: string
+    version: number
+  }
+
+  export interface AssetVersionFileRef {
+    absPath: string
+    mimeType: string
+    version: number
+  }
+
   export interface AssetsAPI {
-    getByFilename(filename: string): Promise<AssetMeta | null>
-    list(filter?: { type?: AssetMeta['type']; taskId?: string | null }): Promise<AssetMeta[]>
-    exists(filename: string): Promise<boolean>
-    fileRef(filename: string): Promise<AssetFileRef>
+    createAsset(input: AssetCreateInput): Promise<VersionedAssetRef>
+    addVersion(assetId: string, input: AssetVersionCreateInput): Promise<VersionedAssetRef>
+    addExport(assetId: string, input: AssetExportRequest): Promise<{ name: string; file: string }>
+    resolveVersionFile(assetId: string, version?: number): Promise<AssetVersionFileRef | null>
   }
 
   export interface ExecToolResult {

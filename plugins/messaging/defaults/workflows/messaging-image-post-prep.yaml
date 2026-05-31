@@ -24,16 +24,16 @@ steps:
       Produce or attach the image asset. Required steps:
         1. Save the image asset:
              bakin_exec_assets_save { filePath, taskId, type: 'images' }
-           returns { filename }
-        2. Push the filename to the Deliverable:
+           returns { assetId }
+        2. Push the assetId to the Deliverable:
              bakin_exec_messaging_deliverable_update {
                deliverableId,
-               draft: { imageFilename }
+               draft: { imageAssetId }
              }
-        3. Set this step's output to the same filename.
+        3. Set this step's output to the same assetId.
     outputs:
-      - id: imageFilename
-        type: file
+      - id: imageAssetId
+        type: string
   - id: review
     label: Review final post
     type: gate
@@ -41,7 +41,7 @@ steps:
     approval_required: true
     preview:
       - caption.outputs.caption
-      - image.outputs.imageFilename
+      - image.outputs.imageAssetId
     on_approve: complete
     on_reject:
       goto: caption
