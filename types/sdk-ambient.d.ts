@@ -334,12 +334,6 @@ declare module '@makinbakin/sdk/types' {
     [key: string]: unknown
   }
 
-  export interface AssetFileRef {
-    kind: 'asset'
-    filename: string
-    mimeType?: string
-  }
-
   export interface AgentRuntimeAdapter {
     agents: {
       list(): Promise<RuntimeAgent[]>
