@@ -8,6 +8,44 @@ defaultEnabled: false
 
 Sound is half the video. Bad audio kills good visuals; good audio elevates mediocre visuals.
 
+## Generating the audio (ElevenLabs)
+
+All audio comes from ElevenLabs — three different endpoints. Keys are in your workspace `.env`
+(`ELEVENLABS_API_KEY`); voice id and any model id default from `TOOLS.md`. Don't hardcode model
+ids here — check current ElevenLabs docs, they change.
+
+**Sound effects** — `POST /v1/sound-generation`:
+```bash
+curl -X POST https://api.elevenlabs.io/v1/sound-generation \
+  -H "xi-api-key: $ELEVENLABS_API_KEY" -H "Content-Type: application/json" \
+  -d '{"text": "food sizzling in a hot pan", "duration_seconds": 10}' \
+  --output /tmp/sizzle.mp3
+```
+
+**Background music** — `POST /v1/music` (NOT `sound-generation` — that's SFX only). The music
+endpoint takes a `prompt` and `music_length_ms` (milliseconds):
+```bash
+curl -X POST https://api.elevenlabs.io/v1/music \
+  -H "xi-api-key: $ELEVENLABS_API_KEY" -H "Content-Type: application/json" \
+  -d '{"prompt": "warm jazzy commercial bed, brushed drums, walking bass", "music_length_ms": 10000}' \
+  --output /tmp/bgmusic.mp3
+```
+
+**Voiceover (TTS)** — `POST /v1/text-to-speech/<voice_id>`:
+```bash
+curl -X POST "https://api.elevenlabs.io/v1/text-to-speech/<voice_id>" \
+  -H "xi-api-key: $ELEVENLABS_API_KEY" -H "Content-Type: application/json" \
+  -d '{"text": "your voiceover text"}' \
+  --output /tmp/voiceover.mp3
+```
+
+**Mix with ffmpeg** (video + music ducked under SFX):
+```bash
+ffmpeg -i video.mp4 -i /tmp/bgmusic.mp3 -i /tmp/sizzle.mp3 \
+  -filter_complex "[1:a]volume=0.4,atrim=0:10[music];[2:a]volume=0.7[sfx];[music][sfx]amix=inputs=2:duration=shortest[aout]" \
+  -map 0:v -map "[aout]" -c:v copy -c:a aac -shortest output_final.mp4
+```
+
 ## Levels (in dB, relative)
 
 When mixing with ffmpeg, the standard relationship between tracks:

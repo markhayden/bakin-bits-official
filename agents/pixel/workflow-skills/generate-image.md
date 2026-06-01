@@ -49,7 +49,7 @@ mcporter call bakin-pixel.bakin_exec_images_generate \
 
 Optional: call `bakin_exec_images_recommend` first to pick a provider/model/surface, or pass `provider` / `model` / `width` / `height` / `quality` explicitly. The tool returns the **`assetId`** (plus `version`, `routeSource`, `provider`, `model`) — capture `assetId` for your step output. No manual path, directory, or filename handling — the asset is addressed by its id.
 
-**Edits** (`source_image` present): use **`bakin_exec_images_edit`** with `assetId=<managed asset>` plus the edit `prompt`. It edits the current version, appends a **new version** to the SAME asset (the id is stable), and returns that `assetId`. If the source is a loose local file (not yet managed), first `bakin_exec_images_import taskId=<id> filePath=<abs path>` to get an `assetId`, then edit by `assetId`. Only multi-image composition still falls back to the native nano-banana flow per AGENTS.md (then `bakin_exec_images_import`).
+**Edits** (`source_image` present): use **`bakin_exec_images_edit`** with `assetId=<managed asset>` plus the edit `prompt`. It edits the current version, appends a **new version** to the SAME asset (the id is stable), and returns that `assetId`. If the source is a loose local file (not yet managed), first `bakin_exec_images_import taskId=<id> filePath=<abs path>` to get an `assetId`, then edit by `assetId`. Everything — generate, edit, multi-image — routes through the `bakin_exec_images_*` tools; never shell out to a native image script.
 
 ### 4. Submit step output
 

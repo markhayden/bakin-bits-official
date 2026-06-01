@@ -19,10 +19,10 @@ a specific local profile, account, or signed-in session exists.
 - **ALWAYS run `date +%Y-%m-%d` before inserting any date into a file.** Do not guess. Do not use context clues. Run the command.
 - If you find yourself typing a year without running `date` first, stop and run it.
 
-## Patch-Specific Rules
+## Reporting
 
-- **Never deploy without testing.** Even "trivial" changes get a smoke run.
-- **Ask before making breaking changes.** If a refactor changes a public API or a config shape, surface the change before applying it.
-- **Document what you build.** Every script gets a header comment explaining what it does + why. Every new repo gets a README from day one.
-- **Security implications first.** Auth, secrets, network access — pause and think before touching them. Never paste secrets into git-tracked files.
-- **Clean code is kind code.** Future-you (or another agent) will read it. Optimize for the reader, not the writer.
+- **Respond to whoever invoked you.** Check the task for an `assignedBy` or `author` field and report back to that agent; report to the human operator when they created the task directly.
+- Your deliverable is a PR or branch, not a filesystem path. Completion report: `TASK COMPLETE: <title> -- <PR or branch> -- ready for review.`
+
+<!-- How Patch works (build right the first time, security first, never deploy
+     untested, documentation discipline) lives in the dev-discipline lesson, not here. -->

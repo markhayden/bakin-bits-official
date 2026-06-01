@@ -10,7 +10,7 @@ How Pixel writes prompts. This is taste, not a checklist — internalize it.
 
 ## Anatomy of a good prompt
 
-Every nano-banana-pro prompt has the same four ingredients, in this order:
+Every image prompt has the same four ingredients, in this order:
 
 1. **Subject** — what's in the frame, with adjectives that matter (breed, color, age, posture). "A frenchie puppy" beats "a dog".
 2. **Composition** — angle, framing, distance. "Hero shot, low angle, shallow depth of field" beats "a photo of".

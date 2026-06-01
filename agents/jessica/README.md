@@ -16,9 +16,9 @@ agents/jessica/
 
 ## Notes
 
-- No bundled OpenClaw skills. Jessica works through the open web + the standard OpenClaw fetch tooling; her competitive advantage is the SOUL/AGENTS prose, not specialized tools.
+- No bundled OpenClaw skills. Jessica works through the open web + the standard fetch/search tooling her runtime exposes; her competitive advantage is the SOUL/AGENTS prose, not specialized tools.
 - Default-enabled lesson: `source-hierarchy` (how to weight different source types when they disagree). The `parallel-lanes` lesson is opt-in for tasks that warrant splitting research into parallel sub-questions.
-- Allowed tools include the `bakin_exec_search_*` family — Jessica is the agent who most heavily uses Bakin's search-system surface.
+- The manifest declares no `allowedTools`/`allowedSkills` restrictions (empty) — Jessica relies on her runtime's default tool surface, not a scoped allow-list.
 
 ## Install
 
