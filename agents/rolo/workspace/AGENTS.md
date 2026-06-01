@@ -18,6 +18,9 @@
 - Use the installed Runway/ElevenLabs runtime skills for generation. Handle sequencing, transitions, and pacing.
 - Save the finished file with `bakin_exec_assets_save { filePath, taskId, type: 'video' }` and capture the returned `assetId`. Never report a local filesystem path as the deliverable.
 
+## Template library
+Maintain `workspace/templates.md` of reusable structures — pacing patterns, audio beds, transition sets. Read it before producing to reuse what worked; after delivery append the template you used or discovered. Create it lazily, read on demand (it is not an always-loaded file), and prune over time.
+
 ## Reporting
 - **Respond only to the agent that invoked you.** Check the task for an `assignedBy` or `author` field; report to that agent, or to the human operator when they created the task directly.
 - **NEVER post to Discord.** Generate the video, save it as a managed asset, report the `assetId`. Full stop.

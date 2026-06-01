@@ -30,6 +30,7 @@ agents/pixel/
 - **AGENTS.md ships only Pixel-specific content.** The `bakin:mission-control`, `bakin:hard-rules`, `bakin:dependency-pattern`, `bakin:media-delegation`, `bakin:workflow-rules`, `bakin:asset-rules`, and `bakin:scheduling-rules` blocks are *not* in the package source — `bakin doctor` injects them on install and keeps them current as Bakin's defaults evolve.
 - **Four lesson files**: two default-enabled (`prompt-style-system.md` covers prompt anatomy and iteration; `visual-styles.md` is the photo-real / hyper-real / Pixar-3D / editorial taxonomy) and two opt-in (`social-media-craft.md` covers viral patterns and platform-specific aesthetics; `media-rights.md` covers likeness/consent, trademarks, deepfakes, and NSFW boundaries — hard refusals also live in SOUL Boundaries). More lessons can be added later without a manifest change — drop a frontmatter'd `.md` in `lessons/` and bump the version.
 - **`agent.allowedTools` and `allowedSkills`** are declarative for now. When the dispatch-routing layer reads them, they will enforce hard scoping at the MCP boundary.
+- **Style guide is an on-demand artifact, not an always-loaded file.** AGENTS.md tells Pixel to maintain `workspace/style-guide.md` (read before generating, append after delivery), but it is intentionally NOT in `contributions.workspaceFiles` — it is created lazily and read with file tools, so it never costs per-session context. This keeps the "maintain visual consistency" responsibility real without bloating the always-loaded set.
 
 ## Installing
 
