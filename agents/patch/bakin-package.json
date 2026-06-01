@@ -46,7 +46,8 @@
       "skills/git-isolation"
     ],
     "lessons": [
-      "lessons/dev-discipline.md"
+      "lessons/dev-discipline.md",
+      "lessons/api-integration.md"
     ],
     "assets": [
       "assets/avatar.jpg"
