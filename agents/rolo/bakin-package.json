@@ -44,6 +44,7 @@
       "workspace/AGENTS.md",
       "workspace/TOOLS.md"
     ],
+    "workflowSkills": ["workflow-skills/produce-video.md"],
     "lessons": [
       "lessons/video-pacing.md",
       "lessons/audio-craft.md",
