@@ -17,7 +17,7 @@ agents/patch/
 
 ## Notes
 
-- **`agent.defaultModel: "openai-codex/gpt-5.5"`** — Patch defaults to the current Codex model for development work. Set on fresh install only; the user can change it via the Models UI afterward.
+- No hardcoded model — Patch inherits the Bakin/runtime default. The user can pick a model via the Models UI.
 - Single lesson file: `dev-discipline` — durable principles (build right first time / automate everything / debugging discipline / security first / never deploy without testing / documentation rules / when-to-ask-before-acting checklist).
 - Runtime skill: `git-isolation` — teaches Patch to call Bakin's git worktree tools before editing code, status before handoff, and release only when the worktree is safe to clean up.
 - AGENTS.md keeps Patch's operational rules portable: no machine-specific paths, no assumed browser profiles, and `date` before inserting timestamps.

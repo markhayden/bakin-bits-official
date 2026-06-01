@@ -23,12 +23,11 @@ bakin agents install github:markhayden/bakin-bits-official#agents/<agent-id>
 
 ```
 agents/
-├── _template/
 └── <agent-id>/
     ├── bakin-package.json
-    ├── workspace/
-    ├── skills/<name>/
-    ├── workflows/*.yaml
+    ├── workspace/              SOUL/IDENTITY/AGENTS/TOOLS
+    ├── skills/<name>/          (optional) runtime skill procedures
+    ├── workflow-skills/*.md    (optional) workflow step instructions
     ├── lessons/*.md
     ├── assets/
     └── README.md

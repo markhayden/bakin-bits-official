@@ -12,10 +12,10 @@
       "emoji": "⚙️"
     },
     "role": "Developer agent",
-    "defaultModel": "openai-codex/gpt-5.5",
     "dispatchableBy": [
       "main"
     ],
+    "allowedTools": [],
     "tags": [
       "dev",
       "automation",

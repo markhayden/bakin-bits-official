@@ -16,7 +16,15 @@ const disallowedPersonalPatterns = [
   /Chrome "Work" profile/i,
   /Work profile/i,
   /current year is \*\*2026\*\*/i,
+  // Hardcoded install-location / machine paths (Bakin's default install is the binary,
+  // not Homebrew — and global node_modules paths are non-portable).
+  /\/opt\/homebrew/i,
+  /\/usr\/local\//i,
+  /lib\/node_modules/i,
+  // Hardcoded model ids go stale fast — agents inherit the Bakin/runtime default.
   /anthropic\/claude-opus-4-6/i,
+  /openai-codex\/gpt-/i,
+  /eleven_monolingual/i,
 ];
 
 type AgentManifest = {
@@ -133,7 +141,6 @@ describe("agent package contracts", () => {
     const manifest = readManifest("patch");
 
     expect(manifest.agent?.allowedTools ?? []).toEqual([]);
-    expect(manifest.agent?.defaultModel).toBe("openai-codex/gpt-5.5");
     expect(manifest.agent?.allowedSkills ?? []).toContain("git-isolation");
     expect(manifest.contributions?.lessons ?? []).toContain(
       "lessons/dev-discipline.md",
@@ -141,6 +148,46 @@ describe("agent package contracts", () => {
     expect(manifest.contributions?.skills ?? []).toContain(
       "skills/git-isolation",
     );
+  });
+
+  it("no agent hardcodes a model (inherits the Bakin/runtime default)", () => {
+    for (const agentId of agentIds) {
+      const manifest = readManifest(agentId);
+      expect(
+        manifest.agent?.defaultModel,
+        `${agentId} sets agent.defaultModel — models go stale; inherit the runtime default`,
+      ).toBeUndefined();
+    }
+  });
+
+  it("declares allowedTools explicitly", () => {
+    for (const agentId of agentIds) {
+      const manifest = readManifest(agentId);
+      expect(
+        Array.isArray(manifest.agent?.allowedTools),
+        `${agentId} must declare agent.allowedTools as an array`,
+      ).toBe(true);
+    }
+  });
+
+  it("keeps always-loaded workspace files within a context budget", () => {
+    const wordCount = (s: string): number =>
+      s.trim().split(/\s+/).filter(Boolean).length;
+    const budgets: Record<string, number> = {
+      "workspace/SOUL.md": 250,
+      "workspace/AGENTS.md": 350,
+    };
+    for (const agentId of agentIds) {
+      for (const [relativePath, max] of Object.entries(budgets)) {
+        const fullPath = join(agentsRoot, agentId, relativePath);
+        if (!existsSync(fullPath)) continue;
+        const words = wordCount(readFileSync(fullPath, "utf-8"));
+        expect(
+          words,
+          `${agentId}/${relativePath} is ${words} words (budget ${max}) — these load every session, push depth to lessons/skills`,
+        ).toBeLessThanOrEqual(max);
+      }
+    }
   });
 
   it("rolo declares required runtime secrets without values", () => {

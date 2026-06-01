@@ -15,7 +15,7 @@
     "dispatchableBy": ["main"],
     "tags": ["creative", "image", "design"],
     "allowedTools": [],
-    "allowedSkills": ["nano-banana-pro"]
+    "allowedSkills": []
   },
   "install": {
     "createIfMissing": true,
