@@ -46,7 +46,8 @@
     ],
     "lessons": [
       "lessons/video-pacing.md",
-      "lessons/audio-craft.md"
+      "lessons/audio-craft.md",
+      "lessons/media-rights.md"
     ],
     "assets": ["assets/avatar.jpg"]
   }

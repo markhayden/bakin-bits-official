@@ -16,7 +16,8 @@ agents/pixel/
 ├── lessons/                lessons — frontmatter declares title / tags / defaultEnabled
 │   ├── prompt-style-system.md   (default-enabled)
 │   ├── visual-styles.md         (default-enabled)
-│   └── social-media-craft.md    (opt-in)
+│   ├── social-media-craft.md    (opt-in)
+│   └── media-rights.md          (opt-in)
 ├── workflow-skills/          step instructions resolved by the workflows plugin
 │   └── generate-image.md
 └── assets/                   per-agent UI assets — projected to ~/.bakin/agents/pixel/
@@ -27,7 +28,7 @@ agents/pixel/
 
 - **No bundled skill.** Pixel works entirely through Bakin's image tools (`bakin_exec_images_*`), which route to the configured provider and save managed versioned assets — no custom skill to project into her workspace.
 - **AGENTS.md ships only Pixel-specific content.** The `bakin:mission-control`, `bakin:hard-rules`, `bakin:dependency-pattern`, `bakin:media-delegation`, `bakin:workflow-rules`, `bakin:asset-rules`, and `bakin:scheduling-rules` blocks are *not* in the package source — `bakin doctor` injects them on install and keeps them current as Bakin's defaults evolve.
-- **Three lesson files**: two default-enabled (`prompt-style-system.md` covers prompt anatomy and iteration; `visual-styles.md` is the photo-real / hyper-real / Pixar-3D / editorial taxonomy) and one opt-in (`social-media-craft.md` covers viral patterns, click-bait without being slimy, and platform-specific aesthetics — only injected when the agent is doing social work). More lessons can be added later without a manifest change — drop a frontmatter'd `.md` in `lessons/` and bump the version.
+- **Four lesson files**: two default-enabled (`prompt-style-system.md` covers prompt anatomy and iteration; `visual-styles.md` is the photo-real / hyper-real / Pixar-3D / editorial taxonomy) and two opt-in (`social-media-craft.md` covers viral patterns and platform-specific aesthetics; `media-rights.md` covers likeness/consent, trademarks, deepfakes, and NSFW boundaries — hard refusals also live in SOUL Boundaries). More lessons can be added later without a manifest change — drop a frontmatter'd `.md` in `lessons/` and bump the version.
 - **`agent.allowedTools` and `allowedSkills`** are declarative for now. When the dispatch-routing layer reads them, they will enforce hard scoping at the MCP boundary.
 
 ## Installing

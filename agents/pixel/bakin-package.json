@@ -36,7 +36,8 @@
     "lessons": [
       "lessons/prompt-style-system.md",
       "lessons/visual-styles.md",
-      "lessons/social-media-craft.md"
+      "lessons/social-media-craft.md",
+      "lessons/media-rights.md"
     ],
     "assets": ["assets/avatar.jpg"]
   }
