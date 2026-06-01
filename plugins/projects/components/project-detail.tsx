@@ -6,7 +6,6 @@ import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, ChevronDow
 import { useMainAgentId } from "@makinbakin/sdk/hooks"
 import { AgentSelect, IntegratedBrainstorm, readBrainstormSseResponse } from "@makinbakin/sdk/components"
 import type { BrainstormMessage } from "@makinbakin/sdk/components"
-import { Slot } from '@makinbakin/sdk/slots'
 import { ProjectChecklist } from './project-checklist'
 import { ProjectEditor } from './project-editor'
 import { Skeleton } from "@makinbakin/sdk/ui"
@@ -17,7 +16,7 @@ import type { ProjectStatus } from '../types'
 // ---------------------------------------------------------------------------
 
 interface ResolvedAsset {
-  filename: string
+  assetId: string
   label?: string
   type: string
   description?: string
@@ -32,7 +31,7 @@ interface ProjectData {
   owner: string
   progress: number
   tasks: Array<{ id: string; title: string; taskId?: string; checked: boolean }>
-  assets: Array<{ filename: string; label?: string }>
+  assets: Array<{ assetId: string; label?: string }>
   body: string
   updated: string
   resolvedTasks: Record<string, { column: string; title: string } | null>
@@ -52,6 +51,8 @@ const STATUS_CONFIG: Record<ProjectStatus, { label: string; dot: string }> = {
 }
 
 const IMAGE_TYPES = new Set(['images', 'image'])
+const VIDEO_TYPES = new Set(['video'])
+const AUDIO_TYPES = new Set(['audio'])
 
 const ASSET_ICONS: Record<string, typeof FileText> = {
   text: FileText,
@@ -70,8 +71,8 @@ function AssetThumb({ asset }: { asset: ResolvedAsset }) {
   if (IMAGE_TYPES.has(asset.type) && !asset.missing && !err) {
     return (
       <img
-        src={`/api/assets/${encodeURIComponent(asset.filename)}`}
-        alt={asset.filename}
+        src={`/api/assets/${encodeURIComponent(asset.assetId)}`}
+        alt={asset.assetId}
         onError={() => setErr(true)}
         className="size-8 rounded object-cover shrink-0 bg-zinc-800"
       />
@@ -84,13 +85,13 @@ function AssetThumb({ asset }: { asset: ResolvedAsset }) {
   )
 }
 
-function PickerThumb({ asset }: { asset: { filename: string; type: string } }) {
+function PickerThumb({ asset }: { asset: { assetId: string; type: string } }) {
   const [err, setErr] = useState(false)
   if (IMAGE_TYPES.has(asset.type) && !err) {
     return (
       <img
-        src={`/api/assets/${encodeURIComponent(asset.filename)}`}
-        alt={asset.filename}
+        src={`/api/assets/${encodeURIComponent(asset.assetId)}`}
+        alt={asset.assetId}
         onError={() => setErr(true)}
         className="size-7 rounded object-cover shrink-0 bg-zinc-800"
       />
@@ -99,6 +100,85 @@ function PickerThumb({ asset }: { asset: { filename: string; type: string } }) {
   return (
     <div className="size-7 rounded bg-zinc-800/60 flex items-center justify-center shrink-0">
       <AssetIcon type={asset.type} />
+    </div>
+  )
+}
+
+function assetUrl(assetId: string): string {
+  return `/api/assets/${encodeURIComponent(assetId)}`
+}
+
+function assetHref(assetId: string): string {
+  return `/assets/${encodeURIComponent(assetId)}`
+}
+
+function assetName(asset: ResolvedAsset): string {
+  return asset.label || asset.assetId
+}
+
+function AssetPreviewModal({ asset, onClose }: { asset: ResolvedAsset; onClose: () => void }) {
+  const name = assetName(asset)
+  const url = assetUrl(asset.assetId)
+  const href = assetHref(asset.assetId)
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={name}
+      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/80 p-8"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[84vh] max-w-[90vw] flex-col items-center gap-3"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {IMAGE_TYPES.has(asset.type) ? (
+          <img
+            src={url}
+            alt={name}
+            className="max-h-[80vh] max-w-[90vw] rounded object-contain"
+          />
+        ) : VIDEO_TYPES.has(asset.type) ? (
+          <video
+            src={url}
+            controls
+            className="max-h-[80vh] max-w-[90vw] rounded bg-black"
+          />
+        ) : AUDIO_TYPES.has(asset.type) ? (
+          <div className="w-[min(90vw,520px)] rounded-lg border border-[rgba(255,255,255,0.10)] bg-zinc-950 p-4">
+            <div className="mb-3 flex items-center gap-2 text-sm text-zinc-200">
+              <AssetIcon type={asset.type} />
+              <span className="truncate">{name}</span>
+            </div>
+            <audio src={url} controls className="w-full" />
+          </div>
+        ) : (
+          <div className="flex w-[min(90vw,420px)] flex-col items-center gap-3 rounded-lg border border-[rgba(255,255,255,0.10)] bg-zinc-950 p-6 text-center">
+            <div className="flex size-12 items-center justify-center rounded bg-zinc-900">
+              <AssetIcon type={asset.type} />
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-zinc-200">{name}</p>
+              <p className="mt-1 text-xs text-zinc-500">{asset.type}</p>
+            </div>
+          </div>
+        )}
+        <div className="flex items-center gap-4 text-sm text-zinc-300">
+          <a href={href} className="underline hover:text-white">Open asset</a>
+          <button type="button" onClick={onClose} className="flex items-center gap-1 hover:text-white">
+            <X className="size-4" /> Close
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -133,8 +213,8 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   // Assets
   const [assetPickerOpen, setAssetPickerOpen] = useState(false)
   const [assetSearch, setAssetSearch] = useState('')
-  const [availableAssets, setAvailableAssets] = useState<Array<{ filename: string; type: string; description?: string }>>([])
-  const [previewFilename, setPreviewFilename] = useState<string | null>(null)
+  const [availableAssets, setAvailableAssets] = useState<Array<{ assetId: string; type: string; description?: string }>>([])
+  const [previewAsset, setPreviewAsset] = useState<ResolvedAsset | null>(null)
 
   // Delete confirmation
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -330,15 +410,15 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
       return
     }
     try {
-      const res = await fetch('/api/plugins/assets/?grouped=false')
+      const res = await fetch('/api/plugins/assets/versioned')
       if (res.ok) {
         const data = await res.json()
-        const attached = new Set(project?.assets.map(a => a.filename) || [])
+        const attached = new Set(project?.assets.map(a => a.assetId) || [])
         setAvailableAssets(
           (data.assets || [])
-            .filter((a: { filename: string }) => !attached.has(a.filename))
-            .map((a: { filename: string; type: string; metadata?: { description?: string } }) => ({
-              filename: a.filename, type: a.type, description: a.metadata?.description,
+            .filter((a: { assetId: string }) => !attached.has(a.assetId))
+            .map((a: { assetId: string; type: string; description?: string }) => ({
+              assetId: a.assetId, type: a.type, description: a.description,
             }))
         )
         setAssetSearch('')
@@ -347,23 +427,23 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
     } catch { /* assets plugin may not be available */ }
   }
 
-  const handleAttachAsset = async (filename: string) => {
+  const handleAttachAsset = async (assetId: string) => {
     if (!currentId) return
-    await fetch(`/api/plugins/projects/${currentId}/assets`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename }) })
+    await fetch(`/api/plugins/projects/${currentId}/assets`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ assetId }) })
     setAssetPickerOpen(false)
     fetchProject()
   }
 
-  const handleDetachAsset = async (filename: string) => {
+  const handleDetachAsset = async (assetId: string) => {
     if (!currentId) return
-    await fetch(`/api/plugins/projects/${currentId}/assets/${encodeURIComponent(filename)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } })
+    await fetch(`/api/plugins/projects/${currentId}/assets/${encodeURIComponent(assetId)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } })
     fetchProject()
   }
 
   const filteredPickerAssets = availableAssets.filter(a => {
     if (!assetSearch.trim()) return true
     const q = assetSearch.toLowerCase()
-    return a.filename.toLowerCase().includes(q) || a.type.toLowerCase().includes(q) || (a.description || '').toLowerCase().includes(q)
+    return a.assetId.toLowerCase().includes(q) || a.type.toLowerCase().includes(q) || (a.description || '').toLowerCase().includes(q)
   })
 
   // ---------------------------------------------------------------------------
@@ -654,28 +734,37 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
               <div className="space-y-1.5">
                 {project.resolvedAssets.map((asset) => (
                   <div
-                    key={asset.filename}
-                    className={`group flex items-start gap-2.5 p-1.5 rounded-lg hover:bg-zinc-800/40 transition-colors ${asset.missing ? 'opacity-40 pointer-events-none' : 'cursor-pointer'}`}
-                    onClick={() => !asset.missing && setPreviewFilename(asset.filename)}
+                    key={asset.assetId}
+                    className={`group flex items-start gap-2.5 rounded-lg p-1.5 transition-colors hover:bg-zinc-800/40 ${asset.missing ? 'opacity-40' : ''}`}
                   >
-                    <AssetThumb asset={asset} />
-                    <div className="flex-1 min-w-0 pt-0.5">
-                      <p className="text-[11px] text-zinc-300 truncate leading-tight">{asset.label || asset.filename}</p>
-                      {asset.description && (
-                        <p className="text-[10px] text-zinc-600 truncate mt-0.5">{asset.description}</p>
-                      )}
-                      {asset.tags && asset.tags.length > 0 && (
-                        <div className="flex gap-1 mt-1 flex-wrap">
-                          {asset.tags.slice(0, 3).map(tag => (
-                            <span key={tag} className="text-[9px] px-1 py-0.5 rounded bg-zinc-800/60 text-zinc-500">{tag}</span>
-                          ))}
-                        </div>
-                      )}
-                      {asset.missing && <span className="text-[10px] text-amber-500/70">missing</span>}
-                    </div>
                     <button
-                      onClick={(e) => { e.stopPropagation(); handleDetachAsset(asset.filename) }}
+                      type="button"
+                      disabled={asset.missing}
+                      onClick={() => setPreviewAsset(asset)}
+                      aria-label={`Open ${assetName(asset)}`}
+                      className="flex min-w-0 flex-1 items-start gap-2.5 text-left disabled:cursor-default"
+                    >
+                      <AssetThumb asset={asset} />
+                      <div className="min-w-0 flex-1 pt-0.5">
+                        <p className="truncate text-[11px] leading-tight text-zinc-300">{assetName(asset)}</p>
+                        {asset.description && (
+                          <p className="mt-0.5 truncate text-[10px] text-zinc-600">{asset.description}</p>
+                        )}
+                        {asset.tags && asset.tags.length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {asset.tags.slice(0, 3).map(tag => (
+                              <span key={tag} className="rounded bg-zinc-800/60 px-1 py-0.5 text-[9px] text-zinc-500">{tag}</span>
+                            ))}
+                          </div>
+                        )}
+                        {asset.missing && <span className="text-[10px] text-amber-500/70">missing</span>}
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); handleDetachAsset(asset.assetId) }}
                       className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 transition-all shrink-0 mt-1"
+                      aria-label={`Detach ${assetName(asset)}`}
                     >
                       <X className="size-3" />
                     </button>
@@ -719,13 +808,13 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                   ) : (
                     filteredPickerAssets.map((asset) => (
                       <button
-                        key={asset.filename}
-                        onClick={() => handleAttachAsset(asset.filename)}
+                        key={asset.assetId}
+                        onClick={() => handleAttachAsset(asset.assetId)}
                         className="w-full text-left px-2.5 py-2 text-[11px] hover:bg-zinc-800/60 transition-colors flex items-center gap-2.5 border-b border-[rgba(255,255,255,0.04)] last:border-0"
                       >
                         <PickerThumb asset={asset} />
                         <div className="flex-1 min-w-0">
-                          <span className="text-zinc-300 truncate block">{asset.filename}</span>
+                          <span className="text-zinc-300 truncate block">{asset.assetId}</span>
                           {asset.description && <span className="text-zinc-600 truncate block text-[10px]">{asset.description}</span>}
                         </div>
                       </button>
@@ -758,14 +847,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
 
       </div>
 
-      {/* Asset preview overlay — routed through the assets plugin slot */}
-      {previewFilename && (
-        <Slot
-          name="asset-detail-modal"
-          filename={previewFilename}
-          onClose={() => setPreviewFilename(null)}
-        />
-      )}
+      {previewAsset && <AssetPreviewModal asset={previewAsset} onClose={() => setPreviewAsset(null)} />}
     </div>
   )
 }

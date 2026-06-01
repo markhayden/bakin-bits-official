@@ -48,9 +48,9 @@ tasks:
     description: "Some details"
     checked: false
 assets:
-  - filename: "20260401-logo-a1b2c3d4.png"
+  - assetId: "20260401-logo-a1b2c3d4"
     label: "Logo"
-  - filename: "20260401-spec-e5f6a7b8.pdf"
+  - assetId: "20260401-spec-e5f6a7b8"
 ---
 
 # Test Project
@@ -165,8 +165,32 @@ describe('parseProject', () => {
   it('parses assets', () => {
     const project = parseProject(SAMPLE_PROJECT)
     expect(project.assets).toHaveLength(2)
-    expect(project.assets[0]).toEqual({ filename: '20260401-logo-a1b2c3d4.png', label: 'Logo' })
-    expect(project.assets[1]).toEqual({ filename: '20260401-spec-e5f6a7b8.pdf', label: undefined })
+    expect(project.assets[0]).toEqual({ assetId: '20260401-logo-a1b2c3d4', label: 'Logo' })
+    expect(project.assets[1]).toEqual({ assetId: '20260401-spec-e5f6a7b8', label: undefined })
+  })
+
+  it('drops legacy filename-only asset entries', () => {
+    const project = parseProject(`---
+id: legacy-assets
+title: "Legacy Assets"
+status: active
+created: "2026-03-28T10:00:00.000Z"
+updated: "2026-03-28T12:00:00.000Z"
+owner: main
+tasks: []
+assets:
+  - filename: "old-hero.png"
+    label: "Old hero"
+  - assetId: ""
+    label: "Empty id"
+  - assetId: "20260401-current-a1b2c3d4"
+    label: "Current"
+---
+
+Body.
+`)
+
+    expect(project.assets).toEqual([{ assetId: '20260401-current-a1b2c3d4', label: 'Current' }])
   })
 
   it('handles missing tasks and assets', () => {

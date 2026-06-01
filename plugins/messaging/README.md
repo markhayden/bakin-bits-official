@@ -102,9 +102,10 @@ That keeps runtime conversation continuity inside the active adapter. The
 plugin persists its own visible timeline for UI reloads and auditability, but
 does not replay the full stored transcript into each runtime prompt.
 
-Publishing goes through `ctx.runtime.channels.deliverContent`. Asset filenames
-in draft fields are resolved server-side with `ctx.assets.fileRef` immediately
-before publishing.
+Publishing goes through `ctx.runtime.channels.deliverContent`. Asset ids in
+draft fields (`imageAssetId` / `videoAssetId`) are resolved server-side to the
+current-version file with `ctx.assets.resolveVersionFile` immediately before
+publishing.
 
 ## Routes
 

@@ -87,7 +87,7 @@ import { MarkdownStorageAdapter } from '../test-helpers'
 /** Create a project markdown file directly on disk for read-only tests. */
 function writeProjectFixture(
   id: string,
-  opts: { title?: string; status?: string; tasks?: Array<{ id: string; title: string; checked: boolean; taskId?: string }>; assets?: Array<{ filename: string; label?: string }>; body?: string; owner?: string } = {},
+  opts: { title?: string; status?: string; tasks?: Array<{ id: string; title: string; checked: boolean; taskId?: string }>; assets?: Array<{ assetId: string; label?: string }>; body?: string; owner?: string } = {},
 ) {
   const title = opts.title ?? `Project ${id}`
   const status = opts.status ?? 'active'
@@ -116,6 +116,33 @@ function writeProjectFixture(
   if (!existsSync(projectsDir)) mkdirSync(projectsDir, { recursive: true })
   writeFileSync(join(projectsDir, `${id}.md`), content, 'utf-8')
 }
+
+function testAssetSummary(assetId: string) {
+  return {
+    assetId,
+    type: 'images' as const,
+    agent: 'pixel',
+    taskId: null,
+    created: '2026-04-01T00:00:00.000Z',
+    updated: '2026-04-01T00:00:00.000Z',
+    currentVersion: 1,
+    versionCount: 1,
+    description: '',
+    tags: [],
+    mimeType: 'image/png',
+    width: null,
+    height: null,
+    size: 1,
+    hasThumb: false,
+  }
+}
+
+const KNOWN_ASSET_IDS = new Set([
+  '20260401-spec-abcdef12',
+  '20260401-logo-abcdef12',
+  '20260401-brief-abcdef12',
+  '20260401-x-abcdef12',
+])
 
 // ---------------------------------------------------------------------------
 // Setup / Teardown
@@ -186,6 +213,9 @@ beforeEach(async () => {
   if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true })
   mkdirSync(projectsDir, { recursive: true })
   plugin = await activatePlugin(projectsPlugin, testDir)
+  plugin.ctx.assets.getAsset = mock(async (assetId: string) => (
+    KNOWN_ASSET_IDS.has(assetId) ? testAssetSummary(assetId) : null
+  )) as typeof plugin.ctx.assets.getAsset
 })
 
 afterAll(() => {
@@ -594,42 +624,64 @@ describe('Routes', () => {
       expect(route).toBeDefined()
       const { status, body } = await callRoute(route, plugin.ctx, {
         searchParams: { projectId: 'proj-att' },
-        body: { filename: '20260401-spec-abcdef12.md', label: 'Spec doc' },
+        body: { assetId: '20260401-spec-abcdef12', label: 'Spec doc' },
       })
       expect(status).toBe(200)
       expect(body.ok).toBe(true)
     })
 
-    it('returns 400 when projectId or filename is missing', async () => {
+    it('rejects unknown or legacy filename asset ids', async () => {
+      writeProjectFixture('proj-att-missing', { title: 'Attach Project' })
+
+      const route = findRoute(plugin.routes, 'POST', '/:projectId/assets')!
+      const missing = await callRoute(route, plugin.ctx, {
+        searchParams: { projectId: 'proj-att-missing' },
+        body: { assetId: '20260401-missing-deadbeef' },
+      })
+      const legacy = await callRoute(route, plugin.ctx, {
+        searchParams: { projectId: 'proj-att-missing' },
+        body: { assetId: 'old-hero.png' },
+      })
+
+      expect(missing.status).toBe(404)
+      expect(missing.body.error).toContain('Asset not found')
+      expect(legacy.status).toBe(404)
+      expect(legacy.body.error).toContain('Asset not found')
+
+      const repo = createProjectRepository(new MarkdownStorageAdapter(testDir))
+      expect(repo.readProject('proj-att-missing')!.assets).toEqual([])
+    })
+
+    it('returns 400 when projectId or assetId is missing', async () => {
       const route = findRoute(plugin.routes, 'POST', '/:projectId/assets')!
       const { status } = await callRoute(route, plugin.ctx, {
-        body: { label: 'No filename' },
+        body: { label: 'No assetId' },
       })
       expect(status).toBe(400)
     })
   })
 
   // -------------------------------------------------------------------------
-  // DELETE /:projectId/assets/:filename — detach asset
+  // DELETE /:projectId/assets/:assetId — detach asset
   // -------------------------------------------------------------------------
-  describe('DELETE /:projectId/assets/:filename — detach asset', () => {
+  describe('DELETE /:projectId/assets/:assetId — detach asset', () => {
     it('detaches an asset from a project', async () => {
       writeProjectFixture('proj-det', {
         title: 'Detach Project',
-        assets: [{ filename: '20260401-spec-abcdef12.md', label: 'Spec' }],
+        assets: [{ assetId: '20260401-spec-abcdef12', label: 'Spec' }],
       })
 
-      const route = findRoute(plugin.routes, 'DELETE', '/:projectId/assets/:filename')!
+      const route = findRoute(plugin.routes, 'DELETE', '/:projectId/assets/:assetId')!
       expect(route).toBeDefined()
       const { status, body } = await callRoute(route, plugin.ctx, {
-        searchParams: { projectId: 'proj-det', filename: '20260401-spec-abcdef12.md' },
+        searchParams: { projectId: 'proj-det', assetId: '20260401-spec-abcdef12' },
       })
       expect(status).toBe(200)
       expect(body.ok).toBe(true)
     })
 
     it('returns 400 when required params are missing', async () => {
-      const route = findRoute(plugin.routes, 'DELETE', '/:projectId/assets/:filename')!
+      const route = findRoute(plugin.routes, 'DELETE', '/:projectId/assets/:assetId')!
       const { status } = await callRoute(route, plugin.ctx, {})
       expect(status).toBe(400)
     })
@@ -643,7 +695,7 @@ describe('Routes', () => {
       writeProjectFixture('proj-ask', {
         title: 'Ask Project',
         tasks: [{ id: 't001', title: 'Do stuff', checked: true }],
-        assets: [{ filename: '20260401-brief-abcdef12.md', label: 'Brief' }],
+        assets: [{ assetId: '20260401-brief-abcdef12', label: 'Brief' }],
       })
       const streamMock = mockRuntimeStream(['Hel', 'lo ', 'world'])
 
@@ -1263,7 +1315,7 @@ describe('Exec Tools', () => {
       expect(tool).toBeDefined()
       const result = await callTool(tool, {
         projectId: 'proj-aa',
-        filename: '20260401-logo-abcdef12.png',
+        assetId: '20260401-logo-abcdef12',
         label: 'Logo',
       })
       expect(result.ok).toBe(true)
@@ -1271,7 +1323,7 @@ describe('Exec Tools', () => {
 
     it('returns error for non-existent project', async () => {
       const tool = findTool(plugin.execTools, 'bakin_exec_projects_attach_asset')!
-      const result = await callTool(tool, { projectId: 'ghost', filename: '20260401-x-abcdef12.md' })
+      const result = await callTool(tool, { projectId: 'ghost', assetId: '20260401-x-abcdef12' })
       expect(result.ok).toBe(false)
       expect(result.error).toMatch(/not found/i)
     })
@@ -1284,18 +1336,18 @@ describe('Exec Tools', () => {
     it('detaches an asset', async () => {
       writeProjectFixture('proj-da', {
         title: 'Detach Asset',
-        assets: [{ filename: '20260401-brief-abcdef12.md', label: 'Brief' }],
+        assets: [{ assetId: '20260401-brief-abcdef12', label: 'Brief' }],
       })
 
       const tool = findTool(plugin.execTools, 'bakin_exec_projects_detach_asset')!
       expect(tool).toBeDefined()
-      const result = await callTool(tool, { projectId: 'proj-da', filename: '20260401-brief-abcdef12.md' })
+      const result = await callTool(tool, { projectId: 'proj-da', assetId: '20260401-brief-abcdef12' })
       expect(result.ok).toBe(true)
     })
 
     it('returns error for non-existent project', async () => {
       const tool = findTool(plugin.execTools, 'bakin_exec_projects_detach_asset')!
-      const result = await callTool(tool, { projectId: 'ghost', filename: '20260401-x-abcdef12.md' })
+      const result = await callTool(tool, { projectId: 'ghost', assetId: '20260401-x-abcdef12' })
       expect(result.ok).toBe(false)
       expect(result.error).toMatch(/not found/i)
     })
@@ -1379,7 +1431,7 @@ describe('Registration', () => {
       { method: 'POST', path: '/:projectId/checklist/:itemId/link' },
       { method: 'POST', path: '/:projectId/checklist/:itemId/promote' },
       { method: 'POST', path: '/:projectId/assets' },
-      { method: 'DELETE', path: '/:projectId/assets/:filename' },
+      { method: 'DELETE', path: '/:projectId/assets/:assetId' },
       { method: 'POST', path: '/:projectId/ask' },
       { method: 'GET', path: '/search' },
     ]

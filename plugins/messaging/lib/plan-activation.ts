@@ -18,10 +18,10 @@ function prepInstruction(contentType: ContentTypeOption): string {
   const requirement = contentType.assetRequirement ?? 'none'
   const base = 'Write your draft. Then call bakin_exec_messaging_deliverable_update with { draft: { caption } }, then call bakin_exec_messaging_deliverable_ready_for_review.'
   if (requirement === 'image' || requirement === 'optional-image') {
-    return `${base} If an image is needed, call bakin_exec_assets_save { filePath, taskId, type: 'images' }, then include the returned filename in your update: { draft: { caption, imageFilename } }.`
+    return `${base} If an image is needed, call bakin_exec_images_generate { taskId, surface, prompt } and include the returned assetId in your update: { draft: { caption, imageAssetId } }. If you already have a loose local file, call bakin_exec_images_import { taskId, filePath } first.`
   }
   if (requirement === 'video' || requirement === 'optional-video') {
-    return `${base} If a video is needed, call bakin_exec_assets_save { filePath, taskId, type: 'video' }, then include the returned filename in your update: { draft: { caption, videoFilename } }.`
+    return `${base} If a video is needed, save the final video with bakin_exec_assets_save { filePath, taskId, type: 'video' }, then include the returned assetId in your update: { draft: { caption, videoAssetId } }.`
   }
   return base
 }

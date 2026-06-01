@@ -178,7 +178,7 @@ describe('Deliverable routes', () => {
     const updateRoute = findRoute(plugin.routes, 'PUT', '/deliverables/:id')!
     await callRoute(updateRoute, plugin.ctx, {
       searchParams: { id: deliverable.id as string },
-      body: { draft: { imageFilename: 'hero.png' } },
+      body: { draft: { imageAssetId: '20260525-hero-a1b2c3d4' } },
     })
     const approved = await callRoute(approveRoute, plugin.ctx, { searchParams: { id: deliverable.id as string } })
 
@@ -453,11 +453,11 @@ describe('Deliverable exec tools', () => {
     const update = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_update')!
     const updated = await callTool(update, {
       deliverableId,
-      draft: { imageFilename: 'quick.png' },
+      draft: { imageAssetId: '20260525-quick-a1b2c3d4' },
     })
     expect((updated.deliverable as Record<string, unknown>).draft).toEqual({
       caption: 'first',
-      imageFilename: 'quick.png',
+      imageAssetId: '20260525-quick-a1b2c3d4',
     })
   })
 
@@ -541,7 +541,7 @@ describe('Deliverable exec tools', () => {
     expect(missingAsset.error).toBe('Required image asset missing on Deliverable')
 
     const update = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_update')!
-    await callTool(update, { deliverableId, draft: { imageFilename: 'image.png' } })
+    await callTool(update, { deliverableId, draft: { imageAssetId: '20260525-image-a1b2c3d4' } })
 
     const readyResult = await callTool(ready, { deliverableId })
     expect((readyResult.deliverable as Record<string, unknown>).status).toBe('in_review')

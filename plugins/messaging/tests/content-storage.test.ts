@@ -111,13 +111,13 @@ describe('createMessagingContentStorage', () => {
         draft: { caption: 'first caption' },
       })
 
-      store.updateDeliverable('deliv-1', { title: undefined, draft: { imageFilename: 'taco.png' } })
+      store.updateDeliverable('deliv-1', { title: undefined, draft: { imageAssetId: '20260525-taco-a1b2c3d4' } })
       const cleared = store.updateDeliverable('deliv-1', { draft: { caption: null } })
 
       expect(cleared.title).toBe('Draft merge')
       expect(cleared.draft).toEqual({
         caption: null,
-        imageFilename: 'taco.png',
+        imageAssetId: '20260525-taco-a1b2c3d4',
       })
     })
   })

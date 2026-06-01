@@ -121,8 +121,8 @@ export interface DeliverableDraft {
   caption?: string | null
   imagePrompt?: string | null
   videoPrompt?: string | null
-  imageFilename?: string | null
-  videoFilename?: string | null
+  imageAssetId?: string | null
+  videoAssetId?: string | null
   agentNotes?: string | null
 }
 
@@ -269,8 +269,8 @@ export const DeliverableDraftSchema = z.object({
   caption: z.string().nullable().optional(),
   imagePrompt: z.string().nullable().optional(),
   videoPrompt: z.string().nullable().optional(),
-  imageFilename: z.string().nullable().optional(),
-  videoFilename: z.string().nullable().optional(),
+  imageAssetId: z.string().nullable().optional(),
+  videoAssetId: z.string().nullable().optional(),
   agentNotes: z.string().nullable().optional(),
 })
 

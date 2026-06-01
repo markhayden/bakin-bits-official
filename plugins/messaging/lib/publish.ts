@@ -1,9 +1,13 @@
-import type { AssetFileRef, PluginContext } from '@makinbakin/sdk/types'
+import { basename, extname } from 'path'
+import type { PluginContext } from '@makinbakin/sdk/types'
 import type { ContentTypeOption, Deliverable, DeliverableFailureStage } from '../types'
 import type { MessagingContentStorage } from './content-storage'
 
+/** A resolved attachment for channel delivery (the versioned serve shape). */
+type DeliveryFile = { name: string; path: string; contentType?: string }
+
 export type BuildFilesResult =
-  | { ok: true; files: AssetFileRef[] }
+  | { ok: true; files: DeliveryFile[] }
   | { ok: false; reason: string }
 
 export type PublishDeliverableResult =
@@ -12,10 +16,10 @@ export type PublishDeliverableResult =
 
 type AssetKind = 'image' | 'video'
 
-function draftFilename(deliverable: Deliverable, kind: AssetKind): string | undefined {
+function draftAssetId(deliverable: Deliverable, kind: AssetKind): string | undefined {
   return kind === 'image'
-    ? deliverable.draft.imageFilename ?? undefined
-    : deliverable.draft.videoFilename ?? undefined
+    ? deliverable.draft.imageAssetId ?? undefined
+    : deliverable.draft.videoAssetId ?? undefined
 }
 
 function isRequiredAsset(contentType: ContentTypeOption, kind: AssetKind): boolean {
@@ -27,19 +31,17 @@ export async function buildFilesFromDraft(
   contentType: ContentTypeOption,
   ctx: PluginContext,
 ): Promise<BuildFilesResult> {
-  const files: AssetFileRef[] = []
+  const files: DeliveryFile[] = []
 
   for (const kind of ['image', 'video'] as const) {
-    const filename = draftFilename(deliverable, kind)
-    if (filename) {
-      try {
-        files.push(await ctx.assets.fileRef(filename))
-      } catch (err) {
-        return {
-          ok: false,
-          reason: `Asset ${filename} (${kind}) not resolvable: ${err instanceof Error ? err.message : String(err)}`,
-        }
+    const assetId = draftAssetId(deliverable, kind)
+    if (assetId) {
+      // Resolve the asset's current version to a file on disk for delivery.
+      const ref = await ctx.assets.resolveVersionFile(assetId)
+      if (!ref) {
+        return { ok: false, reason: `Asset ${assetId} (${kind}) not resolvable` }
       }
+      files.push({ name: `${assetId}${extname(ref.absPath) || extname(basename(ref.absPath))}`, path: ref.absPath, contentType: ref.mimeType })
     } else if (isRequiredAsset(contentType, kind)) {
       return { ok: false, reason: `Required ${kind} asset missing on Deliverable` }
     }

@@ -50,6 +50,27 @@ let getProjectForTask: ProjectService['getProjectForTask']
 let getProjectTitleForTask: ProjectService['getProjectTitleForTask']
 let resolveLinkedTaskStatuses: ProjectService['resolveLinkedTaskStatuses']
 let readProject: ProjectRepository['readProject']
+let ctx: PluginContext
+
+function testAssetSummary(assetId: string) {
+  return {
+    assetId,
+    type: 'images' as const,
+    agent: 'pixel',
+    taskId: null,
+    created: '2026-04-01T00:00:00.000Z',
+    updated: '2026-04-01T00:00:00.000Z',
+    currentVersion: 1,
+    versionCount: 1,
+    description: '',
+    tags: [],
+    mimeType: 'image/png',
+    width: null,
+    height: null,
+    size: 1,
+    hasThumb: false,
+  }
+}
 
 function buildCtx(): PluginContext {
   const tasks = Object.values(mockTaskboardColumns).flat().map((task) => ({
@@ -72,10 +93,11 @@ function buildCtx(): PluginContext {
       appendLog: mock(async () => {}),
     },
     assets: {
-      getByFilename: mock(async () => null),
-      list: mock(async () => []),
-      exists: mock(async () => false),
-      fileRef: mock(async (filename: string) => ({ kind: 'asset' as const, filename })),
+      createAsset: mock(async () => ({ assetId: 'test-asset', version: 1 })),
+      getAsset: mock(async (assetId: string) => testAssetSummary(assetId)),
+      addVersion: mock(async () => ({ assetId: 'test-asset', version: 2 })),
+      addExport: mock(async () => ({ name: 'export', file: 'exports/export.jpg' })),
+      resolveVersionFile: mock(async () => null),
     },
     registerNav: mock(),
     registerRoute: mock(),
@@ -103,7 +125,8 @@ beforeEach(() => {
   mkdirSync(projectsDir, { recursive: true })
   clearIndex()
   repo = createProjectRepository(new MarkdownStorageAdapter(testDir))
-  service = createProjectService(buildCtx(), repo)
+  ctx = buildCtx()
+  service = createProjectService(ctx, repo)
   ;({
     createProject,
     updateProject,
@@ -401,19 +424,27 @@ describe('attachAsset / detachAsset', () => {
   it('attaches and detaches assets', async () => {
     const { id } = await createProject({ title: 'P' })
 
-    await attachAsset(id, '20260401-logo-a1b2c3d4.png', 'Logo')
+    await attachAsset(id, '20260401-logo-a1b2c3d4', 'Logo')
     let project = readProject(id)
     expect(project!.assets).toHaveLength(1)
-    expect(project!.assets[0]).toEqual({ filename: '20260401-logo-a1b2c3d4.png', label: 'Logo' })
+    expect(project!.assets[0]).toEqual({ assetId: '20260401-logo-a1b2c3d4', label: 'Logo' })
 
     // Duplicate attach is ignored
-    await attachAsset(id, '20260401-logo-a1b2c3d4.png')
+    await attachAsset(id, '20260401-logo-a1b2c3d4')
     project = readProject(id)
     expect(project!.assets).toHaveLength(1)
 
-    await detachAsset(id, '20260401-logo-a1b2c3d4.png')
+    await detachAsset(id, '20260401-logo-a1b2c3d4')
     project = readProject(id)
     expect(project!.assets).toHaveLength(0)
+  })
+
+  it('rejects asset attachments that do not exist', async () => {
+    const { id } = await createProject({ title: 'P' })
+    ctx.assets.getAsset = mock(async () => null) as typeof ctx.assets.getAsset
+
+    await expect(attachAsset(id, '20260401-missing-a1b2c3d4')).rejects.toThrow('Asset not found')
+    expect(readProject(id)!.assets).toEqual([])
   })
 
   it('detach no-ops for unattached asset', async () => {

@@ -15,13 +15,15 @@ steps:
           draft: { caption: "<full draft>" }
         }
       Optional, if you want a hero image:
-        1. Save the image asset:
-             bakin_exec_assets_save { filePath, taskId, type: 'images' }
-           returns { filename }
-        2. Push the filename to the Deliverable:
+        1. Generate or import the image as a managed asset:
+             bakin_exec_images_generate { taskId, surface, prompt }
+           If you already have a loose local file, import it:
+             bakin_exec_images_import { taskId, filePath }
+           Both return { assetId }.
+        2. Push the assetId to the Deliverable:
              bakin_exec_messaging_deliverable_update {
                deliverableId,
-               draft: { imageFilename }
+               draft: { imageAssetId }
              }
       Then set this step's output and the workflow will advance to review.
     outputs:
