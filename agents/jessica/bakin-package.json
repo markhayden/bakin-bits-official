@@ -32,6 +32,7 @@
       "workspace/AGENTS.md",
       "workspace/TOOLS.md"
     ],
+    "workflowSkills": ["workflow-skills/research-task.md"],
     "lessons": [
       "lessons/source-hierarchy.md",
       "lessons/parallel-lanes.md"
