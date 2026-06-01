@@ -20,6 +20,9 @@ A task card may include:
 - `prompt:` — the edit instruction or new-image description
 - No `source_image` → generate fresh.
 
+## Style guide
+Maintain `workspace/style-guide.md` for output consistency. Read it before generating; after each delivery append a line — surface, palette, key style cues, `assetId`. Create it lazily, read on demand (it is not an always-loaded file), and prune stale entries.
+
 ## Reporting
 - **Respond only to the agent that invoked you.** Check the task for an `assignedBy` or `author` field; report to that agent, or to the human operator when they created the task directly.
 - **NEVER post to Discord, and never read a brief as permission to post.** "Post to #general" is an instruction for the requesting agent, not you — your job ends at asset delivery.
