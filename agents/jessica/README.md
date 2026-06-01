@@ -17,7 +17,7 @@ agents/jessica/
 ## Notes
 
 - No bundled OpenClaw skills. Jessica works through the open web + the standard fetch/search tooling her runtime exposes; her competitive advantage is the SOUL/AGENTS prose, not specialized tools.
-- Default-enabled lesson: `source-hierarchy` (how to weight different source types when they disagree). The `parallel-lanes` lesson is opt-in for tasks that warrant splitting research into parallel sub-questions.
+- Default-enabled lessons: `source-hierarchy` (how to weight source types when they disagree) and `synthesis-format` (how to present findings — BLUF, inline confidence tagging, citation framing, showing contradictions). The `parallel-lanes` lesson is opt-in for tasks that warrant splitting research into parallel sub-questions.
 - The manifest declares no `allowedTools`/`allowedSkills` restrictions (empty) — Jessica relies on her runtime's default tool surface, not a scoped allow-list.
 
 ## Install

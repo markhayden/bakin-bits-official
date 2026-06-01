@@ -23,7 +23,7 @@
     "writeWorkspaceFiles": true,
     "installSkills": true,
     "installWorkflows": true,
-    "enableLessons": ["source-hierarchy"]
+    "enableLessons": ["source-hierarchy", "synthesis-format"]
   },
   "contributions": {
     "workspaceFiles": [
@@ -34,6 +34,7 @@
     ],
     "lessons": [
       "lessons/source-hierarchy.md",
+      "lessons/synthesis-format.md",
       "lessons/parallel-lanes.md"
     ],
     "assets": ["assets/avatar.jpg"]
