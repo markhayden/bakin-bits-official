@@ -16341,6 +16341,17 @@ function nextTaskItemId(tasks) {
   }
   return `t${String(max + 1).padStart(3, "0")}`;
 }
+function parseAsset(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return null;
+  const raw = value;
+  if (typeof raw.assetId !== "string" || !raw.assetId.trim())
+    return null;
+  return {
+    assetId: raw.assetId.trim(),
+    label: raw.label ? String(raw.label) : undefined
+  };
+}
 function projectPath(id) {
   return `projects/${id}.md`;
 }
@@ -16362,10 +16373,7 @@ function parseProject(content) {
     taskId: t.taskId ? String(t.taskId) : undefined,
     checked: Boolean(t.checked)
   })) : [];
-  const assets = Array.isArray(raw.assets) ? raw.assets.map((a) => ({
-    assetId: String(a.assetId || ""),
-    label: a.label ? String(a.label) : undefined
-  })) : [];
+  const assets = Array.isArray(raw.assets) ? raw.assets.map(parseAsset).filter((asset) => asset !== null) : [];
   const fm = {
     id: String(raw.id || ""),
     title: String(raw.title || ""),
@@ -16762,10 +16770,13 @@ function createProjectService(ctx, repo) {
     });
   }
   async function attachAsset(projectId, assetId, label) {
-    return withProjectLock(() => {
+    return withProjectLock(async () => {
       const project = repo.readProject(projectId);
       if (!project)
         throw new Error(`Project not found: ${projectId}`);
+      const asset = await ctx.assets.getAsset(assetId);
+      if (!asset)
+        throw new Error(`Asset not found: ${assetId}`);
       if (project.assets.some((a) => a.assetId === assetId))
         return;
       project.assets.push({ assetId, label });
@@ -17270,11 +17281,17 @@ var projectsPlugin = {
       const projectId = url2.searchParams.get("projectId") || body.projectId;
       if (!projectId || !body.assetId)
         return json3({ error: "Missing projectId or assetId" }, 400);
-      await attachAsset(projectId, body.assetId, body.label);
-      ctx.activity.audit("asset.attached", "system", { projectId, assetId: body.assetId });
-      ctx.activity.log("system", "Attached asset to project", { taskId: projectId });
-      indexProject(projectId).catch(() => {});
-      return json3({ ok: true });
+      try {
+        await attachAsset(projectId, body.assetId, body.label);
+        ctx.activity.audit("asset.attached", "system", { projectId, assetId: body.assetId });
+        ctx.activity.log("system", "Attached asset to project", { taskId: projectId });
+        indexProject(projectId).catch(() => {});
+        return json3({ ok: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const status = message.startsWith("Project not found") || message.startsWith("Asset not found") ? 404 : 400;
+        return json3({ error: message }, status);
+      }
     };
     ctx.registerRoute({ path: "/:projectId/assets", method: "POST", description: "Attach asset", handler: attachHandler });
     const detachHandler = async (req) => {

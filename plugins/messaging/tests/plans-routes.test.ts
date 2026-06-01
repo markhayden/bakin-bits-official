@@ -156,6 +156,9 @@ describe('Plan routes', () => {
     expect(task?.description).toContain('Plan ID:')
     expect(task?.description).toContain('Deliverable:')
     expect(task?.description).toContain('Channel: blog')
+    expect(task?.description).toContain('bakin_exec_images_generate')
+    expect(task?.description).toContain('imageAssetId')
+    expect(task?.description).not.toContain("bakin_exec_assets_save { filePath, taskId, type: 'images' }")
 
     const repeated = await callRoute(activateRoute, plugin.ctx, { searchParams: { id: plan.id as string } })
     expect(repeated.body.alreadyActivated).toBe(true)

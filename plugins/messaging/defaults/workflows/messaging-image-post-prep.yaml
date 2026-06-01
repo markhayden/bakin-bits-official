@@ -22,9 +22,11 @@ steps:
     agent: $assigned
     description: |
       Produce or attach the image asset. Required steps:
-        1. Save the image asset:
-             bakin_exec_assets_save { filePath, taskId, type: 'images' }
-           returns { assetId }
+        1. Generate or import the image as a managed asset:
+             bakin_exec_images_generate { taskId, surface, prompt }
+           If you already have a loose local file, import it:
+             bakin_exec_images_import { taskId, filePath }
+           Both return { assetId }.
         2. Push the assetId to the Deliverable:
              bakin_exec_messaging_deliverable_update {
                deliverableId,

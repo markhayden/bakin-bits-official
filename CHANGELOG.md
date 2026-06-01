@@ -13,7 +13,15 @@ on a per-plugin basis: each plugin tags its own releases as
   versioned-asset model — image tools now return/take a stable `assetId`
   (not a filename), `bakin_exec_images_edit` takes `assetId` (import a loose
   local file first), edits append a new version to the same asset, and Pixel
-  reports `assetId` back to the invoking agent. Package bumped to `0.2.1`.
+  reports `assetId` back to the invoking agent. Package bumped to `0.3.0`.
+- `rolo`: cut video handoff docs over to managed asset ids — final video files
+  should be saved through the asset API and reported as `assetId`, not local
+  paths. Package bumped to `0.1.0`.
+- `projects`: hard-cut project asset references to managed versioned `assetId`s,
+  reject unknown legacy filename attachments, and preview non-image asset types
+  without routing them through the image lightbox. Package bumped to `0.1.0`.
+- `messaging`: hard-cut image prep prompts to the image asset tools and clean
+  deliverable fixtures/docs to use managed asset ids. Package bumped to `0.1.0`.
 - Reset official plugin and agent package versions to `0.0.1` for the Bakin `0.0.1` release train.
 - Allow Bakin `0.0.1-rc.1` and newer in official plugin and agent package compatibility ranges.
 - Align official plugin SDK peer dependency ranges with the `@makinbakin/sdk` release candidate.
@@ -38,7 +46,7 @@ on a per-plugin basis: each plugin tags its own releases as
 - `patch`: initial agent package added (#10).
 - `pixel`: route image generation through the core images plugin
   (`bakin_exec_images_generate`) instead of the raw nano-banana-pro script —
-  returns the managed `image_filename` with generation provenance; nano-banana
+  returns the managed asset id with generation provenance; nano-banana
   retained for edits and multi-image composition (then imported as a managed
   asset). Package version bumped to `0.1.0` (#41).
 - `pixel`: adopt `bakin_exec_images_edit` for single-image edits (multi-image
@@ -50,7 +58,6 @@ on a per-plugin basis: each plugin tags its own releases as
   more harm than good at this stage. Agents now have unrestricted exec-tool
   access; tighter per-agent scoping will be revisited once a denial surfaces
   to the agent instead of failing silently. (`patch` was already unrestricted.)
-  Versions bumped: `jessica` → `0.0.3`, `rolo` → `0.0.3` (`pixel` stays at the
-  unreleased `0.2.0`).
+  Versions bumped: `jessica` → `0.0.3`, `rolo` → `0.1.0`, `pixel` → `0.3.0`.
 
 [Unreleased]: https://github.com/markhayden/bakin-bits-official/commits/main

@@ -542,33 +542,6 @@ declare module '@makinbakin/sdk/types' {
     query(params: SearchQueryParams): Promise<SearchResponse>
   }
 
-  export interface AssetVariantMeta {
-    role: 'thumbnail' | 'optimized' | 'webp'
-    path: string
-    filename: string
-    size: number
-    mimeType: string
-  }
-
-  export interface AssetMeta {
-    path: string
-    filename: string
-    type: 'text' | 'images' | 'video' | 'audio' | 'plans' | 'research' | 'pdf' | 'data' | 'other'
-    mimeType: string
-    size: number
-    mtimeMs?: number
-    metadata: {
-      agent: string
-      taskId: string | null
-      created: string
-      tool?: string
-      description?: string
-      tags?: string[]
-      originalFilename?: string
-    }
-    variants?: AssetVariantMeta[]
-  }
-
   export type AssetTypeName = 'text' | 'images' | 'video' | 'audio' | 'plans' | 'research' | 'pdf' | 'data' | 'other'
 
   export interface AssetGenerationInfo {

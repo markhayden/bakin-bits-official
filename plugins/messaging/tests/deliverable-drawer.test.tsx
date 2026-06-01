@@ -106,16 +106,16 @@ describe('DeliverableDrawer', () => {
       <DeliverableDrawer
         deliverable={makeDeliverable({
           status: 'failed',
-          draft: { imageAssetId: 'hero image.png', caption: 'Caption' },
-          failureReason: 'Asset hero image.png (image) not resolvable: missing',
+          draft: { imageAssetId: '20260525-hero-a1b2c3d4', caption: 'Caption' },
+          failureReason: 'Asset 20260525-hero-a1b2c3d4 (image) not resolvable: missing',
         })}
         open
         onClose={mock()}
       />,
     )
 
-    const img = screen.getByAltText('hero image.png') as HTMLImageElement
-    expect(img.src).toContain('/api/assets/hero%20image.png')
+    const img = screen.getByAltText('20260525-hero-a1b2c3d4') as HTMLImageElement
+    expect(img.src).toContain('/api/assets/20260525-hero-a1b2c3d4')
     expect(screen.getByText('Failure reason')).toBeDefined()
     expect(screen.getByText(/not resolvable/)).toBeDefined()
   })
@@ -124,7 +124,7 @@ describe('DeliverableDrawer', () => {
     const onUpdated = mock()
     render(
       <DeliverableDrawer
-        deliverable={makeDeliverable({ draft: { imageAssetId: 'hero.png' } })}
+        deliverable={makeDeliverable({ draft: { imageAssetId: '20260525-hero-a1b2c3d4' } })}
         open
         onClose={mock()}
         onUpdated={onUpdated}

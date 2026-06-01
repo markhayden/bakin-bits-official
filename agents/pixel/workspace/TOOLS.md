@@ -20,7 +20,7 @@ Things like:
 ### Image generation
 
 - Default: `bakin_exec_images_generate` (routes, sizes to a surface, saves a managed asset)
-- nano-banana-pro (Gemini via `GEMINI_API_KEY`): only for edits / multi-image, then import the result
+- nano-banana-pro (Gemini via `GEMINI_API_KEY`): only for multi-image composition, then import the result and report the managed `assetId`
 - Default surface: pick from the brief (e.g. instagram-feed-portrait, blog-hero)
 ```
 

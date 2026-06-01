@@ -117,6 +117,33 @@ function writeProjectFixture(
   writeFileSync(join(projectsDir, `${id}.md`), content, 'utf-8')
 }
 
+function testAssetSummary(assetId: string) {
+  return {
+    assetId,
+    type: 'images' as const,
+    agent: 'pixel',
+    taskId: null,
+    created: '2026-04-01T00:00:00.000Z',
+    updated: '2026-04-01T00:00:00.000Z',
+    currentVersion: 1,
+    versionCount: 1,
+    description: '',
+    tags: [],
+    mimeType: 'image/png',
+    width: null,
+    height: null,
+    size: 1,
+    hasThumb: false,
+  }
+}
+
+const KNOWN_ASSET_IDS = new Set([
+  '20260401-spec-abcdef12',
+  '20260401-logo-abcdef12',
+  '20260401-brief-abcdef12',
+  '20260401-x-abcdef12',
+])
+
 // ---------------------------------------------------------------------------
 // Setup / Teardown
 // ---------------------------------------------------------------------------
@@ -186,6 +213,9 @@ beforeEach(async () => {
   if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true })
   mkdirSync(projectsDir, { recursive: true })
   plugin = await activatePlugin(projectsPlugin, testDir)
+  plugin.ctx.assets.getAsset = mock(async (assetId: string) => (
+    KNOWN_ASSET_IDS.has(assetId) ? testAssetSummary(assetId) : null
+  )) as typeof plugin.ctx.assets.getAsset
 })
 
 afterAll(() => {
@@ -594,10 +624,32 @@ describe('Routes', () => {
       expect(route).toBeDefined()
       const { status, body } = await callRoute(route, plugin.ctx, {
         searchParams: { projectId: 'proj-att' },
-        body: { assetId: '20260401-spec-abcdef12.md', label: 'Spec doc' },
+        body: { assetId: '20260401-spec-abcdef12', label: 'Spec doc' },
       })
       expect(status).toBe(200)
       expect(body.ok).toBe(true)
+    })
+
+    it('rejects unknown or legacy filename asset ids', async () => {
+      writeProjectFixture('proj-att-missing', { title: 'Attach Project' })
+
+      const route = findRoute(plugin.routes, 'POST', '/:projectId/assets')!
+      const missing = await callRoute(route, plugin.ctx, {
+        searchParams: { projectId: 'proj-att-missing' },
+        body: { assetId: '20260401-missing-deadbeef' },
+      })
+      const legacy = await callRoute(route, plugin.ctx, {
+        searchParams: { projectId: 'proj-att-missing' },
+        body: { assetId: 'old-hero.png' },
+      })
+
+      expect(missing.status).toBe(404)
+      expect(missing.body.error).toContain('Asset not found')
+      expect(legacy.status).toBe(404)
+      expect(legacy.body.error).toContain('Asset not found')
+
+      const repo = createProjectRepository(new MarkdownStorageAdapter(testDir))
+      expect(repo.readProject('proj-att-missing')!.assets).toEqual([])
     })
 
     it('returns 400 when projectId or assetId is missing', async () => {
@@ -616,13 +668,13 @@ describe('Routes', () => {
     it('detaches an asset from a project', async () => {
       writeProjectFixture('proj-det', {
         title: 'Detach Project',
-        assets: [{ assetId: '20260401-spec-abcdef12.md', label: 'Spec' }],
+        assets: [{ assetId: '20260401-spec-abcdef12', label: 'Spec' }],
       })
 
       const route = findRoute(plugin.routes, 'DELETE', '/:projectId/assets/:assetId')!
       expect(route).toBeDefined()
       const { status, body } = await callRoute(route, plugin.ctx, {
-        searchParams: { projectId: 'proj-det', assetId: '20260401-spec-abcdef12.md' },
+        searchParams: { projectId: 'proj-det', assetId: '20260401-spec-abcdef12' },
       })
       expect(status).toBe(200)
       expect(body.ok).toBe(true)
@@ -643,7 +695,7 @@ describe('Routes', () => {
       writeProjectFixture('proj-ask', {
         title: 'Ask Project',
         tasks: [{ id: 't001', title: 'Do stuff', checked: true }],
-        assets: [{ assetId: '20260401-brief-abcdef12.md', label: 'Brief' }],
+        assets: [{ assetId: '20260401-brief-abcdef12', label: 'Brief' }],
       })
       const streamMock = mockRuntimeStream(['Hel', 'lo ', 'world'])
 
@@ -1263,7 +1315,7 @@ describe('Exec Tools', () => {
       expect(tool).toBeDefined()
       const result = await callTool(tool, {
         projectId: 'proj-aa',
-        assetId: '20260401-logo-abcdef12.png',
+        assetId: '20260401-logo-abcdef12',
         label: 'Logo',
       })
       expect(result.ok).toBe(true)
@@ -1271,7 +1323,7 @@ describe('Exec Tools', () => {
 
     it('returns error for non-existent project', async () => {
       const tool = findTool(plugin.execTools, 'bakin_exec_projects_attach_asset')!
-      const result = await callTool(tool, { projectId: 'ghost', assetId: '20260401-x-abcdef12.md' })
+      const result = await callTool(tool, { projectId: 'ghost', assetId: '20260401-x-abcdef12' })
       expect(result.ok).toBe(false)
       expect(result.error).toMatch(/not found/i)
     })
@@ -1284,18 +1336,18 @@ describe('Exec Tools', () => {
     it('detaches an asset', async () => {
       writeProjectFixture('proj-da', {
         title: 'Detach Asset',
-        assets: [{ assetId: '20260401-brief-abcdef12.md', label: 'Brief' }],
+        assets: [{ assetId: '20260401-brief-abcdef12', label: 'Brief' }],
       })
 
       const tool = findTool(plugin.execTools, 'bakin_exec_projects_detach_asset')!
       expect(tool).toBeDefined()
-      const result = await callTool(tool, { projectId: 'proj-da', assetId: '20260401-brief-abcdef12.md' })
+      const result = await callTool(tool, { projectId: 'proj-da', assetId: '20260401-brief-abcdef12' })
       expect(result.ok).toBe(true)
     })
 
     it('returns error for non-existent project', async () => {
       const tool = findTool(plugin.execTools, 'bakin_exec_projects_detach_asset')!
-      const result = await callTool(tool, { projectId: 'ghost', assetId: '20260401-x-abcdef12.md' })
+      const result = await callTool(tool, { projectId: 'ghost', assetId: '20260401-x-abcdef12' })
       expect(result.ok).toBe(false)
       expect(result.error).toMatch(/not found/i)
     })

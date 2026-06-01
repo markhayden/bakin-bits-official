@@ -27,6 +27,16 @@ export function nextTaskItemId(tasks: ProjectTask[]): string {
   return `t${String(max + 1).padStart(3, '0')}`
 }
 
+function parseAsset(value: unknown): ProjectAsset | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const raw = value as Record<string, unknown>
+  if (typeof raw.assetId !== 'string' || !raw.assetId.trim()) return null
+  return {
+    assetId: raw.assetId.trim(),
+    label: raw.label ? String(raw.label) : undefined,
+  }
+}
+
 function projectPath(id: string): string {
   return `projects/${id}.md`
 }
@@ -61,10 +71,7 @@ export function parseProject(content: string): Project {
     : []
 
   const assets: ProjectAsset[] = Array.isArray(raw.assets)
-    ? raw.assets.map((a: Record<string, unknown>) => ({
-        assetId: String(a.assetId || ''),
-        label: a.label ? String(a.label) : undefined,
-      }))
+    ? raw.assets.map(parseAsset).filter((asset): asset is ProjectAsset => asset !== null)
     : []
 
   const fm: ProjectFrontmatter = {

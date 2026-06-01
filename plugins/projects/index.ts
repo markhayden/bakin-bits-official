@@ -441,11 +441,17 @@ const projectsPlugin: BakinPlugin = {
       const body = await readBody<{ projectId?: string; assetId?: string; label?: string }>(req)
       const projectId = url.searchParams.get('projectId') || body.projectId
       if (!projectId || !body.assetId) return json({ error: 'Missing projectId or assetId' }, 400)
-      await attachAsset(projectId, body.assetId, body.label)
-      ctx.activity.audit('asset.attached', 'system', { projectId, assetId: body.assetId })
-      ctx.activity.log('system', 'Attached asset to project', { taskId: projectId })
-      indexProject(projectId).catch(() => {})
-      return json({ ok: true })
+      try {
+        await attachAsset(projectId, body.assetId, body.label)
+        ctx.activity.audit('asset.attached', 'system', { projectId, assetId: body.assetId })
+        ctx.activity.log('system', 'Attached asset to project', { taskId: projectId })
+        indexProject(projectId).catch(() => {})
+        return json({ ok: true })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        const status = message.startsWith('Project not found') || message.startsWith('Asset not found') ? 404 : 400
+        return json({ error: message }, status)
+      }
     }
     ctx.registerRoute({ path: '/:projectId/assets', method: 'POST', description: 'Attach asset', handler: attachHandler })
 

@@ -352,9 +352,11 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
   }
 
   async function attachAsset(projectId: string, assetId: string, label?: string): Promise<void> {
-    return withProjectLock(() => {
+    return withProjectLock(async () => {
       const project = repo.readProject(projectId)
       if (!project) throw new Error(`Project not found: ${projectId}`)
+      const asset = await ctx.assets.getAsset(assetId)
+      if (!asset) throw new Error(`Asset not found: ${assetId}`)
       if (project.assets.some(a => a.assetId === assetId)) return
       project.assets.push({ assetId, label })
       project.updated = new Date().toISOString()

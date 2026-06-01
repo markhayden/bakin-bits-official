@@ -871,6 +871,8 @@ var STATUS_CONFIG = {
   archived: { label: "Archived", dot: "bg-zinc-600" }
 };
 var IMAGE_TYPES = new Set(["images", "image"]);
+var VIDEO_TYPES = new Set(["video"]);
+var AUDIO_TYPES = new Set(["audio"]);
 var ASSET_ICONS = {
   text: FileText,
   images: Image,
@@ -917,6 +919,115 @@ function PickerThumb({ asset }) {
     }, undefined, false, undefined, this)
   }, undefined, false, undefined, this);
 }
+function assetUrl(assetId) {
+  return `/api/assets/${encodeURIComponent(assetId)}`;
+}
+function assetHref(assetId) {
+  return `/assets/${encodeURIComponent(assetId)}`;
+}
+function assetName(asset) {
+  return asset.label || asset.assetId;
+}
+function AssetPreviewModal({ asset, onClose }) {
+  const name = assetName(asset);
+  const url = assetUrl(asset.assetId);
+  const href = assetHref(asset.assetId);
+  useEffect3(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape")
+        onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+  return /* @__PURE__ */ jsxDEV7("div", {
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-label": name,
+    className: "fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/80 p-8",
+    onClick: onClose,
+    children: /* @__PURE__ */ jsxDEV7("div", {
+      className: "flex max-h-[84vh] max-w-[90vw] flex-col items-center gap-3",
+      onClick: (e) => e.stopPropagation(),
+      children: [
+        IMAGE_TYPES.has(asset.type) ? /* @__PURE__ */ jsxDEV7("img", {
+          src: url,
+          alt: name,
+          className: "max-h-[80vh] max-w-[90vw] rounded object-contain"
+        }, undefined, false, undefined, this) : VIDEO_TYPES.has(asset.type) ? /* @__PURE__ */ jsxDEV7("video", {
+          src: url,
+          controls: true,
+          className: "max-h-[80vh] max-w-[90vw] rounded bg-black"
+        }, undefined, false, undefined, this) : AUDIO_TYPES.has(asset.type) ? /* @__PURE__ */ jsxDEV7("div", {
+          className: "w-[min(90vw,520px)] rounded-lg border border-[rgba(255,255,255,0.10)] bg-zinc-950 p-4",
+          children: [
+            /* @__PURE__ */ jsxDEV7("div", {
+              className: "mb-3 flex items-center gap-2 text-sm text-zinc-200",
+              children: [
+                /* @__PURE__ */ jsxDEV7(AssetIcon, {
+                  type: asset.type
+                }, undefined, false, undefined, this),
+                /* @__PURE__ */ jsxDEV7("span", {
+                  className: "truncate",
+                  children: name
+                }, undefined, false, undefined, this)
+              ]
+            }, undefined, true, undefined, this),
+            /* @__PURE__ */ jsxDEV7("audio", {
+              src: url,
+              controls: true,
+              className: "w-full"
+            }, undefined, false, undefined, this)
+          ]
+        }, undefined, true, undefined, this) : /* @__PURE__ */ jsxDEV7("div", {
+          className: "flex w-[min(90vw,420px)] flex-col items-center gap-3 rounded-lg border border-[rgba(255,255,255,0.10)] bg-zinc-950 p-6 text-center",
+          children: [
+            /* @__PURE__ */ jsxDEV7("div", {
+              className: "flex size-12 items-center justify-center rounded bg-zinc-900",
+              children: /* @__PURE__ */ jsxDEV7(AssetIcon, {
+                type: asset.type
+              }, undefined, false, undefined, this)
+            }, undefined, false, undefined, this),
+            /* @__PURE__ */ jsxDEV7("div", {
+              className: "min-w-0",
+              children: [
+                /* @__PURE__ */ jsxDEV7("p", {
+                  className: "truncate text-sm font-medium text-zinc-200",
+                  children: name
+                }, undefined, false, undefined, this),
+                /* @__PURE__ */ jsxDEV7("p", {
+                  className: "mt-1 text-xs text-zinc-500",
+                  children: asset.type
+                }, undefined, false, undefined, this)
+              ]
+            }, undefined, true, undefined, this)
+          ]
+        }, undefined, true, undefined, this),
+        /* @__PURE__ */ jsxDEV7("div", {
+          className: "flex items-center gap-4 text-sm text-zinc-300",
+          children: [
+            /* @__PURE__ */ jsxDEV7("a", {
+              href,
+              className: "underline hover:text-white",
+              children: "Open asset"
+            }, undefined, false, undefined, this),
+            /* @__PURE__ */ jsxDEV7("button", {
+              type: "button",
+              onClick: onClose,
+              className: "flex items-center gap-1 hover:text-white",
+              children: [
+                /* @__PURE__ */ jsxDEV7(X, {
+                  className: "size-4"
+                }, undefined, false, undefined, this),
+                " Close"
+              ]
+            }, undefined, true, undefined, this)
+          ]
+        }, undefined, true, undefined, this)
+      ]
+    }, undefined, true, undefined, this)
+  }, undefined, false, undefined, this);
+}
 function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange }) {
   const router = useRouter2();
   const isNew = !projectId;
@@ -936,7 +1047,7 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
   const [assetPickerOpen, setAssetPickerOpen] = useState4(false);
   const [assetSearch, setAssetSearch] = useState4("");
   const [availableAssets, setAvailableAssets] = useState4([]);
-  const [previewAssetId, setPreviewAssetId] = useState4(null);
+  const [previewAsset, setPreviewAsset] = useState4(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState4(false);
   const [deleting, setDeleting] = useState4(false);
   const fetchProject = useCallback2(async (enterEdit2) => {
@@ -1472,42 +1583,52 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
                   }, undefined, false, undefined, this) : /* @__PURE__ */ jsxDEV7("div", {
                     className: "space-y-1.5",
                     children: project.resolvedAssets.map((asset) => /* @__PURE__ */ jsxDEV7("div", {
-                      className: `group flex items-start gap-2.5 p-1.5 rounded-lg hover:bg-zinc-800/40 transition-colors ${asset.missing ? "opacity-40 pointer-events-none" : "cursor-pointer"}`,
-                      onClick: () => !asset.missing && setPreviewAssetId(asset.assetId),
+                      className: `group flex items-start gap-2.5 rounded-lg p-1.5 transition-colors hover:bg-zinc-800/40 ${asset.missing ? "opacity-40" : ""}`,
                       children: [
-                        /* @__PURE__ */ jsxDEV7(AssetThumb, {
-                          asset
-                        }, undefined, false, undefined, this),
-                        /* @__PURE__ */ jsxDEV7("div", {
-                          className: "flex-1 min-w-0 pt-0.5",
+                        /* @__PURE__ */ jsxDEV7("button", {
+                          type: "button",
+                          disabled: asset.missing,
+                          onClick: () => setPreviewAsset(asset),
+                          "aria-label": `Open ${assetName(asset)}`,
+                          className: "flex min-w-0 flex-1 items-start gap-2.5 text-left disabled:cursor-default",
                           children: [
-                            /* @__PURE__ */ jsxDEV7("p", {
-                              className: "text-[11px] text-zinc-300 truncate leading-tight",
-                              children: asset.label || asset.assetId
+                            /* @__PURE__ */ jsxDEV7(AssetThumb, {
+                              asset
                             }, undefined, false, undefined, this),
-                            asset.description && /* @__PURE__ */ jsxDEV7("p", {
-                              className: "text-[10px] text-zinc-600 truncate mt-0.5",
-                              children: asset.description
-                            }, undefined, false, undefined, this),
-                            asset.tags && asset.tags.length > 0 && /* @__PURE__ */ jsxDEV7("div", {
-                              className: "flex gap-1 mt-1 flex-wrap",
-                              children: asset.tags.slice(0, 3).map((tag) => /* @__PURE__ */ jsxDEV7("span", {
-                                className: "text-[9px] px-1 py-0.5 rounded bg-zinc-800/60 text-zinc-500",
-                                children: tag
-                              }, tag, false, undefined, this))
-                            }, undefined, false, undefined, this),
-                            asset.missing && /* @__PURE__ */ jsxDEV7("span", {
-                              className: "text-[10px] text-amber-500/70",
-                              children: "missing"
-                            }, undefined, false, undefined, this)
+                            /* @__PURE__ */ jsxDEV7("div", {
+                              className: "min-w-0 flex-1 pt-0.5",
+                              children: [
+                                /* @__PURE__ */ jsxDEV7("p", {
+                                  className: "truncate text-[11px] leading-tight text-zinc-300",
+                                  children: assetName(asset)
+                                }, undefined, false, undefined, this),
+                                asset.description && /* @__PURE__ */ jsxDEV7("p", {
+                                  className: "mt-0.5 truncate text-[10px] text-zinc-600",
+                                  children: asset.description
+                                }, undefined, false, undefined, this),
+                                asset.tags && asset.tags.length > 0 && /* @__PURE__ */ jsxDEV7("div", {
+                                  className: "mt-1 flex flex-wrap gap-1",
+                                  children: asset.tags.slice(0, 3).map((tag) => /* @__PURE__ */ jsxDEV7("span", {
+                                    className: "rounded bg-zinc-800/60 px-1 py-0.5 text-[9px] text-zinc-500",
+                                    children: tag
+                                  }, tag, false, undefined, this))
+                                }, undefined, false, undefined, this),
+                                asset.missing && /* @__PURE__ */ jsxDEV7("span", {
+                                  className: "text-[10px] text-amber-500/70",
+                                  children: "missing"
+                                }, undefined, false, undefined, this)
+                              ]
+                            }, undefined, true, undefined, this)
                           ]
                         }, undefined, true, undefined, this),
                         /* @__PURE__ */ jsxDEV7("button", {
+                          type: "button",
                           onClick: (e) => {
                             e.stopPropagation();
                             handleDetachAsset(asset.assetId);
                           },
                           className: "opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 transition-all shrink-0 mt-1",
+                          "aria-label": `Detach ${assetName(asset)}`,
                           children: /* @__PURE__ */ jsxDEV7(X, {
                             className: "size-3"
                           }, undefined, false, undefined, this)
@@ -1643,39 +1764,10 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
           }, undefined, true, undefined, this)
         ]
       }, undefined, true, undefined, this),
-      previewAssetId && /* @__PURE__ */ jsxDEV7("div", {
-        className: "fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/80 p-8",
-        onClick: () => setPreviewAssetId(null),
-        children: [
-          /* @__PURE__ */ jsxDEV7("img", {
-            src: `/api/assets/${encodeURIComponent(previewAssetId)}`,
-            alt: previewAssetId,
-            className: "max-h-[80vh] max-w-[90vw] rounded object-contain",
-            onClick: (e) => e.stopPropagation()
-          }, undefined, false, undefined, this),
-          /* @__PURE__ */ jsxDEV7("div", {
-            className: "flex items-center gap-4 text-sm text-zinc-300",
-            onClick: (e) => e.stopPropagation(),
-            children: [
-              /* @__PURE__ */ jsxDEV7("a", {
-                href: `/assets/${encodeURIComponent(previewAssetId)}`,
-                className: "underline hover:text-white",
-                children: "View asset →"
-              }, undefined, false, undefined, this),
-              /* @__PURE__ */ jsxDEV7("button", {
-                onClick: () => setPreviewAssetId(null),
-                className: "flex items-center gap-1 hover:text-white",
-                children: [
-                  /* @__PURE__ */ jsxDEV7(X, {
-                    className: "size-4"
-                  }, undefined, false, undefined, this),
-                  " Close"
-                ]
-              }, undefined, true, undefined, this)
-            ]
-          }, undefined, true, undefined, this)
-        ]
-      }, undefined, true, undefined, this)
+      previewAsset && /* @__PURE__ */ jsxDEV7(AssetPreviewModal, {
+        asset: previewAsset,
+        onClose: () => setPreviewAsset(null)
+      }, undefined, false, undefined, this)
     ]
   }, undefined, true, undefined, this);
 }

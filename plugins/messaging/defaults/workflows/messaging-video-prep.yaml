@@ -17,7 +17,7 @@ steps:
     agent: $assigned
     description: |
       Produce or attach a video asset matching the script. Required steps:
-        1. Save the video asset:
+        1. Save the final video as a managed asset:
              bakin_exec_assets_save { filePath, taskId, type: 'video' }
            returns { assetId }
         2. Push the assetId to the Deliverable so messaging can publish it:
