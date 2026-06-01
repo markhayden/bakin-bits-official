@@ -190,6 +190,34 @@ describe("agent package contracts", () => {
     }
   });
 
+  it("install.enableLessons matches lessons marked defaultEnabled", () => {
+    for (const agentId of agentIds) {
+      const manifest = readManifest(agentId);
+      const lessonPaths = manifest.contributions?.lessons ?? [];
+      const defaultEnabled: string[] = [];
+      for (const lessonPath of lessonPaths) {
+        const slug = lessonPath.replace(/^.*\//, "").replace(/\.md$/i, "");
+        const content = readFileSync(
+          join(agentsRoot, agentId, lessonPath),
+          "utf-8",
+        );
+        const frontmatter = content.match(/^---\n([\s\S]*?)\n---/);
+        const isEnabled = frontmatter
+          ? /(^|\n)\s*defaultEnabled:\s*true\b/i.test(frontmatter[1])
+          : false;
+        if (isEnabled) defaultEnabled.push(slug);
+      }
+      const enableLessons =
+        ((manifest.install as Record<string, unknown> | undefined)
+          ?.enableLessons as string[] | undefined) ?? [];
+      expect(
+        [...enableLessons].sort(),
+        `${agentId}: install.enableLessons must equal the lessons whose frontmatter sets defaultEnabled: true ` +
+          `(enableLessons=${JSON.stringify([...enableLessons].sort())}, defaultEnabled=${JSON.stringify([...defaultEnabled].sort())})`,
+      ).toEqual([...defaultEnabled].sort());
+    }
+  });
+
   it("rolo declares required runtime secrets without values", () => {
     const manifest = readManifest("rolo");
 
