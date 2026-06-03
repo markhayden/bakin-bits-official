@@ -53,7 +53,9 @@ The header-level Quick Post action creates a free-floating Deliverable with
    creating Plan-owned Deliverables. Activation creates one Deliverable and
    one Bakin kickoff task per configured channel. The kickoff task is scheduled
    with `availableAt = prepStartAt`, `dueAt = publishAt`, and a `source`
-   pointing back to the Deliverable.
+   pointing back to the Deliverable. Workflow-backed Deliverables start
+   `planned`; bare-task Deliverables start `in_prep` so their agents can mark
+   saved drafts ready for review.
 5. The task dispatcher picks up each kickoff task only after `availableAt`.
    Content types with `workflowId` use workflow-backed prep; others use bare
    Bakin tasks.
@@ -72,6 +74,11 @@ offer one explicit recovery action:
   Deliverables through `workflows.reopenFromStep`.
 - `Retry delivery` for channel delivery failures, with confirmation because it
   may publish or send externally.
+
+When workflow completion reaches publishing and validation or external delivery
+fails, Messaging creates or reuses a blocked repair task with
+`source.purpose = "publish-failure"` so the failure remains visible even if the
+workflow task has already moved to `done`.
 
 ## Content Types
 

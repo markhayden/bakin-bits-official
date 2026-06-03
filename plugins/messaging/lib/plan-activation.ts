@@ -162,7 +162,7 @@ export async function activatePlan(
         brief: channel.brief ?? plan.brief,
         publishAt,
         prepStartAt,
-        status: 'planned',
+        status: workflowId ? 'planned' : 'in_prep',
       })
       createdDeliverableIds.push(deliverable.id)
 

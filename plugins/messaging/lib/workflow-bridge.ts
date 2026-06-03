@@ -52,6 +52,63 @@ function recomputeDeliverablePlan(store: MessagingContentStorage, deliverable: D
   if (deliverable.planId) recomputePlanStatus(store, deliverable.planId)
 }
 
+const PUBLISH_FAILURE_TASK_PURPOSE = 'publish-failure'
+const CLOSED_TASK_COLUMNS = new Set(['done', 'archived'])
+
+async function ensureWorkflowPublishFailureTask(ctx: PluginContext, deliverable: Deliverable, reason: string): Promise<void> {
+  const source = {
+    pluginId: 'messaging',
+    entityType: 'deliverable',
+    entityId: deliverable.id,
+    purpose: PUBLISH_FAILURE_TASK_PURPOSE,
+  }
+  try {
+    const tasks = await ctx.tasks.list()
+    const existing = tasks.find(task =>
+      task.source?.pluginId === source.pluginId &&
+      task.source?.entityType === source.entityType &&
+      task.source?.entityId === source.entityId &&
+      task.source?.purpose === source.purpose &&
+      !CLOSED_TASK_COLUMNS.has(task.column),
+    )
+    const task = existing ?? await ctx.tasks.create({
+      title: `Repair failed publish: ${deliverable.title}`,
+      description: [
+        `Deliverable: ${deliverable.id}`,
+        `Original task: ${deliverable.taskId ?? 'none'}`,
+        `Channel: ${deliverable.channel}`,
+        `Failure: ${reason}`,
+        '',
+        'Review the failed Deliverable, then retry delivery or reopen prep.',
+      ].join('\n'),
+      column: 'blocked',
+      agent: deliverable.agent,
+      createdBy: 'messaging',
+      source,
+    })
+    await ctx.tasks.update(task.id, { column: 'blocked', blockedReason: reason })
+    await ctx.tasks.appendLog(task.id, {
+      timestamp: new Date().toISOString(),
+      author: 'system',
+      message: `Publish failed after workflow completion: ${reason}`,
+      data: { deliverableId: deliverable.id, originalTaskId: deliverable.taskId },
+    })
+    if (!existing) {
+      ctx.activity.audit('deliverable.publish_failure_task_created', 'system', {
+        deliverableId: deliverable.id,
+        taskId: task.id,
+        originalTaskId: deliverable.taskId,
+      })
+    }
+  } catch (err) {
+    ctx.activity.audit('deliverable.publish_failure_task_failed', 'system', {
+      deliverableId: deliverable.id,
+      originalTaskId: deliverable.taskId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
 async function notifyWorkflowFailure(ctx: PluginContext, deliverable: Deliverable, reason: string): Promise<void> {
   try {
     await ctx.runtime.channels.sendMessage({
@@ -189,6 +246,7 @@ export async function handleWorkflowComplete(
     const contentType = contentTypeFor(settings, deliverable.contentType)
     const result = await publishDeliverableNow(store, deliverable, contentType, ctx)
     recomputeDeliverablePlan(store, result.deliverable)
+    if (!result.ok) await ensureWorkflowPublishFailureTask(ctx, result.deliverable, result.reason)
     return result.deliverable
   }
 
@@ -204,6 +262,7 @@ export async function handleWorkflowComplete(
     recomputeDeliverablePlan(store, failed)
     ctx.activity.audit('deliverable.workflow_complete_unapproved', 'system', { deliverableId: failed.id, taskId, reason })
     ctx.activity.log(failed.agent, `Workflow completed before approval for "${failed.title}": ${reason}`)
+    await ensureWorkflowPublishFailureTask(ctx, failed, reason)
     await notifyWorkflowFailure(ctx, failed, reason)
     return failed
   }
