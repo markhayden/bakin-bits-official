@@ -194,6 +194,24 @@ describe('messaging workflow bridge', () => {
     expect(saved.failureReason).toBe('Required image asset missing on Deliverable')
     expect(saved.failureStage).toBe('validation')
     expect(store.getPlan('plan-1')?.status).toBe('failed')
+
+    const tasks = await ctx.tasks.list()
+    const repairTask = tasks.find(task => task.source?.purpose === 'publish-failure')
+    expect(repairTask).toEqual(expect.objectContaining({
+      title: 'Repair failed publish: Taco blog',
+      column: 'blocked',
+      agent: 'basil',
+      createdBy: 'messaging',
+      blockedReason: 'Required image asset missing on Deliverable',
+      source: {
+        pluginId: 'messaging',
+        entityType: 'deliverable',
+        entityId: 'deliverable-1',
+        purpose: 'publish-failure',
+      },
+    }))
+    expect(repairTask?.description).toContain('Original task: task-1')
+    expect(repairTask?.log?.at(-1)?.message).toBe('Publish failed after workflow completion: Required image asset missing on Deliverable')
   }))
 
   it('marks workflow completion before approval as failed', async () => withStore(async (store, ctx) => {

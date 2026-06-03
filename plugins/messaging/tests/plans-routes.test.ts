@@ -131,6 +131,13 @@ describe('Plan routes', () => {
     expect((activated.body.plan as Record<string, unknown>).status).toBe('in_prep')
     expect((activated.body.deliverables as unknown[]).length).toBe(2)
     expect((activated.body.taskIds as unknown[]).length).toBe(2)
+    expect((activated.body.deliverables as Array<Record<string, unknown>>).map(deliverable => ({
+      channel: deliverable.channel,
+      status: deliverable.status,
+    }))).toEqual([
+      { channel: 'blog', status: 'planned' },
+      { channel: 'general', status: 'in_prep' },
+    ])
     expect(plugin.ctx.tasks.create).toHaveBeenCalledWith(expect.objectContaining({
       parentId: null,
       agent: 'basil',
