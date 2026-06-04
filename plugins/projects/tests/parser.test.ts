@@ -169,7 +169,7 @@ describe('parseProject', () => {
     expect(project.assets[1]).toEqual({ assetId: '20260401-spec-e5f6a7b8', label: undefined })
   })
 
-  it('drops legacy filename-only asset entries', () => {
+  it('keeps legacy filename-only asset entries as removable asset ids', () => {
     const project = parseProject(`---
 id: legacy-assets
 title: "Legacy Assets"
@@ -190,7 +190,10 @@ assets:
 Body.
 `)
 
-    expect(project.assets).toEqual([{ assetId: '20260401-current-a1b2c3d4', label: 'Current' }])
+    expect(project.assets).toEqual([
+      { assetId: 'old-hero.png', label: 'Old hero' },
+      { assetId: '20260401-current-a1b2c3d4', label: 'Current' },
+    ])
   })
 
   it('handles missing tasks and assets', () => {

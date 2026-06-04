@@ -30,9 +30,14 @@ export function nextTaskItemId(tasks: ProjectTask[]): string {
 function parseAsset(value: unknown): ProjectAsset | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const raw = value as Record<string, unknown>
-  if (typeof raw.assetId !== 'string' || !raw.assetId.trim()) return null
+  const assetId = typeof raw.assetId === 'string' && raw.assetId.trim()
+    ? raw.assetId.trim()
+    : typeof raw.filename === 'string' && raw.filename.trim()
+      ? raw.filename.trim()
+      : ''
+  if (!assetId) return null
   return {
-    assetId: raw.assetId.trim(),
+    assetId,
     label: raw.label ? String(raw.label) : undefined,
   }
 }

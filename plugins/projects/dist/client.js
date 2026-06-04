@@ -1045,11 +1045,17 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
   const [statusOpen, setStatusOpen] = useState4(false);
   const statusRef = useRef(null);
   const [assetPickerOpen, setAssetPickerOpen] = useState4(false);
+  const [assetPickerMode, setAssetPickerMode] = useState4({ type: "attach" });
   const [assetSearch, setAssetSearch] = useState4("");
   const [availableAssets, setAvailableAssets] = useState4([]);
   const [previewAsset, setPreviewAsset] = useState4(null);
+  const [assetRelinkError, setAssetRelinkError] = useState4(null);
+  const [relinkingAsset, setRelinkingAsset] = useState4(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState4(false);
   const [deleting, setDeleting] = useState4(false);
+  const [assetDetachTarget, setAssetDetachTarget] = useState4(null);
+  const [detachingAsset, setDetachingAsset] = useState4(false);
+  const [assetDetachError, setAssetDetachError] = useState4(null);
   const fetchProject = useCallback2(async (enterEdit2) => {
     if (!currentId)
       return;
@@ -1189,31 +1195,37 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
       return;
     const handler = (e) => {
       if (assetPickerRef.current && !assetPickerRef.current.contains(e.target)) {
-        setAssetPickerOpen(false);
+        if (!relinkingAsset)
+          setAssetPickerOpen(false);
       }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [assetPickerOpen]);
-  const toggleAssetPicker = async () => {
-    if (assetPickerOpen) {
-      setAssetPickerOpen(false);
-      return;
-    }
+  }, [assetPickerOpen, relinkingAsset]);
+  const openAssetPicker = async (mode) => {
     try {
       const res = await fetch("/api/plugins/assets/versioned");
       if (res.ok) {
         const data = await res.json();
-        const attached = new Set(project?.assets.map((a) => a.assetId) || []);
+        const attached = new Set((project?.assets || []).filter((a) => mode.type !== "relink" || a.assetId !== mode.target.assetId).map((a) => a.assetId));
         setAvailableAssets((data.assets || []).filter((a) => !attached.has(a.assetId)).map((a) => ({
           assetId: a.assetId,
           type: a.type,
           description: a.description
         })));
+        setAssetPickerMode(mode);
+        setAssetRelinkError(null);
         setAssetSearch("");
         setAssetPickerOpen(true);
       }
     } catch {}
+  };
+  const toggleAssetPicker = async () => {
+    if (assetPickerOpen && assetPickerMode.type === "attach") {
+      setAssetPickerOpen(false);
+      return;
+    }
+    await openAssetPicker({ type: "attach" });
   };
   const handleAttachAsset = async (assetId) => {
     if (!currentId)
@@ -1222,11 +1234,68 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
     setAssetPickerOpen(false);
     fetchProject();
   };
+  const handleRelinkAsset = async (target, newAssetId) => {
+    if (!currentId || relinkingAsset)
+      return;
+    setRelinkingAsset(true);
+    setAssetRelinkError(null);
+    const controller = new AbortController;
+    const timeout = window.setTimeout(() => controller.abort(), 1e4);
+    try {
+      const res = await fetch(`/api/plugins/projects/${currentId}/assets/${encodeURIComponent(target.assetId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: currentId, assetId: target.assetId, newAssetId }),
+        signal: controller.signal
+      });
+      if (!res.ok) {
+        const message = await res.text().catch(() => "");
+        throw new Error(message || `Relink failed with status ${res.status}`);
+      }
+      setAssetPickerOpen(false);
+      fetchProject();
+    } catch (err) {
+      const message = err instanceof DOMException && err.name === "AbortError" ? "Relink timed out. Check the server log and try again." : err instanceof Error ? err.message : "Failed to relink asset.";
+      setAssetRelinkError(message);
+    } finally {
+      window.clearTimeout(timeout);
+      setRelinkingAsset(false);
+    }
+  };
+  const handlePickerAssetSelect = async (assetId) => {
+    if (assetPickerMode.type === "relink") {
+      await handleRelinkAsset(assetPickerMode.target, assetId);
+      return;
+    }
+    await handleAttachAsset(assetId);
+  };
   const handleDetachAsset = async (assetId) => {
     if (!currentId)
       return;
-    await fetch(`/api/plugins/projects/${currentId}/assets/${encodeURIComponent(assetId)}`, { method: "DELETE", headers: { "Content-Type": "application/json" } });
-    fetchProject();
+    setDetachingAsset(true);
+    setAssetDetachError(null);
+    const controller = new AbortController;
+    const timeout = window.setTimeout(() => controller.abort(), 1e4);
+    try {
+      const res = await fetch(`/api/plugins/projects/${currentId}/assets/${encodeURIComponent(assetId)}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: currentId, assetId }),
+        signal: controller.signal
+      });
+      if (!res.ok) {
+        const message = await res.text().catch(() => "");
+        throw new Error(message || `Detach failed with status ${res.status}`);
+      }
+      setAssetDetachTarget(null);
+      fetchProject();
+    } catch (err) {
+      const message = err instanceof DOMException && err.name === "AbortError" ? "Detach timed out. Check the server log and try again." : err instanceof Error ? err.message : "Failed to detach asset.";
+      setAssetDetachError(message);
+    } finally {
+      window.clearTimeout(timeout);
+      setDetachingAsset(false);
+    }
   };
   const filteredPickerAssets = availableAssets.filter((a) => {
     if (!assetSearch.trim())
@@ -1463,6 +1532,64 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
           }, undefined, true, undefined, this)
         ]
       }, undefined, true, undefined, this),
+      assetDetachTarget && /* @__PURE__ */ jsxDEV7("div", {
+        className: "fixed inset-0 z-50 flex items-center justify-center",
+        children: [
+          /* @__PURE__ */ jsxDEV7("div", {
+            className: "absolute inset-0 bg-black/60",
+            onClick: () => !detachingAsset && setAssetDetachTarget(null)
+          }, undefined, false, undefined, this),
+          /* @__PURE__ */ jsxDEV7("div", {
+            role: "dialog",
+            "aria-modal": "true",
+            "aria-labelledby": "detach-asset-title",
+            className: "relative bg-zinc-900 border border-[rgba(255,255,255,0.08)] rounded-xl shadow-2xl w-[420px] p-6",
+            children: [
+              /* @__PURE__ */ jsxDEV7("h3", {
+                id: "detach-asset-title",
+                className: "text-sm font-semibold text-foreground mb-2",
+                children: "Detach asset?"
+              }, undefined, false, undefined, this),
+              /* @__PURE__ */ jsxDEV7("p", {
+                className: "text-[12px] text-zinc-400 mb-4",
+                children: [
+                  "This removes ",
+                  /* @__PURE__ */ jsxDEV7("span", {
+                    className: "text-zinc-200 font-medium",
+                    children: assetName(assetDetachTarget)
+                  }, undefined, false, undefined, this),
+                  " from this project. It will not delete the asset file."
+                ]
+              }, undefined, true, undefined, this),
+              assetDetachTarget.missing && /* @__PURE__ */ jsxDEV7("p", {
+                className: "mb-4 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] leading-snug text-amber-200/80",
+                children: "Bakin can't find this asset. Detaching it cleans up the broken project reference."
+              }, undefined, false, undefined, this),
+              assetDetachError && /* @__PURE__ */ jsxDEV7("p", {
+                className: "mb-4 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-[11px] leading-snug text-red-300",
+                children: assetDetachError
+              }, undefined, false, undefined, this),
+              /* @__PURE__ */ jsxDEV7("div", {
+                className: "flex justify-end gap-2",
+                children: [
+                  /* @__PURE__ */ jsxDEV7("button", {
+                    onClick: () => setAssetDetachTarget(null),
+                    disabled: detachingAsset,
+                    className: "px-3 py-1.5 rounded-lg text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-50",
+                    children: "Cancel"
+                  }, undefined, false, undefined, this),
+                  /* @__PURE__ */ jsxDEV7("button", {
+                    onClick: () => handleDetachAsset(assetDetachTarget.assetId),
+                    disabled: detachingAsset,
+                    className: "px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/20 transition-colors disabled:opacity-50",
+                    children: detachingAsset ? "Detaching..." : "Detach"
+                  }, undefined, false, undefined, this)
+                ]
+              }, undefined, true, undefined, this)
+            ]
+          }, undefined, true, undefined, this)
+        ]
+      }, undefined, true, undefined, this),
       /* @__PURE__ */ jsxDEV7("div", {
         className: "flex gap-6 pt-5 flex-1 min-h-0 overflow-hidden",
         children: [
@@ -1582,64 +1709,104 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
                     children: "No assets attached."
                   }, undefined, false, undefined, this) : /* @__PURE__ */ jsxDEV7("div", {
                     className: "space-y-1.5",
-                    children: project.resolvedAssets.map((asset) => /* @__PURE__ */ jsxDEV7("div", {
-                      className: `group flex items-start gap-2.5 rounded-lg p-1.5 transition-colors hover:bg-zinc-800/40 ${asset.missing ? "opacity-40" : ""}`,
-                      children: [
-                        /* @__PURE__ */ jsxDEV7("button", {
-                          type: "button",
-                          disabled: asset.missing,
-                          onClick: () => setPreviewAsset(asset),
-                          "aria-label": `Open ${assetName(asset)}`,
-                          className: "flex min-w-0 flex-1 items-start gap-2.5 text-left disabled:cursor-default",
-                          children: [
-                            /* @__PURE__ */ jsxDEV7(AssetThumb, {
-                              asset
-                            }, undefined, false, undefined, this),
-                            /* @__PURE__ */ jsxDEV7("div", {
-                              className: "min-w-0 flex-1 pt-0.5",
-                              children: [
-                                /* @__PURE__ */ jsxDEV7("p", {
-                                  className: "truncate text-[11px] leading-tight text-zinc-300",
-                                  children: assetName(asset)
-                                }, undefined, false, undefined, this),
-                                asset.description && /* @__PURE__ */ jsxDEV7("p", {
-                                  className: "mt-0.5 truncate text-[10px] text-zinc-600",
-                                  children: asset.description
-                                }, undefined, false, undefined, this),
-                                asset.tags && asset.tags.length > 0 && /* @__PURE__ */ jsxDEV7("div", {
-                                  className: "mt-1 flex flex-wrap gap-1",
-                                  children: asset.tags.slice(0, 3).map((tag) => /* @__PURE__ */ jsxDEV7("span", {
-                                    className: "rounded bg-zinc-800/60 px-1 py-0.5 text-[9px] text-zinc-500",
-                                    children: tag
-                                  }, tag, false, undefined, this))
-                                }, undefined, false, undefined, this),
-                                asset.missing && /* @__PURE__ */ jsxDEV7("span", {
-                                  className: "text-[10px] text-amber-500/70",
-                                  children: "missing"
+                    children: [
+                      project.resolvedAssets.some((asset) => asset.missing) && /* @__PURE__ */ jsxDEV7("div", {
+                        className: "rounded-md border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 text-[11px] leading-snug text-amber-200/80",
+                        children: "Some attached assets could not be loaded. Detach broken references to clean up this project."
+                      }, undefined, false, undefined, this),
+                      project.resolvedAssets.map((asset) => /* @__PURE__ */ jsxDEV7("div", {
+                        className: `group flex items-start gap-2.5 rounded-lg p-1.5 transition-colors hover:bg-zinc-800/40 ${asset.missing ? "border border-amber-500/15 bg-amber-500/5" : ""}`,
+                        children: [
+                          /* @__PURE__ */ jsxDEV7("button", {
+                            type: "button",
+                            disabled: asset.missing,
+                            onClick: () => setPreviewAsset(asset),
+                            "aria-label": `Open ${assetName(asset)}`,
+                            className: "flex min-w-0 flex-1 items-start gap-2.5 text-left disabled:cursor-default",
+                            children: [
+                              /* @__PURE__ */ jsxDEV7(AssetThumb, {
+                                asset
+                              }, undefined, false, undefined, this),
+                              /* @__PURE__ */ jsxDEV7("div", {
+                                className: "min-w-0 flex-1 pt-0.5",
+                                children: [
+                                  /* @__PURE__ */ jsxDEV7("p", {
+                                    className: "truncate text-[11px] leading-tight text-zinc-300",
+                                    children: assetName(asset)
+                                  }, undefined, false, undefined, this),
+                                  asset.description && /* @__PURE__ */ jsxDEV7("p", {
+                                    className: "mt-0.5 truncate text-[10px] text-zinc-600",
+                                    children: asset.description
+                                  }, undefined, false, undefined, this),
+                                  asset.tags && asset.tags.length > 0 && /* @__PURE__ */ jsxDEV7("div", {
+                                    className: "mt-1 flex flex-wrap gap-1",
+                                    children: asset.tags.slice(0, 3).map((tag) => /* @__PURE__ */ jsxDEV7("span", {
+                                      className: "rounded bg-zinc-800/60 px-1 py-0.5 text-[9px] text-zinc-500",
+                                      children: tag
+                                    }, tag, false, undefined, this))
+                                  }, undefined, false, undefined, this),
+                                  asset.missing && /* @__PURE__ */ jsxDEV7("span", {
+                                    className: "text-[10px] text-amber-500/70",
+                                    children: "can't find asset"
+                                  }, undefined, false, undefined, this)
+                                ]
+                              }, undefined, true, undefined, this)
+                            ]
+                          }, undefined, true, undefined, this),
+                          /* @__PURE__ */ jsxDEV7("div", {
+                            className: `${asset.missing ? "opacity-100" : "opacity-0 group-hover:opacity-100"} mt-0.5 flex shrink-0 items-center gap-1 transition-opacity`,
+                            children: [
+                              /* @__PURE__ */ jsxDEV7("button", {
+                                type: "button",
+                                onClick: (e) => {
+                                  e.stopPropagation();
+                                  openAssetPicker({ type: "relink", target: asset });
+                                },
+                                className: "inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-200",
+                                "aria-label": `Relink ${assetName(asset)}`,
+                                children: [
+                                  /* @__PURE__ */ jsxDEV7(Link2, {
+                                    className: "size-3"
+                                  }, undefined, false, undefined, this),
+                                  "Relink"
+                                ]
+                              }, undefined, true, undefined, this),
+                              /* @__PURE__ */ jsxDEV7("button", {
+                                type: "button",
+                                onClick: (e) => {
+                                  e.stopPropagation();
+                                  setAssetDetachError(null);
+                                  setAssetDetachTarget(asset);
+                                },
+                                className: `${asset.missing ? "text-amber-400/80" : "text-zinc-600"} p-1 hover:text-red-400 transition-colors`,
+                                "aria-label": `Detach ${assetName(asset)}`,
+                                children: /* @__PURE__ */ jsxDEV7(X, {
+                                  className: "size-3"
                                 }, undefined, false, undefined, this)
-                              ]
-                            }, undefined, true, undefined, this)
-                          ]
-                        }, undefined, true, undefined, this),
-                        /* @__PURE__ */ jsxDEV7("button", {
-                          type: "button",
-                          onClick: (e) => {
-                            e.stopPropagation();
-                            handleDetachAsset(asset.assetId);
-                          },
-                          className: "opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 transition-all shrink-0 mt-1",
-                          "aria-label": `Detach ${assetName(asset)}`,
-                          children: /* @__PURE__ */ jsxDEV7(X, {
-                            className: "size-3"
-                          }, undefined, false, undefined, this)
-                        }, undefined, false, undefined, this)
-                      ]
-                    }, asset.assetId, true, undefined, this))
-                  }, undefined, false, undefined, this),
+                              }, undefined, false, undefined, this)
+                            ]
+                          }, undefined, true, undefined, this)
+                        ]
+                      }, asset.assetId, true, undefined, this))
+                    ]
+                  }, undefined, true, undefined, this),
                   assetPickerOpen && /* @__PURE__ */ jsxDEV7("div", {
                     ref: assetPickerRef,
                     className: "mt-2 mr-2 border border-[rgba(255,255,255,0.08)] rounded-lg bg-zinc-900 overflow-hidden max-w-[310px]",
                     children: [
+                      assetPickerMode.type === "relink" && /* @__PURE__ */ jsxDEV7("div", {
+                        className: "border-b border-[rgba(255,255,255,0.06)] px-2.5 py-2",
+                        children: [
+                          /* @__PURE__ */ jsxDEV7("p", {
+                            className: "text-[11px] font-medium text-zinc-300",
+                            children: "Relink asset"
+                          }, undefined, false, undefined, this),
+                          /* @__PURE__ */ jsxDEV7("p", {
+                            className: "mt-0.5 truncate text-[10px] text-zinc-600",
+                            children: assetName(assetPickerMode.target)
+                          }, undefined, false, undefined, this)
+                        ]
+                      }, undefined, true, undefined, this),
                       /* @__PURE__ */ jsxDEV7("div", {
                         className: "px-2.5 py-2 border-b border-[rgba(255,255,255,0.06)] flex items-center gap-1.5",
                         children: [
@@ -1668,6 +1835,7 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
                           }, undefined, true, undefined, this),
                           /* @__PURE__ */ jsxDEV7("button", {
                             onClick: () => setAssetPickerOpen(false),
+                            disabled: relinkingAsset,
                             className: "text-zinc-500 hover:text-zinc-300 transition-colors shrink-0",
                             children: /* @__PURE__ */ jsxDEV7(X, {
                               className: "size-3.5"
@@ -1675,14 +1843,19 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
                           }, undefined, false, undefined, this)
                         ]
                       }, undefined, true, undefined, this),
+                      assetRelinkError && /* @__PURE__ */ jsxDEV7("p", {
+                        className: "border-b border-red-500/20 bg-red-500/5 px-2.5 py-2 text-[11px] leading-snug text-red-300",
+                        children: assetRelinkError
+                      }, undefined, false, undefined, this),
                       /* @__PURE__ */ jsxDEV7("div", {
                         className: "max-h-52 overflow-y-auto",
                         children: filteredPickerAssets.length === 0 ? /* @__PURE__ */ jsxDEV7("p", {
                           className: "text-[11px] text-zinc-600 p-3 text-center",
                           children: availableAssets.length === 0 ? "No assets available." : "No matches."
                         }, undefined, false, undefined, this) : filteredPickerAssets.map((asset) => /* @__PURE__ */ jsxDEV7("button", {
-                          onClick: () => handleAttachAsset(asset.assetId),
-                          className: "w-full text-left px-2.5 py-2 text-[11px] hover:bg-zinc-800/60 transition-colors flex items-center gap-2.5 border-b border-[rgba(255,255,255,0.04)] last:border-0",
+                          onClick: () => handlePickerAssetSelect(asset.assetId),
+                          disabled: relinkingAsset,
+                          className: "w-full text-left px-2.5 py-2 text-[11px] hover:bg-zinc-800/60 transition-colors flex items-center gap-2.5 border-b border-[rgba(255,255,255,0.04)] last:border-0 disabled:opacity-50",
                           children: [
                             /* @__PURE__ */ jsxDEV7(PickerThumb, {
                               asset
@@ -1699,7 +1872,11 @@ function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange })
                                   children: asset.description
                                 }, undefined, false, undefined, this)
                               ]
-                            }, undefined, true, undefined, this)
+                            }, undefined, true, undefined, this),
+                            assetPickerMode.type === "relink" && relinkingAsset && /* @__PURE__ */ jsxDEV7("span", {
+                              className: "shrink-0 text-[10px] text-zinc-500",
+                              children: "Relinking..."
+                            }, undefined, false, undefined, this)
                           ]
                         }, asset.assetId, true, undefined, this))
                       }, undefined, false, undefined, this)

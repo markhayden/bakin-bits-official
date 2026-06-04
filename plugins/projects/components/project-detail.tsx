@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useRouter } from '@makinbakin/sdk/hooks'
-import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, ChevronDown, Search, Pencil, Trash2 } from 'lucide-react'
+import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, ChevronDown, Search, Pencil, Trash2, Link2 } from 'lucide-react'
 import { useMainAgentId } from "@makinbakin/sdk/hooks"
 import { AgentSelect, IntegratedBrainstorm, readBrainstormSseResponse } from "@makinbakin/sdk/components"
 import type { BrainstormMessage } from "@makinbakin/sdk/components"
@@ -38,6 +38,8 @@ interface ProjectData {
   resolvedAssets: ResolvedAsset[]
   brainstormMessages?: BrainstormMessage[]
 }
+
+type AssetPickerMode = { type: 'attach' } | { type: 'relink'; target: ResolvedAsset }
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -212,13 +214,19 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
 
   // Assets
   const [assetPickerOpen, setAssetPickerOpen] = useState(false)
+  const [assetPickerMode, setAssetPickerMode] = useState<AssetPickerMode>({ type: 'attach' })
   const [assetSearch, setAssetSearch] = useState('')
   const [availableAssets, setAvailableAssets] = useState<Array<{ assetId: string; type: string; description?: string }>>([])
   const [previewAsset, setPreviewAsset] = useState<ResolvedAsset | null>(null)
+  const [assetRelinkError, setAssetRelinkError] = useState<string | null>(null)
+  const [relinkingAsset, setRelinkingAsset] = useState(false)
 
   // Delete confirmation
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [assetDetachTarget, setAssetDetachTarget] = useState<ResolvedAsset | null>(null)
+  const [detachingAsset, setDetachingAsset] = useState(false)
+  const [assetDetachError, setAssetDetachError] = useState<string | null>(null)
 
   // ---------------------------------------------------------------------------
   // Data fetching
@@ -397,23 +405,23 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
     if (!assetPickerOpen) return
     const handler = (e: MouseEvent) => {
       if (assetPickerRef.current && !assetPickerRef.current.contains(e.target as Node)) {
-        setAssetPickerOpen(false)
+        if (!relinkingAsset) setAssetPickerOpen(false)
       }
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
-  }, [assetPickerOpen])
+  }, [assetPickerOpen, relinkingAsset])
 
-  const toggleAssetPicker = async () => {
-    if (assetPickerOpen) {
-      setAssetPickerOpen(false)
-      return
-    }
+  const openAssetPicker = async (mode: AssetPickerMode) => {
     try {
       const res = await fetch('/api/plugins/assets/versioned')
       if (res.ok) {
         const data = await res.json()
-        const attached = new Set(project?.assets.map(a => a.assetId) || [])
+        const attached = new Set(
+          (project?.assets || [])
+            .filter(a => mode.type !== 'relink' || a.assetId !== mode.target.assetId)
+            .map(a => a.assetId)
+        )
         setAvailableAssets(
           (data.assets || [])
             .filter((a: { assetId: string }) => !attached.has(a.assetId))
@@ -421,10 +429,20 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
               assetId: a.assetId, type: a.type, description: a.description,
             }))
         )
+        setAssetPickerMode(mode)
+        setAssetRelinkError(null)
         setAssetSearch('')
         setAssetPickerOpen(true)
       }
     } catch { /* assets plugin may not be available */ }
+  }
+
+  const toggleAssetPicker = async () => {
+    if (assetPickerOpen && assetPickerMode.type === 'attach') {
+      setAssetPickerOpen(false)
+      return
+    }
+    await openAssetPicker({ type: 'attach' })
   }
 
   const handleAttachAsset = async (assetId: string) => {
@@ -434,10 +452,76 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
     fetchProject()
   }
 
+  const handleRelinkAsset = async (target: ResolvedAsset, newAssetId: string) => {
+    if (!currentId || relinkingAsset) return
+    setRelinkingAsset(true)
+    setAssetRelinkError(null)
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 10000)
+    try {
+      const res = await fetch(`/api/plugins/projects/${currentId}/assets/${encodeURIComponent(target.assetId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: currentId, assetId: target.assetId, newAssetId }),
+        signal: controller.signal,
+      })
+      if (!res.ok) {
+        const message = await res.text().catch(() => '')
+        throw new Error(message || `Relink failed with status ${res.status}`)
+      }
+      setAssetPickerOpen(false)
+      void fetchProject()
+    } catch (err) {
+      const message = err instanceof DOMException && err.name === 'AbortError'
+        ? 'Relink timed out. Check the server log and try again.'
+        : err instanceof Error
+          ? err.message
+          : 'Failed to relink asset.'
+      setAssetRelinkError(message)
+    } finally {
+      window.clearTimeout(timeout)
+      setRelinkingAsset(false)
+    }
+  }
+
+  const handlePickerAssetSelect = async (assetId: string) => {
+    if (assetPickerMode.type === 'relink') {
+      await handleRelinkAsset(assetPickerMode.target, assetId)
+      return
+    }
+    await handleAttachAsset(assetId)
+  }
+
   const handleDetachAsset = async (assetId: string) => {
     if (!currentId) return
-    await fetch(`/api/plugins/projects/${currentId}/assets/${encodeURIComponent(assetId)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } })
-    fetchProject()
+    setDetachingAsset(true)
+    setAssetDetachError(null)
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 10000)
+    try {
+      const res = await fetch(`/api/plugins/projects/${currentId}/assets/${encodeURIComponent(assetId)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: currentId, assetId }),
+        signal: controller.signal,
+      })
+      if (!res.ok) {
+        const message = await res.text().catch(() => '')
+        throw new Error(message || `Detach failed with status ${res.status}`)
+      }
+      setAssetDetachTarget(null)
+      void fetchProject()
+    } catch (err) {
+      const message = err instanceof DOMException && err.name === 'AbortError'
+        ? 'Detach timed out. Check the server log and try again.'
+        : err instanceof Error
+          ? err.message
+          : 'Failed to detach asset.'
+      setAssetDetachError(message)
+    } finally {
+      window.clearTimeout(timeout)
+      setDetachingAsset(false)
+    }
   }
 
   const filteredPickerAssets = availableAssets.filter(a => {
@@ -636,6 +720,50 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
         </div>
       )}
 
+      {/* ── Asset detach confirmation dialog ── */}
+      {assetDetachTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60" onClick={() => !detachingAsset && setAssetDetachTarget(null)} />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="detach-asset-title"
+            className="relative bg-zinc-900 border border-[rgba(255,255,255,0.08)] rounded-xl shadow-2xl w-[420px] p-6"
+          >
+            <h3 id="detach-asset-title" className="text-sm font-semibold text-foreground mb-2">Detach asset?</h3>
+            <p className="text-[12px] text-zinc-400 mb-4">
+              This removes <span className="text-zinc-200 font-medium">{assetName(assetDetachTarget)}</span> from this project. It will not delete the asset file.
+            </p>
+            {assetDetachTarget.missing && (
+              <p className="mb-4 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] leading-snug text-amber-200/80">
+                Bakin can't find this asset. Detaching it cleans up the broken project reference.
+              </p>
+            )}
+            {assetDetachError && (
+              <p className="mb-4 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-[11px] leading-snug text-red-300">
+                {assetDetachError}
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setAssetDetachTarget(null)}
+                disabled={detachingAsset}
+                className="px-3 py-1.5 rounded-lg text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleDetachAsset(assetDetachTarget.assetId)}
+                disabled={detachingAsset}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/20 transition-colors disabled:opacity-50"
+              >
+                {detachingAsset ? 'Detaching...' : 'Detach'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Two-column body ── */}
       <div className="flex gap-6 pt-5 flex-1 min-h-0 overflow-hidden">
 
@@ -732,10 +860,15 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
               <p className="text-[11px] text-zinc-600">No assets attached.</p>
             ) : (
               <div className="space-y-1.5">
+                {project.resolvedAssets.some(asset => asset.missing) && (
+                  <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 text-[11px] leading-snug text-amber-200/80">
+                    Some attached assets could not be loaded. Detach broken references to clean up this project.
+                  </div>
+                )}
                 {project.resolvedAssets.map((asset) => (
                   <div
                     key={asset.assetId}
-                    className={`group flex items-start gap-2.5 rounded-lg p-1.5 transition-colors hover:bg-zinc-800/40 ${asset.missing ? 'opacity-40' : ''}`}
+                    className={`group flex items-start gap-2.5 rounded-lg p-1.5 transition-colors hover:bg-zinc-800/40 ${asset.missing ? 'border border-amber-500/15 bg-amber-500/5' : ''}`}
                   >
                     <button
                       type="button"
@@ -757,17 +890,28 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                             ))}
                           </div>
                         )}
-                        {asset.missing && <span className="text-[10px] text-amber-500/70">missing</span>}
+                        {asset.missing && <span className="text-[10px] text-amber-500/70">can't find asset</span>}
                       </div>
                     </button>
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); handleDetachAsset(asset.assetId) }}
-                      className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400 transition-all shrink-0 mt-1"
-                      aria-label={`Detach ${assetName(asset)}`}
-                    >
-                      <X className="size-3" />
-                    </button>
+                    <div className={`${asset.missing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} mt-0.5 flex shrink-0 items-center gap-1 transition-opacity`}>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); void openAssetPicker({ type: 'relink', target: asset }) }}
+                        className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-200"
+                        aria-label={`Relink ${assetName(asset)}`}
+                      >
+                        <Link2 className="size-3" />
+                        Relink
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setAssetDetachError(null); setAssetDetachTarget(asset) }}
+                        className={`${asset.missing ? 'text-amber-400/80' : 'text-zinc-600'} p-1 hover:text-red-400 transition-colors`}
+                        aria-label={`Detach ${assetName(asset)}`}
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -776,6 +920,12 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
             {/* Asset picker */}
             {assetPickerOpen && (
               <div ref={assetPickerRef} className="mt-2 mr-2 border border-[rgba(255,255,255,0.08)] rounded-lg bg-zinc-900 overflow-hidden max-w-[310px]">
+                {assetPickerMode.type === 'relink' && (
+                  <div className="border-b border-[rgba(255,255,255,0.06)] px-2.5 py-2">
+                    <p className="text-[11px] font-medium text-zinc-300">Relink asset</p>
+                    <p className="mt-0.5 truncate text-[10px] text-zinc-600">{assetName(assetPickerMode.target)}</p>
+                  </div>
+                )}
                 <div className="px-2.5 py-2 border-b border-[rgba(255,255,255,0.06)] flex items-center gap-1.5">
                   <div className="flex-1 flex items-center gap-1.5 bg-zinc-800 rounded px-2 py-1">
                     <Search className="size-3 text-zinc-500 shrink-0" />
@@ -795,11 +945,17 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                   </div>
                   <button
                     onClick={() => setAssetPickerOpen(false)}
+                    disabled={relinkingAsset}
                     className="text-zinc-500 hover:text-zinc-300 transition-colors shrink-0"
                   >
                     <X className="size-3.5" />
                   </button>
                 </div>
+                {assetRelinkError && (
+                  <p className="border-b border-red-500/20 bg-red-500/5 px-2.5 py-2 text-[11px] leading-snug text-red-300">
+                    {assetRelinkError}
+                  </p>
+                )}
                 <div className="max-h-52 overflow-y-auto">
                   {filteredPickerAssets.length === 0 ? (
                     <p className="text-[11px] text-zinc-600 p-3 text-center">
@@ -809,14 +965,18 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                     filteredPickerAssets.map((asset) => (
                       <button
                         key={asset.assetId}
-                        onClick={() => handleAttachAsset(asset.assetId)}
-                        className="w-full text-left px-2.5 py-2 text-[11px] hover:bg-zinc-800/60 transition-colors flex items-center gap-2.5 border-b border-[rgba(255,255,255,0.04)] last:border-0"
+                        onClick={() => handlePickerAssetSelect(asset.assetId)}
+                        disabled={relinkingAsset}
+                        className="w-full text-left px-2.5 py-2 text-[11px] hover:bg-zinc-800/60 transition-colors flex items-center gap-2.5 border-b border-[rgba(255,255,255,0.04)] last:border-0 disabled:opacity-50"
                       >
                         <PickerThumb asset={asset} />
                         <div className="flex-1 min-w-0">
                           <span className="text-zinc-300 truncate block">{asset.assetId}</span>
                           {asset.description && <span className="text-zinc-600 truncate block text-[10px]">{asset.description}</span>}
                         </div>
+                        {assetPickerMode.type === 'relink' && relinkingAsset && (
+                          <span className="shrink-0 text-[10px] text-zinc-500">Relinking...</span>
+                        )}
                       </button>
                     ))
                   )}
