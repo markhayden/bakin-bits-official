@@ -662,6 +662,56 @@ describe('Routes', () => {
   })
 
   // -------------------------------------------------------------------------
+  // PATCH /:projectId/assets/:assetId — relink asset reference
+  // -------------------------------------------------------------------------
+  describe('PATCH /:projectId/assets/:assetId — relink asset reference', () => {
+    it('relinks an attached asset to another existing asset', async () => {
+      writeProjectFixture('proj-rel', {
+        title: 'Relink Project',
+        assets: [{ assetId: '20260401-brief-abcdef12', label: 'Brief' }],
+      })
+
+      const route = findRoute(plugin.routes, 'PATCH', '/:projectId/assets/:assetId')!
+      expect(route).toBeDefined()
+      const { status, body } = await callRoute(route, plugin.ctx, {
+        searchParams: { projectId: 'proj-rel', assetId: '20260401-brief-abcdef12' },
+        body: { newAssetId: '20260401-logo-abcdef12' },
+      })
+
+      expect(status).toBe(200)
+      expect(body.ok).toBe(true)
+      const repo = createProjectRepository(new MarkdownStorageAdapter(testDir))
+      expect(repo.readProject('proj-rel')!.assets).toEqual([
+        { assetId: '20260401-logo-abcdef12', label: 'Brief' },
+      ])
+    })
+
+    it('returns 400 when required params are missing', async () => {
+      const route = findRoute(plugin.routes, 'PATCH', '/:projectId/assets/:assetId')!
+      const { status } = await callRoute(route, plugin.ctx, {
+        body: { newAssetId: '20260401-logo-abcdef12' },
+      })
+      expect(status).toBe(400)
+    })
+
+    it('returns 404 when the replacement asset does not exist', async () => {
+      writeProjectFixture('proj-rel-missing', {
+        title: 'Relink Project',
+        assets: [{ assetId: '20260401-brief-abcdef12', label: 'Brief' }],
+      })
+
+      const route = findRoute(plugin.routes, 'PATCH', '/:projectId/assets/:assetId')!
+      const { status, body } = await callRoute(route, plugin.ctx, {
+        searchParams: { projectId: 'proj-rel-missing', assetId: '20260401-brief-abcdef12' },
+        body: { newAssetId: '20260401-missing-deadbeef' },
+      })
+
+      expect(status).toBe(404)
+      expect(body.error).toContain('Asset not found')
+    })
+  })
+
+  // -------------------------------------------------------------------------
   // DELETE /:projectId/assets/:assetId — detach asset
   // -------------------------------------------------------------------------
   describe('DELETE /:projectId/assets/:assetId — detach asset', () => {
@@ -1330,6 +1380,43 @@ describe('Exec Tools', () => {
   })
 
   // -------------------------------------------------------------------------
+  // bakin_exec_projects_relink_asset
+  // -------------------------------------------------------------------------
+  describe('bakin_exec_projects_relink_asset', () => {
+    it('relinks an attached asset', async () => {
+      writeProjectFixture('proj-ra', {
+        title: 'Relink Asset',
+        assets: [{ assetId: '20260401-brief-abcdef12', label: 'Brief' }],
+      })
+
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_relink_asset')!
+      expect(tool).toBeDefined()
+      const result = await callTool(tool, {
+        projectId: 'proj-ra',
+        assetId: '20260401-brief-abcdef12',
+        newAssetId: '20260401-logo-abcdef12',
+      })
+
+      expect(result.ok).toBe(true)
+      const repo = createProjectRepository(new MarkdownStorageAdapter(testDir))
+      expect(repo.readProject('proj-ra')!.assets).toEqual([
+        { assetId: '20260401-logo-abcdef12', label: 'Brief' },
+      ])
+    })
+
+    it('returns error for non-existent project', async () => {
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_relink_asset')!
+      const result = await callTool(tool, {
+        projectId: 'ghost',
+        assetId: '20260401-brief-abcdef12',
+        newAssetId: '20260401-logo-abcdef12',
+      })
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(/not found/i)
+    })
+  })
+
+  // -------------------------------------------------------------------------
   // bakin_exec_projects_detach_asset
   // -------------------------------------------------------------------------
   describe('bakin_exec_projects_detach_asset', () => {
@@ -1431,6 +1518,7 @@ describe('Registration', () => {
       { method: 'POST', path: '/:projectId/checklist/:itemId/link' },
       { method: 'POST', path: '/:projectId/checklist/:itemId/promote' },
       { method: 'POST', path: '/:projectId/assets' },
+      { method: 'PATCH', path: '/:projectId/assets/:assetId' },
       { method: 'DELETE', path: '/:projectId/assets/:assetId' },
       { method: 'POST', path: '/:projectId/ask' },
       { method: 'GET', path: '/search' },
@@ -1456,6 +1544,7 @@ describe('Registration', () => {
       'bakin_exec_projects_link_item',
       'bakin_exec_projects_promote_item',
       'bakin_exec_projects_attach_asset',
+      'bakin_exec_projects_relink_asset',
       'bakin_exec_projects_detach_asset',
     ]
 

@@ -16345,10 +16345,11 @@ function parseAsset(value) {
   if (!value || typeof value !== "object" || Array.isArray(value))
     return null;
   const raw = value;
-  if (typeof raw.assetId !== "string" || !raw.assetId.trim())
+  const assetId = typeof raw.assetId === "string" && raw.assetId.trim() ? raw.assetId.trim() : typeof raw.filename === "string" && raw.filename.trim() ? raw.filename.trim() : "";
+  if (!assetId)
     return null;
   return {
-    assetId: raw.assetId.trim(),
+    assetId,
     label: raw.label ? String(raw.label) : undefined
   };
 }
@@ -16799,6 +16800,31 @@ function createProjectService(ctx, repo) {
       broadcast({ type: "project.asset_changed", projectId, action: "detach", assetId });
     });
   }
+  async function relinkAsset(projectId, oldAssetId, newAssetId, label) {
+    return withProjectLock(async () => {
+      const project = repo.readProject(projectId);
+      if (!project)
+        throw new Error(`Project not found: ${projectId}`);
+      const idx = project.assets.findIndex((a) => a.assetId === oldAssetId);
+      if (idx === -1)
+        throw new Error(`Asset not attached: ${oldAssetId}`);
+      const asset = await ctx.assets.getAsset(newAssetId);
+      if (!asset)
+        throw new Error(`Asset not found: ${newAssetId}`);
+      const existingIdx = project.assets.findIndex((a) => a.assetId === newAssetId);
+      if (existingIdx !== -1 && existingIdx !== idx) {
+        project.assets.splice(idx, 1);
+      } else {
+        project.assets[idx] = {
+          assetId: newAssetId,
+          label: label ?? project.assets[idx].label
+        };
+      }
+      project.updated = new Date().toISOString();
+      repo.writeProject(project);
+      broadcast({ type: "project.asset_changed", projectId, action: "relink", assetId: newAssetId });
+    });
+  }
   async function updateAssetLabel(projectId, assetId, label) {
     return withProjectLock(() => {
       const project = repo.readProject(projectId);
@@ -16873,16 +16899,21 @@ function createProjectService(ctx, repo) {
       resolved[taskId] = task ? { column: task.column, title: task.title } : null;
     }
     const resolvedAssets = await Promise.all(project.assets.map(async (asset) => {
-      const indexed = await ctx.assets.getAsset(asset.assetId);
-      if (!indexed)
+      try {
+        const indexed = typeof ctx.assets.getAsset === "function" ? await ctx.assets.getAsset(asset.assetId) : null;
+        if (!indexed)
+          return { assetId: asset.assetId, label: asset.label, type: "unknown", missing: true };
+        return {
+          assetId: asset.assetId,
+          label: asset.label,
+          type: indexed.type,
+          description: indexed.description,
+          tags: indexed.tags
+        };
+      } catch (err) {
+        log.warn("Unable to resolve project asset", { projectId: project.id, assetId: asset.assetId, err });
         return { assetId: asset.assetId, label: asset.label, type: "unknown", missing: true };
-      return {
-        assetId: asset.assetId,
-        label: asset.label,
-        type: indexed.type,
-        description: indexed.description,
-        tags: indexed.tags
-      };
+      }
     }));
     return { ...project, resolvedTasks: resolved, resolvedAssets };
   }
@@ -16900,6 +16931,7 @@ function createProjectService(ctx, repo) {
     removeChecklistItem,
     linkChecklistItem,
     attachAsset,
+    relinkAsset,
     detachAsset,
     updateAssetLabel,
     promoteItemToTask,
@@ -17000,6 +17032,7 @@ var projectsPlugin = {
       linkChecklistItem,
       promoteItemToTask,
       attachAsset,
+      relinkAsset,
       detachAsset,
       rebuildIndex,
       resolveLinkedTaskStatuses,
@@ -17294,6 +17327,26 @@ var projectsPlugin = {
       }
     };
     ctx.registerRoute({ path: "/:projectId/assets", method: "POST", description: "Attach asset", handler: attachHandler });
+    const relinkHandler = async (req) => {
+      const url2 = new URL(req.url, "http://localhost");
+      const body = await readBody(req);
+      const projectId = url2.searchParams.get("projectId") || body.projectId;
+      const assetId = url2.searchParams.get("assetId") || body.assetId;
+      if (!projectId || !assetId || !body.newAssetId)
+        return json3({ error: "Missing projectId, assetId, or newAssetId" }, 400);
+      try {
+        await relinkAsset(projectId, assetId, body.newAssetId, body.label);
+        ctx.activity.audit("asset.relinked", "system", { projectId, oldAssetId: assetId, newAssetId: body.newAssetId });
+        ctx.activity.log("system", "Relinked project asset", { taskId: projectId });
+        indexProject(projectId).catch(() => {});
+        return json3({ ok: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const status = message.startsWith("Project not found") || message.startsWith("Asset not found") || message.startsWith("Asset not attached") ? 404 : 400;
+        return json3({ error: message }, status);
+      }
+    };
+    ctx.registerRoute({ path: "/:projectId/assets/:assetId", method: "PATCH", description: "Relink asset reference", handler: relinkHandler });
     const detachHandler = async (req) => {
       const url2 = new URL(req.url, "http://localhost");
       const body = await readBody(req).catch(() => ({}));
@@ -17301,11 +17354,17 @@ var projectsPlugin = {
       const assetId = url2.searchParams.get("assetId") || body.assetId;
       if (!projectId || !assetId)
         return json3({ error: "Missing projectId or assetId" }, 400);
-      await detachAsset(projectId, assetId);
-      ctx.activity.audit("asset.detached", "system", { projectId, assetId });
-      ctx.activity.log("system", "Detached asset from project", { taskId: projectId });
-      indexProject(projectId).catch(() => {});
-      return json3({ ok: true });
+      try {
+        await detachAsset(projectId, assetId);
+        ctx.activity.audit("asset.detached", "system", { projectId, assetId });
+        ctx.activity.log("system", "Detached asset from project", { taskId: projectId });
+        indexProject(projectId).catch(() => {});
+        return json3({ ok: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const status = message.startsWith("Project not found") ? 404 : 400;
+        return json3({ error: message }, status);
+      }
     };
     ctx.registerRoute({ path: "/:projectId/assets/:assetId", method: "DELETE", description: "Detach asset", handler: detachHandler });
     ctx.registerRoute({
@@ -17674,6 +17733,26 @@ data: ${JSON.stringify(data)}
       handler: async (params) => {
         try {
           await detachAsset(params.projectId, params.assetId);
+          indexProject(params.projectId).catch(() => {});
+          return { ok: true };
+        } catch (err) {
+          return { ok: false, error: err.message };
+        }
+      }
+    });
+    ctx.registerExecTool({
+      name: "bakin_exec_projects_relink_asset",
+      label: "Relinked project asset",
+      description: "Replace an attached project asset reference with another existing asset. Use this to repair missing or deleted asset references without removing the project context.",
+      parameters: {
+        projectId: exports_external.string().describe("Project ID"),
+        assetId: exports_external.string().describe("Current asset id attached to the project"),
+        newAssetId: exports_external.string().describe("Replacement asset id to attach in its place"),
+        label: exports_external.string().optional().describe("Optional replacement label. If omitted, the existing project label is preserved.")
+      },
+      handler: async (params) => {
+        try {
+          await relinkAsset(params.projectId, params.assetId, params.newAssetId, params.label);
           indexProject(params.projectId).catch(() => {});
           return { ok: true };
         } catch (err) {

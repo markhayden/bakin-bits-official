@@ -134,6 +134,7 @@ const projectsPlugin: BakinPlugin = {
       linkChecklistItem,
       promoteItemToTask,
       attachAsset,
+      relinkAsset,
       detachAsset,
       rebuildIndex,
       resolveLinkedTaskStatuses,
@@ -455,6 +456,27 @@ const projectsPlugin: BakinPlugin = {
     }
     ctx.registerRoute({ path: '/:projectId/assets', method: 'POST', description: 'Attach asset', handler: attachHandler })
 
+    // PATCH /:projectId/assets/:assetId — relink asset reference
+    const relinkHandler = async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const body = await readBody<{ projectId?: string; assetId?: string; newAssetId?: string; label?: string }>(req)
+      const projectId = url.searchParams.get('projectId') || body.projectId
+      const assetId = url.searchParams.get('assetId') || body.assetId
+      if (!projectId || !assetId || !body.newAssetId) return json({ error: 'Missing projectId, assetId, or newAssetId' }, 400)
+      try {
+        await relinkAsset(projectId, assetId, body.newAssetId, body.label)
+        ctx.activity.audit('asset.relinked', 'system', { projectId, oldAssetId: assetId, newAssetId: body.newAssetId })
+        ctx.activity.log('system', 'Relinked project asset', { taskId: projectId })
+        indexProject(projectId).catch(() => {})
+        return json({ ok: true })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        const status = message.startsWith('Project not found') || message.startsWith('Asset not found') || message.startsWith('Asset not attached') ? 404 : 400
+        return json({ error: message }, status)
+      }
+    }
+    ctx.registerRoute({ path: '/:projectId/assets/:assetId', method: 'PATCH', description: 'Relink asset reference', handler: relinkHandler })
+
     // DELETE /:projectId/assets/:assetId — detach asset
     const detachHandler = async (req: Request) => {
       const url = new URL(req.url, 'http://localhost')
@@ -462,11 +484,17 @@ const projectsPlugin: BakinPlugin = {
       const projectId = url.searchParams.get('projectId') || body.projectId
       const assetId = url.searchParams.get('assetId') || body.assetId
       if (!projectId || !assetId) return json({ error: 'Missing projectId or assetId' }, 400)
-      await detachAsset(projectId, assetId)
-      ctx.activity.audit('asset.detached', 'system', { projectId, assetId })
-      ctx.activity.log('system', 'Detached asset from project', { taskId: projectId })
-      indexProject(projectId).catch(() => {})
-      return json({ ok: true })
+      try {
+        await detachAsset(projectId, assetId)
+        ctx.activity.audit('asset.detached', 'system', { projectId, assetId })
+        ctx.activity.log('system', 'Detached asset from project', { taskId: projectId })
+        indexProject(projectId).catch(() => {})
+        return json({ ok: true })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        const status = message.startsWith('Project not found') ? 404 : 400
+        return json({ error: message }, status)
+      }
     }
     ctx.registerRoute({ path: '/:projectId/assets/:assetId', method: 'DELETE', description: 'Detach asset', handler: detachHandler })
 
@@ -875,6 +903,32 @@ const projectsPlugin: BakinPlugin = {
       handler: async (params: Record<string, unknown>) => {
         try {
           await detachAsset(params.projectId as string, params.assetId as string)
+          indexProject(params.projectId as string).catch(() => {})
+          return { ok: true }
+        } catch (err: unknown) {
+          return { ok: false, error: (err as Error).message }
+        }
+      },
+    })
+
+    ctx.registerExecTool({
+      name: 'bakin_exec_projects_relink_asset',
+      label: 'Relinked project asset',
+      description: 'Replace an attached project asset reference with another existing asset. Use this to repair missing or deleted asset references without removing the project context.',
+      parameters: {
+        projectId: z.string().describe('Project ID'),
+        assetId: z.string().describe('Current asset id attached to the project'),
+        newAssetId: z.string().describe('Replacement asset id to attach in its place'),
+        label: z.string().optional().describe('Optional replacement label. If omitted, the existing project label is preserved.'),
+      },
+      handler: async (params: Record<string, unknown>) => {
+        try {
+          await relinkAsset(
+            params.projectId as string,
+            params.assetId as string,
+            params.newAssetId as string,
+            params.label as string | undefined,
+          )
           indexProject(params.projectId as string).catch(() => {})
           return { ok: true }
         } catch (err: unknown) {

@@ -42,6 +42,7 @@ let removeChecklistItem: ProjectService['removeChecklistItem']
 let linkChecklistItem: ProjectService['linkChecklistItem']
 let promoteItemToTask: ProjectService['promoteItemToTask']
 let attachAsset: ProjectService['attachAsset']
+let relinkAsset: ProjectService['relinkAsset']
 let detachAsset: ProjectService['detachAsset']
 let autoCheckLinkedItem: ProjectService['autoCheckLinkedItem']
 let autoUnlinkTask: ProjectService['autoUnlinkTask']
@@ -138,6 +139,7 @@ beforeEach(() => {
     linkChecklistItem,
     promoteItemToTask,
     attachAsset,
+    relinkAsset,
     detachAsset,
     autoCheckLinkedItem,
     autoUnlinkTask,
@@ -452,6 +454,29 @@ describe('attachAsset / detachAsset', () => {
     await detachAsset(id, 'nonexistent')
     // Should not throw
   })
+
+  it('relinks an existing asset reference to a replacement asset', async () => {
+    const { id } = await createProject({ title: 'P' })
+    await attachAsset(id, '20260401-deleted-a1b2c3d4', 'Hero reference')
+
+    await relinkAsset(id, '20260401-deleted-a1b2c3d4', '20260401-hero-e5f6g7h8')
+
+    expect(readProject(id)!.assets).toEqual([
+      { assetId: '20260401-hero-e5f6g7h8', label: 'Hero reference' },
+    ])
+  })
+
+  it('relink removes the old reference when the replacement is already attached', async () => {
+    const { id } = await createProject({ title: 'P' })
+    await attachAsset(id, '20260401-deleted-a1b2c3d4', 'Deleted')
+    await attachAsset(id, '20260401-hero-e5f6g7h8', 'Hero')
+
+    await relinkAsset(id, '20260401-deleted-a1b2c3d4', '20260401-hero-e5f6g7h8')
+
+    expect(readProject(id)!.assets).toEqual([
+      { assetId: '20260401-hero-e5f6g7h8', label: 'Hero' },
+    ])
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -469,5 +494,69 @@ describe('resolveLinkedTaskStatuses', () => {
 
     expect(resolved.resolvedTasks['board01']).toEqual({ column: 'todo', title: 'Board Task 1' })
     expect(resolved.resolvedTasks['missing99']).toBeNull() // not found on board
+  })
+
+  it('marks deleted assets missing without failing the project', async () => {
+    const { id } = await createProject({ title: 'P' })
+    await attachAsset(id, '20260401-logo-a1b2c3d4', 'Logo')
+    ctx.assets.getAsset = mock(async () => null) as typeof ctx.assets.getAsset
+
+    const resolved = await resolveLinkedTaskStatuses(readProject(id)!)
+
+    expect(resolved.resolvedAssets).toEqual([
+      { assetId: '20260401-logo-a1b2c3d4', label: 'Logo', type: 'unknown', missing: true },
+    ])
+  })
+
+  it('marks assets missing when the asset API is unavailable', async () => {
+    const { id } = await createProject({ title: 'P' })
+    await attachAsset(id, '20260401-logo-a1b2c3d4', 'Logo')
+    delete (ctx.assets as Partial<typeof ctx.assets>).getAsset
+
+    const resolved = await resolveLinkedTaskStatuses(readProject(id)!)
+
+    expect(resolved.resolvedAssets).toEqual([
+      { assetId: '20260401-logo-a1b2c3d4', label: 'Logo', type: 'unknown', missing: true },
+    ])
+  })
+
+  it('marks an asset missing when resolving it throws', async () => {
+    const { id } = await createProject({ title: 'P' })
+    await attachAsset(id, '20260401-logo-a1b2c3d4', 'Logo')
+    ctx.assets.getAsset = mock(async () => { throw new Error('asset store unavailable') }) as typeof ctx.assets.getAsset
+
+    const resolved = await resolveLinkedTaskStatuses(readProject(id)!)
+
+    expect(resolved.resolvedAssets).toEqual([
+      { assetId: '20260401-logo-a1b2c3d4', label: 'Logo', type: 'unknown', missing: true },
+    ])
+  })
+
+  it('keeps legacy filename asset references removable', async () => {
+    writeFileSync(join(projectsDir, 'legacy.md'), `---
+id: legacy
+title: Legacy
+status: active
+created: "2026-04-01T00:00:00.000Z"
+updated: "2026-04-01T00:00:00.000Z"
+owner: main
+tasks: []
+assets:
+  - filename: deleted-image.png
+    label: Deleted image
+---
+
+# Legacy
+`)
+    ctx.assets.getAsset = mock(async () => null) as typeof ctx.assets.getAsset
+
+    const resolved = await resolveLinkedTaskStatuses(readProject('legacy')!)
+
+    expect(resolved.resolvedAssets).toEqual([
+      { assetId: 'deleted-image.png', label: 'Deleted image', type: 'unknown', missing: true },
+    ])
+
+    await detachAsset('legacy', 'deleted-image.png')
+    expect(readProject('legacy')!.assets).toEqual([])
   })
 })
