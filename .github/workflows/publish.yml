@@ -94,16 +94,30 @@ jobs:
             --base-url "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
 
       - name: Compose release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
-          # Release notes = your annotated-tag message, if any. Write notes with:
+          # Release notes = your annotated-tag message. Write notes with:
           #   git tag -a messaging-v0.2.0 -m "What changed in this release"
-          # A lightweight tag (git tag messaging-v0.2.0) falls back to the commit
-          # message. The install line is always appended.
+          # We read the tag message via the GitHub API, NOT local git: actions/
+          # checkout peels annotated tags to lightweight, so `git for-each-ref
+          # %(contents)` would return the commit message instead. The API always
+          # sees the real tag object. A lightweight tag (no -a) falls back to the
+          # commit message. The install line is always appended.
+          REF="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}")"
+          OBJ_TYPE="$(echo "$REF" | jq -r '.object.type')"
+          OBJ_SHA="$(echo "$REF" | jq -r '.object.sha')"
+          if [ "$OBJ_TYPE" = "tag" ]; then
+            MSG="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${OBJ_SHA}" --jq '.message')"
+          else
+            MSG="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${OBJ_SHA}" --jq '.commit.message')"
+          fi
           {
-            git for-each-ref "refs/tags/${GITHUB_REF_NAME}" --format='%(contents)'
+            printf '%s\n' "$MSG"
             echo
             echo "---"
-            echo "Install: \`bakin plugins install github:${{ github.repository }}#plugins/${{ steps.tag.outputs.plugin }}\`"
+            echo "Install: \`bakin plugins install github:${GITHUB_REPOSITORY}#plugins/${{ steps.tag.outputs.plugin }}\`"
           } > "$RUNNER_TEMP/notes.md"
 
       - name: Create GitHub release
