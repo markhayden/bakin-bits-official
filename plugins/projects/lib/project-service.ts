@@ -111,6 +111,7 @@ export interface ProjectService {
   removeChecklistItem(projectId: string, taskItemId: string): Promise<void>
   linkChecklistItem(projectId: string, taskItemId: string, boardTaskId: string): Promise<void>
   attachAsset(projectId: string, assetId: string, label?: string): Promise<void>
+  relinkAsset(projectId: string, oldAssetId: string, newAssetId: string, label?: string): Promise<void>
   detachAsset(projectId: string, assetId: string): Promise<void>
   updateAssetLabel(projectId: string, assetId: string, label: string): Promise<void>
   promoteItemToTask(projectId: string, taskItemId: string, opts?: PromoteItemOpts): Promise<{ taskId: string }>
@@ -378,6 +379,31 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     })
   }
 
+  async function relinkAsset(projectId: string, oldAssetId: string, newAssetId: string, label?: string): Promise<void> {
+    return withProjectLock(async () => {
+      const project = repo.readProject(projectId)
+      if (!project) throw new Error(`Project not found: ${projectId}`)
+      const idx = project.assets.findIndex(a => a.assetId === oldAssetId)
+      if (idx === -1) throw new Error(`Asset not attached: ${oldAssetId}`)
+      const asset = await ctx.assets.getAsset(newAssetId)
+      if (!asset) throw new Error(`Asset not found: ${newAssetId}`)
+
+      const existingIdx = project.assets.findIndex(a => a.assetId === newAssetId)
+      if (existingIdx !== -1 && existingIdx !== idx) {
+        project.assets.splice(idx, 1)
+      } else {
+        project.assets[idx] = {
+          assetId: newAssetId,
+          label: label ?? project.assets[idx].label,
+        }
+      }
+
+      project.updated = new Date().toISOString()
+      repo.writeProject(project)
+      broadcast({ type: 'project.asset_changed', projectId, action: 'relink', assetId: newAssetId })
+    })
+  }
+
   async function updateAssetLabel(projectId: string, assetId: string, label: string): Promise<void> {
     return withProjectLock(() => {
       const project = repo.readProject(projectId)
@@ -453,14 +479,21 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     }
 
     const resolvedAssets = await Promise.all(project.assets.map(async (asset) => {
-      const indexed = await ctx.assets.getAsset(asset.assetId)
-      if (!indexed) return { assetId: asset.assetId, label: asset.label, type: 'unknown', missing: true }
-      return {
-        assetId: asset.assetId,
-        label: asset.label,
-        type: indexed.type,
-        description: indexed.description,
-        tags: indexed.tags,
+      try {
+        const indexed = typeof ctx.assets.getAsset === 'function'
+          ? await ctx.assets.getAsset(asset.assetId)
+          : null
+        if (!indexed) return { assetId: asset.assetId, label: asset.label, type: 'unknown', missing: true }
+        return {
+          assetId: asset.assetId,
+          label: asset.label,
+          type: indexed.type,
+          description: indexed.description,
+          tags: indexed.tags,
+        }
+      } catch (err) {
+        log.warn('Unable to resolve project asset', { projectId: project.id, assetId: asset.assetId, err })
+        return { assetId: asset.assetId, label: asset.label, type: 'unknown', missing: true }
       }
     }))
 
@@ -481,6 +514,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     removeChecklistItem,
     linkChecklistItem,
     attachAsset,
+    relinkAsset,
     detachAsset,
     updateAssetLabel,
     promoteItemToTask,

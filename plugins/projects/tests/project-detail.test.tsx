@@ -119,4 +119,68 @@ describe('ProjectDetail', () => {
       expect(screen.queryByRole('dialog', { name: /Launch brief/ })).toBeNull()
     })
   })
+
+  it('shows repair actions for missing assets', async () => {
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : String(input)
+      if (url === '/api/plugins/projects/proj-missing-asset') {
+        return {
+          ok: true,
+          json: async () => ({
+            project: {
+              id: 'proj-missing-asset',
+              title: 'Missing Asset Project',
+              status: 'active',
+              owner: 'main',
+              progress: 0,
+              tasks: [],
+              assets: [{ assetId: 'deleted-image.png', label: 'Deleted image' }],
+              body: '# Missing Asset Project',
+              updated: '2026-05-31T10:00:00.000Z',
+              resolvedTasks: {},
+              resolvedAssets: [
+                {
+                  assetId: 'deleted-image.png',
+                  label: 'Deleted image',
+                  type: 'unknown',
+                  missing: true,
+                },
+              ],
+              brainstormMessages: [],
+            },
+          }),
+          text: async () => '',
+        } as Response
+      }
+      if (url === '/api/plugins/assets/versioned') {
+        return {
+          ok: true,
+          json: async () => ({
+            assets: [
+              {
+                assetId: '20260531-replacement-abc12345',
+                type: 'images',
+                description: 'Replacement image',
+              },
+            ],
+          }),
+          text: async () => '',
+        } as Response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+
+    render(<ProjectDetail projectId="proj-missing-asset" onBack={() => {}} />)
+
+    expect(await screen.findByText("can't find asset")).toBeDefined()
+    expect(screen.getByText(/Some attached assets could not be loaded/)).toBeDefined()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Relink Deleted image' }))
+    expect(await screen.findByText('Relink asset')).toBeDefined()
+    expect(await screen.findByText('20260531-replacement-abc12345')).toBeDefined()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Detach Deleted image' }))
+    expect(await screen.findByRole('dialog', { name: 'Detach asset?' })).toBeDefined()
+    expect(screen.getByText(/Bakin can't find this asset/)).toBeDefined()
+  })
 })
