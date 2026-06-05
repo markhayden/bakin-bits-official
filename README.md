@@ -72,6 +72,28 @@ bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging@me
 | `rolo` | active | Video producer package — video/audio craft lessons and declared Runway/ElevenLabs runtime secrets. |
 | `jessica` | active | Research package — source-hierarchy lessons and evidence-gathering workspace templates. |
 
+## Publishing a release (Whiskit)
+
+Plugin `dist/` is **not committed** — it is build output. To ship a plugin
+version so users can install it with no toolchain, bump
+`plugins/<id>/bakin-plugin.json` and push a matching `<id>-v<semver>` tag:
+
+```sh
+git tag -a messaging-v0.2.0 -m "Add brainstorm export; fix plan ordering"
+git push origin messaging-v0.2.0
+```
+
+CI validates the version, builds the plugin, assembles a prebuilt artifact +
+checksum, carries the catalog forward, and creates a GitHub release (notes = your
+tag message). Install then downloads + verifies the artifact — nothing builds on
+the user's machine. **Full process, versioning rules, and troubleshooting:
+[RELEASE.md](RELEASE.md).**
+
+> **Agent packages don't need a release.** `bakin agents install
+> github:…#agents/<name>` installs from source (the cloned subpath) — agent
+> packages ship content, not built `dist/`, so they have no artifact build or
+> publish step. Land changes on `main` and users get them on their next install.
+
 ## Local development
 
 Clone alongside your Bakin checkout so paths line up, then link a plugin

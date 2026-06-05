@@ -41,12 +41,9 @@ jobs:
       - name: Build prebuilt plugin artifacts
         run: bun run build
 
-      - name: Verify dist/ is up to date
-        run: |
-          if ! git diff --exit-code plugins/*/dist/; then
-            echo "::error::plugins/*/dist/ is out of date. Run 'bun run build' locally and commit the result."
-            exit 1
-          fi
+      # dist/ is build output (no longer committed). The build above is a
+      # compile check; artifacts are produced + published by publish.yml on a
+      # `<id>-v<semver>` tag, not committed to the repo.
 
       - name: Tests with coverage
         run: bun run test:coverage
