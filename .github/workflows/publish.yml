@@ -1,0 +1,96 @@
+name: Publish plugin artifact
+
+# Cut a Whiskin artifact release for one plugin by pushing a `<id>-v<semver>`
+# tag (e.g. `messaging-v0.2.0`). Builds the plugin, runs `bakin plugins publish`
+# to assemble the prebuilt artifact + checksum, carries forward the previous
+# release's whiskin-artifacts.json, and attaches everything to a GitHub release.
+#
+# Consumers then install with no toolchain:
+#   bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging
+#
+# Index entry URLs are pinned to THIS tag's release (releases/download/<tag>/...),
+# and carried-forward entries keep their own older-release URLs — so the latest
+# release's index stays a complete catalog even though plugins release
+# independently. Only whiskin-artifacts.json itself is read via the stable
+# releases/latest/download redirect.
+#
+# Note: this clones + runs Bakin from source to get `bakin plugins publish`.
+# Switch to a downloaded released binary once a Bakin release ships the command.
+
+on:
+  push:
+    tags:
+      - '*-v*'
+
+permissions:
+  contents: write
+
+# Serialize releases so the carry-forward index isn't built from a racing latest.
+concurrency:
+  group: whiskin-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Parse tag → plugin + version
+        id: tag
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          PLUGIN="${TAG%-v*}"
+          VERSION="${TAG##*-v}"
+          if [ -z "$PLUGIN" ] || [ -z "$VERSION" ] || [ "$PLUGIN" = "$TAG" ]; then
+            echo "::error::Tag '$TAG' must be of the form <plugin-id>-v<semver> (e.g. messaging-v0.2.0)"
+            exit 1
+          fi
+          if [ ! -d "plugins/$PLUGIN" ]; then
+            echo "::error::No plugins/$PLUGIN directory for tag '$TAG'"
+            exit 1
+          fi
+          echo "plugin=$PLUGIN" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing $PLUGIN@$VERSION"
+
+      - name: Build the plugin
+        run: |
+          bun install --frozen-lockfile
+          (cd .build-sdk && bun install --frozen-lockfile)
+          bun run build
+
+      - name: Get Bakin (publish tool)
+        run: |
+          git clone --depth 1 https://github.com/markhayden/bakin.git "$RUNNER_TEMP/bakin"
+          (cd "$RUNNER_TEMP/bakin" && bun install --frozen-lockfile)
+
+      - name: Carry forward the previous release index
+        run: |
+          mkdir -p "$RUNNER_TEMP/release"
+          curl -fsSL "https://github.com/${{ github.repository }}/releases/latest/download/whiskin-artifacts.json" \
+            -o "$RUNNER_TEMP/release/whiskin-artifacts.json" \
+            || echo "No previous index (first release) — starting a fresh catalog."
+
+      - name: Publish artifact
+        run: |
+          cd "$RUNNER_TEMP/bakin"
+          bun run cli/bakin.ts plugins publish \
+            "$GITHUB_WORKSPACE/plugins/${{ steps.tag.outputs.plugin }}" \
+            --out "$RUNNER_TEMP/release" \
+            --base-url "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ runner.temp }}/release/*
+          make_latest: true
+          body: |
+            Whiskin artifact release for `${{ steps.tag.outputs.plugin }}@${{ steps.tag.outputs.version }}`.
+            Install: `bakin plugins install github:${{ github.repository }}#plugins/${{ steps.tag.outputs.plugin }}`

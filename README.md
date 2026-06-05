@@ -72,6 +72,26 @@ bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging@me
 | `rolo` | active | Video producer package — video/audio craft lessons and declared Runway/ElevenLabs runtime secrets. |
 | `jessica` | active | Research package — source-hierarchy lessons and evidence-gathering workspace templates. |
 
+## Publishing a release (Whiskin)
+
+Plugin `dist/` is **not committed** — it is build output. To ship a plugin
+version so users can install it with no toolchain, push a `<id>-v<semver>` tag
+and CI does the rest:
+
+```sh
+# bump the version in plugins/<id>/bakin-plugin.json, then:
+git tag messaging-v0.2.0
+git push origin messaging-v0.2.0
+```
+
+`.github/workflows/publish.yml` builds the plugin, runs `bakin plugins publish`
+to assemble a prebuilt artifact + checksum, carries forward the previous
+release's `whiskin-artifacts.json`, and attaches them to a GitHub release. The
+`bakin plugins install github:…#plugins/<name>` command above resolves that
+release automatically — the artifact is downloaded and verified; nothing builds
+on the user's machine. Plugins release independently (one tag ships one plugin;
+the others carry forward into the catalog).
+
 ## Local development
 
 Clone alongside your Bakin checkout so paths line up, then link a plugin
