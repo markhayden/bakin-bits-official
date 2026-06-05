@@ -1,9 +1,9 @@
 name: Publish plugin artifact
 
-# Cut a Whiskin artifact release for one plugin by pushing a `<id>-v<semver>`
+# Cut a Whiskit artifact release for one plugin by pushing a `<id>-v<semver>`
 # tag (e.g. `messaging-v0.2.0`). Builds the plugin, runs `bakin plugins publish`
 # to assemble the prebuilt artifact + checksum, carries forward the previous
-# release's whiskin-artifacts.json, and attaches everything to a GitHub release.
+# release's whiskit-artifacts.json, and attaches everything to a GitHub release.
 #
 # Consumers then install with no toolchain:
 #   bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging
@@ -11,7 +11,7 @@ name: Publish plugin artifact
 # Index entry URLs are pinned to THIS tag's release (releases/download/<tag>/...),
 # and carried-forward entries keep their own older-release URLs — so the latest
 # release's index stays a complete catalog even though plugins release
-# independently. Only whiskin-artifacts.json itself is read via the stable
+# independently. Only whiskit-artifacts.json itself is read via the stable
 # releases/latest/download redirect.
 #
 # Note: this clones + runs Bakin from source to get `bakin plugins publish`.
@@ -27,7 +27,7 @@ permissions:
 
 # Serialize releases so the carry-forward index isn't built from a racing latest.
 concurrency:
-  group: whiskin-publish
+  group: whiskit-publish
   cancel-in-progress: false
 
 jobs:
@@ -81,8 +81,8 @@ jobs:
       - name: Carry forward the previous release index
         run: |
           mkdir -p "$RUNNER_TEMP/release"
-          curl -fsSL "https://github.com/${{ github.repository }}/releases/latest/download/whiskin-artifacts.json" \
-            -o "$RUNNER_TEMP/release/whiskin-artifacts.json" \
+          curl -fsSL "https://github.com/${{ github.repository }}/releases/latest/download/whiskit-artifacts.json" \
+            -o "$RUNNER_TEMP/release/whiskit-artifacts.json" \
             || echo "No previous index (first release) — starting a fresh catalog."
 
       - name: Publish artifact

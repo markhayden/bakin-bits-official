@@ -1,4 +1,4 @@
-# Releasing a plugin (Whiskin)
+# Releasing a plugin (Whiskit)
 
 This repo ships **prebuilt** plugin artifacts so users can install with no
 toolchain — no `bun`, no `node`, no building on their machine. Plugin `dist/`
@@ -25,7 +25,7 @@ That's the whole flow. CI does the rest.
 - **One tag = one plugin.** Tags are `<plugin-id>-v<semver>`
   (`messaging-v0.2.0`, `projects-v0.3.0`, …). Each plugin versions
   independently; a release publishes **only** the tagged plugin.
-- **The others carry forward.** Each release's `whiskin-artifacts.json` is a
+- **The others carry forward.** Each release's `whiskit-artifacts.json` is a
   complete catalog: the tagged plugin gets a fresh artifact in *this* release,
   and every other plugin's entry is carried forward from the previous catalog
   (pointing at its own older release's artifact). So `releases/latest` always
@@ -34,7 +34,7 @@ That's the whole flow. CI does the rest.
 ### Releasing multiple plugins at once
 
 Push multiple tags. The publish workflow uses a `concurrency` group
-(`whiskin-publish`, `cancel-in-progress: false`), so runs **serialize** — each
+(`whiskit-publish`, `cancel-in-progress: false`), so runs **serialize** — each
 one carries forward the previous one's catalog, keeping the index consistent.
 There's no "release everything" button by design; you choose exactly what ships.
 
@@ -75,14 +75,14 @@ then polish if you like.
    (Switch to a downloaded released binary once a Bakin release ships the
    command.)
 4. **Carry forward** — downloads the previous `releases/latest` catalog as the
-   starting `whiskin-artifacts.json` (first release starts fresh).
+   starting `whiskit-artifacts.json` (first release starts fresh).
 5. **Publish artifact** — `bakin plugins publish` assembles the `.tar.gz`
-   (`bakin-plugin.json` + `dist/` + `.whiskin/build.json` provenance) + a
+   (`bakin-plugin.json` + `dist/` + `.whiskit/build.json` provenance) + a
    SHA256 checksum, and merges this plugin's entry into the catalog with URLs
    pinned to **this** tag's release.
 6. **Compose release notes** — tag message + install line → `notes.md`.
 7. **Create GitHub release** — attaches the artifact, checksum, and
-   `whiskin-artifacts.json`; body is `notes.md`; marked `make_latest`.
+   `whiskit-artifacts.json`; body is `notes.md`; marked `make_latest`.
 
 ## How install resolves a release
 
@@ -90,7 +90,7 @@ then polish if you like.
 bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging
 ```
 
-Bakin reads `releases/latest/download/whiskin-artifacts.json` (a stable
+Bakin reads `releases/latest/download/whiskit-artifacts.json` (a stable
 redirect), finds the `messaging` entry, downloads the pinned artifact + checksum
 from whatever release published it, verifies the SHA256, and extracts it into
 the runtime. **Nothing builds on the user's machine.**
@@ -108,7 +108,7 @@ bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging@me
 - [ ] Tag is `<plugin-id>-v<version>` and **matches** that version.
 - [ ] Annotated tag message written (these become the release notes).
 - [ ] After push: the `Publish plugin artifact` workflow is green and the
-      GitHub release has the `.tar.gz`, `.sha256`, and `whiskin-artifacts.json`.
+      GitHub release has the `.tar.gz`, `.sha256`, and `whiskit-artifacts.json`.
 
 ## Troubleshooting
 

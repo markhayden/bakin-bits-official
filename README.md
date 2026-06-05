@@ -72,7 +72,7 @@ bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging@me
 | `rolo` | active | Video producer package — video/audio craft lessons and declared Runway/ElevenLabs runtime secrets. |
 | `jessica` | active | Research package — source-hierarchy lessons and evidence-gathering workspace templates. |
 
-## Publishing a release (Whiskin)
+## Publishing a release (Whiskit)
 
 Plugin `dist/` is **not committed** — it is build output. To ship a plugin
 version so users can install it with no toolchain, bump
