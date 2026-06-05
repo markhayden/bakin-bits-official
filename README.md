@@ -79,18 +79,26 @@ version so users can install it with no toolchain, push a `<id>-v<semver>` tag
 and CI does the rest:
 
 ```sh
-# bump the version in plugins/<id>/bakin-plugin.json, then:
-git tag messaging-v0.2.0
+# 1. Bump the version in plugins/<id>/bakin-plugin.json (it must match the tag).
+# 2. Tag <plugin-id>-v<version>. Use an annotated tag (-a -m) to write release
+#    notes; the message becomes the GitHub release body.
+git tag -a messaging-v0.2.0 -m "Add brainstorm export + fix plan ordering"
 git push origin messaging-v0.2.0
 ```
 
-`.github/workflows/publish.yml` builds the plugin, runs `bakin plugins publish`
-to assemble a prebuilt artifact + checksum, carries forward the previous
-release's `whiskin-artifacts.json`, and attaches them to a GitHub release. The
-`bakin plugins install github:…#plugins/<name>` command above resolves that
+`.github/workflows/publish.yml` validates the tag version matches the manifest,
+builds the plugin, runs `bakin plugins publish` to assemble a prebuilt artifact
++ checksum, carries forward the previous release's `whiskin-artifacts.json`, and
+attaches them to a GitHub release (notes = your tag message + an install line).
+The `bakin plugins install github:…#plugins/<name>` command above resolves that
 release automatically — the artifact is downloaded and verified; nothing builds
-on the user's machine. Plugins release independently (one tag ships one plugin;
-the others carry forward into the catalog).
+on the user's machine.
+
+**One tag = one plugin.** Each plugin versions independently
+(`messaging-v0.2.0`, `projects-v0.3.0`); a release publishes only the tagged
+plugin, and the others carry forward into the catalog (their artifacts stay in
+their own releases). Push multiple tags to release multiple plugins — the
+workflow serializes them so the carry-forward catalog stays consistent.
 
 ## Local development
 

@@ -42,7 +42,7 @@ jobs:
         with:
           bun-version-file: .bun-version
 
-      - name: Parse tag → plugin + version
+      - name: Parse + validate tag
         id: tag
         run: |
           TAG="${GITHUB_REF_NAME}"
@@ -54,6 +54,13 @@ jobs:
           fi
           if [ ! -d "plugins/$PLUGIN" ]; then
             echo "::error::No plugins/$PLUGIN directory for tag '$TAG'"
+            exit 1
+          fi
+          # The manifest version is the source of truth for the artifact; the
+          # tag must agree so the release name matches what gets published.
+          MANIFEST_VERSION="$(jq -r '.version' "plugins/$PLUGIN/bakin-plugin.json")"
+          if [ "$MANIFEST_VERSION" != "$VERSION" ]; then
+            echo "::error::Tag '$TAG' is v$VERSION but plugins/$PLUGIN/bakin-plugin.json is version '$MANIFEST_VERSION'. Bump the manifest version to match the tag (or retag)."
             exit 1
           fi
           echo "plugin=$PLUGIN" >> "$GITHUB_OUTPUT"
@@ -86,11 +93,22 @@ jobs:
             --out "$RUNNER_TEMP/release" \
             --base-url "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
 
+      - name: Compose release notes
+        run: |
+          # Release notes = your annotated-tag message, if any. Write notes with:
+          #   git tag -a messaging-v0.2.0 -m "What changed in this release"
+          # A lightweight tag (git tag messaging-v0.2.0) falls back to the commit
+          # message. The install line is always appended.
+          {
+            git for-each-ref "refs/tags/${GITHUB_REF_NAME}" --format='%(contents)'
+            echo
+            echo "---"
+            echo "Install: \`bakin plugins install github:${{ github.repository }}#plugins/${{ steps.tag.outputs.plugin }}\`"
+          } > "$RUNNER_TEMP/notes.md"
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ runner.temp }}/release/*
+          body_path: ${{ runner.temp }}/notes.md
           make_latest: true
-          body: |
-            Whiskin artifact release for `${{ steps.tag.outputs.plugin }}@${{ steps.tag.outputs.version }}`.
-            Install: `bakin plugins install github:${{ github.repository }}#plugins/${{ steps.tag.outputs.plugin }}`
