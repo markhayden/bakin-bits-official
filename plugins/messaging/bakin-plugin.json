@@ -29,6 +29,30 @@
     "search"
   ],
   "contributes": {
+    "nav": [
+      {
+        "id": "messaging",
+        "label": "Messaging",
+        "icon": "MessageSquare",
+        "href": "/messaging",
+        "order": 25,
+        "alwaysExpanded": true,
+        "children": [
+          { "id": "messaging-calendar", "label": "Calendar", "icon": "CalendarDays", "href": "/messaging/calendar" },
+          { "id": "messaging-plans", "label": "Plans", "icon": "ClipboardList", "href": "/messaging/plans" },
+          { "id": "messaging-brainstorm", "label": "Brainstorm", "icon": "Sparkles", "href": "/messaging/brainstorm" }
+        ]
+      }
+    ],
+    "routes": [
+      { "path": "/messaging", "summary": "Messaging default route" },
+      { "path": "/messaging/calendar", "summary": "Messaging content calendar" },
+      { "path": "/messaging/plans", "summary": "Messaging content Plans" },
+      { "path": "/messaging/plans/[id]", "summary": "Messaging plan workspace" },
+      { "path": "/messaging/brainstorm", "summary": "Messaging brainstorming sessions" }
+    ],
+    "slots": ["nav-badge-providers"],
+    "eager": true,
     "clientRoutes": [
       { "path": "/messaging", "summary": "Messaging default route" },
       { "path": "/messaging/calendar", "summary": "Messaging content calendar" },
