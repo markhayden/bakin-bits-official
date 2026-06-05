@@ -75,30 +75,24 @@ bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging@me
 ## Publishing a release (Whiskin)
 
 Plugin `dist/` is **not committed** — it is build output. To ship a plugin
-version so users can install it with no toolchain, push a `<id>-v<semver>` tag
-and CI does the rest:
+version so users can install it with no toolchain, bump
+`plugins/<id>/bakin-plugin.json` and push a matching `<id>-v<semver>` tag:
 
 ```sh
-# 1. Bump the version in plugins/<id>/bakin-plugin.json (it must match the tag).
-# 2. Tag <plugin-id>-v<version>. Use an annotated tag (-a -m) to write release
-#    notes; the message becomes the GitHub release body.
-git tag -a messaging-v0.2.0 -m "Add brainstorm export + fix plan ordering"
+git tag -a messaging-v0.2.0 -m "Add brainstorm export; fix plan ordering"
 git push origin messaging-v0.2.0
 ```
 
-`.github/workflows/publish.yml` validates the tag version matches the manifest,
-builds the plugin, runs `bakin plugins publish` to assemble a prebuilt artifact
-+ checksum, carries forward the previous release's `whiskin-artifacts.json`, and
-attaches them to a GitHub release (notes = your tag message + an install line).
-The `bakin plugins install github:…#plugins/<name>` command above resolves that
-release automatically — the artifact is downloaded and verified; nothing builds
-on the user's machine.
+CI validates the version, builds the plugin, assembles a prebuilt artifact +
+checksum, carries the catalog forward, and creates a GitHub release (notes = your
+tag message). Install then downloads + verifies the artifact — nothing builds on
+the user's machine. **Full process, versioning rules, and troubleshooting:
+[RELEASE.md](RELEASE.md).**
 
-**One tag = one plugin.** Each plugin versions independently
-(`messaging-v0.2.0`, `projects-v0.3.0`); a release publishes only the tagged
-plugin, and the others carry forward into the catalog (their artifacts stay in
-their own releases). Push multiple tags to release multiple plugins — the
-workflow serializes them so the carry-forward catalog stays consistent.
+> **Agent packages don't need a release.** `bakin agents install
+> github:…#agents/<name>` installs from source (the cloned subpath) — agent
+> packages ship content, not built `dist/`, so they have no artifact build or
+> publish step. Land changes on `main` and users get them on their next install.
 
 ## Local development
 
