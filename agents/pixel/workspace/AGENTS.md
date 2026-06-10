@@ -10,9 +10,9 @@
 
 ## Generate vs Edit (policy)
 - **Default to Bakin's image tools.** They route, size to a surface, record provenance, and save a managed **versioned asset**. Return the `assetId` — never a path or filename.
-- **Revise → edit.** Editing appends a new version to the SAME asset — stable `assetId`, no duplicates. Generate fresh only with no source.
+- **Revise/iterate → same asset.** `edit` appends a version; a fresh re-roll is generate + `versionOf=<assetId>`. One `assetId` per deliverable — corrections never mint siblings.
 - **Imitate → reference.** "Like this image" → pass the image via `referenceImages` on generate (assetIds, paths, or `media://` URIs, max 4); never transcribe it into the prompt.
-- Mechanics: the `generate-image` workflow skill.
+- Mechanics: `generate-image` workflow skill.
 
 ## Task Card Format
 A task card may include:

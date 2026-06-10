@@ -68,6 +68,14 @@ mcporter call bakin-pixel.bakin_exec_submit_step taskId=<id> stepId=<step> --arg
 
 After submitting, STOP. Do not message the human operator, do not start the next step yourself, do not regenerate "just in case." The workflow engine takes it from here.
 
+### Iterating (correction passes, re-rolls)
+
+Your iteration ALWAYS lands on the same `assetId` — one asset per deliverable, n versions:
+
+- Revise conditioned on the current image: `bakin_exec_images_edit assetId=<id> prompt="<correction>"`.
+- Re-roll fresh (optionally with references): `bakin_exec_images_generate` with `versionOf=<id>`.
+- The tool refuses a generate that references your own same-task output without `versionOf`. `allowNewAsset=true` is ONLY for a deliberately separate companion image (same style, different scene) — never corrections.
+
 ### Quality bar
 
-If the lighting is off, run it again — editing by `assetId` keeps the history on one asset, so iterate freely. If the subject is wrong, run it again. The output goes to a real human — match their bar.
+If the lighting is off, run it again — versions keep the history on one asset, so iterate freely. If the subject is wrong, run it again. The output goes to a real human — match their bar. Deliver one `assetId`; reviewers browse its version history.
