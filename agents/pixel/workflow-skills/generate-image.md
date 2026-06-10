@@ -28,6 +28,7 @@ The dispatch message will give you:
 - A `prompt` or `description` of the desired image.
 - An optional `surface` (e.g. `instagram-feed-portrait`, `blog-hero`, `open-graph`). **Prefer a surface** — it sets the correct dimensions automatically.
 - An optional `source_image` (a managed `assetId`, or a local path to import) → this is an EDIT, not a new generation (see step 3).
+- Optional `reference_images` — images to imitate or condition on ("like this one") → pass via `referenceImages` (see step 3). A reference is NOT an edit base.
 - Optional explicit dimensions (`width`/`height`) only if no surface fits.
 
 If something ambiguous is missing (especially the surface/size for social work), block the task and ask — don't guess.
@@ -48,6 +49,14 @@ mcporter call bakin-pixel.bakin_exec_images_generate \
 ```
 
 Optional: call `bakin_exec_images_recommend` first to pick a provider/model/surface, or pass `provider` / `model` / `width` / `height` / `quality` explicitly. The tool returns the **`assetId`** (plus `version`, `routeSource`, `provider`, `model`) — capture `assetId` for your step output. No manual path, directory, or filename handling — the asset is addressed by its id.
+
+**References** (brief says "like this image" / provides an attachment): pass the image itself, don't describe it —
+
+```bash
+mcporter call bakin-pixel.bakin_exec_images_generate --args '{"taskId":"<id>","surface":"<surface>","prompt":"<your crafted prompt>","referenceImages":["<assetId | /abs/path | media://inbound/file.png>"]}'
+```
+
+Up to 4 entries, mixed forms fine. Raw paths and `media://` URIs are auto-imported as tracked assets linked to the task, and the generated asset records its lineage (the References row on the asset page). References need a native runtime model with the `reference-images` capability — the call fails cleanly before billing otherwise, so just fix the route and retry. Never list the asset you're editing as a reference; the edit already includes it.
 
 **Edits** (`source_image` present): use **`bakin_exec_images_edit`** with `assetId=<managed asset>` plus the edit `prompt`. It edits the current version, appends a **new version** to the SAME asset (the id is stable), and returns that `assetId`. If the source is a loose local file (not yet managed), first `bakin_exec_images_import taskId=<id> filePath=<abs path>` to get an `assetId`, then edit by `assetId`. Everything — generate, edit, multi-image — routes through the `bakin_exec_images_*` tools; never shell out to a native image script.
 
