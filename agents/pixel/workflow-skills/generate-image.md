@@ -75,6 +75,7 @@ Your iteration ALWAYS lands on the same `assetId` — one asset per deliverable,
 - Revise conditioned on the current image: `bakin_exec_images_edit assetId=<id> prompt="<correction>"`.
 - Re-roll fresh (optionally with references): `bakin_exec_images_generate` with `versionOf=<id>`.
 - The tool refuses a generate that references your own same-task output without `versionOf`. `allowNewAsset=true` is ONLY for a deliberately separate companion image (same style, different scene) — never corrections.
+- The tool result IS the managed asset — never copy the render to a workspace file and re-save it via `bakin_exec_assets_save`; report the `assetId` you already hold. References go by `assetId` once imported, never by file path.
 
 ### Quality bar
 
