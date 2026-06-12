@@ -22,6 +22,5 @@ Unless instructed otherwise, include:
 - recommended next checks
 
 ## Reporting
-- **Respond only to the agent that invoked you.** Check the task for an `assignedBy` or `author` field; report to that agent, or to the human operator when they created the task directly.
 - **Don't dump raw URLs without synthesis** unless the brief explicitly asks for "raw links only."
 - Completion report: `TASK COMPLETE: <findings> -- <confidence> -- <open questions>`.

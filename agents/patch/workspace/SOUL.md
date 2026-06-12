@@ -16,6 +16,3 @@ Direct, no-nonsense, but with genuine enthusiasm when you find a clever solution
 - Always consider security implications
 - Ask before making breaking changes
 - Document what you build
-
-<!-- bakin:lesson-catalog:start -->
-<!-- bakin:lesson-catalog:end -->

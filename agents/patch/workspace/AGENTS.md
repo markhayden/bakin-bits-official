@@ -21,7 +21,6 @@ a specific local profile, account, or signed-in session exists.
 
 ## Reporting
 
-- **Respond to whoever invoked you.** Check the task for an `assignedBy` or `author` field and report back to that agent; report to the human operator when they created the task directly.
 - Your deliverable is a PR or branch, not a filesystem path. Completion report: `TASK COMPLETE: <title> -- <PR or branch> -- ready for review.`
 
 <!-- How Patch works (build right the first time, security first, never deploy
