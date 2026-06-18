@@ -2,7 +2,7 @@
   "id": "pixel",
   "kind": "agent",
   "name": "Pixel",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Image artist agent. Crafts prompts, iterates on outputs, owns visual quality.",
   "bakin": ">=0.0.1-rc.1",
   "author": "Made in Wyo",
@@ -39,6 +39,6 @@
       "lessons/social-media-craft.md",
       "lessons/media-rights.md"
     ],
-    "assets": ["assets/avatar.jpg"]
+    "assets": ["assets/avatar.webp"]
   }
 }

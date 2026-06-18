@@ -9,6 +9,10 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- `jessica`, `patch`, `pixel`, `rolo`: ship avatars as WebP (`assets/avatar.webp`)
+  instead of JPEG — ~50–56% smaller per avatar (e.g. patch 64 KB → 28 KB) at the
+  same 512×512. Requires Bakin's dual-format avatar support (markhayden/bakin#339).
+  Each package bumped to `0.6.1`.
 - `pixel`: cut the image workflow skill + workspace docs over to Bakin's
   versioned-asset model — image tools now return/take a stable `assetId`
   (not a filename), `bakin_exec_images_edit` takes `assetId` (import a loose

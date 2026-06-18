@@ -13,7 +13,7 @@ agents/rolo/
 ├── lessons/                 lessons w/ frontmatter
 │   ├── video-pacing.md        (default-enabled)
 │   └── audio-craft.md         (opt-in)
-└── assets/                    avatar.jpg
+└── assets/                    avatar.webp
 ```
 
 ## Notes
