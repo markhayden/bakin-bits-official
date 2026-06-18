@@ -12,7 +12,7 @@ agents/patch/
 │   └── git-isolation/        runtime procedure for Bakin git worktree tools
 ├── lessons/
 │   └── dev-discipline.md     (default-enabled)
-└── assets/                   avatar.jpg
+└── assets/                   avatar.webp
 ```
 
 ## Notes

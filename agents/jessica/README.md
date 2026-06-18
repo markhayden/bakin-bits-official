@@ -13,7 +13,7 @@ agents/jessica/
 ├── lessons/
 │   ├── source-hierarchy.md    (default-enabled)
 │   └── parallel-lanes.md      (opt-in)
-└── assets/                    avatar.jpg
+└── assets/                    avatar.webp
 ```
 
 ## Notes

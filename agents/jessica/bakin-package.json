@@ -2,7 +2,7 @@
   "id": "jessica",
   "kind": "agent",
   "name": "Jessica",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Research agent — multi-source discovery, evidence gathering, synthesis support.",
   "bakin": ">=0.0.1-rc.1",
   "author": "Made in Wyo",
@@ -38,6 +38,6 @@
       "lessons/synthesis-format.md",
       "lessons/parallel-lanes.md"
     ],
-    "assets": ["assets/avatar.jpg"]
+    "assets": ["assets/avatar.webp"]
   }
 }
