@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import {
   AgentAvatar,
   AgentFilter,
@@ -11,7 +11,7 @@ import {
   readBrainstormSseResponse,
 } from "@makinbakin/sdk/components"
 import type { BrainstormMessage } from "@makinbakin/sdk/components"
-import { useAgentIds, useAgentList, usePathname, useQueryState, useRouter, useSearch, useSearchParams } from "@makinbakin/sdk/hooks"
+import { useAgentIds, useAgentList, useHorizontalResize, usePathname, useQueryState, useRouter, useSearch, useSearchParams } from "@makinbakin/sdk/hooks"
 import { Badge } from "@makinbakin/sdk/ui"
 import { Button } from "@makinbakin/sdk/ui"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@makinbakin/sdk/ui"
@@ -45,31 +45,6 @@ const REJECT_BUTTON_CLASS = 'border-red-500/50 text-red-400 hover:border-red-400
 
 type BrainstormLayoutMode = 'columns' | 'tabs'
 type BrainstormWorkspaceTab = 'brainstorm' | 'proposals'
-
-function clampProposalPanelWidth(width: number): number {
-  return Math.min(PROPOSAL_PANEL_MAX_WIDTH, Math.max(PROPOSAL_PANEL_MIN_WIDTH, width))
-}
-
-function getStoredProposalPanelWidth(): number {
-  if (typeof window === 'undefined') return PROPOSAL_PANEL_DEFAULT_WIDTH
-  try {
-    const raw = window.localStorage.getItem(PROPOSAL_PANEL_STORAGE_KEY)
-    if (!raw) return PROPOSAL_PANEL_DEFAULT_WIDTH
-    const parsed = Number.parseInt(raw, 10)
-    return Number.isFinite(parsed) ? clampProposalPanelWidth(parsed) : PROPOSAL_PANEL_DEFAULT_WIDTH
-  } catch {
-    return PROPOSAL_PANEL_DEFAULT_WIDTH
-  }
-}
-
-function persistProposalPanelWidth(width: number): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(PROPOSAL_PANEL_STORAGE_KEY, String(clampProposalPanelWidth(width)))
-  } catch {
-    // Resizing should continue to work even if localStorage is unavailable.
-  }
-}
 
 function getStoredBrainstormLayoutMode(): BrainstormLayoutMode {
   if (typeof window === 'undefined') return 'columns'
@@ -533,40 +508,15 @@ export function BrainstormView() {
   const [deleteSessionId, setDeleteSessionId] = useState<string | null>(null)
   const [deletingSession, setDeletingSession] = useState(false)
   const [selectedProposalId, setSelectedProposalId] = useState<string | null>(null)
-  const [proposalPanelWidth, setProposalPanelWidth] = useState(getStoredProposalPanelWidth)
   const [layoutMode, setLayoutMode] = useState<BrainstormLayoutMode>(getStoredBrainstormLayoutMode)
   const [workspaceTab, setWorkspaceTab] = useState<BrainstormWorkspaceTab>('brainstorm')
-  const proposalPanelWidthRef = useRef(proposalPanelWidth)
+  const { width: proposalPanelWidth, handleProps: proposalResizeProps } = useHorizontalResize({
+    defaultWidth: PROPOSAL_PANEL_DEFAULT_WIDTH,
+    minWidth: PROPOSAL_PANEL_MIN_WIDTH,
+    maxWidth: PROPOSAL_PANEL_MAX_WIDTH,
+    storageKey: PROPOSAL_PANEL_STORAGE_KEY,
+  })
   const searchHook = useSearch({ plugin: 'messaging', facets: ['status', 'agent_id'], debounce: 300 })
-
-  useEffect(() => {
-    proposalPanelWidthRef.current = proposalPanelWidth
-  }, [proposalPanelWidth])
-
-  const startProposalPanelResize = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-    event.preventDefault()
-    const startX = event.clientX
-    const startWidth = proposalPanelWidthRef.current
-
-    const handleMouseMove = (moveEvent: MouseEvent) => {
-      const nextWidth = clampProposalPanelWidth(startWidth + startX - moveEvent.clientX)
-      proposalPanelWidthRef.current = nextWidth
-      setProposalPanelWidth(nextWidth)
-    }
-
-    const handleMouseUp = () => {
-      persistProposalPanelWidth(proposalPanelWidthRef.current)
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-  }, [])
 
   const changeLayoutMode = useCallback((mode: BrainstormLayoutMode) => {
     setLayoutMode(mode)
@@ -821,11 +771,9 @@ export function BrainstormView() {
       <aside className={`relative flex min-h-0 flex-col overflow-hidden ${showHeader ? 'border-l border-border px-4' : ''}`}>
         {showResizeHandle && (
           <div
-            role="separator"
-            aria-orientation="vertical"
             aria-label="Resize proposal panel"
             className="absolute inset-y-0 left-0 z-10 w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-accent/50 active:bg-accent"
-            onMouseDown={startProposalPanelResize}
+            {...proposalResizeProps}
           />
         )}
         {showHeader && (
