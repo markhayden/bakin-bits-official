@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { useRouter } from '@makinbakin/sdk/hooks'
+import { useRouter, useHorizontalResize } from '@makinbakin/sdk/hooks'
 import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, ChevronDown, Search, Pencil, Trash2, Link2 } from 'lucide-react'
 import { useMainAgentId } from "@makinbakin/sdk/hooks"
 import { AgentSelect, IntegratedBrainstorm, readBrainstormSseResponse } from "@makinbakin/sdk/components"
@@ -196,6 +196,14 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   const mainAgentId = useMainAgentId() ?? ''
   const [project, setProject] = useState<ProjectData | null>(null)
   const [loading, setLoading] = useState(!isNew)
+
+  // Draggable divider between the main plan column and the progress/tasks sidebar.
+  const { width: sidebarWidth, handleProps: sidebarResizeProps } = useHorizontalResize({
+    defaultWidth: 346,
+    minWidth: 280,
+    maxWidth: 640,
+    storageKey: 'projects-sidebar',
+  })
 
   // Edit mode — single toggle for title + spec
   const [editing, setEditing] = useState(false)
@@ -767,8 +775,8 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
       {/* ── Two-column body ── */}
       <div className="flex gap-6 pt-5 flex-1 min-h-0 overflow-hidden">
 
-        {/* ── Main column ── */}
-        <div className="flex-1 min-w-0 flex flex-col">
+        {/* ── Main column ── (min width keeps the resizable sidebar from collapsing it) */}
+        <div className="flex-1 min-w-[360px] flex flex-col">
 
           {/* Scrollable content area */}
           <div className="flex-1 min-h-0 overflow-y-auto pr-1" style={{ scrollbarGutter: 'stable' }}>
@@ -812,8 +820,18 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
           />
         </div>
 
-        {/* ── Right sidebar ── */}
-        <div className="w-[346px] shrink-0 overflow-y-auto space-y-5 border-l border-[rgba(255,255,255,0.06)] pl-6 pr-2" style={{ scrollbarGutter: 'stable' }}>
+        {/* ── Right sidebar (resizable) ── */}
+        <div
+          className="relative shrink-0 overflow-y-auto space-y-5 border-l border-[rgba(255,255,255,0.06)] pl-6 pr-2"
+          style={{ width: sidebarWidth, scrollbarGutter: 'stable' }}
+        >
+          {/* Drag handle — sits over the left border to resize the sidebar.
+              role / aria-orientation / tabIndex / aria-value* / keyboard all come from handleProps. */}
+          <div
+            {...sidebarResizeProps}
+            aria-label="Resize progress panel"
+            className="absolute inset-y-0 left-0 z-10 w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-accent/50 active:bg-accent"
+          />
 
           {/* Progress */}
           <div>

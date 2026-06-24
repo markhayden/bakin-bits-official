@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { setNavBadge } from './index.js'
 
 const defaultAgents = [
@@ -149,6 +149,100 @@ export function useToastStore() {
   return {}
 }
 
+export function useHorizontalResize({ defaultWidth, minWidth, maxWidth }) {
+  const clamp = (n) => Math.min(maxWidth, Math.max(minWidth, n))
+  const [width, setWidthState] = useState(() => clamp(defaultWidth))
+  const widthRef = useRef(width)
+  const dragging = useRef(false)
+  const startX = useRef(0)
+  const startWidth = useRef(0)
+
+  useEffect(() => {
+    widthRef.current = width
+  }, [width])
+
+  const setWidth = useCallback((w) => {
+    const next = clamp(w)
+    widthRef.current = next
+    setWidthState(next)
+  }, [minWidth, maxWidth])
+
+  const onMouseDown = useCallback((e) => {
+    e.preventDefault()
+    dragging.current = true
+    startX.current = e.clientX
+    startWidth.current = widthRef.current
+    const move = (ev) => {
+      if (!dragging.current) return
+      const next = clamp(startWidth.current + startX.current - ev.clientX)
+      widthRef.current = next
+      setWidthState(next)
+    }
+    const up = () => {
+      dragging.current = false
+      document.removeEventListener('mousemove', move)
+      document.removeEventListener('mouseup', up)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    document.addEventListener('mousemove', move)
+    document.addEventListener('mouseup', up)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }, [minWidth, maxWidth])
+
+  const onTouchStart = useCallback((e) => {
+    const touch = e.touches[0]
+    if (!touch) return
+    dragging.current = true
+    startX.current = touch.clientX
+    startWidth.current = widthRef.current
+    const move = (ev) => {
+      const t = ev.touches[0]
+      if (!t || !dragging.current) return
+      ev.preventDefault()
+      const next = clamp(startWidth.current + startX.current - t.clientX)
+      widthRef.current = next
+      setWidthState(next)
+    }
+    const up = () => {
+      dragging.current = false
+      document.removeEventListener('touchmove', move)
+      document.removeEventListener('touchend', up)
+      document.removeEventListener('touchcancel', up)
+    }
+    document.addEventListener('touchmove', move, { passive: false })
+    document.addEventListener('touchend', up)
+    document.addEventListener('touchcancel', up)
+  }, [minWidth, maxWidth])
+
+  const onKeyDown = useCallback((e) => {
+    let dir = 0
+    if (e.key === 'ArrowLeft') dir = 1
+    else if (e.key === 'ArrowRight') dir = -1
+    else return
+    e.preventDefault()
+    const step = e.shiftKey ? 64 : 16
+    setWidth(widthRef.current + dir * step)
+  }, [setWidth])
+
+  return {
+    width,
+    setWidth,
+    handleProps: {
+      role: 'separator',
+      tabIndex: 0,
+      'aria-orientation': 'vertical',
+      'aria-valuenow': width,
+      'aria-valuemin': minWidth,
+      'aria-valuemax': maxWidth,
+      onMouseDown,
+      onTouchStart,
+      onKeyDown,
+    },
+  }
+}
+
 export function useNavBadge(pluginId, navItemId, badge) {
   const override = hookOverride('useNavBadge')
   if (override) return override(pluginId, navItemId, badge)
@@ -157,3 +251,4 @@ export function useNavBadge(pluginId, navItemId, badge) {
     setNavBadge(pluginId, navItemId, badge)
   }, [pluginId, navItemId, key])
 }
+

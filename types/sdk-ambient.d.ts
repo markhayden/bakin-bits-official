@@ -961,6 +961,31 @@ declare module '@makinbakin/sdk/hooks' {
   export function useNotificationChannels(): NotificationChannel[]
   export function getChannelLabel(channelId: string, channels?: NotificationChannel[]): string
   export function toast(message: string, type?: 'success' | 'error' | 'info' | 'warning'): void
+  /**
+   * Resize a right-anchored panel by dragging the divider on its left edge.
+   * `handleProps` carries the full separator a11y contract (role, tabIndex,
+   * aria-value*, and mouse/touch/keyboard handlers) — spread it onto the divider.
+   */
+  export function useHorizontalResize(opts: {
+    defaultWidth: number
+    minWidth: number
+    maxWidth: number
+    storageKey?: string
+  }): {
+    width: number
+    setWidth(w: number): void
+    handleProps: {
+      role: 'separator'
+      tabIndex: 0
+      'aria-orientation': 'horizontal' | 'vertical'
+      'aria-valuenow': number
+      'aria-valuemin': number
+      'aria-valuemax': number
+      onMouseDown(e: import('react').MouseEvent): void
+      onTouchStart(e: import('react').TouchEvent): void
+      onKeyDown(e: import('react').KeyboardEvent): void
+    }
+  }
   /** Sync a nav item's badge to a derived value; the recommended provider glue. */
   export function useNavBadge(
     pluginId: string,
