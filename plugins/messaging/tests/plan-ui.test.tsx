@@ -234,6 +234,15 @@ describe('Plan client UI', () => {
     })
   })
 
+  it('exposes a resizable details sidebar divider', async () => {
+    render(<PlanWorkspace planId="plan-1" />)
+
+    const handle = await screen.findByLabelText('Resize details panel')
+    expect(handle.getAttribute('role')).toBe('separator')
+    expect(handle.getAttribute('tabindex')).toBe('0')
+    expect(handle.getAttribute('aria-valuenow')).toBe('346')
+  })
+
   it('deletes a Plan and returns to the Plan list', async () => {
     const onDeleted = mock()
     render(<PlanWorkspace planId="plan-1" onDeleted={onDeleted} />)
