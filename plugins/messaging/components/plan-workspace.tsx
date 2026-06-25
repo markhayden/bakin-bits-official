@@ -9,6 +9,7 @@ import {
   readBrainstormSseResponse,
 } from "@makinbakin/sdk/components"
 import type { BrainstormMessage } from "@makinbakin/sdk/components"
+import { useHorizontalResize } from "@makinbakin/sdk/hooks"
 import { Badge } from "@makinbakin/sdk/ui"
 import { Button } from "@makinbakin/sdk/ui"
 import { Skeleton } from "@makinbakin/sdk/ui"
@@ -289,6 +290,14 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
   const [kickoffError, setKickoffError] = useState<string | null>(null)
   const [brainstormMessages, setBrainstormMessages] = useState<BrainstormMessage[]>([])
   const [activeTab, setActiveTab] = useState<PlanWorkspaceTab>('plan')
+
+  // Draggable divider between the main plan column and the details/tasks sidebar.
+  const { width: sidebarWidth, handleProps: sidebarResizeProps } = useHorizontalResize({
+    defaultWidth: 346,
+    minWidth: 280,
+    maxWidth: 640,
+    storageKey: 'messaging-plan-sidebar',
+  })
   const activeDeliverables = useMemo(
     () => deliverables.filter((deliverable) => deliverable.status !== 'cancelled'),
     [deliverables],
@@ -528,7 +537,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
       </div>
 
       <div className="flex min-h-0 flex-1 gap-6 pt-4 overflow-hidden">
-        <main className="flex min-w-0 flex-1 flex-col">
+        <main className="flex min-w-[360px] flex-1 flex-col">
           <div className="flex shrink-0 items-center gap-1 border-b border-border" role="tablist" aria-label="Plan workspace sections">
             {PLAN_WORKSPACE_TABS.map((tab) => {
               const selected = activeTab === tab.id
@@ -562,7 +571,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                           <Info className="size-4" aria-hidden="true" />
                           Review this plan before work starts
                         </h2>
-                        <p className="mt-1 whitespace-nowrap text-sm leading-6 text-sky-100/80">
+                        <p className="mt-1 text-sm leading-6 text-sky-100/80">
                           Confirm the direction, pick channels, and add guidance in the brainstorm before kicking off content prep.
                         </p>
                       </div>
@@ -735,7 +744,17 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
           )}
         </main>
 
-        <aside className="w-[346px] shrink-0 overflow-y-auto border-l border-border pl-6 pr-2" style={{ scrollbarGutter: 'stable' }}>
+        <aside
+          className="relative shrink-0 overflow-y-auto border-l border-border pl-6 pr-2"
+          style={{ width: sidebarWidth, scrollbarGutter: 'stable' }}
+        >
+          {/* Drag handle — sits over the left border to resize the sidebar.
+              role / aria-orientation / tabIndex / aria-value* / keyboard all come from handleProps. */}
+          <div
+            {...sidebarResizeProps}
+            aria-label="Resize details panel"
+            className="absolute inset-y-0 left-0 z-10 w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-accent/50 active:bg-accent"
+          />
           <div>
             <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">Details</h3>
             <div className="space-y-2 text-xs text-muted-foreground">
