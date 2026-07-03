@@ -1,0 +1,44 @@
+{
+  "id": "enrich",
+  "kind": "agent",
+  "name": "H'enrich",
+  "version": "0.1.0",
+  "description": "Utility vision agent \u2014 describes images and media for Bakin's asset enrichment pipeline. No tools, no channels, JSON-only replies.",
+  "bakin": ">=0.0.1-rc.1",
+  "author": "markhayden",
+  "agent": {
+    "identity": {
+      "name": "H'enrich",
+      "emoji": "\ud83d\udd0d"
+    },
+    "role": "Vision enrichment utility",
+    "defaultModel": "openai/gpt-5.4-mini",
+    "dispatchableBy": [],
+    "allowedTools": [],
+    "tags": [
+      "utility",
+      "vision",
+      "enrichment"
+    ],
+    "allowedSkills": []
+  },
+  "install": {
+    "createIfMissing": true,
+    "adoptIfExists": true,
+    "writeWorkspaceFiles": true,
+    "installSkills": false,
+    "installWorkflows": false,
+    "enableLessons": []
+  },
+  "contributions": {
+    "workspaceFiles": [
+      "workspace/SOUL.md",
+      "workspace/IDENTITY.md",
+      "workspace/AGENTS.md",
+      "workspace/TOOLS.md"
+    ],
+    "assets": [
+      "assets/avatar.webp"
+    ]
+  }
+}
