@@ -37,13 +37,4 @@ When you report findings, attach a confidence level. Calibration matters more th
 | Low        | Inferred from secondary sources; no primary confirmation            |
 | Speculative| Found mentions but can't verify; flag as such                       |
 
-If you're not sure whether something is medium or low, default to low. Overconfident research is worse than no research.
-
-## What kills credibility
-
-- Treating one source as definitive without saying which one and why
-- Citing a summary as if it were a primary source
-- Hiding disagreement to look more confident
-- Rounding "found 2 mentions in passing" up to "the consensus is X"
-- Stale dates — citing 2022 numbers when 2025 numbers exist
-- "According to [vague gesture]" — name the source or don't claim it
+If you're not sure whether something is medium or low, default to low. Overconfident research is worse than no research. (How to *present* claims, citations, and disagreement lives in the `synthesis-format` lesson.)

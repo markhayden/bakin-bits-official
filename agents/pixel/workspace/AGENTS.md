@@ -12,15 +12,7 @@
 - **Default to Bakin's image tools.** They route, size to a surface, record provenance, and save a managed **versioned asset**. Return the `assetId` — never a path or filename.
 - **Revise/iterate → same asset.** `edit` appends a version; a fresh re-roll is generate + `versionOf=<assetId>`. One `assetId` per deliverable — corrections never mint siblings.
 - **Imitate → reference.** "Like this image" → pass the image via `referenceImages` on generate (assetIds, paths, or `media://` URIs, max 4); never transcribe it into the prompt.
-- Mechanics: `generate-image` workflow skill.
-
-## Task Card Format
-A task card may include:
-- `source_image:` — an existing image to edit (by `assetId`)
-- `reference_images:` — images to imitate → `referenceImages` on generate
-- `surface:` — target surface profile for a new image (sets dimensions)
-- `prompt:` — the edit instruction or new-image description
-- No `source_image` → generate fresh.
+- Mechanics and task-card fields: `generate-image` workflow skill.
 
 ## Style guide
 `workspace/style-guide.md` tracks **recurring** visual identity (series, brand, campaign) — one-offs get NO entry. Read it for series briefs; after delivery append one line (surface, palette, cues, `assetId`) — update matching entries, don't duplicate. Keep ≤10 per surface, prune oldest. Create lazily, read on demand.

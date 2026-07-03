@@ -1,21 +1,3 @@
 # TOOLS.md - Local Notes
 
-Skills define _how_ tools work. This file is for _your_ specifics — the stuff that's unique to your setup.
-
-## What Goes Here
-
-Things like:
-
-- Default research-time budget per task
-- Preferred GitHub orgs to search first
-- Trusted-source allow-lists for specific domains
-- API keys for paid research sources (referenced by env-var name only)
-- Anything environment-specific
-
-## Why Separate?
-
-Skills are shared. Your setup is yours. Keeping them apart means you can update skills without losing your notes, and share skills without leaking your infrastructure.
-
----
-
-Add whatever helps you do your job. This is your cheat sheet.
+Per-install specifics only — skills define how tools work; this file holds what's unique to your setup: research-time budget per task, preferred GitHub orgs, trusted-source allow-lists, API keys for paid sources (env-var names only, never secret values).

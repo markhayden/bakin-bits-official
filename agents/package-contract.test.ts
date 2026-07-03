@@ -193,6 +193,7 @@ describe("agent package contracts", () => {
     const budgets: Record<string, number> = {
       "workspace/SOUL.md": 250,
       "workspace/AGENTS.md": 350,
+      "workspace/TOOLS.md": 120,
     };
     for (const agentId of agentIds) {
       for (const [relativePath, max] of Object.entries(budgets)) {
@@ -204,6 +205,28 @@ describe("agent package contracts", () => {
           `${agentId}/${relativePath} is ${words} words (budget ${max}) — these load every session, push depth to lessons/skills`,
         ).toBeLessThanOrEqual(max);
       }
+    }
+  });
+
+  // Default-enabled lessons load every session too — they're where always-on
+  // bloat migrates once the workspace files are budgeted.
+  it("keeps default-enabled lessons within a per-agent context budget", () => {
+    const MAX_DEFAULT_LESSON_WORDS = 800;
+    const wordCount = (s: string): number =>
+      s.trim().split(/\s+/).filter(Boolean).length;
+    for (const agentId of agentIds) {
+      const manifest = readManifest(agentId);
+      let total = 0;
+      for (const lessonPath of manifest.contributions?.lessons ?? []) {
+        const content = readFileSync(join(agentsRoot, agentId, lessonPath), "utf-8");
+        const frontmatter = content.match(/^---\n([\s\S]*?)\n---/);
+        if (!frontmatter || !/(^|\n)\s*defaultEnabled:\s*true\b/i.test(frontmatter[1])) continue;
+        total += wordCount(content.replace(/^---\n[\s\S]*?\n---/, ""));
+      }
+      expect(
+        total,
+        `${agentId} default-enabled lessons total ${total} words (budget ${MAX_DEFAULT_LESSON_WORDS}) — flip depth to opt-in lessons`,
+      ).toBeLessThanOrEqual(MAX_DEFAULT_LESSON_WORDS);
     }
   });
 
