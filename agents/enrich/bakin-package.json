@@ -1,0 +1,41 @@
+{
+  "id": "enrich",
+  "kind": "agent",
+  "name": "Enrich",
+  "version": "0.1.0",
+  "description": "Utility vision agent — describes images and media for Bakin's asset enrichment pipeline. No tools, no channels, JSON-only replies.",
+  "bakin": ">=0.0.1-rc.1",
+  "author": "Made in Wyo",
+  "agent": {
+    "identity": {
+      "name": "Enrich",
+      "emoji": "🔍"
+    },
+    "role": "Vision enrichment utility",
+    "defaultModel": "claude-sonnet-4-6",
+    "dispatchableBy": [],
+    "allowedTools": [],
+    "tags": [
+      "utility",
+      "vision",
+      "enrichment"
+    ],
+    "allowedSkills": []
+  },
+  "install": {
+    "createIfMissing": true,
+    "adoptIfExists": true,
+    "writeWorkspaceFiles": true,
+    "installSkills": false,
+    "installWorkflows": false,
+    "enableLessons": []
+  },
+  "contributions": {
+    "workspaceFiles": [
+      "workspace/SOUL.md",
+      "workspace/IDENTITY.md",
+      "workspace/AGENTS.md",
+      "workspace/TOOLS.md"
+    ]
+  }
+}
