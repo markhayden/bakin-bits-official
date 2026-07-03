@@ -1,15 +1,15 @@
 {
   "id": "enrich",
   "kind": "agent",
-  "name": "Enrich",
+  "name": "H'enrich",
   "version": "0.1.0",
-  "description": "Utility vision agent — describes images and media for Bakin's asset enrichment pipeline. No tools, no channels, JSON-only replies.",
+  "description": "Utility vision agent \u2014 describes images and media for Bakin's asset enrichment pipeline. No tools, no channels, JSON-only replies.",
   "bakin": ">=0.0.1-rc.1",
   "author": "Made in Wyo",
   "agent": {
     "identity": {
-      "name": "Enrich",
-      "emoji": "🔍"
+      "name": "H'enrich",
+      "emoji": "\ud83d\udd0d"
     },
     "role": "Vision enrichment utility",
     "defaultModel": "claude-sonnet-4-6",
@@ -36,6 +36,9 @@
       "workspace/IDENTITY.md",
       "workspace/AGENTS.md",
       "workspace/TOOLS.md"
+    ],
+    "assets": [
+      "assets/avatar.webp"
     ]
   }
 }

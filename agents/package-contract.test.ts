@@ -150,13 +150,30 @@ describe("agent package contracts", () => {
     );
   });
 
+  // Agents whose JOB requires a capability the runtime default lacks may pin
+  // a model. enrich (H'enrich): needs image input; the current default is
+  // catalog-declared text-only, so inheriting would make Bakin's capability
+  // probe skip every image — vision enrichment would silently stop working.
+  const MODEL_PIN_EXCEPTIONS = new Set(["enrich"]);
+
   it("no agent hardcodes a model (inherits the Bakin/runtime default)", () => {
     for (const agentId of agentIds) {
+      if (MODEL_PIN_EXCEPTIONS.has(agentId)) continue;
       const manifest = readManifest(agentId);
       expect(
         manifest.agent?.defaultModel,
         `${agentId} sets agent.defaultModel — models go stale; inherit the runtime default`,
       ).toBeUndefined();
+    }
+  });
+
+  it("model-pin exceptions still pin a REAL model string (the exception is not a free pass)", () => {
+    for (const agentId of MODEL_PIN_EXCEPTIONS) {
+      const manifest = readManifest(agentId);
+      expect(
+        typeof manifest.agent?.defaultModel === "string" && manifest.agent.defaultModel.length > 0,
+        `${agentId} is in MODEL_PIN_EXCEPTIONS but pins no model — remove the exception`,
+      ).toBe(true);
     }
   });
 
