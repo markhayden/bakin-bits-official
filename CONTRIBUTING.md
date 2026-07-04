@@ -21,6 +21,8 @@ bakin-bits-official/
 │   ├── messaging/          ← extracted from bakin/plugins/messaging
 │   └── projects/           ← extracted from bakin/plugins/projects
 ├── agents/                 ← installable agent packages
+│   ├── _template/          ← copy this when starting a new agent package
+│   └── <id>/               ← manifest + workspace files + lessons/skills
 ├── package.json            ← workspaces: plugins/*
 ├── tsconfig.json
 ├── eslint.config.mjs
@@ -59,6 +61,32 @@ bakin-bits-official/
    bakin plugins link ./plugins/my-plugin
    ```
 
+## Adding a new agent package
+
+1. **Copy the template.**
+   ```sh
+   cp -R agents/_template agents/my-agent
+   ```
+2. **Update `bakin-package.json`** — `id`, `name`, `version`, `description`,
+   `agent` identity/role, and `contributions`. Do **not** set
+   `agent.defaultModel` unless the agent's job requires a capability the
+   runtime default lacks (the contract test enforces this).
+3. **Write the workspace files.** `SOUL.md` (persona), `IDENTITY.md` (card),
+   `AGENTS.md` (agent-specific policy), `TOOLS.md` (per-install notes
+   template). These load **every session** — keep them tight and push depth
+   into `lessons/` (opt-in by default) and mechanics into `skills/` /
+   `workflow-skills/`. `agents/package-contract.test.ts` enforces word
+   budgets: SOUL ≤250, AGENTS ≤350, TOOLS ≤120, default-enabled lessons
+   ≤800 total.
+4. **Validate.**
+   ```sh
+   bun test agents
+   ```
+5. **Smoke install.**
+   ```sh
+   bakin agents install ./agents/my-agent
+   ```
+
 ## Designing for hot reload
 
 The Bakin runtime hot-reloads linked plugins via in-process module
@@ -95,16 +123,9 @@ starting point.
    accuracy, error handling, and SDK boundary discipline (no imports
    from outside `@makinbakin/sdk/*`).
 
-## Releasing a plugin
+## Releasing
 
-Tag in this repo using the `<plugin-id>-v<semver>` convention:
-
-```sh
-git tag messaging-v0.0.1
-git push origin messaging-v0.0.1
-```
-
-Bakin's `bakin plugins install` and `bakin plugins upgrade` round-trip
-against tags via the install source's `@<ref>` syntax (issue #177
-tracks adding `--ref` to `install`; until then upgrade flow honors the
-installed-time `ref`).
+Releases (plugins and agent packages) are cut by pushing a `<id>-v<semver>`
+**annotated** tag — the tag message becomes the release notes, and the version
+must match the package manifest. See [RELEASE.md](RELEASE.md) for the full
+flow, including the one-tag-at-a-time rule for multi-package releases.

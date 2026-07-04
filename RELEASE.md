@@ -52,12 +52,24 @@ bakin agents install github:markhayden/bakin-bits-official@patch-v0.7.0#agents/p
   (pointing at its own older release's artifact). So `releases/latest` always
   has a full index even though plugins release one at a time.
 
-### Releasing multiple plugins at once
+### Releasing multiple packages at once
 
-Push multiple tags. The publish workflow uses a `concurrency` group
-(`whiskit-publish`, `cancel-in-progress: false`), so runs **serialize** — each
-one carries forward the previous one's catalog, keeping the index consistent.
-There's no "release everything" button by design; you choose exactly what ships.
+**Push tags one at a time, waiting for each publish run to go green before
+pushing the next.** Two GitHub behaviors make batch pushes fail silently
+(both hit in practice, 2026-07):
+
+- **More than 3 tags in a single `git push` fires no workflow events at all.**
+  GitHub suppresses the push event above three refs — the tags land on the
+  remote, but no publish runs start. Fix: delete the remote tags and re-push
+  individually.
+- **The `whiskit-publish` concurrency group holds only ONE queued run.**
+  `cancel-in-progress: false` protects the *running* job, but each newly
+  queued run evicts (cancels) the previously queued one. Tags pushed in quick
+  succession cancel each other's runs; the evicted runs need `gh run rerun`.
+
+The serialization itself is intentional — each run carries forward the
+previous catalog — so there's no "release everything" button by design; you
+choose exactly what ships, one tag at a time.
 
 ## Release notes
 

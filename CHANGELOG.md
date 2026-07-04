@@ -9,6 +9,12 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- Repo hygiene: removed implemented `.claude/specs/`, `plugins/messaging/AUDIT-SUMMARY.md`,
+  and `agents/AUDIT.md` (all historical; rules now live in the contract tests). Added root
+  `CLAUDE.md` (test/install/release gotchas), `agents/_template/` starter package, an
+  "Adding a new agent package" section in CONTRIBUTING, and corrected RELEASE.md's
+  multi-tag guidance (>3 tags in one push fires no workflow events; queued publish runs
+  evict each other — push one tag at a time).
 - All agent packages: second context audit — compressed default-enabled lessons
   (`dev-discipline` 716→379 words, `visual-styles` 571→~390), deduplicated rules
   stated across SOUL/AGENTS/lessons, cut TOOLS.md boilerplate, and fixed stale
