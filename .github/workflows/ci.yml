@@ -20,11 +20,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # Full history: the version-bump check diffs against the PR base.
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: .bun-version
+
+      - name: Package version bump check
+        if: github.event_name == 'pull_request'
+        run: ./scripts/check-version-bump.sh "origin/${{ github.base_ref }}"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

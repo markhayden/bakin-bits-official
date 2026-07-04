@@ -9,6 +9,10 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Added
+- CI guardrails for three recurring failure modes: a `test-sdk` stub drift test
+  (every `@makinbakin/sdk` import in `plugins/` must exist in the stub), a PR
+  version-bump check (changed package ⇒ bumped manifest version), and avatar
+  budgets in the agent contract tests (≤30 KB, ≤256px).
 - `patch`: `dev-task` workflow skill — typed step output (`deliverable` PR/branch,
   `summary`, `tests_passed`), matching the workflow-skill pattern of pixel/rolo/jessica.
   Package bumped to `0.8.0`.
