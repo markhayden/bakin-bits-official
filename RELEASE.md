@@ -16,6 +16,27 @@ git push origin messaging-v0.2.0
 
 That's the whole flow. CI does the rest.
 
+## Agent packages
+
+Agent packages (`agents/<id>`) release through the same tag scheme
+(`patch-v0.7.0`) and the same workflow, but there is **no artifact**: agent
+installs are pure git, so the release is notes-only and validated against
+`agents/<id>/bakin-package.json`. Agent releases are never marked `latest` —
+the stable `releases/latest/download/whiskit-artifacts.json` redirect must
+keep resolving to the newest *plugin* catalog.
+
+```sh
+git tag -a patch-v0.7.0 -m "Context audit v2 — leaner always-loaded workspace"
+git push origin patch-v0.7.0
+```
+
+Consumers install from git, pinnable to the tag:
+
+```sh
+bakin agents install github:markhayden/bakin-bits-official#agents/patch          # default branch
+bakin agents install github:markhayden/bakin-bits-official@patch-v0.7.0#agents/patch  # pinned
+```
+
 ## Versioning
 
 - **Source of truth is `plugins/<id>/bakin-plugin.json` → `version`.** The tag
