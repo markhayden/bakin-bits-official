@@ -2,7 +2,7 @@
   "id": "enrich",
   "kind": "agent",
   "name": "H'enrich",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Utility vision agent \u2014 describes images and media for Bakin's asset enrichment pipeline. No tools, no channels, JSON-only replies.",
   "bakin": ">=0.0.1-rc.1",
   "author": "markhayden",

@@ -1,7 +1,9 @@
 # Agent Package Audit
 
-_Audit of the four official agent packages (`patch`, `pixel`, `rolo`, `jessica`) — bloat,
-inconsistency, and gaps. Normalization applied on branch `agents/audit-normalize`._
+_Historical record of the first audit pass (four packages: `patch`, `pixel`, `rolo`, `jessica`;
+predates `enrich`). Normalization applied on branch `agents/audit-normalize`. A second pass
+(2026-07-03) compressed default-enabled lessons, deduplicated workspace files, and added
+TOOLS/lesson context budgets to the contract test — see git history._
 
 ## Framing
 

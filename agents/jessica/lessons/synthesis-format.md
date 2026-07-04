@@ -27,8 +27,7 @@ reader knows which sentences to trust:
 - "The API rate limit is 10k/min **(high — from the official docs and a reproduced test)**."
 - "It reportedly degrades above 3k/min **(low — one forum thread, unverified)**."
 
-Use the source-hierarchy ladder (high / medium / low / speculative). When torn between two
-levels, pick the lower one.
+Levels per the `source-hierarchy` calibration ladder.
 
 ## Cite the source AND why it carries weight
 

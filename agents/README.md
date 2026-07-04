@@ -18,6 +18,7 @@ bakin agents install github:markhayden/bakin-bits-official#agents/<agent-id>
 | `pixel` | active | Image artist agent with visual prompt lessons, image-generation workflow skills, and workspace templates. |
 | `rolo` | active | Video producer agent with video/audio craft lessons and declared Runway/ElevenLabs runtime secrets. |
 | `jessica` | active | Research agent with source-hierarchy lessons and evidence-gathering workspace templates. |
+| `enrich` | active | Single-purpose vision utility for Bakin's asset enrichment pipeline — no tools, JSON-only replies. |
 
 ## Layout
 

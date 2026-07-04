@@ -9,6 +9,14 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- All agent packages: second context audit — compressed default-enabled lessons
+  (`dev-discipline` 716→379 words, `visual-styles` 571→~390), deduplicated rules
+  stated across SOUL/AGENTS/lessons, cut TOOLS.md boilerplate, and fixed stale
+  docs (enrich README model claim, missing enrich row in agents README).
+  Always-loaded per-session context drops 10–34% per agent. Contract test now
+  budgets TOOLS.md (≤120 words) and default-enabled lessons (≤800 words/agent).
+  Avatars resized 512×512→256×256 WebP (258 KB→61 KB total; UI renders ≤64px).
+  `patch`/`pixel`/`rolo`/`jessica` bumped to `0.7.0`, `enrich` to `0.3.0`.
 - `jessica`, `patch`, `pixel`, `rolo`: ship avatars as WebP (`assets/avatar.webp`)
   instead of JPEG — ~50–56% smaller per avatar (e.g. patch 64 KB → 28 KB) at the
   same 512×512. Requires Bakin's dual-format avatar support (markhayden/bakin#339).

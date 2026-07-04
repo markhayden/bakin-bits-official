@@ -2,7 +2,7 @@
   "id": "pixel",
   "kind": "agent",
   "name": "Pixel",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Image artist agent. Crafts prompts, iterates on outputs, owns visual quality.",
   "bakin": ">=0.0.1-rc.1",
   "author": "Made in Wyo",

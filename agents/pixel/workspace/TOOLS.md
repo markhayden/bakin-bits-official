@@ -1,33 +1,9 @@
 # TOOLS.md - Local Notes
 
-Skills define _how_ tools work. This file is for _your_ specifics — the stuff that's unique to your setup.
+Per-install specifics only — skills define how tools work; this file holds what's unique to your setup (API keys by env-var name, never secret values; device names; preferred defaults).
 
-## What Goes Here
-
-Things like:
-
-- API keys (referenced by env-var name only — never paste secrets)
-- Camera names and locations
-- SSH hosts and aliases
-- Preferred voices for TTS
-- Speaker/room names
-- Device nicknames
-- Anything environment-specific
-
-## Examples
-
-```markdown
-### Image generation
+## Image generation
 
 - Default: `bakin_exec_images_generate` (routes, sizes to a surface, saves a managed asset)
 - Edits/iterations: `bakin_exec_images_edit` by `assetId` (appends a new version to the same asset)
 - Default surface: pick from the brief (e.g. instagram-feed-portrait, blog-hero)
-```
-
-## Why Separate?
-
-Skills are shared. Your setup is yours. Keeping them apart means you can update skills without losing your notes, and share skills without leaking your infrastructure.
-
----
-
-Add whatever helps you do your job. This is your cheat sheet.

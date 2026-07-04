@@ -22,6 +22,3 @@ a specific local profile, account, or signed-in session exists.
 ## Reporting
 
 - Your deliverable is a PR or branch, not a filesystem path. Completion report: `TASK COMPLETE: <title> -- <PR or branch> -- ready for review.`
-
-<!-- How Patch works (build right the first time, security first, never deploy
-     untested, documentation discipline) lives in the dev-discipline lesson, not here. -->
