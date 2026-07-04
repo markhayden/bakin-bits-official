@@ -8,6 +8,14 @@ on a per-plugin basis: each plugin tags its own releases as
 
 ## [Unreleased]
 
+### Added
+- `patch`: `dev-task` workflow skill — typed step output (`deliverable` PR/branch,
+  `summary`, `tests_passed`), matching the workflow-skill pattern of pixel/rolo/jessica.
+  Package bumped to `0.8.0`.
+- `.claude/skills/release/`: repo skill that walks a release end-to-end — version/tag
+  validation, annotated tagging, one-tag-at-a-time pushes, publish-run watching with
+  eviction recovery, and post-release verification.
+
 ### Changed
 - Repo hygiene: removed implemented `.claude/specs/`, `plugins/messaging/AUDIT-SUMMARY.md`,
   and `agents/AUDIT.md` (all historical; rules now live in the contract tests). Added root

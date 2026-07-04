@@ -2,7 +2,7 @@
   "id": "patch",
   "kind": "agent",
   "name": "Patch",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Developer agent — API integrations, automation, debugging, tool extensions.",
   "bakin": ">=0.0.1-rc.1",
   "author": "Made in Wyo",
@@ -44,6 +44,9 @@
     ],
     "skills": [
       "skills/git-isolation"
+    ],
+    "workflowSkills": [
+      "workflow-skills/dev-task.md"
     ],
     "lessons": [
       "lessons/dev-discipline.md",
