@@ -1,12 +1,19 @@
-name: Publish plugin artifact
+name: Publish release
 
-# Cut a Whiskit artifact release for one plugin by pushing a `<id>-v<semver>`
-# tag (e.g. `messaging-v0.2.0`). Builds the plugin, runs `bakin plugins publish`
-# to assemble the prebuilt artifact + checksum, carries forward the previous
-# release's whiskit-artifacts.json, and attaches everything to a GitHub release.
+# Cut a release for one plugin or agent package by pushing a `<id>-v<semver>`
+# tag (e.g. `messaging-v0.2.0`, `patch-v0.7.0`).
 #
-# Consumers then install with no toolchain:
+# Plugins (plugins/<id>): builds the plugin, runs `bakin plugins publish` to
+# assemble the prebuilt artifact + checksum, carries forward the previous
+# release's whiskit-artifacts.json, and attaches everything to a GitHub
+# release. Consumers install with no toolchain:
 #   bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging
+#
+# Agent packages (agents/<id>): no build and no artifact — agent installs are
+# pure git (`bakin agents install github:...#agents/<id>`, pinnable with
+# `@<tag>`). The release is notes-only and is NOT marked latest, so the stable
+# `releases/latest/download/whiskit-artifacts.json` redirect keeps pointing at
+# the newest plugin catalog.
 #
 # Index entry URLs are pinned to THIS tag's release (releases/download/<tag>/...),
 # and carried-forward entries keep their own older-release URLs — so the latest
@@ -46,39 +53,49 @@ jobs:
         id: tag
         run: |
           TAG="${GITHUB_REF_NAME}"
-          PLUGIN="${TAG%-v*}"
+          ID="${TAG%-v*}"
           VERSION="${TAG##*-v}"
-          if [ -z "$PLUGIN" ] || [ -z "$VERSION" ] || [ "$PLUGIN" = "$TAG" ]; then
-            echo "::error::Tag '$TAG' must be of the form <plugin-id>-v<semver> (e.g. messaging-v0.2.0)"
+          if [ -z "$ID" ] || [ -z "$VERSION" ] || [ "$ID" = "$TAG" ]; then
+            echo "::error::Tag '$TAG' must be of the form <id>-v<semver> (e.g. messaging-v0.2.0, patch-v0.7.0)"
             exit 1
           fi
-          if [ ! -d "plugins/$PLUGIN" ]; then
-            echo "::error::No plugins/$PLUGIN directory for tag '$TAG'"
+          if [ -d "plugins/$ID" ]; then
+            KIND="plugin"
+            MANIFEST="plugins/$ID/bakin-plugin.json"
+          elif [ -d "agents/$ID" ]; then
+            KIND="agent"
+            MANIFEST="agents/$ID/bakin-package.json"
+          else
+            echo "::error::No plugins/$ID or agents/$ID directory for tag '$TAG'"
             exit 1
           fi
-          # The manifest version is the source of truth for the artifact; the
-          # tag must agree so the release name matches what gets published.
-          MANIFEST_VERSION="$(jq -r '.version' "plugins/$PLUGIN/bakin-plugin.json")"
+          # The manifest version is the source of truth; the tag must agree so
+          # the release name matches what gets published.
+          MANIFEST_VERSION="$(jq -r '.version' "$MANIFEST")"
           if [ "$MANIFEST_VERSION" != "$VERSION" ]; then
-            echo "::error::Tag '$TAG' is v$VERSION but plugins/$PLUGIN/bakin-plugin.json is version '$MANIFEST_VERSION'. Bump the manifest version to match the tag (or retag)."
+            echo "::error::Tag '$TAG' is v$VERSION but $MANIFEST is version '$MANIFEST_VERSION'. Bump the manifest version to match the tag (or retag)."
             exit 1
           fi
-          echo "plugin=$PLUGIN" >> "$GITHUB_OUTPUT"
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Publishing $PLUGIN@$VERSION"
+          echo "Publishing $KIND $ID@$VERSION"
 
       - name: Build the plugin
+        if: steps.tag.outputs.kind == 'plugin'
         run: |
           bun install --frozen-lockfile
           (cd .build-sdk && bun install --frozen-lockfile)
           bun run build
 
       - name: Get Bakin (publish tool)
+        if: steps.tag.outputs.kind == 'plugin'
         run: |
           git clone --depth 1 https://github.com/markhayden/bakin.git "$RUNNER_TEMP/bakin"
           (cd "$RUNNER_TEMP/bakin" && bun install --frozen-lockfile)
 
       - name: Carry forward the previous release index
+        if: steps.tag.outputs.kind == 'plugin'
         run: |
           mkdir -p "$RUNNER_TEMP/release"
           curl -fsSL "https://github.com/${{ github.repository }}/releases/latest/download/whiskit-artifacts.json" \
@@ -86,10 +103,11 @@ jobs:
             || echo "No previous index (first release) — starting a fresh catalog."
 
       - name: Publish artifact
+        if: steps.tag.outputs.kind == 'plugin'
         run: |
           cd "$RUNNER_TEMP/bakin"
           bun run cli/bakin.ts plugins publish \
-            "$GITHUB_WORKSPACE/plugins/${{ steps.tag.outputs.plugin }}" \
+            "$GITHUB_WORKSPACE/plugins/${{ steps.tag.outputs.id }}" \
             --out "$RUNNER_TEMP/release" \
             --base-url "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
 
@@ -113,16 +131,34 @@ jobs:
           else
             MSG="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${OBJ_SHA}" --jq '.commit.message')"
           fi
+          if [ "${{ steps.tag.outputs.kind }}" = "plugin" ]; then
+            INSTALL="bakin plugins install github:${GITHUB_REPOSITORY}#plugins/${{ steps.tag.outputs.id }}"
+          else
+            INSTALL="bakin agents install github:${GITHUB_REPOSITORY}@${TAG}#agents/${{ steps.tag.outputs.id }}"
+          fi
           {
             printf '%s\n' "$MSG"
             echo
             echo "---"
-            echo "Install: \`bakin plugins install github:${GITHUB_REPOSITORY}#plugins/${{ steps.tag.outputs.plugin }}\`"
+            echo "Install: \`$INSTALL\`"
           } > "$RUNNER_TEMP/notes.md"
 
-      - name: Create GitHub release
+      # Plugin releases carry the artifact catalog and become `latest` — the
+      # stable releases/latest/download/whiskit-artifacts.json redirect must
+      # always resolve to a release that has the catalog attached.
+      - name: Create GitHub release (plugin)
+        if: steps.tag.outputs.kind == 'plugin'
         uses: softprops/action-gh-release@v3
         with:
           files: ${{ runner.temp }}/release/*
           body_path: ${{ runner.temp }}/notes.md
           make_latest: true
+
+      # Agent releases are notes-only (installs are pure git) and never take
+      # `latest`, so plugin catalog resolution is untouched.
+      - name: Create GitHub release (agent)
+        if: steps.tag.outputs.kind == 'agent'
+        uses: softprops/action-gh-release@v3
+        with:
+          body_path: ${{ runner.temp }}/notes.md
+          make_latest: false
