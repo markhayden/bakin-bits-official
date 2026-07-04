@@ -1,0 +1,38 @@
+{
+  "id": "my-agent",
+  "kind": "agent",
+  "name": "My Agent",
+  "version": "0.1.0",
+  "description": "One-line description of what this agent does.",
+  "bakin": ">=0.0.1-rc.1",
+  "author": "you",
+  "agent": {
+    "identity": {
+      "name": "My Agent",
+      "emoji": "🤖"
+    },
+    "role": "Short role label",
+    "dispatchableBy": ["main"],
+    "allowedTools": [],
+    "tags": [],
+    "allowedSkills": []
+  },
+  "install": {
+    "createIfMissing": true,
+    "adoptIfExists": true,
+    "writeWorkspaceFiles": true,
+    "installSkills": true,
+    "installWorkflows": true,
+    "enableLessons": []
+  },
+  "contributions": {
+    "workspaceFiles": [
+      "workspace/SOUL.md",
+      "workspace/IDENTITY.md",
+      "workspace/AGENTS.md",
+      "workspace/TOOLS.md"
+    ],
+    "lessons": [],
+    "assets": []
+  }
+}

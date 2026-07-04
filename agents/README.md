@@ -24,6 +24,7 @@ bakin agents install github:markhayden/bakin-bits-official#agents/<agent-id>
 
 ```
 agents/
+├── _template/                  copy this to start a new agent package
 └── <agent-id>/
     ├── bakin-package.json
     ├── workspace/              SOUL/IDENTITY/AGENTS/TOOLS
@@ -35,4 +36,6 @@ agents/
 ```
 
 Agent package directories must be installable by themselves. Repository-level
-tests validate manifest basics and ensure contributed paths exist.
+tests validate manifest basics, ensure contributed paths exist, and enforce
+context budgets on always-loaded files (see `package-contract.test.ts`);
+`_`-prefixed directories are skipped.
