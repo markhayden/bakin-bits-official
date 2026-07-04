@@ -230,6 +230,60 @@ describe("agent package contracts", () => {
     }
   });
 
+  // Avatars ship in every install and render at ≤64px in the UI (128px
+  // retina); 256×256 WebP is plenty. Keeps a drag-and-dropped 2 MB original
+  // from silently undoing the optimization.
+  it("keeps avatars within size and dimension budgets", () => {
+    const MAX_BYTES = 30_000;
+    const MAX_DIM = 256;
+
+    const webpDimensions = (buf: Buffer): { width: number; height: number } => {
+      expect(buf.toString("ascii", 0, 4)).toBe("RIFF");
+      expect(buf.toString("ascii", 8, 12)).toBe("WEBP");
+      const variant = buf.toString("ascii", 12, 16);
+      if (variant === "VP8 ") {
+        // Lossy: 16-bit LE width/height (14 bits used) after the frame header.
+        return {
+          width: buf.readUInt16LE(26) & 0x3fff,
+          height: buf.readUInt16LE(28) & 0x3fff,
+        };
+      }
+      if (variant === "VP8L") {
+        // Lossless: 14-bit width-1 / height-1 packed after the 0x2f signature.
+        const bits = buf.readUInt32LE(21);
+        return {
+          width: (bits & 0x3fff) + 1,
+          height: ((bits >> 14) & 0x3fff) + 1,
+        };
+      }
+      if (variant === "VP8X") {
+        // Extended: 24-bit LE canvas width-1 / height-1.
+        return {
+          width: buf.readUIntLE(24, 3) + 1,
+          height: buf.readUIntLE(27, 3) + 1,
+        };
+      }
+      throw new Error(`unknown WebP variant '${variant}'`);
+    };
+
+    for (const agentId of agentIds) {
+      const manifest = readManifest(agentId);
+      for (const asset of manifest.contributions?.assets ?? []) {
+        if (!asset.endsWith(".webp")) continue;
+        const buf = readFileSync(join(agentsRoot, agentId, asset));
+        expect(
+          buf.length,
+          `${agentId}/${asset} is ${buf.length} bytes (budget ${MAX_BYTES}) — recompress: cwebp -q 75 -m 6 -resize 256 256`,
+        ).toBeLessThanOrEqual(MAX_BYTES);
+        const { width, height } = webpDimensions(buf);
+        expect(
+          Math.max(width, height),
+          `${agentId}/${asset} is ${width}x${height} (max ${MAX_DIM}px) — the UI renders avatars at ≤64px`,
+        ).toBeLessThanOrEqual(MAX_DIM);
+      }
+    }
+  });
+
   it("install.enableLessons matches lessons marked defaultEnabled", () => {
     for (const agentId of agentIds) {
       const manifest = readManifest(agentId);
