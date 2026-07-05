@@ -1,0 +1,142 @@
+{
+  "version": 2,
+  "updatedAt": "2026-07-05T00:00:00Z",
+  "entries": [
+    {
+      "id": "pixel",
+      "kind": "agent",
+      "name": "Pixel",
+      "emoji": "🎨",
+      "description": "Image artist agent. Crafts prompts, iterates on outputs, owns visual quality.",
+      "category": "Creative",
+      "tags": ["creative", "image", "design"],
+      "useCases": [
+        "Generate on-brand social and marketing images",
+        "Iterate on visual concepts until they land",
+        "Own image quality across your asset library"
+      ],
+      "source": "github:markhayden/bakin-bits-official#agents/pixel",
+      "ref": null,
+      "trust": "official",
+      "iconUrl": "https://raw.githubusercontent.com/markhayden/bakin-bits-official/main/agents/pixel/assets/avatar.webp",
+      "screenshots": []
+    },
+    {
+      "id": "rolo",
+      "kind": "agent",
+      "name": "Rolo",
+      "emoji": "🎬",
+      "description": "Video producer agent. Generates video + audio, mixes finished assets.",
+      "category": "Creative",
+      "tags": ["creative", "video", "audio"],
+      "useCases": [
+        "Produce short-form video from a brief",
+        "Generate and mix audio tracks",
+        "Assemble finished cuts into your asset library"
+      ],
+      "source": "github:markhayden/bakin-bits-official#agents/rolo",
+      "ref": null,
+      "trust": "official",
+      "iconUrl": "https://raw.githubusercontent.com/markhayden/bakin-bits-official/main/agents/rolo/assets/avatar.webp",
+      "screenshots": []
+    },
+    {
+      "id": "jessica",
+      "kind": "agent",
+      "name": "Jessica",
+      "emoji": "🔎",
+      "description": "Research agent — multi-source discovery, evidence gathering, synthesis support.",
+      "category": "Research",
+      "tags": ["research", "synthesis"],
+      "useCases": [
+        "Deep-dive a market, competitor, or topic",
+        "Gather and cross-check evidence from many sources",
+        "Turn raw findings into a synthesized brief"
+      ],
+      "source": "github:markhayden/bakin-bits-official#agents/jessica",
+      "ref": null,
+      "trust": "official",
+      "iconUrl": "https://raw.githubusercontent.com/markhayden/bakin-bits-official/main/agents/jessica/assets/avatar.webp",
+      "screenshots": []
+    },
+    {
+      "id": "patch",
+      "kind": "agent",
+      "name": "Patch",
+      "emoji": "⚙️",
+      "description": "Developer agent — API integrations, automation, debugging, tool extensions.",
+      "category": "Engineering",
+      "tags": ["dev", "automation"],
+      "useCases": [
+        "Wire up API integrations and webhooks",
+        "Automate repetitive technical chores",
+        "Debug failures and extend agent tooling"
+      ],
+      "source": "github:markhayden/bakin-bits-official#agents/patch",
+      "ref": null,
+      "trust": "official",
+      "iconUrl": "https://raw.githubusercontent.com/markhayden/bakin-bits-official/main/agents/patch/assets/avatar.webp",
+      "screenshots": []
+    },
+    {
+      "id": "enrich",
+      "kind": "agent",
+      "name": "H'enrich",
+      "emoji": "🔍",
+      "description": "Vision utility agent — captions, OCR, and tags for asset search. Powers zero-config enrichment; not dispatchable, no channels.",
+      "category": "Utilities",
+      "tags": ["utility", "vision", "enrichment"],
+      "useCases": [
+        "Auto-caption and tag every image you save",
+        "OCR screenshots so their text is searchable",
+        "Keep asset search rich without lifting a finger"
+      ],
+      "source": "github:markhayden/bakin-bits-official#agents/enrich",
+      "ref": null,
+      "trust": "official",
+      "iconUrl": "https://raw.githubusercontent.com/markhayden/bakin-bits-official/main/agents/enrich/assets/avatar.webp",
+      "screenshots": [],
+      "defaultSelected": true
+    },
+    {
+      "id": "messaging",
+      "kind": "plugin",
+      "name": "Messaging",
+      "emoji": "✉️",
+      "description": "Content planning, calendar items, brainstorming sessions, approvals, and channel delivery.",
+      "category": "Content",
+      "tags": ["content", "calendar", "approvals"],
+      "useCases": [
+        "Plan a week of posts on a content calendar",
+        "Route drafts through an approval gate",
+        "Deliver approved content to channels"
+      ],
+      "source": "github:markhayden/bakin-bits-official#plugins/messaging",
+      "ref": null,
+      "trust": "official",
+      "dependencies": ["team", "workflows"],
+      "defaultSelected": true,
+      "screenshots": []
+    },
+    {
+      "id": "projects",
+      "kind": "plugin",
+      "name": "Projects",
+      "emoji": "🗂️",
+      "description": "Project specs, checklists, task links, assets, and project-context agent tools.",
+      "category": "Operations",
+      "tags": ["projects", "specs", "checklists"],
+      "useCases": [
+        "Keep specs, checklists, and tasks in one place",
+        "Link agent work back to the project it serves",
+        "Give agents project context automatically"
+      ],
+      "source": "github:markhayden/bakin-bits-official#plugins/projects",
+      "ref": null,
+      "trust": "official",
+      "dependencies": ["tasks", "assets", "team"],
+      "defaultSelected": true,
+      "screenshots": []
+    }
+  ]
+}

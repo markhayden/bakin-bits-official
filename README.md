@@ -149,6 +149,7 @@ path for content prep.
 
 ```
 bakin-bits-official/
+├── catalog.json  # storefront index consumed by Bakin's Explore plugin
 ├── plugins/      # installable plugin packages (one dir per plugin)
 ├── agents/       # installable agent packages
 ├── assets/       # shared brand assets (logo, etc.)
@@ -156,6 +157,18 @@ bakin-bits-official/
 ├── test-sdk/     # mock @makinbakin/sdk used during local tests
 └── types/        # shared ambient TypeScript types
 ```
+
+### catalog.json — the storefront index
+
+Bakin's Explore plugin fetches `catalog.json` from this repo's `main` branch
+(user-triggered "Refresh catalog"). It's schema v2 (defined in Bakin at
+`src/core/curated-catalog/schema.ts`): one entry per published package with
+`kind`, `category`, `useCases`, `iconUrl` (agent avatars), and `screenshots`.
+Descriptions here are plain-English storefront copy and may differ from the
+technical manifest descriptions. `test/catalog-contract.test.ts` keeps the
+catalog honest — every source/iconUrl/screenshot must exist in this repo and
+every published package must be listed. When you add or remove a package,
+update catalog.json in the same PR.
 
 ## Contributing
 
