@@ -53,10 +53,11 @@ integration work, enable the `api-integration` lesson.
 
 ### 4. Submit step output
 
-```bash
-mcporter call bakin-patch.bakin_exec_submit_step taskId=<id> stepId=<step> \
-  --args '{"deliverable":"<PR URL or branch>","summary":"<what changed>","tests_passed":<true|false>}'
 ```
+bakin_exec_submit_step taskId=<id> stepId=<step> output={"deliverable":"<PR URL or branch>","summary":"<what changed>","tests_passed":<true|false>}
+```
+
+(Invoke Bakin tools as described in your **Tool access** section — the exact call form depends on the active runtime.)
 
 If tests fail and you can't fix them within the task's scope, still submit —
 with `tests_passed: false` and the failure in `summary`. Never report green

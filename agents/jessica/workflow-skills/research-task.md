@@ -53,10 +53,11 @@ why; don't manufacture consensus. Calibrate confidence honestly (when torn, pick
 
 ### 4. Submit step output
 
-```bash
-mcporter call bakin-jessica.bakin_exec_submit_step taskId=<id> stepId=<step> \
-  --args '{"findings":[...],"confidence":"medium","sources":[...],"open_questions":[...]}'
 ```
+bakin_exec_submit_step taskId=<id> stepId=<step> output={"findings":[...],"confidence":"medium","sources":[...],"open_questions":[...]}
+```
+
+(Invoke Bakin tools as described in your **Tool access** section — the exact call form depends on the active runtime.)
 
 `findings` are synthesized claims, not raw URLs. Each `sources` entry names the source AND its
 tier. `open_questions` is research too — an honest "here's what isn't known" beats padded
