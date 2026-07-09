@@ -806,12 +806,7 @@ describe('Routes', () => {
       )
       expect(streamMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          content: expect.stringContaining('When using mcporter from shell, pass JSON as one quoted --args value; do not use --args @-, heredocs, or stdin JSON.'),
-        }),
-      )
-      expect(streamMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          content: expect.stringContaining('If filtering mcporter schema output, use portable grep/sed/head commands; do not assume rg is installed.'),
+          content: expect.stringContaining('Invoke Bakin tools as described in your Tool access section — the exact call form depends on the active runtime.'),
         }),
       )
     })

@@ -41,29 +41,28 @@ Apply the `prompt-style-system` and `visual-styles` lessons — composition, lig
 
 Use **`bakin_exec_images_generate`** — it routes to the configured provider, sizes to the surface, records generation provenance, and saves the result as a managed **versioned asset (v1)** in one call. Do NOT generate to a local file and hand-save it; that bypasses routing, sizing, and provenance.
 
-```bash
-mcporter call bakin-pixel.bakin_exec_images_generate \
-  taskId=<id> \
-  surface=<surface> \
-  prompt="<your crafted prompt>"
 ```
+bakin_exec_images_generate taskId=<id> surface=<surface> prompt="<your crafted prompt>"
+```
+
+(Invoke Bakin tools as described in your **Tool access** section — the exact call form depends on the active runtime.)
 
 Optional: call `bakin_exec_images_recommend` first to pick a provider/model/surface, or pass `provider` / `model` / `width` / `height` / `quality` explicitly. The tool returns the **`assetId`** (plus `version`, `routeSource`, `provider`, `model`) — capture `assetId` for your step output. No manual path, directory, or filename handling — the asset is addressed by its id.
 
 **References** (brief says "like this image" / provides an attachment): pass the image itself, don't describe it —
 
-```bash
-mcporter call bakin-pixel.bakin_exec_images_generate --args '{"taskId":"<id>","surface":"<surface>","prompt":"<your crafted prompt>","referenceImages":["<assetId | /abs/path | media://inbound/file.png>"]}'
+```
+bakin_exec_images_generate taskId=<id> surface=<surface> prompt="<your crafted prompt>" referenceImages=["<assetId | /abs/path | runtime attachment URI>"]
 ```
 
-Up to 4 entries, mixed forms fine. Raw paths and `media://` URIs are auto-imported as tracked assets linked to the task, and the generated asset records its lineage (the References row on the asset page). References need a native runtime model with the `reference-images` capability — the call fails cleanly before billing otherwise, so just fix the route and retry. Never list the asset you're editing as a reference; the edit already includes it.
+Up to 4 entries, mixed forms fine. Raw paths and runtime attachment URIs are auto-imported as tracked assets linked to the task, and the generated asset records its lineage (the References row on the asset page). References need a native runtime model with the `reference-images` capability — the call fails cleanly before billing otherwise, so just fix the route and retry. Never list the asset you're editing as a reference; the edit already includes it.
 
 **Edits** (`source_image` present): use **`bakin_exec_images_edit`** with `assetId=<managed asset>` plus the edit `prompt`. It edits the current version, appends a **new version** to the SAME asset (the id is stable), and returns that `assetId`. If the source is a loose local file (not yet managed), first `bakin_exec_images_import taskId=<id> filePath=<abs path>` to get an `assetId`, then edit by `assetId`. Everything — generate, edit, multi-image — routes through the `bakin_exec_images_*` tools; never shell out to a native image script.
 
 ### 4. Submit step output
 
-```bash
-mcporter call bakin-pixel.bakin_exec_submit_step taskId=<id> stepId=<step> --args '{"assetId":"<assetId>","prompt_used":"<prompt>","iteration_count":<n>}'
+```
+bakin_exec_submit_step taskId=<id> stepId=<step> output={"assetId":"<assetId>","prompt_used":"<prompt>","iteration_count":<n>}
 ```
 
 After submitting, STOP. Do not message the human operator, do not start the next step yourself, do not regenerate "just in case." The workflow engine takes it from here.

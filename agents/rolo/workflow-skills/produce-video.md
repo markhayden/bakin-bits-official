@@ -46,18 +46,19 @@ audio under the video with ffmpeg.
 
 ### 4. Save as a managed asset
 
-```bash
-mcporter call bakin-rolo.bakin_exec_assets_save filePath=<final mp4 path> taskId=<id> type=video
+```
+bakin_exec_assets_save filePath=<final mp4 path> taskId=<id> type=video
 ```
 
 Capture the returned **`assetId`** — that, not a filesystem path, is the deliverable.
 
 ### 5. Submit step output
 
-```bash
-mcporter call bakin-rolo.bakin_exec_submit_step taskId=<id> stepId=<step> \
-  --args '{"assetId":"<assetId>","duration_s":<seconds>,"has_audio":<true|false>}'
 ```
+bakin_exec_submit_step taskId=<id> stepId=<step> output={"assetId":"<assetId>","duration_s":<seconds>,"has_audio":<true|false>}
+```
+
+(Invoke Bakin tools as described in your **Tool access** section — the exact call form depends on the active runtime.)
 
 After submitting, STOP. Do not message the operator, do not post anywhere, do not start the next
 step. The workflow engine takes it from here.
