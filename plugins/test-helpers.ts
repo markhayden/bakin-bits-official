@@ -363,6 +363,10 @@ export function createTestContext(pluginId: string, testDir: string): ActivatedP
 
 export async function activatePlugin(plugin: BakinPlugin, testDir: string): Promise<ActivatedPlugin> {
   const activated = createTestContext(plugin.id, testDir)
+  // Declarative routes (host #642: the only route style) are collected from
+  // the plugin object the way the host registry does; activate() may still
+  // fill late-binding handler maps afterwards.
+  for (const route of plugin.routes ?? []) activated.routes.push(route as APIRoute)
   await plugin.activate(activated.ctx)
   return activated
 }

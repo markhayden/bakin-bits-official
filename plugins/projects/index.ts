@@ -3,6 +3,7 @@
  * Registers API routes, exec tools, and the task-link index.
  */
 import { z } from 'zod'
+import { defineRoute } from '@makinbakin/sdk'
 import type { BakinPlugin, PluginContext, RuntimeAgent } from '@makinbakin/sdk/types'
 import {
   brainstormThreadId,
@@ -98,6 +99,45 @@ function createBrainstormMessage(input: {
 }
 
 // ---------------------------------------------------------------------------
+// Declarative routes (late-binding)
+//
+// Routes are static on the plugin object, but every handler closes over
+// activate()-created services (repo, project service, index helpers). The
+// bridge: activate() fills `routeHandlers`, and each declarative entry
+// trampolines into it. Path params are merged into the request's
+// searchParams — the contract the legacy handlers already read — so the
+// handler bodies are unchanged from the ctx.registerRoute era.
+// ---------------------------------------------------------------------------
+
+type LegacyHandler = (req: Request) => Promise<Response> | Response
+const routeHandlers = new Map<string, LegacyHandler>()
+
+function paramsSchemaFor(path: string): { params?: z.ZodObject<Record<string, z.ZodString>> } {
+  const keys = [...path.matchAll(/:([A-Za-z]+)/g)].map((m) => m[1])
+  if (keys.length === 0) return {}
+  return { params: z.object(Object.fromEntries(keys.map((k) => [k, z.string()]))) }
+}
+
+function legacyRoute(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, summary: string) {
+  return defineRoute({
+    method,
+    path,
+    summary,
+    description: summary,
+    ...paramsSchemaFor(path),
+    handler: async (req: Request, _ctx: unknown, parsed: { params?: Record<string, string> }) => {
+      const handler = routeHandlers.get(`${method} ${path}`)
+      if (!handler) return json({ error: 'projects plugin not ready' }, 503)
+      const url = new URL(req.url)
+      for (const [key, value] of Object.entries(parsed?.params ?? {})) {
+        url.searchParams.set(key, String(value))
+      }
+      return handler(new Request(url, req))
+    },
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Plugin
 // ---------------------------------------------------------------------------
 
@@ -117,7 +157,26 @@ const projectsPlugin: BakinPlugin = {
     { id: 'projects', label: 'Projects', icon: 'FolderKanban', href: '/projects', order: 30 },
   ],
 
+  routes: [
+    legacyRoute('GET', '/', 'List projects'),
+    legacyRoute('GET', '/:projectId', 'Get project by ID'),
+    legacyRoute('POST', '/', 'Create project'),
+    legacyRoute('PUT', '/:projectId', 'Update project'),
+    legacyRoute('DELETE', '/:projectId', 'Delete project'),
+    legacyRoute('POST', '/:projectId/checklist', 'Add checklist item'),
+    legacyRoute('PUT', '/:projectId/checklist/:itemId/toggle', 'Toggle checklist item'),
+    legacyRoute('PUT', '/:projectId/checklist/:itemId', 'Update checklist item'),
+    legacyRoute('DELETE', '/:projectId/checklist/:itemId', 'Remove checklist item'),
+    legacyRoute('POST', '/:projectId/checklist/:itemId/link', 'Link checklist item to task'),
+    legacyRoute('POST', '/:projectId/checklist/:itemId/promote', 'Promote item to task'),
+    legacyRoute('POST', '/:projectId/assets', 'Attach asset'),
+    legacyRoute('PATCH', '/:projectId/assets/:assetId', 'Relink asset reference'),
+    legacyRoute('DELETE', '/:projectId/assets/:assetId', 'Detach asset'),
+    legacyRoute('POST', '/:projectId/ask', 'Ask agent about project (streams tokens via SSE)'),
+  ],
+
   async activate(ctx: PluginContext) {
+    routeHandlers.clear()
     const repo = createProjectRepository(ctx.storage)
     activeProjectRepository = repo
     const projectService = createProjectService(ctx, repo)
@@ -269,7 +328,7 @@ const projectsPlugin: BakinPlugin = {
       if (statusFilter) projects = projects.filter(p => p.status === statusFilter)
       return json({ projects: projects.map(projectToSummary) })
     }
-    ctx.registerRoute({ path: '/', method: 'GET', description: 'List projects', handler: listHandler })
+    routeHandlers.set('GET /', listHandler)
 
     // GET /:projectId — get single project
     const getHandler = async (req: Request) => {
@@ -285,7 +344,7 @@ const projectsPlugin: BakinPlugin = {
         },
       })
     }
-    ctx.registerRoute({ path: '/:projectId', method: 'GET', description: 'Get project by ID', handler: getHandler })
+    routeHandlers.set('GET /:projectId', getHandler)
 
     // POST / — create project
     const createHandler = async (req: Request) => {
@@ -298,7 +357,7 @@ const projectsPlugin: BakinPlugin = {
       indexProject(result.id).catch(() => {})
       return json({ ok: true, ...result })
     }
-    ctx.registerRoute({ path: '/', method: 'POST', description: 'Create project', handler: createHandler })
+    routeHandlers.set('POST /', createHandler)
 
     // PUT /:projectId — update project
     const updateHandler = async (req: Request) => {
@@ -316,7 +375,7 @@ const projectsPlugin: BakinPlugin = {
         return json({ error: (err as Error).message }, 400)
       }
     }
-    ctx.registerRoute({ path: '/:projectId', method: 'PUT', description: 'Update project', handler: updateHandler })
+    routeHandlers.set('PUT /:projectId', updateHandler)
 
     // DELETE /:projectId — delete project
     const deleteHandler = async (req: Request) => {
@@ -344,7 +403,7 @@ const projectsPlugin: BakinPlugin = {
         return json({ error: (err as Error).message }, 400)
       }
     }
-    ctx.registerRoute({ path: '/:projectId', method: 'DELETE', description: 'Delete project', handler: deleteHandler })
+    routeHandlers.set('DELETE /:projectId', deleteHandler)
 
     // POST /:projectId/checklist — add checklist item
     const addItemHandler = async (req: Request) => {
@@ -358,7 +417,7 @@ const projectsPlugin: BakinPlugin = {
       indexProject(projectId).catch(() => {})
       return json({ ok: true, ...result })
     }
-    ctx.registerRoute({ path: '/:projectId/checklist', method: 'POST', description: 'Add checklist item', handler: addItemHandler })
+    routeHandlers.set('POST /:projectId/checklist', addItemHandler)
 
     // PUT /:projectId/checklist/:itemId/toggle — toggle checklist item
     const toggleHandler = async (req: Request) => {
@@ -373,7 +432,7 @@ const projectsPlugin: BakinPlugin = {
       indexProject(projectId).catch(() => {})
       return json({ ok: true, ...result })
     }
-    ctx.registerRoute({ path: '/:projectId/checklist/:itemId/toggle', method: 'PUT', description: 'Toggle checklist item', handler: toggleHandler })
+    routeHandlers.set('PUT /:projectId/checklist/:itemId/toggle', toggleHandler)
 
     // PUT /:projectId/checklist/:itemId — update checklist item
     const updateItemHandler = async (req: Request) => {
@@ -388,7 +447,7 @@ const projectsPlugin: BakinPlugin = {
       indexProject(projectId).catch(() => {})
       return json({ ok: true })
     }
-    ctx.registerRoute({ path: '/:projectId/checklist/:itemId', method: 'PUT', description: 'Update checklist item', handler: updateItemHandler })
+    routeHandlers.set('PUT /:projectId/checklist/:itemId', updateItemHandler)
 
     // DELETE /:projectId/checklist/:itemId — remove checklist item
     const removeItemHandler = async (req: Request) => {
@@ -403,7 +462,7 @@ const projectsPlugin: BakinPlugin = {
       indexProject(projectId).catch(() => {})
       return json({ ok: true })
     }
-    ctx.registerRoute({ path: '/:projectId/checklist/:itemId', method: 'DELETE', description: 'Remove checklist item', handler: removeItemHandler })
+    routeHandlers.set('DELETE /:projectId/checklist/:itemId', removeItemHandler)
 
     // POST /:projectId/checklist/:itemId/link — link to board task
     const linkHandler = async (req: Request) => {
@@ -418,7 +477,7 @@ const projectsPlugin: BakinPlugin = {
       indexProject(projectId).catch(() => {})
       return json({ ok: true })
     }
-    ctx.registerRoute({ path: '/:projectId/checklist/:itemId/link', method: 'POST', description: 'Link checklist item to task', handler: linkHandler })
+    routeHandlers.set('POST /:projectId/checklist/:itemId/link', linkHandler)
 
     // POST /:projectId/checklist/:itemId/promote — promote to board task
     const promoteHandler = async (req: Request) => {
@@ -433,7 +492,7 @@ const projectsPlugin: BakinPlugin = {
       indexProject(projectId).catch(() => {})
       return json({ ok: true, ...result })
     }
-    ctx.registerRoute({ path: '/:projectId/checklist/:itemId/promote', method: 'POST', description: 'Promote item to task', handler: promoteHandler })
+    routeHandlers.set('POST /:projectId/checklist/:itemId/promote', promoteHandler)
 
     // POST /:projectId/assets — attach asset
     const attachHandler = async (req: Request) => {
@@ -453,7 +512,7 @@ const projectsPlugin: BakinPlugin = {
         return json({ error: message }, status)
       }
     }
-    ctx.registerRoute({ path: '/:projectId/assets', method: 'POST', description: 'Attach asset', handler: attachHandler })
+    routeHandlers.set('POST /:projectId/assets', attachHandler)
 
     // PATCH /:projectId/assets/:assetId — relink asset reference
     const relinkHandler = async (req: Request) => {
@@ -474,7 +533,7 @@ const projectsPlugin: BakinPlugin = {
         return json({ error: message }, status)
       }
     }
-    ctx.registerRoute({ path: '/:projectId/assets/:assetId', method: 'PATCH', description: 'Relink asset reference', handler: relinkHandler })
+    routeHandlers.set('PATCH /:projectId/assets/:assetId', relinkHandler)
 
     // DELETE /:projectId/assets/:assetId — detach asset
     const detachHandler = async (req: Request) => {
@@ -495,10 +554,10 @@ const projectsPlugin: BakinPlugin = {
         return json({ error: message }, status)
       }
     }
-    ctx.registerRoute({ path: '/:projectId/assets/:assetId', method: 'DELETE', description: 'Detach asset', handler: detachHandler })
+    routeHandlers.set('DELETE /:projectId/assets/:assetId', detachHandler)
 
     // POST /:projectId/ask — agent brainstorm (SSE stream)
-    ctx.registerRoute({ path: '/:projectId/ask', method: 'POST', description: 'Ask agent about project (streams tokens via SSE)', handler: async (req: Request) => {
+    routeHandlers.set('POST /:projectId/ask', async (req: Request) => {
         const body = await readBody<{
           projectId: string
           prompt: string
@@ -634,8 +693,7 @@ const projectsPlugin: BakinPlugin = {
             'Connection': 'keep-alive',
           },
         })
-      },
-    })
+      })
 
     // -----------------------------------------------------------------
     // MCP Exec Tools

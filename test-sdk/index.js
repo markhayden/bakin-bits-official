@@ -43,3 +43,14 @@ export function setNavBadge(pluginId, navItemId, badge) {
 export function getNavBadge(navItemId) {
   return navBadges.get(navItemId)
 }
+
+// Declarative routing (host #642 migration): identity passthroughs are enough
+// for tests — the real dispatcher lives host-side; tests invoke handlers via
+// the recorded route table.
+export function defineRoute(route) {
+  return route
+}
+
+export function definePlugin(plugin) {
+  return plugin
+}

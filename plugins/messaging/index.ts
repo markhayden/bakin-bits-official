@@ -3,6 +3,7 @@
  * Manages content Plans, Deliverables, brainstorm sessions, prep tasks, and publishing.
  */
 import { z } from 'zod'
+import { defineRoute } from '@makinbakin/sdk'
 import type { BakinPlugin, PluginContext, PluginLogger } from '@makinbakin/sdk/types'
 import {
   brainstormThreadId,
@@ -700,6 +701,45 @@ async function resolvePromptOptions(ctx: PluginContext, agentId: string) {
   return { agentName, contentTypes, persona }
 }
 
+
+// ---------------------------------------------------------------------------
+// Declarative routes (late-binding)
+//
+// Routes are static on the plugin object, but every handler closes over
+// activate()-created services. activate() fills `routeHandlers`; each
+// declarative entry trampolines into it. Path params are merged into the
+// request's searchParams — the contract the legacy handlers already read —
+// so handler bodies are unchanged from the ctx.registerRoute era.
+// ---------------------------------------------------------------------------
+
+type LegacyHandler = (req: Request) => Promise<Response> | Response
+const routeHandlers = new Map<string, LegacyHandler>()
+
+function paramsSchemaFor(path: string): { params?: z.ZodObject<Record<string, z.ZodString>> } {
+  const keys = [...path.matchAll(/:([A-Za-z]+)/g)].map((m) => m[1])
+  if (keys.length === 0) return {}
+  return { params: z.object(Object.fromEntries(keys.map((k) => [k, z.string()]))) }
+}
+
+function legacyRoute(method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, summary: string) {
+  return defineRoute({
+    method,
+    path,
+    summary,
+    description: summary,
+    ...paramsSchemaFor(path),
+    handler: async (req: Request, _ctx: unknown, parsed: { params?: Record<string, string> }) => {
+      const handler = routeHandlers.get(`${method} ${path}`)
+      if (!handler) return json({ error: 'messaging plugin not ready' }, 503)
+      const url = new URL(req.url)
+      for (const [key, value] of Object.entries(parsed?.params ?? {})) {
+        url.searchParams.set(key, String(value))
+      }
+      return handler(new Request(url, req))
+    },
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Plugin
 // ---------------------------------------------------------------------------
@@ -775,7 +815,39 @@ const messagingPlugin: BakinPlugin = {
 
   contentFiles: [],
 
+  routes: [
+    legacyRoute('POST', '/brainstorm', 'Brainstorm content topics with an agent'),
+    legacyRoute('GET', '/sessions', 'List planning sessions'),
+    legacyRoute('GET', '/sessions/:id', 'Get a planning session'),
+    legacyRoute('POST', '/sessions', 'Create a planning session'),
+    legacyRoute('PUT', '/sessions/:id', 'Update a planning session'),
+    legacyRoute('DELETE', '/sessions/:id', 'Delete a planning session without deleting Plans prepared from it'),
+    legacyRoute('POST', '/sessions/:id/messages', 'Send a message in a planning session (SSE streaming)'),
+    legacyRoute('PUT', '/sessions/:id/proposals/:proposalId', 'Update a proposal in a planning session'),
+    legacyRoute('POST', '/sessions/:id/materialize', 'Prepare Plans from accepted brainstorm proposals'),
+    legacyRoute('GET', '/plans', 'List content Plans'),
+    legacyRoute('GET', '/plans/summary', 'Counts of Plans by review status (nav-badge source)'),
+    legacyRoute('GET', '/plans/:id', 'Get a content Plan'),
+    legacyRoute('POST', '/plans', 'Create a content Plan'),
+    legacyRoute('PUT', '/plans/:id', 'Update a content Plan'),
+    legacyRoute('DELETE', '/plans/:id', 'Delete a content Plan, its content pieces, and linked board tasks'),
+    legacyRoute('DELETE', '/plans/:id/channels/:channelId', 'Delete one configured Plan channel, its Deliverables, and linked board tasks'),
+    legacyRoute('POST', '/plans/:id/activate', 'Activate a content Plan and create scheduled kickoff tasks for its configured channels'),
+    legacyRoute('GET', '/deliverables', 'List content Deliverables'),
+    legacyRoute('GET', '/deliverables/:id', 'Get a content Deliverable'),
+    legacyRoute('POST', '/deliverables', 'Create a Quick Post Deliverable. Plan Deliverables are created only by Plan activation.'),
+    legacyRoute('PUT', '/deliverables/:id', 'Update a content Deliverable'),
+    legacyRoute('DELETE', '/deliverables/:id', 'Delete a content Deliverable'),
+    legacyRoute('POST', '/deliverables/:id/approve', 'Approve a content Deliverable'),
+    legacyRoute('POST', '/deliverables/:id/reject', 'Reject a content Deliverable'),
+    legacyRoute('POST', '/deliverables/:id/approve-and-publish-now', 'Approve and immediately publish a bare-task Deliverable'),
+    legacyRoute('POST', '/deliverables/:id/restore-approval', 'Recover a workflow-backed Deliverable by restoring approved state after workflow handoff failure'),
+    legacyRoute('POST', '/deliverables/:id/reopen-prep', 'Recover a failed Deliverable by reopening content prep'),
+    legacyRoute('POST', '/deliverables/:id/retry-delivery', 'Retry external delivery for a failed Deliverable'),
+  ],
+
   async activate(ctx: PluginContext) {
+    routeHandlers.clear()
     bindLogger(ctx)
     activeCtx = ctx
 
@@ -864,10 +936,7 @@ const messagingPlugin: BakinPlugin = {
     // ── API Routes ─────────────────────────────────────────────────────
 
     // POST /brainstorm — one-shot Plan brainstorming
-    ctx.registerRoute({
-      path: '/brainstorm',
-      method: 'POST',
-      handler: async (req: Request) => {
+    routeHandlers.set('POST /brainstorm', async (req: Request) => {
         const body = await readBody<{
           agentId: string
           message: string
@@ -944,46 +1013,31 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
           log.error('Brainstorm error', err)
           return json({ error: err instanceof Error ? err.message : String(err) }, 500)
         }
-      },
-    })
+      })
 
     // ── Session Routes ──────────────────────────────────────────────────
 
     // GET /sessions — list planning sessions
-    ctx.registerRoute({
-      path: '/sessions',
-      method: 'GET',
-      description: 'List planning sessions',
-      handler: async (req: Request) => {
+    routeHandlers.set('GET /sessions', async (req: Request) => {
         const url = new URL(req.url)
         const status = url.searchParams.get('status') || undefined
         const agentId = url.searchParams.get('agentId') || undefined
         const sessions = listBrainstormSessionSummaries(contentStore, { status, agentId })
         return json({ sessions })
-      },
-    })
+      })
 
     // GET /sessions/:id — get full session
-    ctx.registerRoute({
-      path: '/sessions/:id',
-      method: 'GET',
-      description: 'Get a planning session',
-      handler: async (req: Request) => {
+    routeHandlers.set('GET /sessions/:id', async (req: Request) => {
         const url = new URL(req.url)
         const id = url.searchParams.get('id')
         if (!id) return json({ error: 'id required' }, 400)
         const session = contentStore.getBrainstormSession(id)
         if (!session) return json({ error: 'Session not found' }, 404)
         return json({ session })
-      },
-    })
+      })
 
     // POST /sessions — create session
-    ctx.registerRoute({
-      path: '/sessions',
-      method: 'POST',
-      description: 'Create a planning session',
-      handler: async (req: Request) => {
+    routeHandlers.set('POST /sessions', async (req: Request) => {
         const body = await readBody<{ agentId?: string; title?: string; scope?: string }>(req)
         if (!body.agentId) return json({ error: 'agentId required' }, 400)
         if (!(await validateAgentId(ctx, body.agentId))) {
@@ -997,15 +1051,10 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         ctx.activity.audit('session.created', body.agentId, { sessionId: session.id })
         ctx.activity.log(body.agentId, `Created planning session "${session.title}"`)
         return json({ ok: true, session })
-      },
-    })
+      })
 
     // PUT /sessions/:id — update session metadata
-    ctx.registerRoute({
-      path: '/sessions/:id',
-      method: 'PUT',
-      description: 'Update a planning session',
-      handler: async (req: Request) => {
+    routeHandlers.set('PUT /sessions/:id', async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<{ id?: string; title?: string; status?: BrainstormSession['status'] }>(req)
         const id = url.searchParams.get('id') || body.id
@@ -1016,15 +1065,10 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         } catch (e: unknown) {
           return json({ error: (e as Error).message }, 404)
         }
-      },
-    })
+      })
 
     // DELETE /sessions/:id — delete session
-    ctx.registerRoute({
-      path: '/sessions/:id',
-      method: 'DELETE',
-      description: 'Delete a planning session without deleting Plans prepared from it',
-      handler: async (req: Request) => {
+    routeHandlers.set('DELETE /sessions/:id', async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
         const id = url.searchParams.get('id') || body.id
@@ -1035,15 +1079,10 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         ctx.activity.audit('session.deleted', 'system', { sessionId: id })
         ctx.activity.log('system', `Deleted planning session ${id}`)
         return json({ ok: true, planIds: [], taskIds: [] })
-      },
-    })
+      })
 
     // POST /sessions/:id/messages — send message with SSE streaming
-    ctx.registerRoute({
-      path: '/sessions/:id/messages',
-      method: 'POST',
-      description: 'Send a message in a planning session (SSE streaming)',
-      handler: async (req: Request) => {
+    routeHandlers.set('POST /sessions/:id/messages', async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<{ id?: string; message?: string; planId?: string }>(req)
         const id = url.searchParams.get('id') || body.id
@@ -1271,15 +1310,10 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
             'Connection': 'keep-alive',
           },
         })
-      },
-    })
+      })
 
     // PUT /sessions/:id/proposals/:proposalId — update proposal
-    ctx.registerRoute({
-      path: '/sessions/:id/proposals/:proposalId',
-      method: 'PUT',
-      description: 'Update a proposal in a planning session',
-      handler: async (req: Request) => {
+    routeHandlers.set('PUT /sessions/:id/proposals/:proposalId', async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<Record<string, unknown>>(req)
         const sessionId = url.searchParams.get('id')
@@ -1298,14 +1332,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         } catch (e: unknown) {
           return json({ error: (e as Error).message }, 404)
         }
-      },
-    })
+      })
 
-    ctx.registerRoute({
-      path: '/sessions/:id/materialize',
-      method: 'POST',
-      description: 'Prepare Plans from accepted brainstorm proposals',
-      handler: async (req: Request) => {
+    routeHandlers.set('POST /sessions/:id/materialize', async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<{ id?: string }>(req).catch(() => ({} as { id?: string }))
         const id = url.searchParams.get('id') || body.id
@@ -1320,16 +1349,11 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         ctx.activity.audit('session.materialized', 'system', { sessionId: id, planIds: result.planIds })
         ctx.activity.log('system', `Created ${result.planIds.length} Plan(s) from "${session.title}"`)
         return json({ ok: true, ...result })
-      },
-    })
+      })
 
     // ── Plan Routes ────────────────────────────────────────────────────
 
-    ctx.registerRoute({
-      path: '/plans',
-      method: 'GET',
-      description: 'List content Plans',
-      handler: async (req: Request) => {
+    routeHandlers.set('GET /plans', async (req: Request) => {
         const url = new URL(req.url)
         const status = url.searchParams.get('status')
         const agent = url.searchParams.get('agent')
@@ -1339,43 +1363,28 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         if (agent) plans = plans.filter(plan => plan.agent === agent)
         if (campaign) plans = plans.filter(plan => plan.campaign === campaign)
         return json({ plans })
-      },
-    })
+      })
 
     // Cheap counts for the Plans nav badge — returns only numbers, never
     // full Plan bodies, so the sidebar badge can refresh on every SSE tick
     // without paying for the list payload. The host route matcher prefers
     // this exact path over the `/plans/:id` param route.
-    ctx.registerRoute({
-      path: '/plans/summary',
-      method: 'GET',
-      description: 'Counts of Plans by review status (nav-badge source)',
-      handler: async () => {
+    routeHandlers.set('GET /plans/summary', async () => {
         const plans = contentStore.listPlans()
         const needsReview = plans.filter(plan => plan.status === 'needs_review').length
         return json({ needsReview, total: plans.length })
-      },
-    })
+      })
 
-    ctx.registerRoute({
-      path: '/plans/:id',
-      method: 'GET',
-      description: 'Get a content Plan',
-      handler: async (req: Request) => {
+    routeHandlers.set('GET /plans/:id', async (req: Request) => {
         const url = new URL(req.url)
         const id = url.searchParams.get('id')
         if (!id) return json({ error: 'id required' }, 400)
         const plan = contentStore.getPlan(id)
         if (!plan) return json({ error: 'Plan not found' }, 404)
         return json({ plan, deliverables: contentStore.listDeliverables({ planId: id }) })
-      },
-    })
+      })
 
-    ctx.registerRoute({
-      path: '/plans',
-      method: 'POST',
-      description: 'Create a content Plan',
-      handler: async (req: Request) => {
+    routeHandlers.set('POST /plans', async (req: Request) => {
         const body = await readBody<Record<string, unknown>>(req)
         if (!body.title || !body.targetDate || !body.agent) {
           return json({ error: 'title, targetDate, and agent required' }, 400)
@@ -1391,14 +1400,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         ctx.activity.audit('plan.created', body.agent as string, { planId: plan.id, title: plan.title })
         ctx.activity.log(body.agent as string, `Created content Plan "${plan.title}"`)
         return json({ ok: true, plan })
-      },
-    })
+      })
 
-    ctx.registerRoute({
-      path: '/plans/:id',
-      method: 'PUT',
-      description: 'Update a content Plan',
-      handler: async (req: Request) => {
+    routeHandlers.set('PUT /plans/:id', async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<Record<string, unknown>>(req)
         const id = url.searchParams.get('id') || body.id as string | undefined
@@ -1424,14 +1428,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         } catch (err) {
           return json({ error: err instanceof Error ? err.message : String(err) }, 404)
         }
-      },
-    })
+      })
 
-    ctx.registerRoute({
-      path: '/plans/:id',
-      method: 'DELETE',
-      description: 'Delete a content Plan, its content pieces, and linked board tasks',
-      handler: async (req: Request) => {
+    routeHandlers.set('DELETE /plans/:id', async (req: Request) => {
         const url = new URL(req.url)
         const hasQueryOptions = url.searchParams.has('id') && url.searchParams.has('deleteLinkedTasks')
         const body: { id?: string; deleteLinkedTasks?: boolean } = hasQueryOptions ? {} : await readBody<{ id?: string; deleteLinkedTasks?: boolean }>(req)
@@ -1445,14 +1444,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         if (!result.deleted) return json({ error: 'Plan not found' }, 404)
         ctx.activity.audit('plan.deleted', 'system', { planId: id, deliverableIds: result.deliverableIds, taskIds: result.taskIds })
         return json({ ok: true, deliverableIds: result.deliverableIds, taskIds: result.taskIds })
-      },
-    })
+      })
 
-    ctx.registerRoute({
-      path: '/plans/:id/channels/:channelId',
-      method: 'DELETE',
-      description: 'Delete one configured Plan channel, its Deliverables, and linked board tasks',
-      handler: async (req: Request) => {
+    routeHandlers.set('DELETE /plans/:id/channels/:channelId', async (req: Request) => {
         const url = new URL(req.url)
         const hasQueryOptions = url.searchParams.has('id')
           && url.searchParams.has('channelId')
@@ -1475,14 +1469,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
           taskIds: result.taskIds,
         })
         return json({ ok: true, plan: result.plan, deliverableIds: result.deliverableIds, taskIds: result.taskIds })
-      },
-    })
+      })
 
-    ctx.registerRoute({
-      path: '/plans/:id/activate',
-      method: 'POST',
-      description: 'Activate a content Plan and create scheduled kickoff tasks for its configured channels',
-      handler: async (req: Request) => {
+    routeHandlers.set('POST /plans/:id/activate', async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
         const id = url.searchParams.get('id') || body.id
@@ -1490,40 +1479,25 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const result = await activatePlan(ctx, contentStore, id, ctx.getSettings<MessagingSettings>())
         if (!result.ok) return json({ error: result.error }, result.status)
         return json(result)
-      },
-    })
+      })
 
     // ── Deliverable Routes ─────────────────────────────────────────────
 
-    ctx.registerRoute({
-      path: '/deliverables',
-      method: 'GET',
-      description: 'List content Deliverables',
-      handler: async (req: Request) => {
+    routeHandlers.set('GET /deliverables', async (req: Request) => {
         const url = new URL(req.url)
         return json({ deliverables: filterDeliverablesBySearchParams(contentStore.listDeliverables(), url) })
-      },
-    })
+      })
 
-    ctx.registerRoute({
-      path: '/deliverables/:id',
-      method: 'GET',
-      description: 'Get a content Deliverable',
-      handler: async (req: Request) => {
+    routeHandlers.set('GET /deliverables/:id', async (req: Request) => {
         const url = new URL(req.url)
         const id = url.searchParams.get('id')
         if (!id) return json({ error: 'id required' }, 400)
         const deliverable = contentStore.getDeliverable(id)
         if (!deliverable) return json({ error: 'Deliverable not found' }, 404)
         return json({ deliverable })
-      },
-    })
+      })
 
-    ctx.registerRoute({
-      path: '/deliverables',
-      method: 'POST',
-      description: 'Create a Quick Post Deliverable. Plan Deliverables are created only by Plan activation.',
-      handler: async (req: Request) => {
+    routeHandlers.set('POST /deliverables', async (req: Request) => {
         const body = await readBody<Record<string, unknown>>(req)
         if (!body.title || !body.brief || !body.channel || !body.contentType || !body.tone || !body.agent || !body.publishAt) {
           return json({ error: 'title, brief, channel, contentType, tone, agent, and publishAt required' }, 400)
@@ -1555,14 +1529,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         } catch (err) {
           return json({ error: err instanceof Error ? err.message : String(err) }, 400)
         }
-      },
-    })
+      })
 
-    ctx.registerRoute({
-      path: '/deliverables/:id',
-      method: 'PUT',
-      description: 'Update a content Deliverable',
-      handler: async (req: Request) => {
+    routeHandlers.set('PUT /deliverables/:id', async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<Record<string, unknown>>(req)
         const id = url.searchParams.get('id') || body.id as string | undefined
@@ -1599,14 +1568,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         } catch (err) {
           return json({ error: err instanceof Error ? err.message : String(err) }, 400)
         }
-      },
-    })
+      })
 
-    ctx.registerRoute({
-      path: '/deliverables/:id',
-      method: 'DELETE',
-      description: 'Delete a content Deliverable',
-      handler: async (req: Request) => {
+    routeHandlers.set('DELETE /deliverables/:id', async (req: Request) => {
         const url = new URL(req.url)
         const hasQueryOptions = url.searchParams.has('id') && url.searchParams.has('deleteLinkedTasks')
         const body: { id?: string; deleteLinkedTasks?: boolean } = hasQueryOptions ? {} : await readBody<{ id?: string; deleteLinkedTasks?: boolean }>(req)
@@ -1620,14 +1584,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         if (!result.deleted) return json({ error: 'Deliverable not found' }, 404)
         ctx.activity.audit('deliverable.deleted', 'system', { deliverableId: id, planId: result.planId, taskIds: result.taskIds })
         return json({ ok: true, taskIds: result.taskIds })
-      },
-    })
+      })
 
-    ctx.registerRoute({
-      path: '/deliverables/:id/approve',
-      method: 'POST',
-      description: 'Approve a content Deliverable',
-      handler: async (req: Request) => {
+    routeHandlers.set('POST /deliverables/:id/approve', async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
         const id = url.searchParams.get('id') || body.id
@@ -1635,14 +1594,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const result = await approveDeliverable(contentStore, ctx, ctx.getSettings<MessagingSettings>(), id)
         if (!result.ok) return json({ error: result.error, deliverable: result.deliverable }, result.status)
         return json({ ok: true, deliverable: result.deliverable })
-      },
-    })
+      })
 
-    ctx.registerRoute({
-      path: '/deliverables/:id/reject',
-      method: 'POST',
-      description: 'Reject a content Deliverable',
-      handler: async (req: Request) => {
+    routeHandlers.set('POST /deliverables/:id/reject', async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<{ id?: string; note?: string; reason?: string }>(req).catch(() => ({} as { id?: string; note?: string; reason?: string }))
         const id = url.searchParams.get('id') || body.id
@@ -1650,14 +1604,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const result = await rejectDeliverable(contentStore, ctx, id, body.note ?? body.reason ?? '')
         if (!result.ok) return json({ error: result.error, deliverable: result.deliverable }, result.status)
         return json({ ok: true, deliverable: result.deliverable })
-      },
-    })
+      })
 
-    ctx.registerRoute({
-      path: '/deliverables/:id/approve-and-publish-now',
-      method: 'POST',
-      description: 'Approve and immediately publish a bare-task Deliverable',
-      handler: async (req: Request) => {
+    routeHandlers.set('POST /deliverables/:id/approve-and-publish-now', async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
         const id = url.searchParams.get('id') || body.id
@@ -1665,14 +1614,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const result = await approveAndPublishDeliverableNow(contentStore, ctx, ctx.getSettings<MessagingSettings>(), id)
         if (!result.ok) return json({ error: result.error, deliverable: result.deliverable }, result.status)
         return json({ ok: true, deliverable: result.deliverable, published: result.published })
-      },
-    })
+      })
 
-    ctx.registerRoute({
-      path: '/deliverables/:id/restore-approval',
-      method: 'POST',
-      description: 'Recover a workflow-backed Deliverable by restoring approved state after workflow handoff failure',
-      handler: async (req: Request) => {
+    routeHandlers.set('POST /deliverables/:id/restore-approval', async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
         const id = url.searchParams.get('id') || body.id
@@ -1681,14 +1625,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const plan = result.deliverable?.planId ? contentStore.getPlan(result.deliverable.planId) : null
         if (!result.ok) return json({ error: result.error, deliverable: result.deliverable, plan }, result.status)
         return json({ ok: true, deliverable: result.deliverable, plan })
-      },
-    })
+      })
 
-    ctx.registerRoute({
-      path: '/deliverables/:id/reopen-prep',
-      method: 'POST',
-      description: 'Recover a failed Deliverable by reopening content prep',
-      handler: async (req: Request) => {
+    routeHandlers.set('POST /deliverables/:id/reopen-prep', async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
         const id = url.searchParams.get('id') || body.id
@@ -1697,14 +1636,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const plan = result.deliverable?.planId ? contentStore.getPlan(result.deliverable.planId) : null
         if (!result.ok) return json({ error: result.error, deliverable: result.deliverable, plan }, result.status)
         return json({ ok: true, deliverable: result.deliverable, plan })
-      },
-    })
+      })
 
-    ctx.registerRoute({
-      path: '/deliverables/:id/retry-delivery',
-      method: 'POST',
-      description: 'Retry external delivery for a failed Deliverable',
-      handler: async (req: Request) => {
+    routeHandlers.set('POST /deliverables/:id/retry-delivery', async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
         const id = url.searchParams.get('id') || body.id
@@ -1713,8 +1647,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const plan = result.deliverable?.planId ? contentStore.getPlan(result.deliverable.planId) : null
         if (!result.ok) return json({ error: result.error, deliverable: result.deliverable, plan }, result.status)
         return json({ ok: true, deliverable: result.deliverable, plan, published: result.published })
-      },
-    })
+      })
 
     // ── Exec Tools (agent-facing) ─────────────────────────────────────
 
