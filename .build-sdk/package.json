@@ -1,8 +1,8 @@
 {
   "name": "bakin-bits-official-build-sdk",
   "private": true,
-  "description": "Build-only install of the real @makinbakin/sdk so scripts/build-plugins.ts can bundle the SDK into server bundles. Tests still resolve @makinbakin/sdk to the file:./test-sdk stub at the repo root.",
+  "description": "Build-only install of the real @makinbakin/sdk so scripts/build-plugins.ts can bundle the SDK into server bundles. Tests resolve @makinbakin/sdk to the file:./test-sdk stub. NOTE: pin below MUST be repointed to the published rc carrying the conversation kit (>= the one that ships ConversationPanel/useConversationStream/conversationThreadId/createTurnRecorder) before this builds in CI/release.",
   "dependencies": {
-    "@makinbakin/sdk": "file:/Users/markhayden/go/src/github.com/markhayden/bakin/dist-sdk"
+    "@makinbakin/sdk": "0.0.1-rc.5"
   }
 }
