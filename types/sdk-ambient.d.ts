@@ -846,49 +846,69 @@ declare module '@makinbakin/sdk/components' {
 
   export type SortDir = 'asc' | 'desc'
 
-  export interface BrainstormMessage {
-    id?: string
-    agentId?: string
-    role: 'user' | 'assistant' | 'system' | 'activity'
-    content: string
-    kind?: 'runtime_status' | 'tool_call' | 'error' | string
-    data?: unknown
-    createdAt?: string
-    timestamp?: string
-    metadata?: Record<string, unknown>
-    [key: string]: unknown
+  // ── Conversation kit (successor to IntegratedBrainstorm) ──────────────
+  export interface DisplayAttachment {
+    name: string
+    mimeType: string
+    url: string
   }
 
-  export interface BrainstormActivityStorageInput {
-    id?: string
-    kind?: string
-    content?: string
-    data?: unknown
-    timestamp?: string
+  export type ConversationMessage =
+    | { kind: 'user'; ts: string; content: string; attachments?: DisplayAttachment[] }
+    | { kind: 'assistant'; ts: string; turnId?: string; agentId?: string; content: string }
+    | {
+        kind: 'tool'
+        ts: string
+        turnId?: string
+        agentId?: string
+        callId?: string
+        toolName: string
+        status?: 'running' | 'completed' | 'failed' | string
+        summary?: string
+        inputPreview?: string
+        outputPreview?: string
+        durationMs?: number
+        metadata?: Record<string, unknown>
+      }
+    | { kind: 'error'; ts: string; turnId?: string; message: string; errorKind?: string }
+    | { kind: 'aborted'; ts: string; turnId?: string }
+
+  export interface ConversationStreamOptions {
+    fetcher: (content: string, ctx: { signal: AbortSignal }) => Promise<Response>
+    onCustom?: (event: string, data: unknown) => void
+    onDone?: (finalContent: string) => void | Promise<void>
+    onError?: (message: string) => void
+    onAborted?: () => void
   }
 
-  export interface BrainstormActivityStorageRecord {
-    kind: string
-    content: string
-    data?: unknown
+  export interface ConversationStream {
+    liveChunks: import('@makinbakin/sdk/types').RuntimeChatChunk[] | null
+    streaming: boolean
+    send: (content: string) => Promise<void>
+    abort: () => void
   }
 
-  export interface SendContext {
-    signal: AbortSignal
-    onToken: (text: string) => void
-    onCustom?: (name: string, data: unknown) => void
-  }
+  export function useConversationStream(options: ConversationStreamOptions): ConversationStream
 
-  export function readBrainstormSseResponse(
+  export function readConversationSseStream(
     response: Response,
-    ctx: SendContext,
-    options?: {
-      onCustomEvent?: (event: string, data: unknown) => boolean | void
+    handlers: {
+      signal: AbortSignal
+      onChunk: (chunk: import('@makinbakin/sdk/types').RuntimeChatChunk) => void
+      onCustom?: (event: string, data: unknown) => void
     },
   ): Promise<{ content: string }>
-  export function brainstormThreadId(scope: string, entityId: string, agentId: string): string
-  export function normalizeBrainstormActivityForStorage(activity: BrainstormActivityStorageInput): BrainstormActivityStorageRecord | null
-  export function normalizeBrainstormActivityMessageForStorage(activity: BrainstormActivityStorageInput): Pick<BrainstormMessage, 'role' | 'kind' | 'content' | 'data'> | null
+
+  export function foldConversation(
+    messages: readonly ConversationMessage[],
+    opts?: { liveChunks?: readonly import('@makinbakin/sdk/types').RuntimeChatChunk[]; liveAgentId?: string },
+  ): unknown[]
+
+  export const ConversationPanel: SDKComponent
+  export const Conversation: SDKComponent
+  export const Composer: SDKComponent
+  export const ConversationEmptyState: SDKComponent
+  export const ThinkingIndicator: SDKComponent
 
   export const AgentAvatar: ComponentType<{ agentId?: string; agent?: AgentInfo | null; size?: string | number; className?: string }>
   export const AgentFilter: SDKComponent
@@ -897,7 +917,6 @@ declare module '@makinbakin/sdk/components' {
   export const ChannelIcon: SDKComponent
   export const EmptyState: SDKComponent
   export const FacetFilter: SDKComponent
-  export const IntegratedBrainstorm: SDKComponent
   export const MarkdownEditor: SDKComponent
   export const PluginHeader: ComponentType<{
     title: string
@@ -1002,48 +1021,20 @@ declare module '@makinbakin/sdk/slots' {
 
 declare module '@makinbakin/sdk/utils' {
   import type { RuntimeChatChunk } from '@makinbakin/sdk/types'
-
-  export interface BrainstormActivityInput {
-    kind: string
-    content: string
-    data?: unknown
-  }
-
-  export interface BrainstormActivityStorageInput {
-    id?: string
-    kind?: string
-    content?: string
-    data?: unknown
-    timestamp?: string
-  }
-
-  export interface BrainstormActivityStorageRecord {
-    kind: string
-    content: string
-    data?: unknown
-  }
+  import type { ConversationMessage } from '@makinbakin/sdk/components'
 
   export function cn(...args: Array<string | undefined | null | false>): string
   export function formatAge(date: Date | string): string
   export function formatSize(bytes: number): string
-  export function brainstormThreadId(scope: string, entityId: string, agentId: string): string
-  export function normalizeBrainstormActivityForStorage(activity: BrainstormActivityStorageInput): BrainstormActivityStorageRecord | null
-  export function normalizeBrainstormActivityMessageForStorage(activity: BrainstormActivityStorageInput): {
-    role: 'activity'
-    kind: string
-    content: string
-    data?: unknown
-  } | null
-  export function runtimeChunkToBrainstormActivity(chunk: RuntimeChatChunk): BrainstormActivityInput | null
-  export function readBrainstormSseResponse(
-    response: Response,
-    ctx: {
-      signal: AbortSignal
-      onToken: (text: string) => void
-      onCustom?: (name: string, data: unknown) => void
-    },
-    options?: {
-      onCustomEvent?: (event: string, data: unknown) => boolean | void
-    },
-  ): Promise<{ content: string }>
+
+  // Conversation kit server helpers (successors to the brainstorm utils).
+  export function conversationThreadId(scope: string, entityId: string, agentId: string): string
+  export interface TurnRecorder {
+    ingest: (chunk: RuntimeChatChunk) => void
+    drain: () => ConversationMessage[]
+    finish: () => ConversationMessage[]
+  }
+  export function createTurnRecorder(options: { turnId: string; agentId?: string; now?: () => string }): TurnRecorder
+  export const SUMMARY_MAX_CHARS: number
+  export const PREVIEW_MAX_CHARS: number
 }
