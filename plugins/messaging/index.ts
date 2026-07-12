@@ -5,11 +5,7 @@
 import { z } from 'zod'
 import { defineRoute } from '@makinbakin/sdk'
 import type { BakinPlugin, PluginContext, PluginLogger } from '@makinbakin/sdk/types'
-import {
-  brainstormThreadId,
-  normalizeBrainstormActivityForStorage,
-  runtimeChunkToBrainstormActivity,
-} from '@makinbakin/sdk/utils'
+import { conversationThreadId } from '@makinbakin/sdk/utils'
 import type {
   BrainstormSession,
   ContentTone,
@@ -491,6 +487,29 @@ function listBrainstormSessionSummaries(
       proposalCount: session.proposals.length,
       approvedCount: session.proposals.filter(proposal => proposal.status === 'approved').length,
     }))
+}
+
+/**
+ * Map a runtime tool/status chunk into messaging's own SessionMessage
+ * activity row (storage stays messaging-shaped; the wire carries the raw
+ * chunk and the conversation kit folds it client-side). Successor to the
+ * deleted SDK brainstorm normalizers.
+ */
+function sessionActivityFromChunk(
+  chunk: { type: string; content?: string; data?: unknown },
+): { role: 'activity'; content: string; kind: string; data?: unknown } | null {
+  if (chunk.type === 'status') {
+    const content = (chunk.content ?? 'Agent status update').trim().slice(0, 500)
+    if (!content) return null
+    return { role: 'activity', kind: 'runtime_status', content, ...(chunk.data !== undefined ? { data: chunk.data } : {}) }
+  }
+  if (chunk.type === 'tool') {
+    const data = chunk.data as { toolName?: string; summary?: string } | undefined
+    const content = (chunk.content || (data?.toolName ? `${data.toolName}${data.summary ? `: ${data.summary}` : ''}` : 'Tool call')).trim().slice(0, 500)
+    if (!content) return null
+    return { role: 'activity', kind: 'tool_call', content, ...(chunk.data !== undefined ? { data: chunk.data } : {}) }
+  }
+  return null
 }
 
 function appendBrainstormMessage(
@@ -1106,8 +1125,8 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
           ? buildPlanRefinementMessages(session, plan, body.message, promptOptions)
           : buildMessages(session, body.message, promptOptions)
         const sessionKey = plan
-          ? brainstormThreadId('messaging-plan', plan.id, session.agentId)
-          : brainstormThreadId('messaging', id, session.agentId)
+          ? conversationThreadId('messaging-plan', plan.id, session.agentId)
+          : conversationThreadId('messaging', id, session.agentId)
 
         // Create a ReadableStream that pipes runtime SSE to the client
         const stream = new ReadableStream({
@@ -1174,25 +1193,24 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
                 for await (const chunk of runtimeChunks) {
                   if (chunk.type === 'text' && chunk.content) {
                     fullContent += chunk.content
-                    send('token', { text: chunk.content })
+                    send('chunk', chunk)
                     // Check if a ```json block just completed
                     if (chunk.content.includes('`')) {
                       checkForCompletedBlocks()
                     }
                   } else if (chunk.type === 'error') {
                     throw new Error(chunk.content ?? 'Runtime stream error')
-                  } else {
-                    const activity = runtimeChunkToBrainstormActivity(chunk)
-                    const normalized = activity ? normalizeBrainstormActivityForStorage(activity) : null
-                    if (normalized) {
+                  } else if (chunk.type === 'tool' || chunk.type === 'status') {
+                    // Raw chunks on the wire (the kit folds them client-side);
+                    // storage keeps messaging's own SessionMessage activity rows
+                    // with the structured chunk payload.
+                    send('chunk', chunk)
+                    const activity = sessionActivityFromChunk(chunk)
+                    if (activity) {
                       appendBrainstormMessage(contentStore, sessionId, {
-                        role: 'activity',
-                        content: normalized.content,
-                        kind: normalized.kind,
-                        data: normalized.data,
+                        ...activity,
                         agentId: session.agentId,
                       })
-                      send('activity', { activity: normalized })
                     }
                   }
                 }
@@ -1204,8 +1222,8 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
                     agentId: session.agentId,
                     sessionKey,
                   })
-                  // Send entire response as a single token event
-                  send('token', { text: fullContent })
+                  // Send entire response as a single text chunk
+                  send('chunk', { type: 'text', content: fullContent })
                 } catch (err) {
                   send('error', { message: err instanceof Error ? err.message : String(err) })
                   controller.close()
@@ -2125,7 +2143,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         // Durable history is held by the runtime adapter through the stable threadId.
         const promptOptions = await resolvePromptOptions(ctx, session.agentId)
         const messages = buildMessages(session, params.message as string, promptOptions)
-        const sessionKey = brainstormThreadId('messaging', params.sessionId as string, session.agentId)
+        const sessionKey = conversationThreadId('messaging', params.sessionId as string, session.agentId)
 
         let fullContent: string
         try {

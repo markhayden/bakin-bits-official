@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   AgentAvatar,
+  ConversationPanel,
   EmptyState,
-  IntegratedBrainstorm,
   PluginHeader,
-  readBrainstormSseResponse,
+  useConversationStream,
 } from "@makinbakin/sdk/components"
-import type { BrainstormMessage } from "@makinbakin/sdk/components"
+import type { ConversationMessage } from "@makinbakin/sdk/components"
 import { useHorizontalResize } from "@makinbakin/sdk/hooks"
 import { Badge } from "@makinbakin/sdk/ui"
 import { Button } from "@makinbakin/sdk/ui"
@@ -85,16 +85,28 @@ const DISTRIBUTION_CHANNEL_OPTIONS: DistributionChannelOption[] = MESSAGING_DIST
 }))
 const DELETE_REQUEST_TIMEOUT_MS = 10000
 
-function toBrainstorm(agentId: string, message: SessionMessage): BrainstormMessage {
-  return {
-    id: message.id,
-    role: message.role,
-    content: message.content,
-    kind: message.role === 'activity' ? message.kind : undefined,
-    data: message.role === 'activity' ? message.data : undefined,
-    agentId: message.role === 'assistant' ? agentId : message.agentId,
-    timestamp: message.timestamp,
+function toConversation(agentId: string, message: SessionMessage): ConversationMessage | null {
+  if (message.role === 'user') {
+    return { kind: 'user', ts: message.timestamp, content: message.content }
   }
+  if (message.role === 'assistant') {
+    return { kind: 'assistant', ts: message.timestamp, agentId, content: message.content }
+  }
+  if (message.kind === 'tool_call') {
+    const data = (message.data ?? {}) as { callId?: string; toolName?: string; status?: string; summary?: string }
+    return {
+      kind: 'tool',
+      ts: message.timestamp,
+      agentId,
+      toolName: data.toolName ?? 'tool',
+      status: data.status === 'failed' ? 'failed' : 'completed',
+      summary: data.summary ?? message.content,
+    }
+  }
+  if (message.kind === 'error') {
+    return { kind: 'error', ts: message.timestamp, message: message.content }
+  }
+  return null
 }
 
 function formatDateTime(value: string): string {
@@ -288,7 +300,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
   const [savingChannels, setSavingChannels] = useState(false)
   const [startingPrep, setStartingPrep] = useState(false)
   const [kickoffError, setKickoffError] = useState<string | null>(null)
-  const [brainstormMessages, setBrainstormMessages] = useState<BrainstormMessage[]>([])
+  const [brainstormMessages, setBrainstormMessages] = useState<ConversationMessage[]>([])
   const [activeTab, setActiveTab] = useState<PlanWorkspaceTab>('plan')
 
   // Draggable divider between the main plan column and the details/tasks sidebar.
@@ -336,7 +348,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
       if (!response.ok) return
       const data = await response.json() as { session?: BrainstormSession }
       if (!cancelled && data.session) {
-        setBrainstormMessages(data.session.messages.map((message) => toBrainstorm(data.session!.agentId, message)))
+        setBrainstormMessages(data.session.messages.map((message) => toConversation(data.session!.agentId, message)).filter((m): m is ConversationMessage => m !== null))
       }
     }
     loadBrainstorm()
@@ -401,26 +413,29 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
     }
   }
 
-  const onBrainstormSend = useCallback(async (
-    prompt: string,
-    _history: BrainstormMessage[],
-    ctx: { signal: AbortSignal; onToken: (text: string) => void; onCustom?: (name: string, data: unknown) => void },
-  ): Promise<{ content: string }> => {
-    if (!plan?.sourceSessionId) return { content: '' }
-    const encoded = encodeURIComponent(plan.sourceSessionId)
-    const response = await fetch(`/api/plugins/messaging/sessions/${encoded}/messages?id=${encoded}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: ctx.signal,
-      body: JSON.stringify({
-        message: prompt,
-        planId: plan.id,
-      }),
-    })
-    const result = await readBrainstormSseResponse(response, ctx)
-    await refresh()
-    return result
-  }, [plan, refresh])
+  // Plan refinements ride the same sessions route with planId; plan_update
+  // custom events land via the post-turn refresh.
+  const brainstorm = useConversationStream({
+    fetcher: useCallback((content: string, ctx: { signal: AbortSignal }) => {
+      if (!plan?.sourceSessionId) throw new Error('Plan has no source session')
+      const encoded = encodeURIComponent(plan.sourceSessionId)
+      return fetch(`/api/plugins/messaging/sessions/${encoded}/messages?id=${encoded}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: ctx.signal,
+        body: JSON.stringify({
+          message: content,
+          planId: plan.id,
+        }),
+      })
+    }, [plan]),
+    onDone: useCallback(async () => {
+      await refresh()
+    }, [refresh]),
+    onError: useCallback(async () => {
+      await refresh()
+    }, [refresh]),
+  })
 
   const handleDeletePlan = async () => {
     if (!plan) return
@@ -725,11 +740,14 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                       Before content prep starts, refine the angle and channels here. A useful first note is which channels this message should use and anything the prep agents should avoid.
                     </div>
                   )}
-                  <IntegratedBrainstorm
+                  <ConversationPanel
                     messages={brainstormMessages}
-                    onMessagesChange={setBrainstormMessages}
-                    onSend={onBrainstormSend}
+                    liveChunks={brainstorm.liveChunks}
+                    streaming={brainstorm.streaming}
+                    onSend={brainstorm.send}
+                    onAbort={brainstorm.abort}
                     agentId={plan.agent}
+                    storageKey={`messaging-plan:${plan.id}`}
                     placeholder="Refine the angle, channels, timeline, or content pieces..."
                     fitParent
                     showHeader={false}

@@ -175,7 +175,7 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
         const parsed = JSON.parse(content)
         if (!Array.isArray(parsed)) return []
         return parsed
-          .map(normalizeBrainstormMessage)
+          .map(normalizeConversationRow)
           .filter((message): message is ProjectBrainstormMessage => message !== null)
       } catch {
         return []
@@ -201,7 +201,7 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
   }
 }
 
-function normalizeBrainstormMessage(value: unknown): ProjectBrainstormMessage | null {
+function normalizeConversationRow(value: unknown): ProjectBrainstormMessage | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const raw = value as Record<string, unknown>
   const ts = typeof raw.ts === 'string' && raw.ts ? raw.ts : new Date().toISOString()
