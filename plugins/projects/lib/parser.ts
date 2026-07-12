@@ -204,21 +204,43 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
 function normalizeBrainstormMessage(value: unknown): ProjectBrainstormMessage | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const raw = value as Record<string, unknown>
-  const role = raw.role === 'user' || raw.role === 'assistant' || raw.role === 'activity'
-    ? raw.role
-    : null
-  const content = typeof raw.content === 'string' ? raw.content : null
-  if (!role || content === null) return null
-  const id = typeof raw.id === 'string' && raw.id ? raw.id : `msg-${Date.now().toString(36)}`
-  const timestamp = typeof raw.timestamp === 'string' && raw.timestamp ? raw.timestamp : new Date().toISOString()
-  return {
-    id,
-    role,
-    content,
-    ...(typeof raw.agentId === 'string' ? { agentId: raw.agentId } : {}),
-    ...(typeof raw.kind === 'string' ? { kind: raw.kind } : {}),
-    ...(raw.data !== undefined ? { data: raw.data } : {}),
-    timestamp,
+  const ts = typeof raw.ts === 'string' && raw.ts ? raw.ts : new Date().toISOString()
+  const opt = (key: string) => (typeof raw[key] === 'string' ? { [key]: raw[key] as string } : {})
+  switch (raw.kind) {
+    case 'user':
+      return typeof raw.content === 'string' ? { kind: 'user', ts, content: raw.content } : null
+    case 'assistant':
+      return typeof raw.content === 'string'
+        ? { kind: 'assistant', ts, content: raw.content, ...opt('turnId'), ...opt('agentId') }
+        : null
+    case 'tool':
+      return typeof raw.toolName === 'string'
+        ? {
+            kind: 'tool',
+            ts,
+            toolName: raw.toolName,
+            ...opt('turnId'),
+            ...opt('agentId'),
+            ...opt('callId'),
+            ...opt('status'),
+            ...opt('summary'),
+            ...opt('inputPreview'),
+            ...opt('outputPreview'),
+            ...(typeof raw.durationMs === 'number' ? { durationMs: raw.durationMs } : {}),
+            ...(raw.metadata && typeof raw.metadata === 'object' && !Array.isArray(raw.metadata)
+              ? { metadata: raw.metadata as Record<string, unknown> }
+              : {}),
+          }
+        : null
+    case 'error':
+      return typeof raw.message === 'string'
+        ? { kind: 'error', ts, message: raw.message, ...opt('turnId'), ...opt('errorKind') }
+        : null
+    case 'aborted':
+      return { kind: 'aborted', ts, ...opt('turnId') }
+    default:
+      // Pre-kit role-based rows: dropped (accepted degraded replay).
+      return null
   }
 }
 

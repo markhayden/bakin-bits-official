@@ -5,11 +5,7 @@
 import { z } from 'zod'
 import { defineRoute } from '@makinbakin/sdk'
 import type { BakinPlugin, PluginContext, RuntimeAgent } from '@makinbakin/sdk/types'
-import {
-  brainstormThreadId,
-  normalizeBrainstormActivityForStorage,
-  runtimeChunkToBrainstormActivity,
-} from '@makinbakin/sdk/utils'
+import { conversationThreadId, createTurnRecorder } from '@makinbakin/sdk/utils'
 import { createProjectRepository, projectToSummary } from './lib/parser'
 import { createProjectService } from './lib/project-service'
 import type { Project, ProjectBrainstormMessage, ProjectStatus } from './types'
@@ -58,44 +54,8 @@ const PROJECT_BRAINSTORM_INSTRUCTIONS = [
   'If suggesting tasks, format them as a numbered list.',
 ].join('\n')
 
-function newBrainstormMessageId(prefix: string): string {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-}
-
-function hydrateBrainstormMessages(
-  existing: ProjectBrainstormMessage[],
-  requestHistory: Array<{ role: 'user' | 'agent' | 'assistant' | 'activity'; content: string }> | undefined,
-  agentId: string,
-): ProjectBrainstormMessage[] {
-  if (existing.length > 0) return existing
-  if (!Array.isArray(requestHistory)) return []
-  return requestHistory
-    .filter((message) => message.role === 'user' || message.role === 'assistant' || message.role === 'agent')
-    .map((message): ProjectBrainstormMessage => ({
-      id: newBrainstormMessageId('history'),
-      role: message.role === 'user' ? 'user' : 'assistant',
-      content: message.content,
-      ...(message.role === 'user' ? {} : { agentId }),
-      timestamp: new Date().toISOString(),
-    }))
-}
-
-function createBrainstormMessage(input: {
-  role: ProjectBrainstormMessage['role']
-  content: string
-  agentId?: string
-  kind?: ProjectBrainstormMessage['kind']
-  data?: unknown
-}): ProjectBrainstormMessage {
-  return {
-    id: newBrainstormMessageId(input.role),
-    role: input.role,
-    content: input.content,
-    ...(input.agentId ? { agentId: input.agentId } : {}),
-    ...(input.kind ? { kind: input.kind } : {}),
-    ...(input.data !== undefined ? { data: input.data } : {}),
-    timestamp: new Date().toISOString(),
-  }
+function newTurnId(): string {
+  return `turn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 // ---------------------------------------------------------------------------
@@ -556,23 +516,18 @@ const projectsPlugin: BakinPlugin = {
     }
     routeHandlers.set('DELETE /:projectId/assets/:assetId', detachHandler)
 
-    // POST /:projectId/ask — agent brainstorm (SSE stream)
+    // POST /:projectId/ask — agent brainstorm (SSE stream, kit `chunk` frames)
     routeHandlers.set('POST /:projectId/ask', async (req: Request) => {
         const body = await readBody<{
           projectId: string
           prompt: string
           agent?: string
-          history?: Array<{ role: 'user' | 'agent' | 'assistant' | 'activity'; content: string }>
         }>(req)
         if (!body.projectId || !body.prompt) return json({ error: 'Missing projectId or prompt' }, 400)
         const project = readProject(body.projectId)
         if (!project) return json({ error: 'Project not found' }, 404)
         const agentId = body.agent || await getRuntimeMainAgentId(ctx)
-        let persistedMessages = hydrateBrainstormMessages(
-          readBrainstormMessages(body.projectId),
-          body.history,
-          agentId,
-        )
+        let persistedMessages = readBrainstormMessages(body.projectId)
 
         const assetLines = project.assets.length > 0
           ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.assetId}${a.label ? ` — ${a.label}` : ''}`)]
@@ -596,9 +551,12 @@ const projectsPlugin: BakinPlugin = {
           'Respond concisely.',
         ].join('\n')
 
-        const sessionKey = brainstormThreadId('projects', body.projectId, agentId)
-        const userMessage = createBrainstormMessage({ role: 'user', content: body.prompt })
-        persistedMessages = [...persistedMessages, userMessage]
+        const sessionKey = conversationThreadId('projects', body.projectId, agentId)
+        const turnId = newTurnId()
+        persistedMessages = [
+          ...persistedMessages,
+          { kind: 'user', ts: new Date().toISOString(), content: body.prompt },
+        ]
         writeBrainstormMessages(body.projectId, persistedMessages)
 
         const stream = new ReadableStream({
@@ -607,8 +565,10 @@ const projectsPlugin: BakinPlugin = {
             function send(event: string, data: unknown): void {
               controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
             }
-            function appendBrainstormMessage(message: ProjectBrainstormMessage): void {
-              persistedMessages = [...persistedMessages, message]
+            const recorder = createTurnRecorder({ turnId, agentId })
+            function persistRows(rows: ProjectBrainstormMessage[]): void {
+              if (rows.length === 0) return
+              persistedMessages = [...persistedMessages, ...rows]
               writeBrainstormMessages(body.projectId, persistedMessages)
             }
 
@@ -635,24 +595,15 @@ const projectsPlugin: BakinPlugin = {
             try {
               if (useStreaming && chunks) {
                 for await (const chunk of chunks) {
-                  if (chunk.type === 'text' && chunk.content) {
-                    fullContent += chunk.content
-                    send('token', { text: chunk.content })
-                  } else if (chunk.type === 'error') {
+                  if (chunk.type === 'error') {
                     throw new Error(chunk.content ?? 'Runtime stream error')
-                  } else {
-                    const activity = runtimeChunkToBrainstormActivity(chunk)
-                    const normalized = activity ? normalizeBrainstormActivityForStorage(activity) : null
-                    if (normalized) {
-                      send('activity', { activity: normalized })
-                      appendBrainstormMessage(createBrainstormMessage({
-                        role: 'activity',
-                        content: normalized.content,
-                        kind: normalized.kind,
-                        data: normalized.data,
-                      }))
-                    }
                   }
+                  if (chunk.type === 'text' && chunk.content) fullContent += chunk.content
+                  if (chunk.type === 'text' || chunk.type === 'tool' || chunk.type === 'status') {
+                    send('chunk', chunk)
+                  }
+                  recorder.ingest(chunk)
+                  persistRows(recorder.drain())
                 }
               } else {
                 const result = await ctx.runtime.messaging.send({
@@ -661,24 +612,19 @@ const projectsPlugin: BakinPlugin = {
                   threadId: sessionKey,
                 })
                 fullContent = result.content ?? ''
-                if (fullContent) send('token', { text: fullContent })
+                if (fullContent) {
+                  const chunk = { type: 'text' as const, content: fullContent }
+                  send('chunk', chunk)
+                  recorder.ingest(chunk)
+                }
               }
-              const assistantMessage = createBrainstormMessage({
-                role: 'assistant',
-                content: fullContent,
-                agentId,
-              })
-              appendBrainstormMessage(assistantMessage)
-              send('done', { content: fullContent, messageId: assistantMessage.id })
+              persistRows(recorder.finish())
+              send('done', { content: fullContent })
             } catch (err: unknown) {
               log.error('Agent ask failed', err)
               const message = err instanceof Error ? err.message : String(err)
-              appendBrainstormMessage(createBrainstormMessage({
-                role: 'activity',
-                content: message,
-                kind: 'error',
-                data: { message },
-              }))
+              persistRows(recorder.finish())
+              persistRows([{ kind: 'error', ts: new Date().toISOString(), turnId, message }])
               send('error', { message })
             } finally {
               controller.close()

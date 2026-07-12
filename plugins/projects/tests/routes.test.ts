@@ -758,7 +758,9 @@ describe('Routes', () => {
       expect(response.headers.get('content-type')).toBe('text/event-stream')
 
       const events = await consumeSSE(response)
-      const tokens = events.filter((e) => e.event === 'token').map((e) => (e.data as { text: string }).text)
+      const tokens = events
+        .filter((e) => e.event === 'chunk' && (e.data as { type: string }).type === 'text')
+        .map((e) => (e.data as { content: string }).content)
       expect(tokens).toEqual(['Hel', 'lo ', 'world'])
       const doneEvent = events.find((e) => e.event === 'done')
       expect(doneEvent).toBeDefined()
@@ -834,8 +836,8 @@ describe('Routes', () => {
         searchParams: { projectId: 'proj-persist' },
       })
       expect(hydrated.body.project.brainstormMessages).toMatchObject([
-        { role: 'user', content: 'First question?' },
-        { role: 'assistant', content: 'First answer', agentId: 'main' },
+        { kind: 'user', content: 'First question?' },
+        { kind: 'assistant', content: 'First answer', agentId: 'main' },
       ])
 
       const second = await callRoute(askRoute, plugin.ctx, {
@@ -852,7 +854,7 @@ describe('Routes', () => {
       expect(prompts[1]).toContain('User request:\nSecond question?')
     })
 
-    it('forwards runtime status and tool chunks as brainstorm activity events', async () => {
+    it('forwards runtime status and tool chunks on the wire; result-phase tools persist as rows', async () => {
       writeProjectFixture('proj-activity', { title: 'Activity Project' })
       mockRuntimeChunks([
         { type: 'status', content: 'Reading project context', data: { step: 'context' } },
@@ -864,7 +866,19 @@ describe('Routes', () => {
             callId: 'call-1',
             toolName: 'exec',
             status: 'running',
+            summary: 'gh issue list',
             inputPreview: '{"command":"gh issue list"}',
+          },
+        },
+        {
+          type: 'tool',
+          data: {
+            phase: 'result',
+            callId: 'call-1',
+            toolName: 'exec',
+            status: 'completed',
+            outputPreview: '3 open issues',
+            durationMs: 420,
           },
         },
         { type: 'text', content: 'Done.' },
@@ -876,44 +890,35 @@ describe('Routes', () => {
         rawResponse: true,
       })
 
+      // The wire carries raw runtime chunks — the kit folds them client-side.
       const events = await consumeSSE(response)
-      const activities = events.filter((e) => e.event === 'activity')
-      expect(activities).toHaveLength(2)
-      expect(activities[0].data).toEqual({
-        activity: {
-          kind: 'runtime_status',
-          content: 'Reading project context',
-          data: { step: 'context' },
-        },
-      })
-      expect(activities[1].data).toEqual({
-        activity: {
-          kind: 'tool_call',
-          content: 'exec: gh issue list',
-          data: {
-            phase: 'call',
-            callId: 'call-1',
-            toolName: 'exec',
-            status: 'running',
-            inputPreview: '{"command":"gh issue list"}',
-          },
-        },
-      })
+      const chunkTypes = events.filter((e) => e.event === 'chunk').map((e) => (e.data as { type: string }).type)
+      expect(chunkTypes).toEqual(['status', 'tool', 'tool', 'text'])
       expect(events.find((e) => e.event === 'done')?.data).toMatchObject({ content: 'Done.' })
 
+      // Durable rows: user + the RESULT-phase tool (call summary merged) +
+      // assistant. Status chunks are ephemeral, call phases fold into results.
       const getRoute = findRoute(plugin.routes, 'GET', '/:projectId')!
       const hydrated = await callRoute(getRoute, plugin.ctx, {
         searchParams: { projectId: 'proj-activity' },
       })
       expect(hydrated.body.project.brainstormMessages).toMatchObject([
-        { role: 'user', content: 'Check tickets' },
-        { role: 'activity', kind: 'runtime_status', content: 'Reading project context' },
-        { role: 'activity', kind: 'tool_call', content: 'exec: gh issue list' },
-        { role: 'assistant', content: 'Done.', agentId: 'main' },
+        { kind: 'user', content: 'Check tickets' },
+        {
+          kind: 'tool',
+          toolName: 'exec',
+          callId: 'call-1',
+          status: 'completed',
+          summary: 'gh issue list',
+          inputPreview: '{"command":"gh issue list"}',
+          outputPreview: '3 open issues',
+          durationMs: 420,
+        },
+        { kind: 'assistant', content: 'Done.', agentId: 'main' },
       ])
     })
 
-    it('uses the custom agent while storing client history outside the durable runtime prompt', async () => {
+    it('uses the custom agent; the durable runtime prompt never replays history', async () => {
       writeProjectFixture('proj-ask2', { title: 'Ask 2' })
       const streamMock = mockRuntimeStream(['ok'])
 
@@ -923,7 +928,6 @@ describe('Routes', () => {
           projectId: 'proj-ask2',
           prompt: 'Continue',
           agent: 'pixel',
-          history: [{ role: 'user', content: 'Start' }, { role: 'assistant', content: 'OK' }],
         },
         rawResponse: true,
       })
@@ -952,7 +956,9 @@ describe('Routes', () => {
         rawResponse: true,
       })
       const events = await consumeSSE(response)
-      const tokens = events.filter((e) => e.event === 'token').map((e) => (e.data as { text: string }).text)
+      const tokens = events
+        .filter((e) => e.event === 'chunk' && (e.data as { type: string }).type === 'text')
+        .map((e) => (e.data as { content: string }).content)
       expect(tokens).toEqual(['Full reply in one go'])
       expect(events.some((e) => e.event === 'done')).toBe(true)
       expect(sendMock).toHaveBeenCalledWith(
