@@ -5,12 +5,12 @@ import {
   AgentAvatar,
   AgentFilter,
   BakinDrawer,
+  ConversationPanel,
   EmptyState,
-  IntegratedBrainstorm,
   PluginHeader,
-  readBrainstormSseResponse,
+  useConversationStream,
 } from "@makinbakin/sdk/components"
-import type { BrainstormMessage } from "@makinbakin/sdk/components"
+import type { ConversationMessage } from "@makinbakin/sdk/components"
 import { useAgentIds, useAgentList, useHorizontalResize, usePathname, useQueryState, useRouter, useSearch, useSearchParams } from "@makinbakin/sdk/hooks"
 import { Badge } from "@makinbakin/sdk/ui"
 import { Button } from "@makinbakin/sdk/ui"
@@ -64,16 +64,34 @@ function persistBrainstormLayoutMode(mode: BrainstormLayoutMode): void {
   }
 }
 
-function toBrainstorm(agentId: string, message: SessionMessage): BrainstormMessage {
-  return {
-    id: message.id,
-    role: message.role,
-    content: message.content,
-    kind: message.role === 'activity' ? message.kind : undefined,
-    data: message.role === 'activity' ? message.data : undefined,
-    agentId: message.role === 'assistant' ? agentId : message.agentId,
-    timestamp: message.timestamp,
+function toConversation(agentId: string, message: SessionMessage): ConversationMessage | null {
+  if (message.role === 'user') {
+    return { kind: 'user', ts: message.timestamp, content: message.content }
   }
+  if (message.role === 'assistant') {
+    return { kind: 'assistant', ts: message.timestamp, agentId, content: message.content }
+  }
+  // Activity rows: structured tool payloads render as tool rows; status
+  // noise stays out of the durable timeline; errors render honestly.
+  if (message.kind === 'tool_call') {
+    const data = (message.data ?? {}) as { callId?: string; toolName?: string; status?: string; summary?: string; inputPreview?: string; outputPreview?: string; durationMs?: number }
+    return {
+      kind: 'tool',
+      ts: message.timestamp,
+      agentId,
+      toolName: data.toolName ?? 'tool',
+      status: data.status === 'failed' ? 'failed' : 'completed',
+      ...(data.callId ? { callId: data.callId } : {}),
+      summary: data.summary ?? message.content,
+      ...(data.inputPreview ? { inputPreview: data.inputPreview } : {}),
+      ...(data.outputPreview ? { outputPreview: data.outputPreview } : {}),
+      ...(typeof data.durationMs === 'number' ? { durationMs: data.durationMs } : {}),
+    }
+  }
+  if (message.kind === 'error') {
+    return { kind: 'error', ts: message.timestamp, message: message.content }
+  }
+  return null
 }
 
 function BrainstormLayoutToggle({
@@ -503,7 +521,7 @@ export function BrainstormView() {
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const [activeSession, setActiveSession] = useState<BrainstormSession | null>(null)
-  const [messages, setMessages] = useState<BrainstormMessage[]>([])
+  const [messages, setMessages] = useState<ConversationMessage[]>([])
   const [materializing, setMaterializing] = useState(false)
   const [deleteSessionId, setDeleteSessionId] = useState<string | null>(null)
   const [deletingSession, setDeletingSession] = useState(false)
@@ -572,7 +590,7 @@ export function BrainstormView() {
     const data = await response.json() as { session?: BrainstormSession }
     if (!data.session) return
     setActiveSession(data.session)
-    setMessages(data.session.messages.map(message => toBrainstorm(data.session!.agentId, message)))
+    setMessages(data.session.messages.map(message => toConversation(data.session!.agentId, message)).filter((m): m is ConversationMessage => m !== null))
   }, [])
 
   useEffect(() => {
@@ -689,37 +707,38 @@ export function BrainstormView() {
     }
   }
 
-  const onSend = useCallback(async (
-    prompt: string,
-    _history: BrainstormMessage[],
-    ctx: { signal: AbortSignal; onToken: (text: string) => void; onCustom?: (name: string, data: unknown) => void },
-  ): Promise<{ content: string }> => {
-    if (!activeSession) return { content: '' }
-    const encoded = encodeURIComponent(activeSession.id)
-    const response = await fetch(`/api/plugins/messaging/sessions/${encoded}/messages?id=${encoded}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: ctx.signal,
-      body: JSON.stringify({ message: prompt }),
-    })
-    const result = await readBrainstormSseResponse(response, ctx, {
-      onCustomEvent: (event, data) => {
-        if (event === 'proposal' && isRecord(data) && data.proposal) {
-          const proposal = data.proposal as PlanProposal
-          setActiveSession(current => current ? {
-            ...current,
-            proposals: mergeProposal(current.proposals, proposal),
-          } : current)
-          ctx.onCustom?.('proposal', proposal)
-          return true
-        }
-        return false
-      },
-    })
-    await loadSession(activeSession.id)
-    await loadSessions()
-    return result
-  }, [activeSession, loadSession, loadSessions])
+  // The kit stream hook drives the live turn over the `chunk` SSE frames;
+  // the `proposal` custom events keep the side panel in sync mid-stream.
+  const brainstorm = useConversationStream({
+    fetcher: useCallback((content: string, ctx: { signal: AbortSignal }) => {
+      if (!activeSession) throw new Error('No active session')
+      const encoded = encodeURIComponent(activeSession.id)
+      return fetch(`/api/plugins/messaging/sessions/${encoded}/messages?id=${encoded}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: ctx.signal,
+        body: JSON.stringify({ message: content }),
+      })
+    }, [activeSession]),
+    onCustom: useCallback((event: string, data: unknown) => {
+      if (event === 'proposal' && isRecord(data) && data.proposal) {
+        const proposal = data.proposal as PlanProposal
+        setActiveSession(current => current ? {
+          ...current,
+          proposals: mergeProposal(current.proposals, proposal),
+        } : current)
+      }
+    }, []),
+    onDone: useCallback(async () => {
+      if (!activeSession) return
+      await loadSession(activeSession.id)
+      await loadSessions()
+    }, [activeSession, loadSession, loadSessions]),
+    onError: useCallback(async () => {
+      if (!activeSession) return
+      await loadSession(activeSession.id)
+    }, [activeSession, loadSession]),
+  })
 
   const sessionPendingDelete = deleteSessionId
     ? activeSession?.id === deleteSessionId
@@ -753,13 +772,16 @@ export function BrainstormView() {
     const selectedProposal = activeSession.proposals.find(proposal => proposal.id === selectedProposalId) ?? null
     const brainstormPane = (
       <div className="min-h-0">
-        <IntegratedBrainstorm
+        <ConversationPanel
           messages={messages}
-          onMessagesChange={setMessages}
-          onSend={onSend}
+          liveChunks={brainstorm.liveChunks}
+          streaming={brainstorm.streaming}
+          onSend={brainstorm.send}
+          onAbort={brainstorm.abort}
           agentId={activeSession.agentId}
+          storageKey={`messaging:${activeSession.id}`}
           placeholder="Ask for content topics, campaign ideas, or revisions..."
-          transformAssistantMessage={transformAssistantReply}
+          transformText={transformAssistantReply}
           readOnly={activeSession.status === 'archived'}
           readOnlyNotice={<Badge variant="outline">Archived session</Badge>}
           fitParent

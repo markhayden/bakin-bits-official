@@ -232,15 +232,15 @@ describe('Streaming endpoint', () => {
     const text = await res.text()
     const events = parseSSEEvents(text)
 
-    const tokenEvents = events.filter(e => e.event === 'token')
-    expect(tokenEvents.length).toBeGreaterThan(0)
-    // Reassemble tokens
-    const fullText = tokenEvents.map(e => e.data.text).join('')
+    const textChunks = events.filter(e => e.event === 'chunk' && e.data.type === 'text')
+    expect(textChunks.length).toBeGreaterThan(0)
+    // Reassemble text deltas
+    const fullText = textChunks.map(e => e.data.content).join('')
     expect(fullText).toContain('Here')
     expect(fullText).toContain('ideas')
   })
 
-  it('forwards runtime tool chunks as brainstorm activity events', async () => {
+  it('forwards runtime tool chunks on the wire and stores structured activity rows', async () => {
     streamRuntimeChunkResponse([
       { type: 'text', content: 'Checking ' },
       {
@@ -273,10 +273,11 @@ describe('Streaming endpoint', () => {
     const res = await sendMessage(sessionId, 'Look up issues')
     const events = parseSSEEvents(await res.text())
 
-    const activityEvents = events.filter(e => e.event === 'activity')
-    expect(activityEvents).toHaveLength(2)
-    expect(activityEvents[0].data.activity).toEqual({
-      kind: 'tool_call',
+    // The wire carries the raw runtime chunks — the kit folds them client-side.
+    const toolChunks = events.filter(e => e.event === 'chunk' && e.data.type === 'tool')
+    expect(toolChunks).toHaveLength(2)
+    expect(toolChunks[0].data).toEqual({
+      type: 'tool',
       content: 'exec: gh issue list',
       data: {
         phase: 'call',
@@ -286,8 +287,8 @@ describe('Streaming endpoint', () => {
         inputPreview: '{"command":"gh issue list"}',
       },
     })
-    expect(activityEvents[1].data.activity).toEqual({
-      kind: 'tool_call',
+    expect(toolChunks[1].data).toEqual({
+      type: 'tool',
       content: 'exec completed',
       data: {
         phase: 'result',
@@ -299,7 +300,7 @@ describe('Streaming endpoint', () => {
         outputPreview: '[]',
       },
     })
-    const fullText = events.filter(e => e.event === 'token').map(e => e.data.text).join('')
+    const fullText = events.filter(e => e.event === 'chunk' && e.data.type === 'text').map(e => e.data.content).join('')
     expect(fullText).toBe('Checking done.')
 
     const sessionPath = join(testDir, 'messaging', 'sessions', `${sessionId}.json`)
@@ -452,9 +453,9 @@ describe('Streaming endpoint', () => {
     const text = await res.text()
     const events = parseSSEEvents(text)
 
-    const tokenEvents = events.filter(e => e.event === 'token')
-    expect(tokenEvents.length).toBe(1) // Single token with full content
-    expect(tokenEvents[0].data.text).toBe('Fallback response here.')
+    const textChunks = events.filter(e => e.event === 'chunk' && e.data.type === 'text')
+    expect(textChunks.length).toBe(1) // Single chunk with full content
+    expect(textChunks[0].data.content).toBe('Fallback response here.')
 
     const doneEvents = events.filter(e => e.event === 'done')
     expect(doneEvents.length).toBe(1)

@@ -41,17 +41,15 @@ describe('ProjectDetail', () => {
               resolvedAssets: [],
               brainstormMessages: [
                 {
-                  id: 'm-user',
-                  role: 'user',
+                  kind: 'user',
+                  ts: '2026-05-09T10:00:01.000Z',
                   content: 'What did we decide?',
-                  timestamp: '2026-05-09T10:00:01.000Z',
                 },
                 {
-                  id: 'm-assistant',
-                  role: 'assistant',
+                  kind: 'assistant',
+                  ts: '2026-05-09T10:00:02.000Z',
                   agentId: 'main',
                   content: 'We decided to keep the launch plan focused.',
-                  timestamp: '2026-05-09T10:00:02.000Z',
                 },
               ],
             },

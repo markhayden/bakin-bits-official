@@ -33,15 +33,13 @@ export interface Project extends ProjectFrontmatter {
   progress: number    // 0-100, derived from tasks
 }
 
-export interface ProjectBrainstormMessage {
-  id: string
-  role: 'user' | 'assistant' | 'activity'
-  content: string
-  agentId?: string
-  kind?: 'runtime_status' | 'tool_call' | 'error' | string
-  data?: unknown
-  timestamp: string
-}
+/**
+ * Brainstorm rows ARE the conversation kit's storable shape — the panel
+ * folds and renders them directly, and the server's turn recorder produces
+ * them. Old role-based rows are dropped on read (accepted: degraded replay
+ * for pre-kit brainstorms; no compat shims).
+ */
+export type ProjectBrainstormMessage = import('@makinbakin/sdk/components').ConversationMessage
 
 export interface ProjectSummary {
   id: string

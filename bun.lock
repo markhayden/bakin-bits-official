@@ -362,6 +362,12 @@
 
     "zod": ["zod@4.3.6", "", {}, "sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg=="],
 
+    "@bakin-bits/_template/@makinbakin/sdk": ["@makinbakin/sdk@file:test-sdk", { "peerDependencies": { "react": "^19.0.0" } }],
+
+    "@bakin-bits/messaging/@makinbakin/sdk": ["@makinbakin/sdk@file:test-sdk", { "peerDependencies": { "react": "^19.0.0" } }],
+
+    "@bakin-bits/projects/@makinbakin/sdk": ["@makinbakin/sdk@file:test-sdk", { "peerDependencies": { "react": "^19.0.0" } }],
+
     "@eslint-community/eslint-utils/eslint-visitor-keys": ["eslint-visitor-keys@3.4.3", "", {}, "sha512-wpc+LXeiyiisxPlEkUzU6svyS1frIO3Mgxj1fdy7Pm8Ygzguax2N3Fa/D/ag1WqbOprdI+uY6wMUl8/a2G+iag=="],
 
     "@typescript-eslint/eslint-plugin/ignore": ["ignore@7.0.5", "", {}, "sha512-Hs59xBNfUIunMFgWAbGX5cq6893IbWg4KnrjbYwX3tx0ztorVgTDA6B2sxf8ejHJ4wz8BqGUMYlnzNBer5NvGg=="],

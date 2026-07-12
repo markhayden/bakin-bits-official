@@ -376,7 +376,7 @@ describe('BrainstormView (search consumer)', () => {
 
     expect(screen.getByRole('button', { name: 'Columns layout' }).getAttribute('aria-pressed')).toBe('true')
     expect(screen.getByTestId('brainstorm-workspace-columns')).toBeDefined()
-    expect(screen.getByTestId('integrated-brainstorm')).toBeDefined()
+    expect(screen.getByTestId('conversation-panel')).toBeDefined()
     expect(screen.getByRole('separator', { name: 'Resize proposal panel' })).toBeDefined()
   })
 

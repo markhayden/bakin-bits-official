@@ -4,8 +4,8 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { useRouter, useHorizontalResize } from '@makinbakin/sdk/hooks'
 import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, ChevronDown, Search, Pencil, Trash2, Link2 } from 'lucide-react'
 import { useMainAgentId } from "@makinbakin/sdk/hooks"
-import { AgentSelect, IntegratedBrainstorm, readBrainstormSseResponse } from "@makinbakin/sdk/components"
-import type { BrainstormMessage } from "@makinbakin/sdk/components"
+import { AgentSelect, ConversationPanel, useConversationStream } from "@makinbakin/sdk/components"
+import type { ConversationMessage } from "@makinbakin/sdk/components"
 import { ProjectChecklist } from './project-checklist'
 import { ProjectEditor } from './project-editor'
 import { Skeleton } from "@makinbakin/sdk/ui"
@@ -36,7 +36,7 @@ interface ProjectData {
   updated: string
   resolvedTasks: Record<string, { column: string; title: string } | null>
   resolvedAssets: ResolvedAsset[]
-  brainstormMessages?: BrainstormMessage[]
+  brainstormMessages?: ConversationMessage[]
 }
 
 type AssetPickerMode = { type: 'attach' } | { type: 'relink'; target: ResolvedAsset }
@@ -214,7 +214,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
 
   // Brainstorm
   const [brainstormAgent, setBrainstormAgent] = useState(mainAgentId)
-  const [brainstormMessages, setBrainstormMessages] = useState<BrainstormMessage[]>([])
+  const [brainstormMessages, setBrainstormMessages] = useState<ConversationMessage[]>([])
 
   // Dropdowns
   const [statusOpen, setStatusOpen] = useState(false)
@@ -374,33 +374,27 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   // Brainstorm
   // ---------------------------------------------------------------------------
 
-  const projectAskOnSend = useCallback(
-    async (
-      prompt: string,
-      history: BrainstormMessage[],
-      ctx: { signal: AbortSignal; onToken: (text: string) => void },
-    ): Promise<{ content: string }> => {
-      if (!currentId) throw new Error('Create the project before starting a brainstorm.')
-      const res = await fetch(`/api/plugins/projects/${currentId}/ask`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: ctx.signal,
-        body: JSON.stringify({
-          projectId: currentId,
-          prompt,
-          agent: brainstormAgent,
-          history: history
-            .filter((m) => m.role === 'user' || m.role === 'assistant')
-            .map((m) => ({ role: m.role, content: m.content })),
-        }),
-      })
-      const result = await readBrainstormSseResponse(res, ctx)
-      // Refresh project after a reply lands — agent may have updated the spec.
-      fetchProject()
-      return result
-    },
-    [currentId, brainstormAgent, fetchProject],
-  )
+  // The server owns the transcript (ConversationMessage rows in the
+  // project payload); the kit stream hook drives the live turn over the
+  // `chunk` SSE frames the ask route emits.
+  const brainstorm = useConversationStream({
+    fetcher: useCallback(
+      (content: string, ctx: { signal: AbortSignal }) => {
+        if (!currentId) throw new Error('Create the project before starting a brainstorm.')
+        return fetch(`/api/plugins/projects/${currentId}/ask`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: ctx.signal,
+          body: JSON.stringify({ projectId: currentId, prompt: content, agent: brainstormAgent }),
+        })
+      },
+      [currentId, brainstormAgent],
+    ),
+    // Refresh after a reply lands — the agent may have updated the spec,
+    // and the durable transcript replaces the live chunks.
+    onDone: () => fetchProject(),
+    onError: () => fetchProject(),
+  })
 
   // ---------------------------------------------------------------------------
   // Assets
@@ -810,12 +804,16 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
           </div>
 
           {/* ── Brainstorm — pinned at bottom ── */}
-          <IntegratedBrainstorm
+          <ConversationPanel
             messages={brainstormMessages}
-            onMessagesChange={setBrainstormMessages}
-            onSend={projectAskOnSend}
+            liveChunks={brainstorm.liveChunks}
+            streaming={brainstorm.streaming}
+            onSend={brainstorm.send}
+            onAbort={brainstorm.abort}
             agentId={brainstormAgent}
             onAgentChange={setBrainstormAgent}
+            storageKey={`project:${currentId}`}
+            showHeader={false}
             placeholder="Ask about this project..."
           />
         </div>
