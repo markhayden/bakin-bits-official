@@ -39,7 +39,6 @@ steps:
     preview:
       - script.outputs.script
       - record.outputs.videoAssetId
-    on_approve: complete
     on_reject:
       goto: script
       note_to_agent: true

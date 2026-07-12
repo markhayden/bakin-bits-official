@@ -40,7 +40,6 @@ const gateStepSchema = z.object({
   description: z.string().optional(),
   approval_required: z.boolean().optional(),
   preview: z.array(z.string()).optional(),
-  on_approve: z.string().min(1),
   on_reject: z.object({
     goto: z.string().min(1),
     note_to_agent: z.boolean().optional(),
@@ -105,15 +104,10 @@ export function validateMessagingWorkflowDefinition(definition: WorkflowDefiniti
     }
 
     if (step.type !== 'gate') continue
-    const expectedNext = steps[index + 1]?.id
-    if (step.on_approve !== 'done' && step.on_approve !== expectedNext) {
-      errors.push(
-        expectedNext
-          ? `Step "${step.id}": on_approve must point to the next top-level step "${expectedNext}" or "done"`
-          : `Step "${step.id}": final gate on_approve must be "done"`,
-      )
-    }
-
+    // Approval advances to the next top-level step implicitly — that is the
+    // core engine's gate semantics. The old `on_approve` field only restated
+    // it (and core's strict step schema rejects the unknown key, so every
+    // install carried a standing doctor warning).
     if (step.on_reject?.goto) {
       if (!idSet.has(step.on_reject.goto)) {
         errors.push(`Step "${step.id}": on_reject.goto references nonexistent step "${step.on_reject.goto}"`)

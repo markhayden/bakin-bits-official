@@ -44,7 +44,6 @@ steps:
     preview:
       - caption.outputs.caption
       - image.outputs.imageAssetId
-    on_approve: complete
     on_reject:
       goto: caption
       note_to_agent: true
