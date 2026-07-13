@@ -2,14 +2,18 @@
   "id": "web-search-brave",
   "kind": "skill-pack",
   "name": "Web Search (Brave)",
-  "version": "1.0.0",
-  "description": "Web search and content extraction for agents via the Brave Search CLI (bx). Token-efficient RAG grounding, AI answers, and raw search — no browser required.",
+  "version": "1.0.1",
+  "description": "Lets your agents search the web — fresh information, documentation, and news, read straight from the page and cited back to their sources. No browser required.",
   "author": "Bakin",
   "bakin": "^1.0.0",
   "capability": "web-search",
-  "runtimes": ["*"],
+  "runtimes": [
+    "*"
+  ],
   "contributions": {
-    "skills": ["skills/bx-search"]
+    "skills": [
+      "skills/bx-search"
+    ]
   },
   "requires": {
     "bins": [
@@ -30,7 +34,9 @@
             "sha256": "19b6f652ac9f9630f526156b10e13a4ebf698d3ce4c9d916a53fdb686d344ede"
           }
         },
-        "verifyArgs": ["--version"]
+        "verifyArgs": [
+          "--version"
+        ]
       }
     ]
   },
