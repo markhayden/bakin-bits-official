@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-07-05T00:00:00Z",
+  "updatedAt": "2026-07-13T00:00:00Z",
   "entries": [
     {
       "id": "pixel",
@@ -9,7 +9,11 @@
       "emoji": "🎨",
       "description": "Image artist agent. Crafts prompts, iterates on outputs, owns visual quality.",
       "category": "Creative",
-      "tags": ["creative", "image", "design"],
+      "tags": [
+        "creative",
+        "image",
+        "design"
+      ],
       "useCases": [
         "Generate on-brand social and marketing images",
         "Iterate on visual concepts until they land",
@@ -28,7 +32,11 @@
       "emoji": "🎬",
       "description": "Video producer agent. Generates video + audio, mixes finished assets.",
       "category": "Creative",
-      "tags": ["creative", "video", "audio"],
+      "tags": [
+        "creative",
+        "video",
+        "audio"
+      ],
       "useCases": [
         "Produce short-form video from a brief",
         "Generate and mix audio tracks",
@@ -47,7 +55,10 @@
       "emoji": "🔎",
       "description": "Research agent — multi-source discovery, evidence gathering, synthesis support.",
       "category": "Research",
-      "tags": ["research", "synthesis"],
+      "tags": [
+        "research",
+        "synthesis"
+      ],
       "useCases": [
         "Deep-dive a market, competitor, or topic",
         "Gather and cross-check evidence from many sources",
@@ -66,7 +77,10 @@
       "emoji": "⚙️",
       "description": "Developer agent — API integrations, automation, debugging, tool extensions.",
       "category": "Engineering",
-      "tags": ["dev", "automation"],
+      "tags": [
+        "dev",
+        "automation"
+      ],
       "useCases": [
         "Wire up API integrations and webhooks",
         "Automate repetitive technical chores",
@@ -85,7 +99,11 @@
       "emoji": "🔍",
       "description": "Vision utility agent — captions, OCR, and tags for asset search. Powers zero-config enrichment; not dispatchable, no channels.",
       "category": "Utilities",
-      "tags": ["utility", "vision", "enrichment"],
+      "tags": [
+        "utility",
+        "vision",
+        "enrichment"
+      ],
       "useCases": [
         "Auto-caption and tag every image you save",
         "OCR screenshots so their text is searchable",
@@ -105,7 +123,11 @@
       "emoji": "✉️",
       "description": "Content planning, calendar items, brainstorming sessions, approvals, and channel delivery.",
       "category": "Content",
-      "tags": ["content", "calendar", "approvals"],
+      "tags": [
+        "content",
+        "calendar",
+        "approvals"
+      ],
       "useCases": [
         "Plan a week of posts on a content calendar",
         "Route drafts through an approval gate",
@@ -114,7 +136,10 @@
       "source": "github:markhayden/bakin-bits-official#plugins/messaging",
       "ref": null,
       "trust": "official",
-      "dependencies": ["team", "workflows"],
+      "dependencies": [
+        "team",
+        "workflows"
+      ],
       "defaultSelected": true,
       "screenshots": []
     },
@@ -125,7 +150,11 @@
       "emoji": "🗂️",
       "description": "Project specs, checklists, task links, assets, and project-context agent tools.",
       "category": "Operations",
-      "tags": ["projects", "specs", "checklists"],
+      "tags": [
+        "projects",
+        "specs",
+        "checklists"
+      ],
       "useCases": [
         "Keep specs, checklists, and tasks in one place",
         "Link agent work back to the project it serves",
@@ -134,7 +163,38 @@
       "source": "github:markhayden/bakin-bits-official#plugins/projects",
       "ref": null,
       "trust": "official",
-      "dependencies": ["tasks", "assets", "team"],
+      "dependencies": [
+        "tasks",
+        "assets",
+        "team"
+      ],
+      "defaultSelected": true,
+      "screenshots": []
+    },
+    {
+      "id": "web-search-brave",
+      "kind": "skill-pack",
+      "name": "Web Search (Brave)",
+      "emoji": "🔎",
+      "description": "Give your agents real web search — token-efficient research, docs lookup, and fresh information via the Brave Search API. Bakin installs the CLI and walks you through the free API key.",
+      "category": "Research",
+      "tags": [
+        "capability",
+        "research",
+        "web-search"
+      ],
+      "useCases": [
+        "Research tasks that need current information",
+        "Documentation and troubleshooting lookups",
+        "Grounding agent output in cited sources"
+      ],
+      "source": "github:markhayden/bakin-bits-official#packs/web-search-brave",
+      "ref": null,
+      "trust": "official",
+      "capability": "web-search",
+      "runtimes": [
+        "*"
+      ],
       "defaultSelected": true,
       "screenshots": []
     }

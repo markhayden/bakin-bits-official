@@ -1,0 +1,46 @@
+{
+  "id": "web-search-brave",
+  "kind": "skill-pack",
+  "name": "Web Search (Brave)",
+  "version": "1.0.0",
+  "description": "Web search and content extraction for agents via the Brave Search CLI (bx). Token-efficient RAG grounding, AI answers, and raw search — no browser required.",
+  "author": "Bakin",
+  "bakin": "^1.0.0",
+  "capability": "web-search",
+  "runtimes": ["*"],
+  "contributions": {
+    "skills": ["skills/bx-search"]
+  },
+  "requires": {
+    "bins": [
+      {
+        "name": "bx",
+        "version": "1.4.0",
+        "install": {
+          "darwin-arm64": {
+            "url": "https://github.com/brave/brave-search-cli/releases/download/v1.4.0/bx-1.4.0-darwin-arm64",
+            "sha256": "07d2f4488358ae8a6d3fbfc089fcd25adbdcceadc7c0d45f66d34c81f0069a7c"
+          },
+          "linux-x64": {
+            "url": "https://github.com/brave/brave-search-cli/releases/download/v1.4.0/bx-1.4.0-linux-amd64",
+            "sha256": "71970bb18818d12cb3d4851f1bfaf0c0dc4804622edffed73626dccedb919957"
+          },
+          "linux-arm64": {
+            "url": "https://github.com/brave/brave-search-cli/releases/download/v1.4.0/bx-1.4.0-linux-arm64",
+            "sha256": "19b6f652ac9f9630f526156b10e13a4ebf698d3ce4c9d916a53fdb686d344ede"
+          }
+        },
+        "verifyArgs": ["--version"]
+      }
+    ]
+  },
+  "secrets": [
+    {
+      "name": "BRAVE_SEARCH_API_KEY",
+      "description": "Brave Search API key — all plans include $5/month free credits (~1,000 queries).",
+      "required": true,
+      "secretSlot": "brave.apiKey",
+      "help": "https://api-dashboard.search.brave.com"
+    }
+  ]
+}
