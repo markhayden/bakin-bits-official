@@ -90,7 +90,9 @@ describe('catalog.json ↔ repo consistency', () => {
     // copy (plain-English), manifests are technical source of truth.
     for (const entry of catalog.entries) {
       const subpath = entry.source!.split('#')[1]
-      const manifestName = entry.kind === 'agent' ? 'bakin-package.json' : 'bakin-plugin.json'
+      // Plugins ship bakin-plugin.json; every package kind (agent, skill-pack,
+      // workflow-pack, lesson-pack) ships bakin-package.json.
+      const manifestName = entry.kind === 'plugin' ? 'bakin-plugin.json' : 'bakin-package.json'
       const manifest = JSON.parse(readFileSync(join(ROOT, subpath, manifestName), 'utf-8')) as {
         id: string
         name: string
