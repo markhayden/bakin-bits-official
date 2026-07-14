@@ -2,21 +2,27 @@
   "id": "youtube-transcript",
   "kind": "skill-pack",
   "name": "YouTube Transcripts",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Lets your agents read YouTube videos — pull the transcript of any captioned video for notes, summaries, and research. No audio processing, no API key.",
   "author": "Bakin (skill by Mario Zechner, badlogic/pi-skills, MIT)",
   "bakin": "^1.0.0",
   "capability": "youtube-transcript",
-  "runtimes": ["*"],
+  "runtimes": [
+    "*"
+  ],
   "contributions": {
-    "skills": ["skills/youtube-transcript"]
+    "skills": [
+      "skills/youtube-transcript"
+    ]
   },
   "requires": {
     "npm": [
       {
         "name": "scripts",
         "source": "payload/scripts",
-        "dependencies": { "youtube-transcript-plus": "1.0.4" }
+        "dependencies": {
+          "youtube-transcript-plus": "2.0.0"
+        }
       }
     ]
   }

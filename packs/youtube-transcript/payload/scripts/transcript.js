@@ -24,7 +24,8 @@ try {
   const transcript = await YoutubeTranscript.fetchTranscript(extractedId);
   
   for (const entry of transcript) {
-    const timestamp = formatTimestamp(entry.offset / 1000);
+    // youtube-transcript-plus v2 reports offset in SECONDS (v1 was ms).
+    const timestamp = formatTimestamp(entry.offset);
     console.log(`[${timestamp}] ${entry.text}`);
   }
 } catch (error) {
