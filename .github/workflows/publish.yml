@@ -81,18 +81,26 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Publishing $KIND $ID@$VERSION"
 
-      - name: Build the plugin
-        if: steps.tag.outputs.kind == 'plugin'
-        run: |
-          bun install --frozen-lockfile
-          (cd .build-sdk && bun install --frozen-lockfile)
-          bun run build
-
-      - name: Get Bakin (publish tool)
+      - name: Get Bakin (publish tool + SDK source)
         if: steps.tag.outputs.kind == 'plugin'
         run: |
           git clone --depth 1 https://github.com/markhayden/bakin.git "$RUNNER_TEMP/bakin"
           (cd "$RUNNER_TEMP/bakin" && bun install --frozen-lockfile)
+
+      - name: Assemble the current SDK
+        # Plugins may use SDK surface newer than the last npm publish — build
+        # server bundles against the SDK assembled from Bakin main, not the
+        # .build-sdk npm pin (which is only the no-checkout local fallback).
+        if: steps.tag.outputs.kind == 'plugin'
+        run: |
+          (cd "$RUNNER_TEMP/bakin" && bun run scripts/publish-sdk.ts --dry-run --version 0.1.1-rc.1 --package-dir "$RUNNER_TEMP/sdk-package" --keep-package-dir)
+          echo "BAKIN_SDK_DIR=$RUNNER_TEMP/sdk-package" >> "$GITHUB_ENV"
+
+      - name: Build the plugin
+        if: steps.tag.outputs.kind == 'plugin'
+        run: |
+          bun install --frozen-lockfile
+          bun run build
 
       - name: Carry forward the previous release index
         if: steps.tag.outputs.kind == 'plugin'

@@ -23,7 +23,14 @@ import { join, resolve } from 'node:path'
 
 const REPO_ROOT = resolve(import.meta.dir, '..')
 const PLUGINS_ROOT = join(REPO_ROOT, 'plugins')
-const BUILD_SDK_ROOT = join(REPO_ROOT, '.build-sdk', 'node_modules', '@makinbakin', 'sdk')
+// SDK source for server bundles. BAKIN_SDK_DIR (an assembled package dir —
+// `bun run scripts/publish-sdk.ts --dry-run --package-dir <dir>` in a Bakin
+// checkout) lets CI and local dev build against an UNPUBLISHED SDK; the
+// .build-sdk npm pin is the fallback and only works until plugins start
+// using SDK surface newer than the last npm publish.
+const BUILD_SDK_ROOT = process.env.BAKIN_SDK_DIR
+  ? resolve(process.env.BAKIN_SDK_DIR)
+  : join(REPO_ROOT, '.build-sdk', 'node_modules', '@makinbakin', 'sdk')
 
 const CLIENT_EXTERNAL = [
   'react', 'react-dom', 'react-dom/client',
@@ -73,9 +80,10 @@ const sdkResolverPlugin = {
 function assertBuildSdkPresent(): void {
   if (!existsSync(join(BUILD_SDK_ROOT, 'package.json'))) {
     throw new Error(
-      `Missing .build-sdk install. Run:\n` +
-      `  (cd .build-sdk && bun install)\n` +
-      `Or first-time setup: see scripts/build-plugins.ts header.`,
+      `No SDK at ${BUILD_SDK_ROOT}. Either set BAKIN_SDK_DIR to an assembled\n` +
+      `SDK package dir (in a Bakin checkout:\n` +
+      `  bun run scripts/publish-sdk.ts --dry-run --version 0.0.0-local --package-dir <dir> --keep-package-dir\n` +
+      `) or install the npm fallback: (cd .build-sdk && bun install).`,
     )
   }
 }
