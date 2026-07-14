@@ -243,10 +243,20 @@ declare module '@makinbakin/sdk/types' {
   export interface APIRoute {
     path: string
     method: HttpMethod
-    handler: (req: Request, ctx: PluginContext) => Response | Promise<Response>
+    /**
+     * Declarative handler (host #642): third arg carries zod-parsed
+     * params/query/body. Ambient shape keeps it loose — the published SDK
+     * owns full per-route inference.
+     */
+    handler: (
+      req: Request,
+      ctx: PluginContext,
+      parsed: { params?: Record<string, string>; query?: Record<string, unknown>; body?: unknown },
+    ) => Response | Promise<Response>
     summary?: string
     description?: string
-    params?: string
+    /** zod schema for path params (declarative routes, host #642). */
+    params?: SchemaLike
     input?: SchemaLike
     output?: SchemaLike
     visibility?: ContractVisibility
@@ -742,6 +752,8 @@ declare module '@makinbakin/sdk/types' {
     settingsSchema?: PluginSettingsSchema
     navItems?: NavItem[]
     contentFiles?: ContentFile[]
+    /** Declarative HTTP routes, registered before activate() (host #642). */
+    routes?: APIRoute[]
   }
 }
 
@@ -763,6 +775,10 @@ declare module '@makinbakin/sdk' {
   }
 
   export function registerPlugin(def: PluginRegistration): void
+  /** Declarative route author helper (host #642) — identity at runtime. */
+  export function defineRoute<R extends import('@makinbakin/sdk/types').APIRoute>(route: R): R
+  /** Plugin author helper preserving per-route inference — identity at runtime. */
+  export function definePlugin<P extends import('@makinbakin/sdk/types').BakinPlugin>(plugin: P): P
   export function unregisterPlugin(id: string): void
   export function getAllNavItems(): NavItem[]
   /** Set or clear a runtime badge on a plugin-owned nav item (bakin #265). */

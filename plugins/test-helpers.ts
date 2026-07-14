@@ -400,7 +400,20 @@ export async function callRoute(
     body: opts.body,
     searchParams: opts.searchParams,
   })
-  const response = await route.handler(req, ctx)
+  // Third handler arg mirrors the host registry's parsed input: `:key`
+  // segments of the declared path matched against the actual path.
+  const params: Record<string, string> = {}
+  const declared = route.path.split('/')
+  const actual = (opts.path ?? route.path).split('?')[0]!.split('/')
+  declared.forEach((seg, i) => {
+    // A still-templated segment (test called with the declared path) is NOT a value.
+    if (seg.startsWith(':') && actual[i] !== undefined && !actual[i]!.startsWith(':')) params[seg.slice(1)] = decodeURIComponent(actual[i]!)
+  })
+  const response = await route.handler(req, ctx, {
+    ...(Object.keys(params).length > 0 ? { params } : {}),
+    ...(opts.searchParams ? { query: opts.searchParams } : {}),
+    ...(opts.body !== undefined ? { body: opts.body } : {}),
+  })
   if (opts.rawResponse) return { status: response.status, body: {}, response }
   let body: Record<string, unknown> = {}
   try {
