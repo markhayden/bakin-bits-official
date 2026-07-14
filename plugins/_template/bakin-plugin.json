@@ -4,10 +4,6 @@
   "version": "0.0.0",
   "bakin": ">=0.0.1-rc.1",
   "description": "Starter scaffold demonstrating the BakinPlugin contract with hot-reload-safe lifecycle hooks.",
-  "entry": {
-    "server": "index.ts",
-    "client": "client.tsx"
-  },
   "permissions": [],
   "dependencies": []
 }
