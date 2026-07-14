@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-07-13T21:00:00Z",
+  "updatedAt": "2026-07-14T05:00:00Z",
   "entries": [
     {
       "id": "pixel",
@@ -196,6 +196,33 @@
         "*"
       ],
       "defaultSelected": true,
+      "screenshots": []
+    },
+    {
+      "id": "youtube-transcript",
+      "kind": "skill-pack",
+      "name": "YouTube Transcripts",
+      "emoji": "📺",
+      "description": "Lets your agents read YouTube videos — pull the transcript of any captioned video for notes, summaries, and research. No audio processing, no API key.",
+      "category": "Research",
+      "tags": [
+        "capability",
+        "research",
+        "video"
+      ],
+      "useCases": [
+        "Summarize talks and tutorials from a link",
+        "Pull quotes and timestamps from a video",
+        "Research topics covered in video form"
+      ],
+      "source": "github:markhayden/bakin-bits-official#packs/youtube-transcript",
+      "ref": null,
+      "trust": "official",
+      "capability": "youtube-transcript",
+      "runtimes": [
+        "*"
+      ],
+      "defaultSelected": false,
       "screenshots": []
     }
   ]
