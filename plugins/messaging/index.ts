@@ -29,6 +29,7 @@ import {
 import { archiveLegacyMessagingFile } from './lib/legacy-archive'
 import { normalizeContentTypes, normalizeContentTypesForActivate, validateContentTypeWorkflows } from './lib/content-types'
 import { createMessagingContentStorage } from './lib/content-storage'
+import { listMessagingScheduledEvents, rescheduleMessagingDeliverable, type ScheduledEventsQuery } from './lib/scheduled-events'
 import { registerMessagingDefaultWorkflows } from './lib/default-workflows'
 import {
   approveAndPublishDeliverableNow,
@@ -877,6 +878,26 @@ const messagingPlugin: BakinPlugin = {
     }
 
     const contentStore = createMessagingContentStorage(ctx.storage)
+
+    // ── Scheduled domain events (bakin#191) ────────────────────────────
+    // Publish dates appear on Bakin's Schedule calendars; rescheduleEvent is
+    // the one sanctioned mutation (mirrors PUT /deliverables/:id semantics).
+    ctx.hooks.register(
+      'messaging.scheduledEvents',
+      (data: unknown) => listMessagingScheduledEvents(() => contentStore.listDeliverables(), data as ScheduledEventsQuery),
+      { hookKind: 'rpc', label: 'Scheduled publish dates', summary: 'Deliverable publish dates as calendar events' },
+    )
+    ctx.hooks.register(
+      'messaging.rescheduleEvent',
+      (data: unknown) => rescheduleMessagingDeliverable({
+        getDeliverable: (id) => contentStore.getDeliverable(id),
+        updateDeliverable: (id, patch) => contentStore.updateDeliverable(id, patch),
+        derivePrepStartAt: (publishAt, contentTypeId) => derivePrepStartAt(ctx, publishAt, contentTypeId),
+        recomputeLinkedPlan: (planId) => recomputeLinkedPlan(contentStore, planId),
+        audit: (event, actor, payload) => ctx.activity.audit(event, actor, payload),
+      }, data as { eventId: string; to: string }),
+      { hookKind: 'rpc', label: 'Reschedule a publish date', summary: 'Move a deliverable publishAt from the Schedule calendar' },
+    )
 
     const defaultWorkflows = registerMessagingDefaultWorkflows(ctx, undefined, log)
     if (defaultWorkflows.registered.length > 0) {
