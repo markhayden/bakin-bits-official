@@ -31,10 +31,10 @@
       {
         "id": "messaging",
         "label": "Messaging",
-        "icon": "MessageSquare",
+        "icon": "Megaphone",
         "href": "/messaging",
-        "order": 25,
-        "alwaysExpanded": true,
+        "order": 30,
+        "section": "create",
         "children": [
           {
             "id": "messaging-calendar",
@@ -51,7 +51,7 @@
           {
             "id": "messaging-brainstorm",
             "label": "Brainstorm",
-            "icon": "Sparkles",
+            "icon": "Lightbulb",
             "href": "/messaging/brainstorm"
           }
         ]

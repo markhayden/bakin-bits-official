@@ -239,7 +239,6 @@ declare module '@makinbakin/sdk/types' {
     order?: number
     children?: NavItem[]
     section?: NavSection
-    alwaysExpanded?: boolean
     badge?: NavBadge
   }
 
