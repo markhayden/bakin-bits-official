@@ -15,14 +15,14 @@ const navItems: NavItem[] = [
   {
     id: 'messaging',
     label: 'Messaging',
-    icon: 'MessageSquare',
+    icon: 'Megaphone',
     href: '/messaging',
-    order: 25,
-    alwaysExpanded: true,
+    order: 30,
+    section: 'create',
     children: [
       { id: 'messaging-calendar', label: 'Calendar', icon: 'CalendarDays', href: '/messaging/calendar' },
       { id: 'messaging-plans', label: 'Plans', icon: 'ClipboardList', href: '/messaging/plans' },
-      { id: 'messaging-brainstorm', label: 'Brainstorm', icon: 'Sparkles', href: '/messaging/brainstorm' },
+      { id: 'messaging-brainstorm', label: 'Brainstorm', icon: 'Lightbulb', href: '/messaging/brainstorm' },
     ],
   },
 ]

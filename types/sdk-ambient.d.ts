@@ -229,6 +229,8 @@ declare module '@makinbakin/sdk/types' {
     tone?: NavBadgeTone
   }
 
+  export type NavSection = 'plan-and-automate' | 'create' | 'operations'
+
   export interface NavItem {
     id: string
     label: string
@@ -236,7 +238,7 @@ declare module '@makinbakin/sdk/types' {
     href: string
     order?: number
     children?: NavItem[]
-    alwaysExpanded?: boolean
+    section?: NavSection
     badge?: NavBadge
   }
 

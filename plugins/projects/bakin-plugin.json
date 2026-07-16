@@ -34,9 +34,10 @@
       {
         "id": "projects",
         "label": "Projects",
-        "icon": "Compass",
+        "icon": "FolderKanban",
         "href": "/projects",
-        "order": 30
+        "order": 10,
+        "section": "plan-and-automate"
       }
     ],
     "routes": [
