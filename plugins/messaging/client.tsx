@@ -18,7 +18,6 @@ const navItems: NavItem[] = [
     icon: 'MessageSquare',
     href: '/messaging',
     order: 25,
-    alwaysExpanded: true,
     children: [
       { id: 'messaging-calendar', label: 'Calendar', icon: 'CalendarDays', href: '/messaging/calendar' },
       { id: 'messaging-plans', label: 'Plans', icon: 'ClipboardList', href: '/messaging/plans' },

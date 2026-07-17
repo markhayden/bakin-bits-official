@@ -34,7 +34,6 @@
         "icon": "MessageSquare",
         "href": "/messaging",
         "order": 25,
-        "alwaysExpanded": true,
         "children": [
           {
             "id": "messaging-calendar",

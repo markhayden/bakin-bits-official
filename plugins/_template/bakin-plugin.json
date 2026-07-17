@@ -5,5 +5,19 @@
   "bakin": ">=0.0.1-rc.1",
   "description": "Starter scaffold demonstrating the BakinPlugin contract with hot-reload-safe lifecycle hooks.",
   "permissions": [],
-  "dependencies": []
+  "dependencies": [],
+  "contributes": {
+    "nav": [
+      {
+        "id": "_template",
+        "label": "Template",
+        "icon": "Sparkles",
+        "href": "/_template",
+        "order": 200
+      }
+    ],
+    "slots": [
+      "page:/_template"
+    ]
+  }
 }

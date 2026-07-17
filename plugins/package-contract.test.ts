@@ -68,6 +68,21 @@ function registeredRoutes(pluginDir: string): string[] {
 }
 
 describe('official plugin package contracts', () => {
+  it('uses current host navigation disclosure and mirrors the template page slot', () => {
+    for (const plugin of ['messaging', 'projects', '_template']) {
+      const manifest = JSON.parse(readFileSync(join(import.meta.dir, plugin, 'bakin-plugin.json'), 'utf-8')) as {
+        contributes?: {
+          nav?: Array<Record<string, unknown>>
+          slots?: string[]
+        }
+      }
+      expect((manifest.contributes?.nav ?? []).some(item => 'alwaysExpanded' in item)).toBe(false)
+      if (plugin === '_template') {
+        expect(manifest.contributes?.slots).toContain('page:/_template')
+      }
+    }
+  })
+
   for (const plugin of PLUGINS) {
     it(`${plugin} declares every non-host runtime package it imports`, () => {
       const pluginDir = join(import.meta.dir, plugin)
