@@ -506,6 +506,8 @@ function listBrainstormSessionSummaries(
     }))
 }
 
+const SESSION_MESSAGE_CAP = 300
+
 function appendBrainstormMessage(
   contentStore: MessagingContentStorage,
   sessionId: string,
@@ -531,7 +533,9 @@ function appendBrainstormMessage(
   if (message.data !== undefined) nextMessage.data = message.data
   if (message.agentId !== undefined) nextMessage.agentId = message.agentId
   contentStore.updateBrainstormSession(sessionId, {
-    messages: [...session.messages, nextMessage],
+    // Bounded (bakin#706): sessions are working conversations — the oldest
+    // rows drop so the per-row full-file rewrite stays cheap.
+    messages: [...session.messages, nextMessage].slice(-SESSION_MESSAGE_CAP),
   })
   return nextMessage
 }
@@ -1055,9 +1059,17 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         if (!id) return json({ error: 'id required' }, 400)
         const session = contentStore.getBrainstormSession(id)
         if (!session) return json({ error: 'Session not found' }, 404)
-        // Server-seeded in-flight flag — a remount mid-turn rehydrates the
-        // streaming indicator instead of looking idle (bakin#703).
-        return json({ session, streaming: brainstormTurns.isInFlight(id) })
+        // Server-seeded in-flight flag + streamed-so-far text — a remount
+        // mid-turn rehydrates the indicator AND the reply's beginning
+        // (bakin#703/#706). Flag first: if the turn settles between the two
+        // reads we return streaming:false with no text, never the reverse.
+        const streaming = brainstormTurns.isInFlight(id)
+        const preview = streaming ? brainstormTurns.inflightPreview(id) : null
+        return json({
+          session,
+          streaming,
+          ...(preview !== null ? { streamingText: preview } : {}),
+        })
       })
 
     // POST /sessions — create session
@@ -1322,6 +1334,22 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         },
       },
     })
+
+    // Boot sweep (bakin#706): sessions whose transcript ends on a user row
+    // lost their turn to a process death — stamp an honest marker.
+    try {
+      for (const session of contentStore.listBrainstormSessions()) {
+        const last = session.messages[session.messages.length - 1]
+        if (last?.role !== 'user') continue
+        appendBrainstormMessage(contentStore, session.id, {
+          role: 'activity',
+          kind: 'turn_error',
+          content: 'Turn failed: interrupted by a server restart before the reply finished.',
+        })
+      }
+    } catch (err) {
+      log.error('interrupted-turn sweep failed', err)
+    }
 
     // POST /sessions/:id/messages — 202; the turn runs on the engine.
     routeHandlers.set('POST /sessions/:id/messages', async (req: Request) => {

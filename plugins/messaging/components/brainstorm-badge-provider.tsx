@@ -9,8 +9,7 @@
  * lands while the user is elsewhere. The brainstorm view marks sessions
  * seen (`?session=` query — the visible key lives in the query string).
  */
-import { useConversationAttention, AgentAvatar } from '@makinbakin/sdk/components'
-import { useAgent, useRouter } from '@makinbakin/sdk/hooks'
+import { useConversationAttention, ConversationReplyToast } from '@makinbakin/sdk/components'
 
 /**
  * The session whose turns are on screen. Two surfaces qualify: the
@@ -28,33 +27,6 @@ function visibleSessionId(): string {
   if (typeof planSession === 'string' && planSession) return planSession
   if (!window.location.pathname.startsWith('/messaging/brainstorm')) return ''
   return new URLSearchParams(window.location.search).get('session') ?? ''
-}
-
-function ReplyToast({ sessionId, agentId, preview, onNavigate }: {
-  sessionId: string
-  agentId: string
-  preview?: string
-  onNavigate?: () => void
-}) {
-  const agent = useAgent(agentId)
-  const router = useRouter()
-  return (
-    <button
-      type="button"
-      data-messaging-brainstorm-toast={sessionId}
-      onClick={() => {
-        onNavigate?.()
-        router.push(`/messaging/brainstorm?session=${encodeURIComponent(sessionId)}`)
-      }}
-      className="flex max-w-sm items-start gap-2 text-left"
-    >
-      <AgentAvatar agentId={agentId} size="xs" />
-      <span className="min-w-0">
-        <span className="block text-sm font-medium">{agent?.name ?? agentId} replied in a brainstorm</span>
-        {preview ? <span className="block truncate text-xs text-muted-foreground">{preview}</span> : null}
-      </span>
-    </button>
-  )
 }
 
 export function BrainstormBadgeProvider() {
@@ -76,7 +48,14 @@ export function BrainstormBadgeProvider() {
       return { unreadTotal: body.unreadTotal ?? 0, inflightKeys: body.inflight ?? [] }
     },
     renderToast: (done, dismiss) => (
-      <ReplyToast sessionId={done.key} agentId={done.agentId} preview={done.preview} onNavigate={dismiss} />
+      <ConversationReplyToast
+        agentId={done.agentId}
+        title="replied in a brainstorm"
+        preview={done.preview}
+        to={`/messaging/brainstorm?session=${encodeURIComponent(done.key)}`}
+        onNavigate={dismiss}
+        testId={{ attr: 'data-messaging-brainstorm-toast', value: done.key }}
+      />
     ),
     osNotification: (done) => ({
       title: `${done.agentId} replied`,

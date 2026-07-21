@@ -1,6 +1,6 @@
 import React from 'react'
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { usePluginEvent, useNavBadge as hookUseNavBadge, toast as hookToast } from './hooks.js'
+import { usePluginEvent, useNavBadge as hookUseNavBadge, toast as hookToast, useAgent, useRouter } from './hooks.js'
 
 export function AgentAvatar({ agentId }) {
   return React.createElement('span', { 'data-testid': agentId ? `avatar-${agentId}` : 'avatar' }, agentId)
@@ -32,6 +32,49 @@ export function EmptyState({ title, children }) {
 
 export function FacetFilter() {
   return null
+}
+
+// Functional minimum of the real SegmentedControl — real tablist semantics
+// and onValueChange wiring so tab-switching tests exercise genuine clicks.
+export function SegmentedControl({ options, value, onValueChange, ariaLabel }) {
+  return React.createElement(
+    'div',
+    { role: 'tablist', 'aria-label': ariaLabel, 'data-segmented-control': true },
+    options.map(o =>
+      React.createElement(
+        'button',
+        {
+          key: o.value,
+          role: 'tab',
+          'aria-selected': value === o.value,
+          'data-segment': o.value,
+          onClick: () => onValueChange?.(o.value),
+        },
+        o.hideLabel ? null : o.label,
+      ),
+    ),
+  )
+}
+
+// Functional minimum of the kit reply toast — avatar + "<agent> title" +
+// preview, click dismisses then router-pushes, test marker attr preserved.
+export function ConversationReplyToast({ agentId, title, preview, to, onNavigate, testId }) {
+  const agent = useAgent(agentId)
+  const router = useRouter()
+  return React.createElement(
+    'button',
+    {
+      type: 'button',
+      ...(testId ? { [testId.attr]: testId.value } : {}),
+      onClick: () => {
+        onNavigate?.()
+        router.push(to)
+      },
+    },
+    React.createElement(AgentAvatar, { agentId }),
+    React.createElement('span', null, `${agent?.name ?? agentId} ${title}`),
+    preview ? React.createElement('span', null, preview) : null,
+  )
 }
 
 // ── Conversation kit stubs (successors to IntegratedBrainstorm) ──────────

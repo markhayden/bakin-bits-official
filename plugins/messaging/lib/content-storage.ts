@@ -99,14 +99,31 @@ export interface MessagingContentStorage {
 }
 
 export function createMessagingContentStorage(storage: StorageAdapter): MessagingContentStorage {
+  // Attention polls list every session on each tick — cache parsed sessions
+  // against the file's mtime+size so steady-state polls skip the
+  // read+parse+zod pass per session (bakin#706). Callers never mutate
+  // returned sessions (all updates flow through saveBrainstormSession,
+  // which invalidates).
+  const sessionCache = new Map<string, { mtimeMs: number; size: number; session: BrainstormSession | null }>()
+
   function saveBrainstormSession(session: BrainstormSession): void {
     atomicWriteJson(storage, entityPath(SESSIONS_DIR, session.id), BrainstormSessionSchema.parse(session))
+    sessionCache.delete(session.id)
   }
 
   function getBrainstormSession(id: string): BrainstormSession | null {
-    const raw = readJson(storage, entityPath(SESSIONS_DIR, id))
+    const path = entityPath(SESSIONS_DIR, id)
+    const stat = storage.stat?.(path)
+    if (stat) {
+      const cached = sessionCache.get(id)
+      if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.session
+    }
+    const raw = readJson(storage, path)
     const parsed = BrainstormSessionSchema.safeParse(raw)
-    return parsed.success ? parsed.data : null
+    const session = parsed.success ? parsed.data : null
+    if (stat) sessionCache.set(id, { mtimeMs: stat.mtimeMs, size: stat.size, session })
+    else sessionCache.delete(id)
+    return session
   }
 
   function listBrainstormSessions(): BrainstormSession[] {
@@ -158,6 +175,7 @@ export function createMessagingContentStorage(storage: StorageAdapter): Messagin
 
   function deleteBrainstormSession(id: string): void {
     storage.remove?.(entityPath(SESSIONS_DIR, id))
+    sessionCache.delete(id)
   }
 
   function savePlan(plan: Plan): void {

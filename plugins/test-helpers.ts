@@ -35,6 +35,7 @@ type TurnCtx = { runtime: any; events: { emit: (event: string, data?: Record<str
 
 function createTestTurnService(config: TurnConfig, meteredTurns: Array<Record<string, unknown>>) {
   const inflight = new Map<string, { promise: Promise<unknown>; controller: AbortController; agentId: string; turnId: string; startedAt: number }>()
+  const previews = new Map<string, string>()
 
   const runTurn = async (ctx: TurnCtx, key: string, agentId: string, content: string, controller: AbortController, turnId: string, opts?: Record<string, any>) => {
     const recorder = createTurnRecorder({ turnId })
@@ -65,7 +66,10 @@ function createTestTurnService(config: TurnConfig, meteredTurns: Array<Record<st
           const kind = typeof chunk.data?.kind === 'string' ? chunk.data.kind : undefined
           throw Object.assign(new Error(chunk.content || 'runtime stream error'), { kind })
         }
-        if (chunk.type === 'text') assistantText += chunk.content
+        if (chunk.type === 'text') {
+          assistantText += chunk.content
+          previews.set(key, assistantText)
+        }
         if (chunk.type === 'done') doneUsage = chunk.usage
         recorder.ingest(chunk)
         await persist(recorder.drain())
@@ -104,6 +108,7 @@ function createTestTurnService(config: TurnConfig, meteredTurns: Array<Record<st
       const agentId = opts?.agentId ?? thread.agentId
       const entry = { promise: Promise.resolve() as Promise<unknown>, controller, agentId, turnId, startedAt: Date.now() }
       inflight.set(key, entry)
+      previews.set(key, '')
       if (!content.trim() && opts?.attachments?.length) content = 'See the attached image.'
       try {
         await config.appendRow(key, { kind: 'user', ts: new Date().toISOString(), content, ...(opts?.attachments?.length ? { attachments: opts.attachments } : {}) })
@@ -112,7 +117,7 @@ function createTestTurnService(config: TurnConfig, meteredTurns: Array<Record<st
         return 'not_found'
       }
       entry.promise = runTurn(ctx, key, agentId, content, controller, turnId, opts)
-        .finally(() => { inflight.delete(key) })
+        .finally(() => { inflight.delete(key); previews.delete(key) })
         .then(outcome => config.hooks?.onSettled?.({ ctx, key, outcome }))
       return 'accepted'
     },
@@ -123,6 +128,7 @@ function createTestTurnService(config: TurnConfig, meteredTurns: Array<Record<st
       return true
     },
     isInFlight: (key: string) => inflight.has(key),
+    inflightPreview: (key: string) => (inflight.has(key) ? (previews.get(key) ?? '') : null),
     waitFor: async (key: string) => { await (inflight.get(key)?.promise ?? Promise.resolve()) },
     listInFlight: () => [...inflight.entries()].map(([key, t]) => ({ key, agentId: t.agentId, turnId: t.turnId, startedAt: t.startedAt })),
   }

@@ -352,6 +352,23 @@ const projectsPlugin: BakinPlugin = {
     // API Routes (RESTful + aliases for old paths)
     // -----------------------------------------------------------------
 
+    // Boot sweep (bakin#706): brainstorms whose transcript ends on a user
+    // row lost their turn to a process death — stamp an honest error row.
+    try {
+      for (const project of readAllProjects()) {
+        const rows = readBrainstormMessages(project.id)
+        const last = rows[rows.length - 1]
+        if (last?.kind !== 'user') continue
+        writeBrainstormMessages(project.id, [...rows, {
+          kind: 'error',
+          ts: new Date().toISOString(),
+          message: 'Interrupted by a server restart before the reply finished.',
+        } as ProjectBrainstormMessage])
+      }
+    } catch (err) {
+      log.error('interrupted-turn sweep failed', err)
+    }
+
     // GET / — list projects
     const listHandler = async (req: Request) => {
       const url = new URL(req.url, 'http://localhost')
@@ -378,13 +395,20 @@ const projectsPlugin: BakinPlugin = {
       if (!id) return json({ error: 'Missing id parameter' }, 400)
       const project = readProject(id)
       if (!project) return json({ error: 'Project not found' }, 404)
+      const resolvedProject = await resolveLinkedTaskStatuses(project)
+      // Sample the flag before the preview: if the turn settles between the
+      // two reads we return streaming:false with no text (honest), never
+      // text without the flag.
+      const brainstormStreaming = brainstormTurns.isInFlight(id)
+      const brainstormPreview = brainstormStreaming ? brainstormTurns.inflightPreview(id) : null
       return json({
         project: {
-          ...(await resolveLinkedTaskStatuses(project)),
+          ...resolvedProject,
           brainstormMessages: readBrainstormMessages(id),
-          // Server-seeded in-flight flag — a remount mid-turn rehydrates the
-          // streaming indicator instead of looking idle.
-          brainstormStreaming: brainstormTurns.isInFlight(id),
+          // Server-seeded in-flight flag + streamed-so-far text — a remount
+          // mid-turn rehydrates the indicator AND the reply's beginning.
+          brainstormStreaming,
+          ...(brainstormPreview !== null ? { brainstormStreamingText: brainstormPreview } : {}),
         },
       })
     }
@@ -650,8 +674,7 @@ const projectsPlugin: BakinPlugin = {
 
     /** A project counts as unread when agent activity landed after the last view. */
     function hasUnseenBrainstormReply(id: string): boolean {
-      const rows = readBrainstormMessages(id)
-      const lastAgentTs = [...rows].reverse().find(r => r.kind === 'assistant' || r.kind === 'error')?.ts
+      const lastAgentTs = repo.readLastAgentActivityTs(id)
       if (!lastAgentTs) return false
       const seenAt = repo.readBrainstormSeen(id)
       return !seenAt || lastAgentTs > seenAt
