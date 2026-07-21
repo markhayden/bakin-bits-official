@@ -1,15 +1,15 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useRef, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   AgentAvatar,
   ConversationPanel,
   EmptyState,
   PluginHeader,
-  useConversationStream,
+  useConversationThread,
 } from "@makinbakin/sdk/components"
 import type { ConversationMessage } from "@makinbakin/sdk/components"
-import { useHorizontalResize } from "@makinbakin/sdk/hooks"
+import { toast, useHorizontalResize, usePluginEvent } from "@makinbakin/sdk/hooks"
 import { Badge } from "@makinbakin/sdk/ui"
 import { Button } from "@makinbakin/sdk/ui"
 import { Skeleton } from "@makinbakin/sdk/ui"
@@ -300,7 +300,6 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
   const [savingChannels, setSavingChannels] = useState(false)
   const [startingPrep, setStartingPrep] = useState(false)
   const [kickoffError, setKickoffError] = useState<string | null>(null)
-  const [brainstormMessages, setBrainstormMessages] = useState<ConversationMessage[]>([])
   const [activeTab, setActiveTab] = useState<PlanWorkspaceTab>('plan')
 
   // Draggable divider between the main plan column and the details/tasks sidebar.
@@ -335,27 +334,6 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
     return [...byId.values()]
   }, [selectedChannels])
   const canKickoffContentPrep = Boolean(plan && activeDeliverables.length === 0)
-
-  useEffect(() => {
-    if (!plan?.sourceSessionId) {
-      setBrainstormMessages([])
-      return
-    }
-    let cancelled = false
-    const loadBrainstorm = async () => {
-      const encoded = encodeURIComponent(plan.sourceSessionId!)
-      const response = await fetch(`/api/plugins/messaging/sessions/${encoded}?id=${encoded}`)
-      if (!response.ok) return
-      const data = await response.json() as { session?: BrainstormSession }
-      if (!cancelled && data.session) {
-        setBrainstormMessages(data.session.messages.map((message) => toConversation(data.session!.agentId, message)).filter((m): m is ConversationMessage => m !== null))
-      }
-    }
-    loadBrainstorm()
-    return () => {
-      cancelled = true
-    }
-  }, [plan?.sourceSessionId])
 
   const buildPlanChannel = (option: DistributionChannelOption): PlanChannel => ({
     id: option.id,
@@ -415,27 +393,60 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
 
   // Plan refinements ride the same sessions route with planId; plan_update
   // custom events land via the post-turn refresh.
-  const brainstorm = useConversationStream({
-    fetcher: useCallback((content: string, ctx: { signal: AbortSignal }) => {
-      if (!plan?.sourceSessionId) throw new Error('Plan has no source session')
-      const encoded = encodeURIComponent(plan.sourceSessionId)
-      return fetch(`/api/plugins/messaging/sessions/${encoded}/messages?id=${encoded}`, {
+  // Plan-refinement turns run server-side on the conversation turn engine
+  // (bakin#703): they share the source session's transcript + bus events,
+  // so navigation never kills a refinement and returning rehydrates it.
+  const planIdRef = useRef(plan?.id)
+  planIdRef.current = plan?.id
+  const brainstorm = useConversationThread({
+    threadKey: plan?.sourceSessionId ?? '',
+    events: {
+      chunk: 'messaging.brainstorm.chunk',
+      done: 'messaging.brainstorm.done',
+      error: 'messaging.brainstorm.error',
+    },
+    keyOf: useCallback((payload: Record<string, unknown>) => payload.sessionId, []),
+    load: useCallback(async (key: string) => {
+      const encoded = encodeURIComponent(key)
+      const response = await fetch(`/api/plugins/messaging/sessions/${encoded}?id=${encoded}`)
+      if (!response.ok) return null
+      const data = await response.json() as { session?: BrainstormSession; streaming?: boolean }
+      if (!data.session) return null
+      return {
+        messages: data.session.messages.map((message) => toConversation(data.session!.agentId, message)).filter((m): m is ConversationMessage => m !== null),
+        streaming: data.streaming === true,
+      }
+    }, []),
+    post: useCallback(async (key: string, content: string) => {
+      const encoded = encodeURIComponent(key)
+      const response = await fetch(`/api/plugins/messaging/sessions/${encoded}/messages?id=${encoded}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        signal: ctx.signal,
-        body: JSON.stringify({
-          message: content,
-          planId: plan.id,
-        }),
+        body: JSON.stringify({ message: content, planId: planIdRef.current }),
       })
-    }, [plan]),
-    onDone: useCallback(async () => {
-      await refresh()
-    }, [refresh]),
-    onError: useCallback(async () => {
-      await refresh()
+      if (response.ok) return { ok: true }
+      const body = await response.json().catch(() => ({})) as { error?: string }
+      return { ok: false, status: response.status, ...(body.error ? { error: String(body.error) } : {}) }
+    }, []),
+    onSettled: useCallback(() => {
+      void refresh()
     }, [refresh]),
   })
+
+  // Plan updates parsed from refinement replies ride the bus.
+  usePluginEvent('messaging.brainstorm.plan_update', (payload) => {
+    if (payload.sessionId === plan?.sourceSessionId) void refresh()
+  })
+
+  useEffect(() => {
+    if (brainstorm.sendError) toast(brainstorm.sendError, 'error')
+  }, [brainstorm.sendError])
+
+  const abortBrainstorm = useCallback(() => {
+    if (!plan?.sourceSessionId) return
+    const encoded = encodeURIComponent(plan.sourceSessionId)
+    void fetch(`/api/plugins/messaging/sessions/${encoded}/abort?id=${encoded}`, { method: 'POST' }).catch(() => {})
+  }, [plan?.sourceSessionId])
 
   const handleDeletePlan = async () => {
     if (!plan) return
@@ -741,11 +752,11 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                     </div>
                   )}
                   <ConversationPanel
-                    messages={brainstormMessages}
+                    messages={brainstorm.messages}
                     liveChunks={brainstorm.liveChunks}
                     streaming={brainstorm.streaming}
                     onSend={brainstorm.send}
-                    onAbort={brainstorm.abort}
+                    onAbort={abortBrainstorm}
                     agentId={plan.agent}
                     storageKey={`messaging-plan:${plan.id}`}
                     placeholder="Refine the angle, channels, timeline, or content pieces..."
