@@ -52,18 +52,18 @@ export function RenderedPlan({ projectId, body }: { projectId: string; body: str
             key={index}
             data-plan-removed-marker
             title="Content removed here in the latest edit"
-            className="-ml-3 h-[3px] w-12 rounded-full bg-red-500"
+            className="h-[3px] w-12 rounded-full bg-red-500"
           />
         ) : (
+          // Every block carries the same gutter so text stays aligned; the
+          // bar is in normal flow (a negative margin put it outside the
+          // scroll container's clip — invisible).
           <div
             key={index}
             {...(entry.changed
-              ? {
-                  'data-plan-changed-block': true,
-                  title: 'Added or edited in the latest edit',
-                  className: 'relative -ml-3 border-l-[3px] border-emerald-500 pl-3',
-                }
+              ? { 'data-plan-changed-block': true, title: 'Added or edited in the latest edit' }
               : {})}
+            className={`border-l-[3px] pl-3 ${entry.changed ? 'border-emerald-500' : 'border-transparent'}`}
           >
             <MarkdownEditor content={entry.text} editing={false} onChange={() => {}} format="markdown" />
           </div>
