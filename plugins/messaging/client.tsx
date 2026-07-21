@@ -10,6 +10,17 @@ import { BrainstormView } from './components/brainstorm-view'
 import { PlanList } from './components/plan-list'
 import { PlanWorkspace } from './components/plan-workspace'
 import { PlansBadgeProvider } from './components/plans-badge-provider'
+import { BrainstormBadgeProvider } from './components/brainstorm-badge-provider'
+
+/** One slot, two providers: Plans review counts + brainstorm attention (#703). */
+function MessagingBadgeProviders() {
+  return (
+    <>
+      <PlansBadgeProvider />
+      <BrainstormBadgeProvider />
+    </>
+  )
+}
 
 const navItems: NavItem[] = [
   {
@@ -116,6 +127,6 @@ registerPlugin({
   // Background runner that keeps the Plans nav badge in sync with the
   // needs_review count. Stays mounted while the plugin is registered.
   slots: {
-    'nav-badge-providers': PlansBadgeProvider,
+    'nav-badge-providers': MessagingBadgeProviders,
   },
 })

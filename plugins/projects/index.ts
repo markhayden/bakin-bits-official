@@ -5,9 +5,10 @@
 import { z } from 'zod'
 import { defineRoute } from '@makinbakin/sdk'
 import type { BakinPlugin, PluginContext, RuntimeAgent } from '@makinbakin/sdk/types'
-import { conversationThreadId, createTurnRecorder } from '@makinbakin/sdk/utils'
+import { conversationThreadId } from '@makinbakin/sdk/utils'
 import { createProjectRepository, projectToSummary } from './lib/parser'
 import { createProjectService } from './lib/project-service'
+import { PROJECT_STATUSES } from './types'
 import type { Project, ProjectBrainstormMessage, ProjectStatus } from './types'
 
 const log = {
@@ -41,21 +42,55 @@ async function getRuntimeMainAgentId(ctx: PluginContext): Promise<string> {
   return main?.id ?? 'main'
 }
 
+// The plan-first brainstorm posture (bakin#703): the plan document is the
+// PRIMARY working artifact. Incremental edits apply directly (every body
+// write is snapshotted with a visible diff + restore, so they are safe);
+// wholesale rewrites ask in chat first. ONE constant — the /ask route and
+// the bakin_exec_projects_ask tool must never drift apart.
 const PROJECT_BRAINSTORM_INSTRUCTIONS = [
   'Project brainstorm mode:',
-  'This brainstorm is for maintaining and improving the project plan.',
-  'Treat chat as the working conversation, but keep the project body and checklist as the durable source of truth.',
-  'Default toward identifying plan updates, checklist changes, open questions, and next actions that would keep the project current.',
-  'Do not edit the project body or checklist until the user explicitly asks you to update it or confirms your proposed changes.',
-  'When updates are warranted, propose the exact project body and checklist changes first.',
-  'After confirmation, prefer bakin_exec_projects_apply_plan for combined body and checklist updates.',
+  'The project plan (body + checklist) is your PRIMARY working artifact — actively create, edit, and refine it as the conversation evolves; the chat is the working conversation around it.',
+  'If the project body is empty or stale, draft or update it without being asked.',
+  'Apply INCREMENTAL updates directly, then report exactly what you changed: additions, checklist changes (add/check/update items), and section-scoped edits are yours to make via the project tools.',
+  'Prefer bakin_exec_projects_apply_plan for combined body and checklist updates; use the checklist item tools for single-item changes.',
+  'ASK FIRST — in chat, before applying — for wholesale rewrites or large deletions of existing content: propose the change and wait for confirmation.',
+  'Every plan edit is snapshotted with a visible diff and one-click restore, so direct incremental edits are safe.',
   'Invoke Bakin tools as described in your Tool access section — the exact call form depends on the active runtime.',
-  'If the user asks for advice only, answer in chat and call out any optional plan update separately.',
+  'If the user asks for advice only, lead with the answer in chat; plan upkeep still applies — make any needed incremental edit afterwards and mention it.',
   'If suggesting tasks, format them as a numbered list.',
 ].join('\n')
 
-function newTurnId(): string {
-  return `turn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+/** Shared brainstorm context — the /ask route and the _ask exec tool build
+ *  the SAME prompt so the plan-first posture can never drift between them. */
+function buildProjectBrainstormContext(project: Project, request: string): string {
+  const assetLines = project.assets.length > 0
+    ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.assetId}${a.label ? ` — ${a.label}` : ''}`)]
+    : []
+  const SPEC_CAP = 3000
+  const truncated = project.body.length > SPEC_CAP
+  return [
+    `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
+    `Progress: ${project.progress}% (${project.tasks.filter(t => t.checked).length}/${project.tasks.length} items checked)`,
+    '',
+    'Project spec:',
+    project.body.slice(0, SPEC_CAP),
+    // Visible omission marker — an agent told the plan is its primary
+    // artifact must never mistake a truncated view for the whole spec.
+    ...(truncated
+      ? [`[... spec truncated: showing ${SPEC_CAP} of ${project.body.length} chars — read the full plan with bakin_exec_projects_get before any rewrite; prefer appendBody or single-item edits.]`]
+      : []),
+    '',
+    'Checklist items:',
+    ...project.tasks.map(t => `- [${t.checked ? 'x' : ' '}] ${t.title}${t.taskId ? ` (linked: ${t.taskId})` : ''}`),
+    ...assetLines,
+    '',
+    PROJECT_BRAINSTORM_INSTRUCTIONS,
+    '',
+    'User request:',
+    request,
+    '',
+    'Respond concisely.',
+  ].join('\n')
 }
 
 // ---------------------------------------------------------------------------
@@ -132,7 +167,12 @@ const projectsPlugin: BakinPlugin = {
     legacyRoute('POST', '/:projectId/assets', 'Attach asset'),
     legacyRoute('PATCH', '/:projectId/assets/:assetId', 'Relink asset reference'),
     legacyRoute('DELETE', '/:projectId/assets/:assetId', 'Detach asset'),
-    legacyRoute('POST', '/:projectId/ask', 'Ask agent about project (streams tokens via SSE)'),
+    legacyRoute('POST', '/:projectId/ask', 'Ask agent about project (202; streams over the plugin-event bus)'),
+    legacyRoute('POST', '/:projectId/ask/abort', 'Abort the in-flight brainstorm turn'),
+    legacyRoute('GET', '/brainstorm/attention', 'Brainstorm attention totals (unread + in-flight)'),
+    legacyRoute('POST', '/:projectId/brainstorm/seen', 'Mark a project brainstorm as seen'),
+    legacyRoute('GET', '/:projectId/history', 'Plan body snapshot history (oldest first)'),
+    legacyRoute('POST', '/:projectId/history/:index/restore', 'Restore a plan snapshot (snapshots current first)'),
   ],
 
   async activate(ctx: PluginContext) {
@@ -162,6 +202,38 @@ const projectsPlugin: BakinPlugin = {
     const readAllProjects = repo.readAllProjects
     const readBrainstormMessages = repo.readBrainstormMessages
     const writeBrainstormMessages = repo.writeBrainstormMessages
+
+    // Brainstorm turns run on the shared conversation turn engine
+    // (bakin#703): server-owned background turns, streamed as
+    // projects.brainstorm.* plugin-events, persisted incrementally into the
+    // per-project transcript — navigating away never kills a turn. The
+    // runtime thread stays the durable per-(project, agent) session.
+    const brainstormTurns = ctx.conversations.createTurnService({
+      name: 'projects.brainstorm',
+      events: {
+        chunk: 'projects.brainstorm.chunk',
+        done: 'projects.brainstorm.done',
+        error: 'projects.brainstorm.error',
+      },
+      payload: (key) => ({ projectId: key }),
+      resolveThread: async (key) =>
+        readProject(key) ? { agentId: await getRuntimeMainAgentId(ctx) } : null,
+      appendRow: (key, row) => {
+        // A turn racing a delete must not resurrect the sidecar as a
+        // permanent orphan — the throw surfaces as the engine's logged
+        // append failure.
+        if (!readProject(key)) throw new Error(`project ${key} is gone — dropping brainstorm row`)
+        writeBrainstormMessages(key, [
+          ...readBrainstormMessages(key),
+          row as unknown as ProjectBrainstormMessage,
+        ])
+      },
+      threadId: (key, agentId) => conversationThreadId('projects', key, agentId),
+      metering: {
+        workClass: 'chat',
+        runId: (key, turnId) => `brainstorm:projects:${key}:turn:${turnId}`,
+      },
+    })
 
     // ─── Search Content Type Registration ─────────────────────────────
 
@@ -286,7 +358,16 @@ const projectsPlugin: BakinPlugin = {
       const statusFilter = url.searchParams.get('status') as ProjectStatus | null
       let projects = readAllProjects()
       if (statusFilter) projects = projects.filter(p => p.status === statusFilter)
-      return json({ projects: projects.map(projectToSummary) })
+      // Per-project attention flags so list rows can show WHICH project has
+      // an unseen reply / running turn (the nav badge names only the count).
+      const inflight = new Set(brainstormTurns.listInFlight().map(t => t.key))
+      return json({
+        projects: projects.map(p => ({
+          ...projectToSummary(p),
+          brainstormUnread: hasUnseenBrainstormReply(p.id),
+          brainstormStreaming: inflight.has(p.id),
+        })),
+      })
     }
     routeHandlers.set('GET /', listHandler)
 
@@ -301,6 +382,9 @@ const projectsPlugin: BakinPlugin = {
         project: {
           ...(await resolveLinkedTaskStatuses(project)),
           brainstormMessages: readBrainstormMessages(id),
+          // Server-seeded in-flight flag — a remount mid-turn rehydrates the
+          // streaming indicator instead of looking idle.
+          brainstormStreaming: brainstormTurns.isInFlight(id),
         },
       })
     }
@@ -325,6 +409,9 @@ const projectsPlugin: BakinPlugin = {
       const body = await readBody<{ id?: string; title?: string; status?: ProjectStatus; body?: string; owner?: string }>(req)
       const id = url.searchParams.get('projectId') || body.id
       if (!id) return json({ error: 'Missing id' }, 400)
+      if (body.status !== undefined && !PROJECT_STATUSES.includes(body.status)) {
+        return json({ error: `Invalid status: ${String(body.status)}` }, 400)
+      }
       try {
         await updateProject(id, body)
         ctx.activity.audit('updated', 'system', { projectId: id })
@@ -343,6 +430,9 @@ const projectsPlugin: BakinPlugin = {
       const body = await readBody<{ id?: string; deleteLinkedTasks?: boolean }>(req).catch(() => ({} as { id?: string; deleteLinkedTasks?: boolean }))
       const id = url.searchParams.get('projectId') || body.id
       if (!id) return json({ error: 'Missing id' }, 400)
+      // A live brainstorm must die with its project — otherwise it keeps
+      // billing and resurrects the transcript sidecar (review I2).
+      brainstormTurns.abort(id)
       try {
         if (body.deleteLinkedTasks) {
           const project = readProject(id)
@@ -516,130 +606,107 @@ const projectsPlugin: BakinPlugin = {
     }
     routeHandlers.set('DELETE /:projectId/assets/:assetId', detachHandler)
 
-    // POST /:projectId/ask — agent brainstorm (SSE stream, kit `chunk` frames)
+    // POST /:projectId/ask — agent brainstorm on the turn engine (bakin#703):
+    // 202 immediately, the turn streams as projects.brainstorm.* bus events
+    // and persists incrementally. One turn per project (busy → 409). The
+    // assembled context rides opts.runtimeContent — the transcript keeps the
+    // user's clean prompt.
     routeHandlers.set('POST /:projectId/ask', async (req: Request) => {
-        const body = await readBody<{
-          projectId: string
-          prompt: string
-          agent?: string
-        }>(req)
-        if (!body.projectId || !body.prompt) return json({ error: 'Missing projectId or prompt' }, 400)
-        const project = readProject(body.projectId)
-        if (!project) return json({ error: 'Project not found' }, 404)
-        const agentId = body.agent || await getRuntimeMainAgentId(ctx)
-        let persistedMessages = readBrainstormMessages(body.projectId)
+      const url = new URL(req.url, 'http://localhost')
+      const body = await readBody<{
+        projectId?: string
+        prompt: string
+        agent?: string
+      }>(req)
+      const projectId = url.searchParams.get('projectId') || body.projectId
+      if (!projectId || !body.prompt) return json({ error: 'Missing projectId or prompt' }, 400)
+      // A body id diverging from the path would silently brainstorm (and
+      // mutate) a DIFFERENT project under this URL — refuse.
+      if (body.projectId && body.projectId !== projectId) {
+        return json({ error: 'projectId mismatch between path and body' }, 400)
+      }
+      const project = readProject(projectId)
+      if (!project) return json({ error: 'Project not found' }, 404)
+      const agentId = body.agent || await getRuntimeMainAgentId(ctx)
+      const context = buildProjectBrainstormContext(project, body.prompt)
 
-        const assetLines = project.assets.length > 0
-          ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.assetId}${a.label ? ` — ${a.label}` : ''}`)]
-          : []
-
-        const context = [
-          `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
-          `Progress: ${project.progress}% (${project.tasks.filter(t => t.checked).length}/${project.tasks.length} items checked)`,
-          '',
-          'Project spec:',
-          project.body.slice(0, 3000),
-          '',
-          'Checklist items:',
-          ...project.tasks.map(t => `- [${t.checked ? 'x' : ' '}] ${t.title}${t.taskId ? ` (linked: ${t.taskId})` : ''}`),
-          ...assetLines,
-          PROJECT_BRAINSTORM_INSTRUCTIONS,
-          '',
-          'User request:',
-          body.prompt,
-          '',
-          'Respond concisely.',
-        ].join('\n')
-
-        const sessionKey = conversationThreadId('projects', body.projectId, agentId)
-        const turnId = newTurnId()
-        persistedMessages = [
-          ...persistedMessages,
-          { kind: 'user', ts: new Date().toISOString(), content: body.prompt },
-        ]
-        writeBrainstormMessages(body.projectId, persistedMessages)
-
-        const stream = new ReadableStream({
-          async start(controller) {
-            const encoder = new TextEncoder()
-            function send(event: string, data: unknown): void {
-              controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
-            }
-            const recorder = createTurnRecorder({ turnId, agentId })
-            function persistRows(rows: ProjectBrainstormMessage[]): void {
-              if (rows.length === 0) return
-              persistedMessages = [...persistedMessages, ...rows]
-              writeBrainstormMessages(body.projectId, persistedMessages)
-            }
-
-            let fullContent = ''
-            let useStreaming = true
-            let chunks: ReturnType<PluginContext['runtime']['messaging']['stream']> | undefined
-
-            try {
-              chunks = ctx.runtime.messaging.stream({
-                agentId,
-                content: context,
-                threadId: sessionKey,
-              })
-            } catch (err) {
-              // Fall back to one-shot runtime messaging below. Log at warn level
-              // so a real runtime transport outage is still debuggable.
-              log.warn('runtime stream failed, falling back to runtime send', {
-                error: err instanceof Error ? err.message : String(err),
-                agentId,
-              })
-              useStreaming = false
-            }
-
-            try {
-              if (useStreaming && chunks) {
-                for await (const chunk of chunks) {
-                  if (chunk.type === 'error') {
-                    throw new Error(chunk.content ?? 'Runtime stream error')
-                  }
-                  if (chunk.type === 'text' && chunk.content) fullContent += chunk.content
-                  if (chunk.type === 'text' || chunk.type === 'tool' || chunk.type === 'status') {
-                    send('chunk', chunk)
-                  }
-                  recorder.ingest(chunk)
-                  persistRows(recorder.drain())
-                }
-              } else {
-                const result = await ctx.runtime.messaging.send({
-                  agentId,
-                  content: context,
-                  threadId: sessionKey,
-                })
-                fullContent = result.content ?? ''
-                if (fullContent) {
-                  const chunk = { type: 'text' as const, content: fullContent }
-                  send('chunk', chunk)
-                  recorder.ingest(chunk)
-                }
-              }
-              persistRows(recorder.finish())
-              send('done', { content: fullContent })
-            } catch (err: unknown) {
-              log.error('Agent ask failed', err)
-              const message = err instanceof Error ? err.message : String(err)
-              persistRows(recorder.finish())
-              persistRows([{ kind: 'error', ts: new Date().toISOString(), turnId, message }])
-              send('error', { message })
-            } finally {
-              controller.close()
-            }
-          },
-        })
-
-        return new Response(stream, {
-          headers: {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-          },
-        })
+      const result = await brainstormTurns.start(ctx, projectId, body.prompt, {
+        agentId,
+        runtimeContent: context,
       })
+      if (result === 'not_found') return json({ error: 'Project not found' }, 404)
+      if (result === 'busy') return json({ error: 'A brainstorm turn is already running for this project' }, 409)
+      return json({ ok: true, streaming: true }, 202)
+    })
+
+    // POST /:projectId/ask/abort — stop the in-flight brainstorm turn.
+    routeHandlers.set('POST /:projectId/ask/abort', async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const id = url.searchParams.get('projectId')
+      if (!id) return json({ error: 'Missing projectId' }, 400)
+      if (!brainstormTurns.abort(id)) return json({ error: 'No brainstorm turn in flight' }, 409)
+      return json({ ok: true })
+    })
+
+    /** A project counts as unread when agent activity landed after the last view. */
+    function hasUnseenBrainstormReply(id: string): boolean {
+      const rows = readBrainstormMessages(id)
+      const lastAgentTs = [...rows].reverse().find(r => r.kind === 'assistant' || r.kind === 'error')?.ts
+      if (!lastAgentTs) return false
+      const seenAt = repo.readBrainstormSeen(id)
+      return !seenAt || lastAgentTs > seenAt
+    }
+
+    // GET /brainstorm/attention — totals for the nav badge provider:
+    // unreadTotal counts PROJECTS with unseen agent replies; inflight lists
+    // projects with a running turn (server truth for the working dot).
+    routeHandlers.set('GET /brainstorm/attention', async () => {
+      const unread = readAllProjects().filter(p => hasUnseenBrainstormReply(p.id))
+      return json({
+        unreadTotal: unread.length,
+        inflight: brainstormTurns.listInFlight().map(t => t.key),
+      })
+    })
+
+    // POST /:projectId/brainstorm/seen — viewing the brainstorm clears unread.
+    routeHandlers.set('POST /:projectId/brainstorm/seen', async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const id = url.searchParams.get('projectId')
+      if (!id) return json({ error: 'Missing projectId' }, 400)
+      if (!readProject(id)) return json({ error: 'Project not found' }, 404)
+      repo.writeBrainstormSeen(id, new Date().toISOString())
+      return json({ ok: true })
+    })
+
+    // GET /:projectId/history — plan snapshots, oldest first (bakin#703).
+    routeHandlers.set('GET /:projectId/history', async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const id = url.searchParams.get('projectId')
+      if (!id) return json({ error: 'Missing projectId' }, 400)
+      if (!readProject(id)) return json({ error: 'Project not found' }, 404)
+      return json({ history: repo.readPlanHistory(id) })
+    })
+
+    // POST /:projectId/history/:index/restore — never destructive: the
+    // current body becomes a snapshot before the restore lands.
+    routeHandlers.set('POST /:projectId/history/:index/restore', async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const id = url.searchParams.get('projectId')
+      const index = Number(url.searchParams.get('index'))
+      const body = await readBody<{ expectedTs?: string }>(req).catch(() => ({} as { expectedTs?: string }))
+      if (!id || !Number.isInteger(index) || index < 0) return json({ error: 'Missing projectId or index' }, 400)
+      try {
+        const { changed } = await projectService.restorePlanVersion(id, index, body.expectedTs)
+        indexProject(id).catch(() => {})
+        return json({ ok: true, changed })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        const status = message.startsWith('Project not found') ? 404
+          : message.startsWith('History changed') ? 409
+          : 400
+        return json({ error: message }, status)
+      }
+    })
 
     // -----------------------------------------------------------------
     // MCP Exec Tools
@@ -1005,26 +1072,7 @@ const projectsPlugin: BakinPlugin = {
         const project = readProject(projectId)
         if (!project) return { ok: false, error: `Project not found: ${projectId}` }
 
-        const assetLines = project.assets.length > 0
-          ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.assetId}${a.label ? ` — ${a.label}` : ''}`)]
-          : []
-
-        const context = [
-          `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
-          `Progress: ${project.progress}% (${project.tasks.filter(t => t.checked).length}/${project.tasks.length} items checked)`,
-          '',
-          'Project spec:',
-          project.body.slice(0, 3000),
-          '',
-          'Checklist items:',
-          ...project.tasks.map(t => `- [${t.checked ? 'x' : ' '}] ${t.title}${t.taskId ? ` (linked: ${t.taskId})` : ''}`),
-          ...assetLines,
-          '',
-          'User request:',
-          message,
-          '',
-          'Respond concisely. If suggesting tasks, format them as a numbered list.',
-        ].join('\n')
+        const context = buildProjectBrainstormContext(project, message)
 
         try {
           const agentId = (params.agent as string) || await getRuntimeMainAgentId(ctx)

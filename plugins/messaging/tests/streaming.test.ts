@@ -1,6 +1,7 @@
 /**
- * Streaming endpoint tests — verifies SSE format, token events,
- * proposal extraction, session persistence, and error handling.
+ * Brainstorm turn tests (engine-backed, bakin#703) — 202 + bus events,
+ * proposal extraction, plan refinement, segmented persistence, abort,
+ * attention totals, and error handling.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, mock } from 'bun:test'
 import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs'
@@ -122,21 +123,36 @@ function failRuntimeSend(error: Error): void {
   })
 }
 
-function parseSSEEvents(text: string): Array<{ event: string; data: Record<string, unknown> }> {
+/** Record every messaging.brainstorm.* bus event during a turn. */
+function collectBusEvents(): { events: Array<{ event: string; data: Record<string, unknown> }>; stop: () => void } {
   const events: Array<{ event: string; data: Record<string, unknown> }> = []
-  const lines = text.split('\n')
-  let currentEvent = ''
-  for (const line of lines) {
-    if (line.startsWith('event: ')) {
-      currentEvent = line.slice(7).trim()
-    } else if (line.startsWith('data: ') && currentEvent) {
-      try {
-        events.push({ event: currentEvent, data: JSON.parse(line.slice(6)) })
-      } catch { /* skip */ }
-      currentEvent = ''
-    }
-  }
-  return events
+  const off = plugin.ctx.events.on('*', (event, data) => {
+    if (event.startsWith('messaging.brainstorm.')) events.push({ event, data })
+  })
+  return { events, stop: off }
+}
+
+/** Resolves when the in-flight turn settles (done or error bus event). */
+function nextSettle(): Promise<void> {
+  return new Promise((resolve) => {
+    const off = plugin.ctx.events.on('*', (event) => {
+      if (event === 'messaging.brainstorm.done' || event === 'messaging.brainstorm.error') {
+        off()
+        resolve()
+      }
+    })
+  })
+}
+
+/** Send + await turn settle; returns the collected bus events. */
+async function sendAndSettle(sessionId: string, message: string, planId?: string): Promise<Array<{ event: string; data: Record<string, unknown> }>> {
+  const bus = collectBusEvents()
+  const settled = nextSettle()
+  const res = planId ? await sendPlanMessage(sessionId, planId, message) : await sendMessage(sessionId, message)
+  if (res.status !== 202) throw new Error(`send failed: ${res.status} ${await res.text()}`)
+  await settled
+  bus.stop()
+  return bus.events
 }
 
 // ---------------------------------------------------------------------------
@@ -194,7 +210,7 @@ async function sendPlanMessage(sessionId: string, planId: string, message: strin
 
 async function createMaterializedPlan(sessionId: string): Promise<string> {
   streamRuntimeResponse(`Plan option:\n\`\`\`json\n{"title":"Trail safety Monday","targetDate":"2026-05-18","brief":"Beginner survival tip about leaving a trip plan."}\n\`\`\``)
-  await (await sendMessage(sessionId, 'Plan one topic')).text()
+  await sendAndSettle(sessionId, 'Plan one topic')
 
   const getSession = findRoute(plugin.routes, 'GET', '/sessions/:id')!
   const sessionResult = await callRoute(getSession, plugin.ctx, { searchParams: { id: sessionId } })
@@ -217,30 +233,32 @@ async function createMaterializedPlan(sessionId: string): Promise<string> {
 // TESTS
 // ===========================================================================
 
-describe('Streaming endpoint', () => {
-  it('returns text/event-stream content type', async () => {
+describe('Brainstorm turns (engine-backed)', () => {
+  it('202s immediately with the streaming flag', async () => {
     streamRuntimeResponse('Hello world')
     const sessionId = await createTestSession()
+    const settled = nextSettle()
     const res = await sendMessage(sessionId, 'Plan next week')
-    expect(res.headers.get('content-type')).toBe('text/event-stream')
+    expect(res.status).toBe(202)
+    expect(await res.json()).toMatchObject({ ok: true, streaming: true })
+    await settled
   })
 
-  it('streams token events from runtime SSE', async () => {
+  it('streams text chunks over the bus, keyed by session', async () => {
     streamRuntimeResponse('Here are some ideas for next week.')
     const sessionId = await createTestSession()
-    const res = await sendMessage(sessionId, 'Plan next week')
-    const text = await res.text()
-    const events = parseSSEEvents(text)
+    const events = await sendAndSettle(sessionId, 'Plan next week')
 
-    const textChunks = events.filter(e => e.event === 'chunk' && e.data.type === 'text')
+    const textChunks = events.filter(e => e.event === 'messaging.brainstorm.chunk' && (e.data.chunk as { type: string }).type === 'text')
     expect(textChunks.length).toBeGreaterThan(0)
-    // Reassemble text deltas
-    const fullText = textChunks.map(e => e.data.content).join('')
+    for (const e of textChunks) expect(e.data.sessionId).toBe(sessionId)
+    const fullText = textChunks.map(e => (e.data.chunk as { content?: string }).content).join('')
     expect(fullText).toContain('Here')
     expect(fullText).toContain('ideas')
+    expect(events.some(e => e.event === 'messaging.brainstorm.done')).toBe(true)
   })
 
-  it('forwards runtime tool chunks on the wire and stores structured activity rows', async () => {
+  it('forwards runtime tool chunks on the bus and stores structured activity rows interleaved with text', async () => {
     streamRuntimeChunkResponse([
       { type: 'text', content: 'Checking ' },
       {
@@ -251,6 +269,7 @@ describe('Streaming endpoint', () => {
           callId: 'call-1',
           toolName: 'exec',
           status: 'running',
+          summary: 'gh issue list',
           inputPreview: '{"command":"gh issue list"}',
         },
       },
@@ -263,54 +282,30 @@ describe('Streaming endpoint', () => {
           toolName: 'exec',
           status: 'completed',
           durationMs: 6605,
-          exitCode: 0,
           outputPreview: '[]',
         },
       },
       { type: 'text', content: 'done.' },
     ])
     const sessionId = await createTestSession()
-    const res = await sendMessage(sessionId, 'Look up issues')
-    const events = parseSSEEvents(await res.text())
+    const events = await sendAndSettle(sessionId, 'Look up issues')
 
-    // The wire carries the raw runtime chunks — the kit folds them client-side.
-    const toolChunks = events.filter(e => e.event === 'chunk' && e.data.type === 'tool')
+    // The bus carries the raw runtime chunks — the kit folds them client-side.
+    const toolChunks = events.filter(e => e.event === 'messaging.brainstorm.chunk' && (e.data.chunk as { type: string }).type === 'tool')
     expect(toolChunks).toHaveLength(2)
-    expect(toolChunks[0].data).toEqual({
-      type: 'tool',
-      content: 'exec: gh issue list',
-      data: {
-        phase: 'call',
-        callId: 'call-1',
-        toolName: 'exec',
-        status: 'running',
-        inputPreview: '{"command":"gh issue list"}',
-      },
-    })
-    expect(toolChunks[1].data).toEqual({
-      type: 'tool',
-      content: 'exec completed',
-      data: {
-        phase: 'result',
-        callId: 'call-1',
-        toolName: 'exec',
-        status: 'completed',
-        durationMs: 6605,
-        exitCode: 0,
-        outputPreview: '[]',
-      },
-    })
-    const fullText = events.filter(e => e.event === 'chunk' && e.data.type === 'text').map(e => e.data.content).join('')
-    expect(fullText).toBe('Checking done.')
 
+    // Durable rows follow the turn recorder's interleaving: text flushed
+    // before the tool RESULT (call phase folds into it), then trailing text.
     const sessionPath = join(testDir, 'messaging', 'sessions', `${sessionId}.json`)
     const session = JSON.parse(readFileSync(sessionPath, 'utf-8'))
     expect(session.messages).toMatchObject([
       { role: 'user', content: 'Look up issues' },
+      { role: 'assistant', content: 'Checking' },
       { role: 'activity', kind: 'tool_call', content: 'exec: gh issue list', agentId: 'basil' },
-      { role: 'activity', kind: 'tool_call', content: 'exec completed', agentId: 'basil' },
-      { role: 'assistant', content: 'Checking done.' },
+      { role: 'assistant', content: 'done.' },
     ])
+    const activityRow = session.messages[2]
+    expect(activityRow.data).toMatchObject({ kind: 'tool', toolName: 'exec', status: 'completed', outputPreview: '[]' })
   })
 
   it('uses a stable runtime thread id across messages in the same session', async () => {
@@ -318,8 +313,8 @@ describe('Streaming endpoint', () => {
     streamRuntimeResponse('Second answer.')
     const sessionId = await createTestSession('nemo')
 
-    await (await sendMessage(sessionId, 'First question')).text()
-    await (await sendMessage(sessionId, 'Second question')).text()
+    await sendAndSettle(sessionId, 'First question')
+    await sendAndSettle(sessionId, 'Second question')
 
     const threadIds = mockRuntimeStream.mock.calls.map((call) => call[0]?.threadId)
     expect(threadIds).toEqual([
@@ -333,20 +328,17 @@ describe('Streaming endpoint', () => {
     expect(secondPrompt).not.toContain('First answer')
   })
 
-  it('sends done event after stream completes', async () => {
+  it('emits done with the reply preview after the turn settles', async () => {
     streamRuntimeResponse('All done.')
     const sessionId = await createTestSession()
-    const res = await sendMessage(sessionId, 'quick')
-    const text = await res.text()
-    const events = parseSSEEvents(text)
+    const events = await sendAndSettle(sessionId, 'quick')
 
-    const doneEvents = events.filter(e => e.event === 'done')
+    const doneEvents = events.filter(e => e.event === 'messaging.brainstorm.done')
     expect(doneEvents.length).toBe(1)
-    expect(doneEvents[0].data.messageId).toBeDefined()
-    expect(doneEvents[0].data.content).toContain('All done')
+    expect(doneEvents[0].data).toMatchObject({ sessionId, preview: 'All done.' })
   })
 
-  it('extracts proposals from JSON block and sends proposals event', async () => {
+  it('extracts proposals from JSON block and emits proposal bus events', async () => {
     const responseWithProposals = `Great ideas for next week!
 
 \`\`\`json
@@ -355,11 +347,9 @@ describe('Streaming endpoint', () => {
 
     streamRuntimeResponse(responseWithProposals)
     const sessionId = await createTestSession()
-    const res = await sendMessage(sessionId, 'Plan next week')
-    const text = await res.text()
-    const events = parseSSEEvents(text)
+    const events = await sendAndSettle(sessionId, 'Plan next week')
 
-    const proposalEvents = events.filter(e => e.event === 'proposal')
+    const proposalEvents = events.filter(e => e.event === 'messaging.brainstorm.proposal')
     expect(proposalEvents.length).toBe(1)
     const proposal = proposalEvents[0].data.proposal as Record<string, unknown>
     expect(proposal.title).toBe('Monday Recipe')
@@ -371,17 +361,19 @@ describe('Streaming endpoint', () => {
     const planId = await createMaterializedPlan(sessionId)
     streamRuntimeResponse(`I'd use X for the short public take, Instagram for visual packaging, and TikTok for reach.\n\n\`\`\`json\n{"planUpdate":{"channels":[{"channel":"x"},{"channel":"instagram"},{"channel":"tiktok"}]}}\n\`\`\``)
 
-    const res = await sendPlanMessage(sessionId, planId, 'what channels do you recommend?')
-    const events = parseSSEEvents(await res.text())
+    const events = await sendAndSettle(sessionId, 'what channels do you recommend?', planId)
 
-    expect(events.filter(e => e.event === 'proposal')).toHaveLength(0)
-    const planUpdateEvents = events.filter(e => e.event === 'plan_update')
+    expect(events.filter(e => e.event === 'messaging.brainstorm.proposal')).toHaveLength(0)
+    const planUpdateEvents = events.filter(e => e.event === 'messaging.brainstorm.plan_update')
     expect(planUpdateEvents).toHaveLength(1)
     const refinedPlan = planUpdateEvents[0].data.plan as Record<string, unknown>
     expect((refinedPlan.channels as Array<Record<string, unknown>>).map(channel => channel.channel)).toEqual(['x', 'instagram', 'tiktok'])
     expect((refinedPlan.channels as Array<Record<string, unknown>>).map(channel => channel.contentType)).toEqual(['x-post', 'image', 'video'])
 
-    const prompt = mockRuntimeStream.mock.calls.at(-1)?.[0]?.content as string
+    // Plan-refinement turns run on the plan's own thread.
+    const lastCall = mockRuntimeStream.mock.calls.at(-1)?.[0]
+    expect(lastCall?.threadId).toBe(`messaging-plan:${planId}:basil`)
+    const prompt = lastCall?.content as string
     expect(prompt).toContain('Plan Refinement Mode')
     expect(prompt).toContain('Do not inspect Schedule, cron jobs, schedule runs')
     expect(prompt).toContain('USER:\nwhat channels do you recommend?')
@@ -399,13 +391,11 @@ describe('Streaming endpoint', () => {
     expect((session.proposals as unknown[]).length).toBe(1)
   })
 
-  it('persists user and assistant messages to session file', async () => {
+  it('persists user and assistant messages to the session file', async () => {
     streamRuntimeResponse('Sounds good, let me think...')
     const sessionId = await createTestSession()
-    const res = await sendMessage(sessionId, 'Plan content for Monday')
-    await res.text() // Must consume stream to trigger side effects
+    await sendAndSettle(sessionId, 'Plan content for Monday')
 
-    // Read session file directly
     const sessionPath = join(testDir, 'messaging', 'sessions', `${sessionId}.json`)
     expect(existsSync(sessionPath)).toBe(true)
     const session = JSON.parse(readFileSync(sessionPath, 'utf-8'))
@@ -415,12 +405,11 @@ describe('Streaming endpoint', () => {
     expect(session.messages[1].role).toBe('assistant')
   })
 
-  it('persists proposals to session file', async () => {
+  it('persists proposals to the session file', async () => {
     const responseWithProposals = `Ideas:\n\`\`\`json\n[{"title":"Test","targetDate":"2026-04-13","brief":"A tip","suggestedChannels":["x"]}]\n\`\`\``
     streamRuntimeResponse(responseWithProposals)
     const sessionId = await createTestSession()
-    const res = await sendMessage(sessionId, 'Suggest something')
-    await res.text() // Consume stream
+    await sendAndSettle(sessionId, 'Suggest something')
 
     const sessionPath = join(testDir, 'messaging', 'sessions', `${sessionId}.json`)
     const session = JSON.parse(readFileSync(sessionPath, 'utf-8'))
@@ -433,8 +422,7 @@ describe('Streaming endpoint', () => {
     const responseWithProposals = `Here:\n\`\`\`json\n[{"title":"Linked","targetDate":"2026-04-13","brief":"A tip","suggestedChannels":["x"]}]\n\`\`\``
     streamRuntimeResponse(responseWithProposals)
     const sessionId = await createTestSession()
-    const res = await sendMessage(sessionId, 'Ideas')
-    await res.text() // Consume stream
+    await sendAndSettle(sessionId, 'Ideas')
 
     const sessionPath = join(testDir, 'messaging', 'sessions', `${sessionId}.json`)
     const session = JSON.parse(readFileSync(sessionPath, 'utf-8'))
@@ -444,38 +432,181 @@ describe('Streaming endpoint', () => {
     expect(assistantMsg.proposalIds[0]).toBe(session.proposals[0].id)
   })
 
-  it('falls back to non-streaming when runtime streaming throws', async () => {
-    failRuntimeStream(new Error('Stream not supported'))
-    sendRuntimeResponse('Fallback response here.')
-
-    const sessionId = await createTestSession()
-    const res = await sendMessage(sessionId, 'Plan')
-    const text = await res.text()
-    const events = parseSSEEvents(text)
-
-    const textChunks = events.filter(e => e.event === 'chunk' && e.data.type === 'text')
-    expect(textChunks.length).toBe(1) // Single chunk with full content
-    expect(textChunks[0].data.content).toBe('Fallback response here.')
-
-    const doneEvents = events.filter(e => e.event === 'done')
-    expect(doneEvents.length).toBe(1)
-  })
-
-  it('sends error event when both streaming and fallback fail', async () => {
+  it('a failing runtime stream settles as an error turn — durable error row + bus error event', async () => {
     failRuntimeStream(new Error('Stream failed'))
-    failRuntimeSend(new Error('Fallback also failed'))
 
     const sessionId = await createTestSession()
+    const bus = collectBusEvents()
+    const settled = nextSettle()
     const res = await sendMessage(sessionId, 'Plan')
-    const text = await res.text()
-    const events = parseSSEEvents(text)
+    expect(res.status).toBe(202)
+    await settled
+    bus.stop()
 
-    const errorEvents = events.filter(e => e.event === 'error')
+    const errorEvents = bus.events.filter(e => e.event === 'messaging.brainstorm.error')
     expect(errorEvents.length).toBe(1)
-    expect(errorEvents[0].data.message).toContain('Fallback also failed')
+    expect(String(errorEvents[0].data.message)).toContain('Stream failed')
+
+    const sessionPath = join(testDir, 'messaging', 'sessions', `${sessionId}.json`)
+    const session = JSON.parse(readFileSync(sessionPath, 'utf-8'))
+    const last = session.messages[session.messages.length - 1]
+    expect(last).toMatchObject({ role: 'activity', kind: 'turn_error' })
+    expect(last.content).toContain('Stream failed')
   })
 
-  it('returns JSON 400 for missing params (before stream starts)', async () => {
+  it('one turn per session: concurrent send 409s; abort settles clean with a marker row', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    mockRuntimeStream.mockImplementationOnce(() => (async function* () {
+      yield { type: 'text' as const, content: 'partial reply' }
+      await gate
+      yield { type: 'done' as const }
+    })())
+
+    const sessionId = await createTestSession()
+    const settled = nextSettle()
+    const first = await sendMessage(sessionId, 'go')
+    expect(first.status).toBe(202)
+    const second = await sendMessage(sessionId, 'again')
+    expect(second.status).toBe(409)
+
+    // Mid-turn, the session GET seeds the streaming flag.
+    const getSession = findRoute(plugin.routes, 'GET', '/sessions/:id')!
+    const midTurn = await callRoute(getSession, plugin.ctx, { searchParams: { id: sessionId } })
+    expect(midTurn.body.streaming).toBe(true)
+
+    const abortRoute = findRoute(plugin.routes, 'POST', '/sessions/:id/abort')!
+    const aborted = await callRoute(abortRoute, plugin.ctx, { searchParams: { id: sessionId } })
+    expect(aborted.status).toBe(200)
+    release()
+    await settled
+    // The slot releases just after the done event — wait for idle before
+    // asserting the idle-abort contract.
+    for (let i = 0; i < 50; i++) {
+      const check = await callRoute(getSession, plugin.ctx, { searchParams: { id: sessionId } })
+      if (check.body.streaming === false) break
+      await new Promise(resolve => setTimeout(resolve, 5))
+    }
+
+    const sessionPath = join(testDir, 'messaging', 'sessions', `${sessionId}.json`)
+    const session = JSON.parse(readFileSync(sessionPath, 'utf-8'))
+    const roles = session.messages.map((m: { role: string; kind?: string }) => m.kind ?? m.role)
+    expect(roles).toContain('turn_aborted')
+    // The interrupted partial reply survives (bakin#703 — previously lost).
+    expect(session.messages.some((m: { role: string; content: string }) => m.role === 'assistant' && m.content.includes('partial reply'))).toBe(true)
+
+    const idle = await callRoute(abortRoute, plugin.ctx, { searchParams: { id: sessionId } })
+    expect(idle.status).toBe(409)
+  })
+
+  it('session summaries carry unread + streaming flags', async () => {
+    streamRuntimeResponse('summary reply')
+    const sessionId = await createTestSession()
+    await sendAndSettle(sessionId, 'hi')
+
+    const listRoute = findRoute(plugin.routes, 'GET', '/sessions')!
+    let list = await callRoute(listRoute, plugin.ctx, {})
+    let row = (list.body.sessions as Array<Record<string, unknown>>).find(s => s.id === sessionId)!
+    expect(row.unread).toBe(true)
+    expect(row.streaming).toBe(false)
+
+    const seenRoute = findRoute(plugin.routes, 'POST', '/sessions/:id/seen')!
+    await callRoute(seenRoute, plugin.ctx, { searchParams: { id: sessionId } })
+    list = await callRoute(listRoute, plugin.ctx, {})
+    row = (list.body.sessions as Array<Record<string, unknown>>).find(s => s.id === sessionId)!
+    expect(row.unread).toBe(false)
+  })
+
+  it('a 409d concurrent send never destroys the running turns proposal state (review C1)', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    mockRuntimeStream.mockImplementationOnce(() => (async function* () {
+      yield { type: 'text' as const, content: 'Ideas:\n' }
+      await gate
+      yield { type: 'text' as const, content: '```json\n[{"title":"Survivor","targetDate":"2026-08-01","brief":"tip","suggestedChannels":["x"]}]\n```' }
+      yield { type: 'done' as const }
+    })())
+
+    const sessionId = await createTestSession()
+    const settled = nextSettle()
+    expect((await sendMessage(sessionId, 'go')).status).toBe(202)
+    // Concurrent send mid-turn: 409, and it must NOT clobber turn state.
+    expect((await sendMessage(sessionId, 'again')).status).toBe(409)
+    release()
+    await settled
+
+    const sessionPath = join(testDir, 'messaging', 'sessions', `${sessionId}.json`)
+    const session = JSON.parse(readFileSync(sessionPath, 'utf-8'))
+    // The proposal parsed after the 409 survived AND got linked.
+    expect(session.proposals).toHaveLength(1)
+    expect(session.proposals[0].title).toBe('Survivor')
+    const assistantMsg = session.messages.find((m: Record<string, unknown>) => m.role === 'assistant')
+    expect(assistantMsg.proposalIds).toEqual([session.proposals[0].id])
+  })
+
+  it('aborted turns do not count as unseen activity (no self-inflicted unread)', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    mockRuntimeStream.mockImplementationOnce(() => (async function* () {
+      await gate
+      yield { type: 'done' as const }
+    })())
+    const sessionId = await createTestSession()
+    const settled = nextSettle()
+    await sendMessage(sessionId, 'go')
+    const abortRoute = findRoute(plugin.routes, 'POST', '/sessions/:id/abort')!
+    await callRoute(abortRoute, plugin.ctx, { searchParams: { id: sessionId } })
+    release()
+    await settled
+
+    const attentionRoute = findRoute(plugin.routes, 'GET', '/brainstorm/attention')!
+    const res = await callRoute(attentionRoute, plugin.ctx, {})
+    expect(res.body).toMatchObject({ unreadTotal: 0 })
+  })
+
+  it('deleting a session aborts its in-flight turn', async () => {
+    let sawAbort = false
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    mockRuntimeStream.mockImplementationOnce((args: MessageArgs) => (async function* () {
+      const signal = args.signal as AbortSignal
+      signal?.addEventListener('abort', () => { sawAbort = true; release() }, { once: true })
+      yield { type: 'text' as const, content: 'doomed' }
+      await gate
+      yield { type: 'done' as const }
+    })())
+    const sessionId = await createTestSession()
+    const settled = nextSettle()
+    await sendMessage(sessionId, 'go')
+
+    const deleteRoute = findRoute(plugin.routes, 'DELETE', '/sessions/:id')!
+    const res = await callRoute(deleteRoute, plugin.ctx, { searchParams: { id: sessionId } })
+    expect(res.status).toBe(200)
+    await settled
+    expect(sawAbort).toBe(true)
+  })
+
+  it('attention totals: unread counts sessions with unseen agent activity; seen clears', async () => {
+    streamRuntimeResponse('A reply.')
+    const sessionId = await createTestSession()
+    await sendAndSettle(sessionId, 'hi')
+
+    const attentionRoute = findRoute(plugin.routes, 'GET', '/brainstorm/attention')!
+    let res = await callRoute(attentionRoute, plugin.ctx, {})
+    expect(res.body).toMatchObject({ unreadTotal: 1, inflight: [] })
+
+    const seenRoute = findRoute(plugin.routes, 'POST', '/sessions/:id/seen')!
+    const seen = await callRoute(seenRoute, plugin.ctx, { searchParams: { id: sessionId } })
+    expect(seen.status).toBe(200)
+
+    res = await callRoute(attentionRoute, plugin.ctx, {})
+    expect(res.body).toMatchObject({ unreadTotal: 0, inflight: [] })
+
+    const ghost = await callRoute(seenRoute, plugin.ctx, { searchParams: { id: 'ghost' } })
+    expect(ghost.status).toBe(404)
+  })
+
+  it('returns JSON 400 for missing params (before the turn starts)', async () => {
     const route = findRoute(plugin.routes, 'POST', '/sessions/:id/messages')!
     const { status, body } = await callRoute(route, plugin.ctx, {
       searchParams: { id: 'some-id' },
@@ -498,14 +629,23 @@ describe('Streaming endpoint', () => {
     const responseWithJson = `Great plan!\n\`\`\`json\n[{"title":"X","targetDate":"2026-04-13","brief":"Y","suggestedChannels":["x"]}]\n\`\`\``
     streamRuntimeResponse(responseWithJson)
     const sessionId = await createTestSession()
-    const res = await sendMessage(sessionId, 'Plan')
-    await res.text() // Consume stream
+    await sendAndSettle(sessionId, 'Plan')
 
     const sessionPath = join(testDir, 'messaging', 'sessions', `${sessionId}.json`)
     const session = JSON.parse(readFileSync(sessionPath, 'utf-8'))
     const assistantMsg = session.messages.find((m: Record<string, unknown>) => m.role === 'assistant')
     expect(assistantMsg.content).not.toContain('```json')
     expect(assistantMsg.content).toContain('Great plan!')
+  })
+
+  it('meters brainstorm turns under work class chat with the brainstorm runId scheme', async () => {
+    streamRuntimeResponse('ok')
+    plugin.meteredTurns.length = 0
+    const sessionId = await createTestSession()
+    await sendAndSettle(sessionId, 'hi')
+    expect(plugin.meteredTurns).toHaveLength(1)
+    expect(String(plugin.meteredTurns[0].runId)).toStartWith(`brainstorm:messaging:${sessionId}:turn:`)
+    expect(plugin.meteredTurns[0].workClass).toBe('chat')
   })
 })
 

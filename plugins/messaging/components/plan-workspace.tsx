@@ -1,20 +1,22 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useRef, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   AgentAvatar,
   ConversationPanel,
   EmptyState,
   PluginHeader,
-  useConversationStream,
+  useConversationThread,
 } from "@makinbakin/sdk/components"
 import type { ConversationMessage } from "@makinbakin/sdk/components"
-import { useHorizontalResize } from "@makinbakin/sdk/hooks"
+import { emitPluginEvent, toast, useHorizontalResize, usePluginEvent } from "@makinbakin/sdk/hooks"
 import { Badge } from "@makinbakin/sdk/ui"
 import { Button } from "@makinbakin/sdk/ui"
 import { Skeleton } from "@makinbakin/sdk/ui"
 import { ArrowLeft, CalendarDays, CheckCircle2, Circle, ClipboardList, ExternalLink, FileText, Globe2, Info, Instagram, MessageCircle, MessageSquareText, Music2, Rocket, Slack, Trash2, Twitter, type LucideIcon } from 'lucide-react'
-import type { BrainstormSession, ContentTypeOption, Deliverable, Plan, PlanChannel, PlanStatus, SessionMessage } from '../types'
+import type { BrainstormSession, ContentTypeOption, Deliverable, Plan, PlanChannel, PlanStatus } from '../types'
+import { sessionMessageToConversation } from '../lib/session-to-conversation'
+import { setVisiblePlanSourceSession } from './brainstorm-badge-provider'
 import { PLAN_STATUS_BADGE } from '../constants'
 import { usePlan } from '../hooks/use-plan'
 import { getContentTypeLabel, useContentTypes } from '../hooks/use-content-types'
@@ -85,29 +87,6 @@ const DISTRIBUTION_CHANNEL_OPTIONS: DistributionChannelOption[] = MESSAGING_DIST
 }))
 const DELETE_REQUEST_TIMEOUT_MS = 10000
 
-function toConversation(agentId: string, message: SessionMessage): ConversationMessage | null {
-  if (message.role === 'user') {
-    return { kind: 'user', ts: message.timestamp, content: message.content }
-  }
-  if (message.role === 'assistant') {
-    return { kind: 'assistant', ts: message.timestamp, agentId, content: message.content }
-  }
-  if (message.kind === 'tool_call') {
-    const data = (message.data ?? {}) as { callId?: string; toolName?: string; status?: string; summary?: string }
-    return {
-      kind: 'tool',
-      ts: message.timestamp,
-      agentId,
-      toolName: data.toolName ?? 'tool',
-      status: data.status === 'failed' ? 'failed' : 'completed',
-      summary: data.summary ?? message.content,
-    }
-  }
-  if (message.kind === 'error') {
-    return { kind: 'error', ts: message.timestamp, message: message.content }
-  }
-  return null
-}
 
 function formatDateTime(value: string): string {
   const date = new Date(value)
@@ -300,7 +279,6 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
   const [savingChannels, setSavingChannels] = useState(false)
   const [startingPrep, setStartingPrep] = useState(false)
   const [kickoffError, setKickoffError] = useState<string | null>(null)
-  const [brainstormMessages, setBrainstormMessages] = useState<ConversationMessage[]>([])
   const [activeTab, setActiveTab] = useState<PlanWorkspaceTab>('plan')
 
   // Draggable divider between the main plan column and the details/tasks sidebar.
@@ -335,27 +313,6 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
     return [...byId.values()]
   }, [selectedChannels])
   const canKickoffContentPrep = Boolean(plan && activeDeliverables.length === 0)
-
-  useEffect(() => {
-    if (!plan?.sourceSessionId) {
-      setBrainstormMessages([])
-      return
-    }
-    let cancelled = false
-    const loadBrainstorm = async () => {
-      const encoded = encodeURIComponent(plan.sourceSessionId!)
-      const response = await fetch(`/api/plugins/messaging/sessions/${encoded}?id=${encoded}`)
-      if (!response.ok) return
-      const data = await response.json() as { session?: BrainstormSession }
-      if (!cancelled && data.session) {
-        setBrainstormMessages(data.session.messages.map((message) => toConversation(data.session!.agentId, message)).filter((m): m is ConversationMessage => m !== null))
-      }
-    }
-    loadBrainstorm()
-    return () => {
-      cancelled = true
-    }
-  }, [plan?.sourceSessionId])
 
   const buildPlanChannel = (option: DistributionChannelOption): PlanChannel => ({
     id: option.id,
@@ -415,27 +372,86 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
 
   // Plan refinements ride the same sessions route with planId; plan_update
   // custom events land via the post-turn refresh.
-  const brainstorm = useConversationStream({
-    fetcher: useCallback((content: string, ctx: { signal: AbortSignal }) => {
-      if (!plan?.sourceSessionId) throw new Error('Plan has no source session')
-      const encoded = encodeURIComponent(plan.sourceSessionId)
-      return fetch(`/api/plugins/messaging/sessions/${encoded}/messages?id=${encoded}`, {
+  // Watching refinements here counts as viewing the source session: the
+  // badge provider suppresses toast/chime for it, and seen marks keep the
+  // Brainstorm nav badge honest (review I3 — replies watched in the plan
+  // workspace stayed "unread" forever).
+  const markSourceSessionSeen = useCallback(() => {
+    const sessionId = plan?.sourceSessionId
+    if (!sessionId || document.visibilityState !== 'visible') return
+    const encoded = encodeURIComponent(sessionId)
+    void fetch(`/api/plugins/messaging/sessions/${encoded}/seen?id=${encoded}`, { method: 'POST' })
+      .then(() => emitPluginEvent({ event: 'messaging.brainstorm.seen', sessionId }))
+      .catch(() => {})
+  }, [plan?.sourceSessionId])
+
+  useEffect(() => {
+    setVisiblePlanSourceSession(plan?.sourceSessionId ?? null)
+    markSourceSessionSeen()
+    return () => setVisiblePlanSourceSession(null)
+  }, [plan?.sourceSessionId, markSourceSessionSeen])
+
+  // Plan-refinement turns run server-side on the conversation turn engine
+  // (bakin#703): they share the source session's transcript + bus events,
+  // so navigation never kills a refinement and returning rehydrates it.
+  const planIdRef = useRef(plan?.id)
+  planIdRef.current = plan?.id
+  const brainstorm = useConversationThread({
+    threadKey: plan?.sourceSessionId ?? '',
+    events: {
+      chunk: 'messaging.brainstorm.chunk',
+      done: 'messaging.brainstorm.done',
+      error: 'messaging.brainstorm.error',
+    },
+    keyOf: useCallback((payload: Record<string, unknown>) => payload.sessionId, []),
+    load: useCallback(async (key: string) => {
+      const encoded = encodeURIComponent(key)
+      const response = await fetch(`/api/plugins/messaging/sessions/${encoded}?id=${encoded}`)
+      if (!response.ok) return null
+      const data = await response.json() as { session?: BrainstormSession; streaming?: boolean }
+      if (!data.session) return null
+      return {
+        messages: data.session.messages.map((message) => sessionMessageToConversation(data.session!.agentId, message)).filter((m): m is ConversationMessage => m !== null),
+        streaming: data.streaming === true,
+      }
+    }, []),
+    post: useCallback(async (key: string, content: string) => {
+      const encoded = encodeURIComponent(key)
+      const response = await fetch(`/api/plugins/messaging/sessions/${encoded}/messages?id=${encoded}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        signal: ctx.signal,
-        body: JSON.stringify({
-          message: content,
-          planId: plan.id,
-        }),
+        body: JSON.stringify({ message: content, planId: planIdRef.current }),
       })
-    }, [plan]),
-    onDone: useCallback(async () => {
-      await refresh()
-    }, [refresh]),
-    onError: useCallback(async () => {
-      await refresh()
-    }, [refresh]),
+      if (response.ok) return { ok: true }
+      const body = await response.json().catch(() => ({})) as { error?: string }
+      return { ok: false, status: response.status, ...(body.error ? { error: String(body.error) } : {}) }
+    }, []),
+    onSettled: useCallback(() => {
+      void refresh()
+      markSourceSessionSeen()
+    }, [refresh, markSourceSessionSeen]),
   })
+
+  // Plan updates parsed from refinement replies ride the bus.
+  usePluginEvent('messaging.brainstorm.plan_update', (payload) => {
+    if (payload.sessionId === plan?.sourceSessionId) void refresh()
+  })
+
+  useEffect(() => {
+    if (brainstorm.sendError) toast(brainstorm.sendError, 'error')
+  }, [brainstorm.sendError])
+
+  const abortBrainstorm = useCallback(() => {
+    if (!plan?.sourceSessionId) return
+    const encoded = encodeURIComponent(plan.sourceSessionId)
+    void fetch(`/api/plugins/messaging/sessions/${encoded}/abort?id=${encoded}`, { method: 'POST' }).catch(() => {})
+  }, [plan?.sourceSessionId])
+
+  // "Try again" on an error turn re-sends the newest user message (chat parity).
+  const retryBrainstorm = useCallback(() => {
+    const lastUser = [...brainstorm.messages].reverse().find((m) => m.kind === 'user')
+    if (lastUser?.kind === 'user' && lastUser.content) void brainstorm.send(lastUser.content)
+  }, [brainstorm])
 
   const handleDeletePlan = async () => {
     if (!plan) return
@@ -741,16 +757,23 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                     </div>
                   )}
                   <ConversationPanel
-                    messages={brainstormMessages}
+                    messages={brainstorm.messages}
                     liveChunks={brainstorm.liveChunks}
                     streaming={brainstorm.streaming}
                     onSend={brainstorm.send}
-                    onAbort={brainstorm.abort}
+                    onAbort={abortBrainstorm}
+                    onRetry={retryBrainstorm}
                     agentId={plan.agent}
                     storageKey={`messaging-plan:${plan.id}`}
                     placeholder="Refine the angle, channels, timeline, or content pieces..."
                     fitParent
                     showHeader={false}
+                    emptyState={
+                      <div className="px-6 text-center text-sm text-muted-foreground">
+                        <p className="font-medium text-foreground">Refine this plan with its agent</p>
+                        <p className="mt-1">Suggested channel, timeline, or angle changes apply to the plan directly — a good first note is which channels to use and what to avoid.</p>
+                      </div>
+                    }
                   />
                 </div>
               ) : (

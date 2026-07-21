@@ -61,9 +61,15 @@ function packageName(specifier: string): string | null {
 function registeredRoutes(pluginDir: string): string[] {
   const source = readFileSync(join(pluginDir, 'index.ts'), 'utf-8')
   const routes: string[] = []
-  const re = /ctx\.registerRoute\(\{\s*path:\s*['"]([^'"]+)['"][\s\S]*?method:\s*['"]([^'"]+)['"]/g
+  // Legacy imperative registrations (none left, kept for safety).
+  const legacyRe = /ctx\.registerRoute\(\{\s*path:\s*['"]([^'"]+)['"][\s\S]*?method:\s*['"]([^'"]+)['"]/g
   let match: RegExpExecArray | null
-  while ((match = re.exec(source))) routes.push(`${match[2].toUpperCase()} ${match[1]}`)
+  while ((match = legacyRe.exec(source))) routes.push(`${match[2].toUpperCase()} ${match[1]}`)
+  // Declarative route arrays — the live pattern (host #642). This scanner
+  // once matched only ctx.registerRoute and silently found NOTHING, letting
+  // undeclared routes brick activation at runtime (bakin#703 abort routes).
+  const declarativeRe = /legacyRoute\(\s*['"](GET|POST|PUT|PATCH|DELETE)['"],\s*['"]([^'"]+)['"]/g
+  while ((match = declarativeRe.exec(source))) routes.push(`${match[1].toUpperCase()} ${match[2]}`)
   return routes.sort()
 }
 

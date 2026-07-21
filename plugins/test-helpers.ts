@@ -21,6 +21,113 @@ import type {
   WorkflowDefinitionInput,
 } from '@makinbakin/sdk/types'
 
+
+// ---------------------------------------------------------------------------
+// Conversation turn engine (#703) — functional minimum of the host engine so
+// route tests exercise genuine background-turn lifecycle: slot reservation,
+// incremental recorder persistence, bus events, abort/error rows, metering
+// capture. Mirrors src/core/conversation-turns.ts in the bakin repo.
+// ---------------------------------------------------------------------------
+import { createTurnRecorder } from '@makinbakin/sdk/utils'
+
+type TurnConfig = Record<string, any>
+type TurnCtx = { runtime: any; events: { emit: (event: string, data?: Record<string, unknown>) => void } }
+
+function createTestTurnService(config: TurnConfig, meteredTurns: Array<Record<string, unknown>>) {
+  const inflight = new Map<string, { promise: Promise<unknown>; controller: AbortController; agentId: string; turnId: string; startedAt: number }>()
+
+  const runTurn = async (ctx: TurnCtx, key: string, agentId: string, content: string, controller: AbortController, turnId: string, opts?: Record<string, any>) => {
+    const recorder = createTurnRecorder({ turnId })
+    const persist = async (rows: any[]) => {
+      for (const row of rows) {
+        try { await config.appendRow(key, row) } catch { /* mirrors the engine: persistence never throws */ }
+      }
+    }
+    let assistantText = ''
+    let doneUsage: unknown
+    try {
+      for await (const chunk of ctx.runtime.messaging.stream({
+        agentId,
+        content: opts?.runtimeContent ?? (config.framing ? `${content}\n\n${config.framing}` : content),
+        threadId: config.threadId(key, agentId),
+        signal: controller.signal,
+        ...(config.ephemeral ? { ephemeral: true } : {}),
+      })) {
+        try { config.hooks?.onChunk?.(key, chunk) } catch { /* tap never kills the turn */ }
+        if (chunk.type === 'text' || chunk.type === 'tool' || chunk.type === 'status') {
+          ctx.events.emit(config.events.chunk, {
+            ...config.payload(key),
+            agentId,
+            chunk: { type: chunk.type, content: chunk.content, data: chunk.data, ...(chunk.type === 'text' && chunk.format ? { format: chunk.format } : {}) },
+          })
+        }
+        if (chunk.type === 'error') {
+          const kind = typeof chunk.data?.kind === 'string' ? chunk.data.kind : undefined
+          throw Object.assign(new Error(chunk.content || 'runtime stream error'), { kind })
+        }
+        if (chunk.type === 'text') assistantText += chunk.content
+        if (chunk.type === 'done') doneUsage = chunk.usage
+        recorder.ingest(chunk)
+        await persist(recorder.drain())
+      }
+      await persist(recorder.finish())
+      const aborted = controller.signal.aborted
+      if (aborted) await persist([{ kind: 'aborted', ts: new Date().toISOString(), turnId }])
+      try { await config.hooks?.onTurnComplete?.({ key, aborted }) } catch { /* mirrors the engine: never throws */ }
+      if (config.metering) {
+        meteredTurns.push({ runId: config.metering.runId(key, turnId), workClass: config.metering.workClass, agent: agentId, turnId, usage: doneUsage })
+      }
+      ctx.events.emit(config.events.done, {
+        ...config.payload(key),
+        agentId,
+        ...(assistantText ? { preview: assistantText.trim().split('\n')[0]?.slice(0, 140) ?? '' } : {}),
+        ...(aborted ? { aborted: true } : {}),
+      })
+      return { aborted, errored: false }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      const kind = err && typeof err === 'object' && 'kind' in err ? (err as { kind?: string }).kind : undefined
+      await persist(recorder.finish())
+      await persist([{ kind: 'error', ts: new Date().toISOString(), turnId, message, ...(kind ? { errorKind: kind } : {}) }])
+      ctx.events.emit(config.events.error, { ...config.payload(key), agentId, message, ...(kind ? { kind } : {}) })
+      return { aborted: false, errored: true }
+    }
+  }
+
+  return {
+    async start(ctx: TurnCtx, key: string, content: string, opts?: Record<string, any>) {
+      const thread = await config.resolveThread(key)
+      if (!thread) return 'not_found'
+      if (inflight.has(key)) return 'busy'
+      const controller = new AbortController()
+      const turnId = `turn-${Math.random().toString(36).slice(2, 10)}`
+      const agentId = opts?.agentId ?? thread.agentId
+      const entry = { promise: Promise.resolve() as Promise<unknown>, controller, agentId, turnId, startedAt: Date.now() }
+      inflight.set(key, entry)
+      if (!content.trim() && opts?.attachments?.length) content = 'See the attached image.'
+      try {
+        await config.appendRow(key, { kind: 'user', ts: new Date().toISOString(), content, ...(opts?.attachments?.length ? { attachments: opts.attachments } : {}) })
+      } catch {
+        inflight.delete(key)
+        return 'not_found'
+      }
+      entry.promise = runTurn(ctx, key, agentId, content, controller, turnId, opts)
+        .finally(() => { inflight.delete(key) })
+        .then(outcome => config.hooks?.onSettled?.({ ctx, key, outcome }))
+      return 'accepted'
+    },
+    abort(key: string) {
+      const turn = inflight.get(key)
+      if (!turn) return false
+      turn.controller.abort()
+      return true
+    },
+    isInFlight: (key: string) => inflight.has(key),
+    waitFor: async (key: string) => { await (inflight.get(key)?.promise ?? Promise.resolve()) },
+    listInFlight: () => [...inflight.entries()].map(([key, t]) => ({ key, agentId: t.agentId, turnId: t.turnId, startedAt: t.startedAt })),
+  }
+}
+
 export class MarkdownStorageAdapter implements StorageAdapter {
   constructor(private readonly root: string) {}
 
@@ -249,6 +356,8 @@ export interface ActivatedPlugin {
   execTools: ExecToolDefinition[]
   seedResults: (results: SearchResult[], aggregations?: SearchResponse['aggregations']) => void
   fileBackedContentTypes: FileBackedContentTypeDefinition[]
+  /** Turns metered through declarative ctx.conversations metering (#703). */
+  meteredTurns: Array<Record<string, unknown>>
 }
 
 export function createTestContext(pluginId: string, testDir: string): ActivatedPlugin {
@@ -259,6 +368,7 @@ export function createTestContext(pluginId: string, testDir: string): ActivatedP
   const fileBackedContentTypes: FileBackedContentTypeDefinition[] = []
   const storage = new MarkdownStorageAdapter(testDir)
   const events = new BakinEventBus()
+  const meteredTurns: Array<Record<string, unknown>> = []
   let seededResults: SearchResult[] = []
   let seededAggregations: SearchResponse['aggregations'] = undefined
 
@@ -347,6 +457,9 @@ export function createTestContext(pluginId: string, testDir: string): ActivatedP
       has: mock(() => false),
       invoke: mock(async () => undefined),
     },
+    conversations: {
+      createTurnService: (config) => createTestTurnService(config as unknown as TurnConfig, meteredTurns) as ReturnType<PluginContext['conversations']['createTurnService']>,
+    },
   }
 
   return {
@@ -354,6 +467,7 @@ export function createTestContext(pluginId: string, testDir: string): ActivatedP
     routes,
     execTools,
     fileBackedContentTypes,
+    meteredTurns,
     seedResults: (results, aggregations) => {
       seededResults = results
       seededAggregations = aggregations

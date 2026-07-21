@@ -1,7 +1,7 @@
 {
   "id": "messaging",
   "name": "Messaging",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "bakin": ">=0.0.1-rc.1",
   "description": "Content messaging with scheduling, brainstorming, and multi-agent content pipeline",
   "contentFiles": [],
@@ -345,6 +345,30 @@
         "summary": "Search messaging brainstorm sessions",
         "permissions": [
           "search.read"
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/sessions/:id/abort",
+        "summary": "Abort the in-flight brainstorm turn",
+        "permissions": [
+          "runtime.messaging"
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/sessions/:id/seen",
+        "summary": "Mark a brainstorm session as seen",
+        "permissions": [
+          "storage.write"
+        ]
+      },
+      {
+        "method": "GET",
+        "path": "/brainstorm/attention",
+        "summary": "Brainstorm attention totals (unread + in-flight)",
+        "permissions": [
+          "storage.read"
         ]
       }
     ],

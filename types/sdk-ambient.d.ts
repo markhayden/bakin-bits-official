@@ -717,6 +717,91 @@ declare module '@makinbakin/sdk/types' {
     fields: Array<Record<string, unknown> & { type: FormFieldType; key: string; label: string }>
   }
 
+  // ── Conversation turn engine (#703) ──────────────────────────────────
+
+  export interface ConversationTurnAttachment {
+    name: string
+    mimeType: string
+    path: string
+  }
+
+  export type ConversationTurnRow =
+    | { kind: 'user'; ts: string; content: string; attachments?: ConversationTurnAttachment[] }
+    | { kind: 'assistant'; ts: string; turnId?: string; content: string }
+    | {
+        kind: 'tool'
+        ts: string
+        turnId?: string
+        callId?: string
+        toolName: string
+        status: 'completed' | 'failed'
+        summary?: string
+        inputPreview?: string
+        outputPreview?: string
+        durationMs?: number
+        metadata?: Record<string, unknown>
+      }
+    | { kind: 'error'; ts: string; turnId?: string; message: string; errorKind?: string }
+    | { kind: 'aborted'; ts: string; turnId?: string }
+
+  export interface ConversationTurnOutcome {
+    aborted: boolean
+    errored: boolean
+  }
+
+  export type ConversationStartTurnResult = 'accepted' | 'not_found' | 'busy'
+
+  export interface ConversationInflightTurnInfo {
+    key: string
+    agentId: string
+    turnId: string
+    startedAt: number
+  }
+
+  export interface ConversationTurnContext {
+    runtime: AgentRuntimeAdapter
+    events: EventBus
+  }
+
+  export interface ConversationStartTurnOptions {
+    attachments?: ConversationTurnAttachment[]
+    agentId?: string
+    runtimeContent?: string
+  }
+
+  export interface ConversationTurnServiceConfig {
+    name: string
+    events: { chunk: string; done: string; error: string }
+    payload: (key: string) => Record<string, unknown>
+    resolveThread: (key: string) => { agentId: string } | null | Promise<{ agentId: string } | null>
+    appendRow: (key: string, row: ConversationTurnRow) => void | Promise<void>
+    threadId: (key: string, agentId: string) => string
+    framing?: string
+    ephemeral?: boolean
+    metering?: {
+      workClass: 'chat'
+      runId: (key: string, turnId: string) => string
+    }
+    hooks?: {
+      onChunk?: (key: string, chunk: RuntimeChatChunk) => void
+      meter?: (info: { key: string; agentId: string; turnId: string; usage?: unknown }) => Promise<void> | void
+      onTurnComplete?: (info: { key: string; aborted: boolean }) => Promise<void> | void
+      onSettled?: (info: { ctx: ConversationTurnContext; key: string; outcome: ConversationTurnOutcome }) => Promise<unknown> | unknown
+    }
+  }
+
+  export interface ConversationTurnService {
+    start(ctx: ConversationTurnContext, key: string, content: string, opts?: ConversationStartTurnOptions): Promise<ConversationStartTurnResult>
+    abort(key: string): boolean
+    isInFlight(key: string): boolean
+    waitFor(key: string): Promise<void>
+    listInFlight(): ConversationInflightTurnInfo[]
+  }
+
+  export interface ConversationTurnsAPI {
+    createTurnService(config: ConversationTurnServiceConfig): ConversationTurnService
+  }
+
   export interface PluginContext {
     storage: StorageAdapter
     events: EventBus
@@ -740,6 +825,8 @@ declare module '@makinbakin/sdk/types' {
     log?: PluginLogger
     hooks: HookAPI
     search: SearchAPI
+    /** Shared conversation turn engine — background turns for chat-like surfaces (#703). */
+    conversations: ConversationTurnsAPI
   }
 
   export interface BakinPlugin {
@@ -891,31 +978,68 @@ declare module '@makinbakin/sdk/components' {
     | { kind: 'error'; ts: string; turnId?: string; message: string; errorKind?: string }
     | { kind: 'aborted'; ts: string; turnId?: string }
 
-  export interface ConversationStreamOptions {
-    fetcher: (content: string, ctx: { signal: AbortSignal }) => Promise<Response>
-    onCustom?: (event: string, data: unknown) => void
-    onDone?: (finalContent: string) => void | Promise<void>
-    onError?: (message: string) => void
-    onAborted?: () => void
+
+  export interface ConversationThreadLoad<Meta = unknown> {
+    messages: ConversationMessage[]
+    streaming?: boolean
+    meta?: Meta
   }
 
-  export interface ConversationStream {
+  export interface ConversationThreadOptions<Meta = unknown, Attachment = unknown> {
+    threadKey: string
+    events: { chunk: string; done: string; error: string }
+    keyOf: (payload: Record<string, unknown>) => unknown
+    load: (key: string) => Promise<ConversationThreadLoad<Meta> | null>
+    post: (key: string, content: string, attachments?: Attachment[]) => Promise<{ ok: boolean; status?: number; error?: string }>
+    optimisticRow?: (content: string, attachments?: Attachment[]) => ConversationMessage
+    onSettled?: (payload: Record<string, unknown>) => void
+  }
+
+  export interface ConversationThread<Meta = unknown, Attachment = unknown> {
+    messages: ConversationMessage[]
+    meta: Meta | null
     liveChunks: import('@makinbakin/sdk/types').RuntimeChatChunk[] | null
     streaming: boolean
-    send: (content: string) => Promise<void>
-    abort: () => void
+    sendError: string | null
+    send: (content: string, attachments?: Attachment[]) => Promise<void>
+    refresh: () => Promise<void>
   }
 
-  export function useConversationStream(options: ConversationStreamOptions): ConversationStream
+  export function useConversationThread<Meta = unknown, Attachment = unknown>(
+    options: ConversationThreadOptions<Meta, Attachment>,
+  ): ConversationThread<Meta, Attachment>
 
-  export function readConversationSseStream(
-    response: Response,
-    handlers: {
-      signal: AbortSignal
-      onChunk: (chunk: import('@makinbakin/sdk/types').RuntimeChatChunk) => void
-      onCustom?: (event: string, data: unknown) => void
-    },
-  ): Promise<{ content: string }>
+  export interface ConversationDonePayload {
+    key: string
+    agentId: string
+    preview?: string
+    aborted?: boolean
+  }
+
+  export interface ConversationAttentionTotals {
+    unreadTotal: number
+    inflightKeys: string[]
+  }
+
+  export interface ConversationAttentionConfig {
+    pluginId: string
+    navItemId: string
+    events: { chunk: string; done: string; error: string; refresh?: [string] | [string, string] }
+    keyOf: (payload: Record<string, unknown>) => string
+    visibleKey: () => string
+    refreshTotals: () => Promise<ConversationAttentionTotals | null>
+    settings?: () => { sound: boolean; toasts: boolean }
+    renderToast: (payload: ConversationDonePayload, dismiss: () => void) => ReactNode | string
+    osNotification: (payload: ConversationDonePayload) => { title: string; body: string; href: string } | null
+    errorToast?: (payload: Record<string, unknown>) => string | null
+    titlePrefix?: boolean
+    chime?: () => void
+  }
+
+  export function useConversationAttention(config: ConversationAttentionConfig): void
+
+  export function visibleIdFromLocation(pathname: string, base: string, opts?: { exclude?: readonly string[] }): string
+
 
   export function foldConversation(
     messages: readonly ConversationMessage[],
@@ -998,6 +1122,10 @@ declare module '@makinbakin/sdk/hooks' {
   export function useNotificationChannels(): NotificationChannel[]
   export function getChannelLabel(channelId: string, channels?: NotificationChannel[]): string
   export function toast(message: string, type?: 'success' | 'error' | 'info' | 'warning'): void
+
+  export type PluginEventPayload = Record<string, unknown> & { event?: string }
+  export function emitPluginEvent(payload: PluginEventPayload): void
+  export function usePluginEvent(event: string, handler: (payload: PluginEventPayload) => void): void
   /**
    * Resize a right-anchored panel by dragging the divider on its left edge.
    * `handleProps` carries the full separator a11y contract (role, tabIndex,

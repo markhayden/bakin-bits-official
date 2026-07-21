@@ -31,30 +31,6 @@ const testDir = join(tmpdir(), `bakin-test-projects-routes-${Date.now()}`)
 const projectsDir = join(testDir, 'projects')
 
 /** Consume an SSE Response body into a list of {event, data} records. */
-async function consumeSSE(res: Response): Promise<Array<{ event: string; data: unknown }>> {
-  const reader = res.body!.getReader()
-  const decoder = new TextDecoder()
-  const events: Array<{ event: string; data: unknown }> = []
-  let buffer = ''
-  let currentEvent = ''
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-    for (const line of lines) {
-      if (line.startsWith('event: ')) {
-        currentEvent = line.slice(7).trim()
-      } else if (line.startsWith('data: ') && currentEvent) {
-        events.push({ event: currentEvent, data: JSON.parse(line.slice(6)) })
-        currentEvent = ''
-      }
-    }
-  }
-  return events
-}
-
 type ProjectRouteTestGlobal = typeof globalThis & {
   __bakinBroadcast?: unknown
   __bakinProjectIndex?: unknown
@@ -185,27 +161,6 @@ function mockRuntimeStreamError(message: string) {
   })
   plugin.ctx.runtime.messaging.stream = streamMock
   return streamMock
-}
-
-function mockRuntimeSend(content: string) {
-  const sendMock = mock((args: MessageArgs): Promise<MessageResult> => {
-    void args
-    return Promise.resolve({
-      id: 'msg-test',
-      content,
-    })
-  })
-  plugin.ctx.runtime.messaging.send = sendMock
-  return sendMock
-}
-
-function mockRuntimeSendError(message: string) {
-  const sendMock = mock(async (args: MessageArgs): Promise<MessageResult> => {
-    void args
-    throw new Error(message)
-  })
-  plugin.ctx.runtime.messaging.send = sendMock
-  return sendMock
 }
 
 beforeEach(async () => {
@@ -740,77 +695,107 @@ describe('Routes', () => {
   // -------------------------------------------------------------------------
   // POST /:projectId/ask — agent brainstorm
   // -------------------------------------------------------------------------
-  describe('POST /:projectId/ask — agent brainstorm (SSE stream)', () => {
-    it('streams token events then a done event with accumulated content', async () => {
+  describe('POST /:projectId/ask — agent brainstorm (turn engine, bakin#703)', () => {
+    /** Record every projects.brainstorm.* bus event during a turn. */
+    function collectBusEvents(): { events: Array<{ event: string; data: Record<string, unknown> }>; stop: () => void } {
+      const events: Array<{ event: string; data: Record<string, unknown> }> = []
+      const off = plugin.ctx.events.on('*', (event, data) => {
+        if (event.startsWith('projects.brainstorm.')) events.push({ event, data })
+      })
+      return { events, stop: off }
+    }
+
+    /** Resolves when the in-flight turn settles (done or error bus event). */
+    function nextSettle(): Promise<void> {
+      return new Promise((resolve) => {
+        const off = plugin.ctx.events.on('*', (event) => {
+          if (event === 'projects.brainstorm.done' || event === 'projects.brainstorm.error') {
+            off()
+            resolve()
+          }
+        })
+      })
+    }
+
+    it('202s immediately; chunks and done ride the bus; the transcript persists durable rows', async () => {
       writeProjectFixture('proj-ask', {
         title: 'Ask Project',
         tasks: [{ id: 't001', title: 'Do stuff', checked: true }],
         assets: [{ assetId: '20260401-brief-abcdef12', label: 'Brief' }],
       })
       const streamMock = mockRuntimeStream(['Hel', 'lo ', 'world'])
+      const bus = collectBusEvents()
+      const settled = nextSettle()
 
       const route = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
       const { response } = await callRoute(route, plugin.ctx, {
         body: { projectId: 'proj-ask', prompt: 'What should we do next?' },
         rawResponse: true,
       })
-      expect(response.status).toBe(200)
-      expect(response.headers.get('content-type')).toBe('text/event-stream')
+      expect(response.status).toBe(202)
+      await settled
+      bus.stop()
 
-      const events = await consumeSSE(response)
-      const tokens = events
-        .filter((e) => e.event === 'chunk' && (e.data as { type: string }).type === 'text')
-        .map((e) => (e.data as { content: string }).content)
+      const tokens = bus.events
+        .filter((e) => e.event === 'projects.brainstorm.chunk' && (e.data.chunk as { type: string }).type === 'text')
+        .map((e) => (e.data.chunk as { content: string }).content)
       expect(tokens).toEqual(['Hel', 'lo ', 'world'])
-      const doneEvent = events.find((e) => e.event === 'done')
-      expect(doneEvent).toBeDefined()
-      expect((doneEvent!.data as { content: string }).content).toBe('Hello world')
+      for (const e of bus.events) expect(e.data.projectId).toBe('proj-ask')
+      const done = bus.events.find((e) => e.event === 'projects.brainstorm.done')
+      expect(done?.data).toMatchObject({ projectId: 'proj-ask', agentId: 'main', preview: 'Hello world' })
 
-      // Context was built with project metadata
+      // Context was built with project metadata; the transcript keeps the
+      // clean prompt (the assembled context rides runtimeContent only).
       expect(streamMock).toHaveBeenCalledWith(
         expect.objectContaining({
           agentId: 'main',
           content: expect.stringContaining('Ask Project'),
         }),
       )
+      const getRoute = findRoute(plugin.routes, 'GET', '/:projectId')!
+      const hydrated = await callRoute(getRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-ask' },
+      })
+      expect(hydrated.body.project.brainstormMessages).toMatchObject([
+        { kind: 'user', content: 'What should we do next?' },
+        { kind: 'assistant', content: 'Hello world' },
+      ])
+      expect(hydrated.body.project.brainstormStreaming).toBe(false)
     })
 
-    it('instructs brainstorm agents to maintain the project plan but ask before editing', async () => {
+    it('instructs brainstorm agents to treat the plan as the primary artifact: apply incremental edits, ask before big rewrites', async () => {
       writeProjectFixture('proj-plan-prompt', { title: 'Plan Prompt Project' })
       const streamMock = mockRuntimeStream(['ok'])
+      const settled = nextSettle()
 
       const route = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
-      const { response } = await callRoute(route, plugin.ctx, {
+      await callRoute(route, plugin.ctx, {
         body: { projectId: 'proj-plan-prompt', prompt: 'Help me think through launch sequencing.' },
-        rawResponse: true,
       })
-      await consumeSSE(response)
+      await settled
 
-      expect(streamMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          content: expect.stringContaining('This brainstorm is for maintaining and improving the project plan.'),
-        }),
-      )
-      expect(streamMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          content: expect.stringContaining('Do not edit the project body or checklist until the user explicitly asks you to update it or confirms your proposed changes.'),
-        }),
-      )
-      expect(streamMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          content: expect.stringContaining('When updates are warranted, propose the exact project body and checklist changes first.'),
-        }),
-      )
-      expect(streamMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          content: expect.stringContaining('After confirmation, prefer bakin_exec_projects_apply_plan for combined body and checklist updates.'),
-        }),
-      )
-      expect(streamMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          content: expect.stringContaining('Invoke Bakin tools as described in your Tool access section — the exact call form depends on the active runtime.'),
-        }),
-      )
+      const prompt = String(streamMock.mock.calls[0]?.[0]?.content ?? '')
+      expect(prompt).toContain('PRIMARY working artifact — actively create, edit, and refine it')
+      expect(prompt).toContain('Apply INCREMENTAL updates directly, then report exactly what you changed')
+      expect(prompt).toContain('ASK FIRST — in chat, before applying — for wholesale rewrites or large deletions')
+      expect(prompt).toContain('Prefer bakin_exec_projects_apply_plan for combined body and checklist updates')
+      expect(prompt).toContain('snapshotted with a visible diff and one-click restore')
+      expect(prompt).toContain('Invoke Bakin tools as described in your Tool access section — the exact call form depends on the active runtime.')
+    })
+
+    it('the bakin_exec_projects_ask tool sends the SAME plan-first instructions (single shared constant)', async () => {
+      writeProjectFixture('proj-tool-prompt', { title: 'Tool Prompt Project' })
+      const sendMock = mock(async (args: MessageArgs) => ({ id: 'msg-1', content: 'tool reply', ...(args ? {} : {}) }))
+      plugin.ctx.runtime.messaging.send = sendMock
+
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_ask')!
+      const result = await callTool(tool, { projectId: 'proj-tool-prompt', message: 'What next?' })
+      expect(result).toMatchObject({ ok: true, reply: 'tool reply' })
+
+      const prompt = String(sendMock.mock.calls[0]?.[0]?.content ?? '')
+      expect(prompt).toContain('PRIMARY working artifact — actively create, edit, and refine it')
+      expect(prompt).toContain('ASK FIRST — in chat, before applying — for wholesale rewrites or large deletions')
+      expect(prompt).toContain('User request:\nWhat next?')
     })
 
     it('persists brainstorm turns without replaying them into durable runtime prompts', async () => {
@@ -825,11 +810,11 @@ describe('Routes', () => {
       plugin.ctx.runtime.messaging.stream = streamMock
 
       const askRoute = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
-      const first = await callRoute(askRoute, plugin.ctx, {
+      let settled = nextSettle()
+      await callRoute(askRoute, plugin.ctx, {
         body: { projectId: 'proj-persist', prompt: 'First question?' },
-        rawResponse: true,
       })
-      await consumeSSE(first.response)
+      await settled
 
       const getRoute = findRoute(plugin.routes, 'GET', '/:projectId')!
       const hydrated = await callRoute(getRoute, plugin.ctx, {
@@ -837,14 +822,14 @@ describe('Routes', () => {
       })
       expect(hydrated.body.project.brainstormMessages).toMatchObject([
         { kind: 'user', content: 'First question?' },
-        { kind: 'assistant', content: 'First answer', agentId: 'main' },
+        { kind: 'assistant', content: 'First answer' },
       ])
 
-      const second = await callRoute(askRoute, plugin.ctx, {
+      settled = nextSettle()
+      await callRoute(askRoute, plugin.ctx, {
         body: { projectId: 'proj-persist', prompt: 'Second question?' },
-        rawResponse: true,
       })
-      await consumeSSE(second.response)
+      await settled
 
       expect(streamMock).toHaveBeenCalledTimes(2)
       expect(threadIds).toEqual(['projects:proj-persist:main', 'projects:proj-persist:main'])
@@ -854,7 +839,7 @@ describe('Routes', () => {
       expect(prompts[1]).toContain('User request:\nSecond question?')
     })
 
-    it('forwards runtime status and tool chunks on the wire; result-phase tools persist as rows', async () => {
+    it('forwards runtime status and tool chunks on the bus; result-phase tools persist as rows', async () => {
       writeProjectFixture('proj-activity', { title: 'Activity Project' })
       mockRuntimeChunks([
         { type: 'status', content: 'Reading project context', data: { step: 'context' } },
@@ -883,18 +868,22 @@ describe('Routes', () => {
         },
         { type: 'text', content: 'Done.' },
       ])
+      const bus = collectBusEvents()
+      const settled = nextSettle()
 
       const route = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
-      const { response } = await callRoute(route, plugin.ctx, {
+      await callRoute(route, plugin.ctx, {
         body: { projectId: 'proj-activity', prompt: 'Check tickets' },
-        rawResponse: true,
       })
+      await settled
+      bus.stop()
 
-      // The wire carries raw runtime chunks — the kit folds them client-side.
-      const events = await consumeSSE(response)
-      const chunkTypes = events.filter((e) => e.event === 'chunk').map((e) => (e.data as { type: string }).type)
+      // The bus carries raw runtime chunks — the kit folds them client-side.
+      const chunkTypes = bus.events
+        .filter((e) => e.event === 'projects.brainstorm.chunk')
+        .map((e) => (e.data.chunk as { type: string }).type)
       expect(chunkTypes).toEqual(['status', 'tool', 'tool', 'text'])
-      expect(events.find((e) => e.event === 'done')?.data).toMatchObject({ content: 'Done.' })
+      expect(bus.events.find((e) => e.event === 'projects.brainstorm.done')?.data).toMatchObject({ preview: 'Done.' })
 
       // Durable rows: user + the RESULT-phase tool (call summary merged) +
       // assistant. Status chunks are ephemeral, call phases fold into results.
@@ -914,24 +903,24 @@ describe('Routes', () => {
           outputPreview: '3 open issues',
           durationMs: 420,
         },
-        { kind: 'assistant', content: 'Done.', agentId: 'main' },
+        { kind: 'assistant', content: 'Done.' },
       ])
     })
 
     it('uses the custom agent; the durable runtime prompt never replays history', async () => {
       writeProjectFixture('proj-ask2', { title: 'Ask 2' })
       const streamMock = mockRuntimeStream(['ok'])
+      const settled = nextSettle()
 
       const route = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
-      const { response } = await callRoute(route, plugin.ctx, {
+      await callRoute(route, plugin.ctx, {
         body: {
           projectId: 'proj-ask2',
           prompt: 'Continue',
           agent: 'pixel',
         },
-        rawResponse: true,
       })
-      await consumeSSE(response)
+      await settled
       expect(streamMock).toHaveBeenCalledWith(
         expect.objectContaining({
           agentId: 'pixel',
@@ -945,28 +934,150 @@ describe('Routes', () => {
       expect(call?.content).not.toContain('OK')
     })
 
-    it('falls back to one-shot runtime send when streaming is unavailable', async () => {
-      writeProjectFixture('proj-fallback', { title: 'Fallback' })
-      mockRuntimeStreamError('stream unavailable')
-      const sendMock = mockRuntimeSend('Full reply in one go')
-
-      const route = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
-      const { response } = await callRoute(route, plugin.ctx, {
-        body: { projectId: 'proj-fallback', prompt: 'Hi' },
-        rawResponse: true,
+    it('one turn per project: concurrent send 409s; the abort route settles the turn clean', async () => {
+      writeProjectFixture('proj-busy', { title: 'Busy Project' })
+      let release: () => void = () => {}
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      plugin.ctx.runtime.messaging.stream = mock((args: MessageArgs) => {
+        void args
+        return (async function* (): AsyncIterable<ChatChunk> {
+          yield { type: 'text', content: 'partial' }
+          await gate
+          yield { type: 'done' }
+        })()
       })
-      const events = await consumeSSE(response)
-      const tokens = events
-        .filter((e) => e.event === 'chunk' && (e.data as { type: string }).type === 'text')
-        .map((e) => (e.data as { content: string }).content)
-      expect(tokens).toEqual(['Full reply in one go'])
-      expect(events.some((e) => e.event === 'done')).toBe(true)
-      expect(sendMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: 'main',
-          content: expect.stringContaining('Fallback'),
-        }),
-      )
+
+      const askRoute = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      const settled = nextSettle()
+      const first = await callRoute(askRoute, plugin.ctx, {
+        body: { projectId: 'proj-busy', prompt: 'go' },
+      })
+      expect(first.status).toBe(202)
+      const second = await callRoute(askRoute, plugin.ctx, {
+        body: { projectId: 'proj-busy', prompt: 'again' },
+      })
+      expect(second.status).toBe(409)
+
+      // Mid-turn, the GET seeds the streaming flag for remount rehydration.
+      const getRoute = findRoute(plugin.routes, 'GET', '/:projectId')!
+      const midTurn = await callRoute(getRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-busy' },
+      })
+      expect(midTurn.body.project.brainstormStreaming).toBe(true)
+
+      const abortRoute = findRoute(plugin.routes, 'POST', '/:projectId/ask/abort')!
+      const aborted = await callRoute(abortRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-busy' },
+      })
+      expect(aborted.status).toBe(200)
+      release()
+      await settled
+
+      const hydrated = await callRoute(getRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-busy' },
+      })
+      const rows = hydrated.body.project.brainstormMessages as Array<{ kind: string }>
+      expect(rows[rows.length - 1]?.kind).toBe('aborted')
+      expect(rows.some((r) => r.kind === 'assistant')).toBe(true) // partial kept
+
+      // Idle abort → 409.
+      const idle = await callRoute(abortRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-busy' },
+      })
+      expect(idle.status).toBe(409)
+    })
+
+    it('meters brainstorm turns under work class chat with the brainstorm runId scheme', async () => {
+      writeProjectFixture('proj-meter', { title: 'Meter Project' })
+      mockRuntimeStream(['ok'])
+      plugin.meteredTurns.length = 0
+      const settled = nextSettle()
+      const route = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      await callRoute(route, plugin.ctx, {
+        body: { projectId: 'proj-meter', prompt: 'hi' },
+      })
+      await settled
+      expect(plugin.meteredTurns).toHaveLength(1)
+      expect(String(plugin.meteredTurns[0].runId)).toStartWith('brainstorm:projects:proj-meter:turn:')
+      expect(plugin.meteredTurns[0].workClass).toBe('chat')
+    })
+
+    it('honors the PATH projectId (no body id needed) and 400s on a path/body mismatch', async () => {
+      writeProjectFixture('proj-path', { title: 'Path Project' })
+      mockRuntimeStream(['ok'])
+      const settled = nextSettle()
+      const route = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      const res = await callRoute(route, plugin.ctx, {
+        searchParams: { projectId: 'proj-path' },
+        body: { prompt: 'path only' },
+      })
+      expect(res.status).toBe(202)
+      await settled
+
+      writeProjectFixture('proj-other', { title: 'Other' })
+      const mismatch = await callRoute(route, plugin.ctx, {
+        searchParams: { projectId: 'proj-path' },
+        body: { projectId: 'proj-other', prompt: 'sneaky' },
+      })
+      expect(mismatch.status).toBe(400)
+    })
+
+    it('deleting a project aborts its in-flight brainstorm turn (no sidecar resurrection)', async () => {
+      writeProjectFixture('proj-del', { title: 'Doomed' })
+      let sawAbort = false
+      let release: () => void = () => {}
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      plugin.ctx.runtime.messaging.stream = mock((args: MessageArgs) => (async function* (): AsyncIterable<ChatChunk> {
+        args.signal?.addEventListener('abort', () => { sawAbort = true; release() }, { once: true })
+        yield { type: 'text', content: 'doomed reply' }
+        await gate
+        yield { type: 'done' }
+      })())
+      const settled = nextSettle()
+      const askRoute = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      await callRoute(askRoute, plugin.ctx, { body: { projectId: 'proj-del', prompt: 'go' } })
+
+      const deleteRoute = findRoute(plugin.routes, 'DELETE', '/:projectId')!
+      const res = await callRoute(deleteRoute, plugin.ctx, { searchParams: { projectId: 'proj-del' } })
+      expect(res.status).toBe(200)
+      await settled
+      expect(sawAbort).toBe(true)
+      // The turn's post-delete rows must NOT resurrect the sidecar.
+      const { existsSync: fsExists } = await import('fs')
+      expect(fsExists(join(testDir, 'projects', 'proj-del.brainstorm.json'))).toBe(false)
+    })
+
+    it('restore pins the snapshot by ts — a stale list 409s instead of restoring the wrong version', async () => {
+      writeProjectFixture('proj-ts', { title: 'TS Project', body: 'v1' })
+      const putRoute = findRoute(plugin.routes, 'PUT', '/:projectId')!
+      await callRoute(putRoute, plugin.ctx, { searchParams: { projectId: 'proj-ts' }, body: { body: 'v2' } })
+
+      const restoreRoute = findRoute(plugin.routes, 'POST', '/:projectId/history/:index/restore')!
+      const stale = await callRoute(restoreRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-ts', index: '0' },
+        body: { expectedTs: '2020-01-01T00:00:00.000Z' },
+      })
+      expect(stale.status).toBe(409)
+
+      const historyRoute = findRoute(plugin.routes, 'GET', '/:projectId/history')!
+      const history = await callRoute(historyRoute, plugin.ctx, { searchParams: { projectId: 'proj-ts' } })
+      const ts = (history.body.history as Array<{ ts: string }>)[0].ts
+      const ok = await callRoute(restoreRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-ts', index: '0' },
+        body: { expectedTs: ts },
+      })
+      expect(ok.status).toBe(200)
+      expect(ok.body.changed).toBe(true)
+    })
+
+    it('PUT rejects an unknown status instead of silently coercing to draft', async () => {
+      writeProjectFixture('proj-status', { title: 'Status Project' })
+      const putRoute = findRoute(plugin.routes, 'PUT', '/:projectId')!
+      const res = await callRoute(putRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-status' },
+        body: { status: 'bogus' },
+      })
+      expect(res.status).toBe(400)
     })
 
     it('returns 400 when projectId or prompt is missing', async () => {
@@ -986,20 +1097,147 @@ describe('Routes', () => {
       expect(body.error).toMatch(/not found/i)
     })
 
-    it('emits an error event when both streaming and fallback fail', async () => {
+    it('the project list carries per-project attention flags (unread + streaming)', async () => {
+      writeProjectFixture('proj-flags', { title: 'Flags Project' })
+      mockRuntimeStream(['flag reply'])
+      const settled = nextSettle()
+      const askRoute = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      await callRoute(askRoute, plugin.ctx, { body: { projectId: 'proj-flags', prompt: 'hi' } })
+      await settled
+      // The slot releases just after the done event — wait for idle.
+      const getProjFlags = findRoute(plugin.routes, 'GET', '/:projectId')!
+      for (let i = 0; i < 50; i++) {
+        const check = await callRoute(getProjFlags, plugin.ctx, { searchParams: { projectId: 'proj-flags' } })
+        if (check.body.project.brainstormStreaming === false) break
+        await new Promise(resolve => setTimeout(resolve, 5))
+      }
+
+      const listRoute = findRoute(plugin.routes, 'GET', '/')!
+      const list = await callRoute(listRoute, plugin.ctx, {})
+      const row = (list.body.projects as Array<Record<string, unknown>>).find(p => p.id === 'proj-flags')!
+      expect(row.brainstormUnread).toBe(true)
+      expect(row.brainstormStreaming).toBe(false)
+
+      const seenRoute = findRoute(plugin.routes, 'POST', '/:projectId/brainstorm/seen')!
+      await callRoute(seenRoute, plugin.ctx, { searchParams: { projectId: 'proj-flags' } })
+      const after = await callRoute(listRoute, plugin.ctx, {})
+      const rowAfter = (after.body.projects as Array<Record<string, unknown>>).find(p => p.id === 'proj-flags')!
+      expect(rowAfter.brainstormUnread).toBe(false)
+    })
+
+    it('attention totals: unread counts projects with unseen replies; seen clears; inflight lists running turns', async () => {
+      writeProjectFixture('proj-att', { title: 'Attention Project' })
+      mockRuntimeStream(['A reply'])
+      const settled = nextSettle()
+      const askRoute = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      await callRoute(askRoute, plugin.ctx, {
+        body: { projectId: 'proj-att', prompt: 'hi' },
+      })
+      await settled
+      // The slot releases just after the done event — wait for idle.
+      const getProj = findRoute(plugin.routes, 'GET', '/:projectId')!
+      for (let i = 0; i < 50; i++) {
+        const check = await callRoute(getProj, plugin.ctx, { searchParams: { projectId: 'proj-att' } })
+        if (check.body.project.brainstormStreaming === false) break
+        await new Promise(resolve => setTimeout(resolve, 5))
+      }
+
+      const attentionRoute = findRoute(plugin.routes, 'GET', '/brainstorm/attention')!
+      let res = await callRoute(attentionRoute, plugin.ctx, {})
+      expect(res.body).toMatchObject({ unreadTotal: 1, inflight: [] })
+
+      const seenRoute = findRoute(plugin.routes, 'POST', '/:projectId/brainstorm/seen')!
+      const seen = await callRoute(seenRoute, plugin.ctx, { searchParams: { projectId: 'proj-att' } })
+      expect(seen.status).toBe(200)
+
+      res = await callRoute(attentionRoute, plugin.ctx, {})
+      expect(res.body).toMatchObject({ unreadTotal: 0, inflight: [] })
+
+      // Ghost project seen → 404.
+      const ghost = await callRoute(seenRoute, plugin.ctx, { searchParams: { projectId: 'ghost' } })
+      expect(ghost.status).toBe(404)
+    })
+
+    it('attention inflight lists a mid-turn project (working-dot truth)', async () => {
+      writeProjectFixture('proj-att2', { title: 'Attention 2' })
+      let release: () => void = () => {}
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      plugin.ctx.runtime.messaging.stream = mock((args: MessageArgs) => {
+        void args
+        return (async function* (): AsyncIterable<ChatChunk> {
+          yield { type: 'text', content: 'partial' }
+          await gate
+          yield { type: 'done' }
+        })()
+      })
+      const settled = nextSettle()
+      const askRoute = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      await callRoute(askRoute, plugin.ctx, { body: { projectId: 'proj-att2', prompt: 'go' } })
+
+      const attentionRoute = findRoute(plugin.routes, 'GET', '/brainstorm/attention')!
+      const midTurn = await callRoute(attentionRoute, plugin.ctx, {})
+      expect(midTurn.body.inflight).toEqual(['proj-att2'])
+      release()
+      await settled
+    })
+
+    it('history routes: GET lists snapshots; restore round-trips through the service', async () => {
+      writeProjectFixture('proj-hist', { title: 'History Project', body: 'original body' })
+      const putRoute = findRoute(plugin.routes, 'PUT', '/:projectId')!
+      await callRoute(putRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-hist' },
+        body: { body: 'edited body' },
+      })
+
+      const historyRoute = findRoute(plugin.routes, 'GET', '/:projectId/history')!
+      const history = await callRoute(historyRoute, plugin.ctx, { searchParams: { projectId: 'proj-hist' } })
+      expect(history.status).toBe(200)
+      expect(history.body.history).toMatchObject([{ author: 'user', body: 'original body' }])
+
+      const restoreRoute = findRoute(plugin.routes, 'POST', '/:projectId/history/:index/restore')!
+      const restored = await callRoute(restoreRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-hist', index: '0' },
+      })
+      expect(restored.status).toBe(200)
+
+      const getRoute = findRoute(plugin.routes, 'GET', '/:projectId')!
+      const hydrated = await callRoute(getRoute, plugin.ctx, { searchParams: { projectId: 'proj-hist' } })
+      expect(hydrated.body.project.body).toBe('original body')
+
+      // Bad index → 400; ghost project → 404.
+      const bad = await callRoute(restoreRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-hist', index: '99' },
+      })
+      expect(bad.status).toBe(400)
+      const ghost = await callRoute(historyRoute, plugin.ctx, { searchParams: { projectId: 'ghost' } })
+      expect(ghost.status).toBe(404)
+    })
+
+    it('a failing runtime stream settles as an error turn — durable error row + bus error event', async () => {
       writeProjectFixture('proj-fail', { title: 'Fail Project' })
       mockRuntimeStreamError('unreachable')
-      mockRuntimeSendError('runtime down')
+      const bus = collectBusEvents()
+      const settled = nextSettle()
 
       const route = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
       const { response } = await callRoute(route, plugin.ctx, {
         body: { projectId: 'proj-fail', prompt: 'Help' },
         rawResponse: true,
       })
-      const events = await consumeSSE(response)
-      const errEvent = events.find((e) => e.event === 'error')
+      expect(response.status).toBe(202)
+      await settled
+      bus.stop()
+
+      const errEvent = bus.events.find((e) => e.event === 'projects.brainstorm.error')
       expect(errEvent).toBeDefined()
-      expect((errEvent!.data as { message: string }).message).toMatch(/runtime down|unreachable/i)
+      expect(String(errEvent!.data.message)).toMatch(/unreachable/i)
+
+      const getRoute = findRoute(plugin.routes, 'GET', '/:projectId')!
+      const hydrated = await callRoute(getRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-fail' },
+      })
+      const rows = hydrated.body.project.brainstormMessages as Array<{ kind: string; message?: string }>
+      expect(rows[rows.length - 1]).toMatchObject({ kind: 'error', message: 'unreachable' })
     })
   })
 })

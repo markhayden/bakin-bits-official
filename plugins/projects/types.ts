@@ -2,7 +2,8 @@
  * Projects plugin — type definitions.
  */
 
-export type ProjectStatus = 'draft' | 'active' | 'completed' | 'archived'
+export const PROJECT_STATUSES = ['draft', 'active', 'completed', 'archived'] as const
+export type ProjectStatus = (typeof PROJECT_STATUSES)[number]
 
 export interface ProjectTask {
   id: string          // "t001", "t002" — auto-incrementing
@@ -41,6 +42,13 @@ export interface Project extends ProjectFrontmatter {
  */
 export type ProjectBrainstormMessage = import('@makinbakin/sdk/components').ConversationMessage
 
+/** One plan-body snapshot (bakin#703): captured BEFORE every body write. */
+export interface PlanSnapshot {
+  ts: string
+  author: 'agent' | 'user'
+  body: string
+}
+
 export interface ProjectSummary {
   id: string
   title: string
@@ -50,4 +58,7 @@ export interface ProjectSummary {
   taskCount: number
   assetCount: number
   updated: string
+  /** Brainstorm attention (bakin#703): unseen agent reply / turn running. */
+  brainstormUnread?: boolean
+  brainstormStreaming?: boolean
 }

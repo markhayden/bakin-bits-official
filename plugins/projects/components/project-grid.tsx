@@ -9,7 +9,7 @@ import { EmptyState } from "@makinbakin/sdk/components"
 import { Skeleton } from "@makinbakin/sdk/ui"
 import { useQueryState } from "@makinbakin/sdk/hooks"
 import { useSearch } from "@makinbakin/sdk/hooks"
-import { useDebug } from "@makinbakin/sdk/hooks"
+import { useDebug, usePluginEvent } from "@makinbakin/sdk/hooks"
 import { ProjectCard } from './project-card'
 import { NewProjectDialog } from './new-project-dialog'
 import type { ProjectSummary, ProjectStatus } from '../types'
@@ -57,6 +57,17 @@ export function ProjectGrid() {
   useEffect(() => {
     fetchProjects()
   }, [fetchProjects])
+
+  // Keep the per-card unread/working indicators live: settles and seen
+  // writes refresh; the first chunk of a NEW turn refreshes once so the
+  // working dot appears (later chunks for an already-marked project skip).
+  usePluginEvent('projects.brainstorm.done', () => { void fetchProjects() })
+  usePluginEvent('projects.brainstorm.error', () => { void fetchProjects() })
+  usePluginEvent('projects.brainstorm.seen', () => { void fetchProjects() })
+  usePluginEvent('projects.brainstorm.chunk', (payload) => {
+    const id = String(payload.projectId ?? '')
+    if (id && !projects.some(p => p.id === id && p.brainstormStreaming)) void fetchProjects()
+  })
 
   const searchHook = useSearch({ plugin: 'projects', facets: ['status'], debounce: 300 })
   useEffect(() => {

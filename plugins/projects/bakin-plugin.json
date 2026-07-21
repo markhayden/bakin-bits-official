@@ -1,7 +1,7 @@
 {
   "id": "projects",
   "name": "Projects",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "bakin": ">=0.0.1-rc.1",
   "description": "Project management with specs, checklists, task linking, and agent access via MCP tools",
   "contentFiles": [],
@@ -213,6 +213,46 @@
         "summary": "Search projects",
         "permissions": [
           "search.read"
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/:projectId/ask/abort",
+        "summary": "Abort the in-flight brainstorm turn",
+        "permissions": [
+          "runtime.messaging"
+        ]
+      },
+      {
+        "method": "GET",
+        "path": "/brainstorm/attention",
+        "summary": "Brainstorm attention totals (unread + in-flight)",
+        "permissions": [
+          "storage.read"
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/:projectId/brainstorm/seen",
+        "summary": "Mark a project brainstorm as seen",
+        "permissions": [
+          "storage.write"
+        ]
+      },
+      {
+        "method": "GET",
+        "path": "/:projectId/history",
+        "summary": "Plan body snapshot history (oldest first)",
+        "permissions": [
+          "storage.read"
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/:projectId/history/:index/restore",
+        "summary": "Restore a plan snapshot (snapshots current first)",
+        "permissions": [
+          "storage.write"
         ]
       }
     ],
@@ -498,7 +538,10 @@
     ],
     "docs": {
       "slug": "official/projects"
-    }
+    },
+    "slots": [
+      "nav-badge-providers"
+    ]
   },
   "devWatch": [
     "**/*.ts",
