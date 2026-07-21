@@ -16,6 +16,7 @@ export function BrainstormBadgeProvider() {
     pluginId: 'projects',
     navItemId: 'projects',
     events: {
+      started: 'projects.brainstorm.started',
       chunk: 'projects.brainstorm.chunk',
       done: 'projects.brainstorm.done',
       error: 'projects.brainstorm.error',

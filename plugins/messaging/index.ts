@@ -1249,6 +1249,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         chunk: 'messaging.brainstorm.chunk',
         done: 'messaging.brainstorm.done',
         error: 'messaging.brainstorm.error',
+        // Fires at 202-accept — the nav working dot must not wait out model
+        // latency for the first chunk (bakin#707).
+        started: 'messaging.brainstorm.started',
       },
       payload: (key) => ({ sessionId: key }),
       resolveThread: (key) => {

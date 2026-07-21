@@ -214,6 +214,9 @@ const projectsPlugin: BakinPlugin = {
         chunk: 'projects.brainstorm.chunk',
         done: 'projects.brainstorm.done',
         error: 'projects.brainstorm.error',
+        // Fires at 202-accept — the nav working dot must not wait out model
+        // latency for the first chunk (bakin#707).
+        started: 'projects.brainstorm.started',
       },
       payload: (key) => ({ projectId: key }),
       resolveThread: async (key) =>

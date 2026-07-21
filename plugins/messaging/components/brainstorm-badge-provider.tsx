@@ -34,6 +34,7 @@ export function BrainstormBadgeProvider() {
     pluginId: 'messaging',
     navItemId: 'messaging-brainstorm',
     events: {
+      started: 'messaging.brainstorm.started',
       chunk: 'messaging.brainstorm.chunk',
       done: 'messaging.brainstorm.done',
       error: 'messaging.brainstorm.error',

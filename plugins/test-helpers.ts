@@ -116,6 +116,7 @@ function createTestTurnService(config: TurnConfig, meteredTurns: Array<Record<st
         inflight.delete(key)
         return 'not_found'
       }
+      if (config.events.started) ctx.events.emit(config.events.started, { ...config.payload(key), agentId })
       entry.promise = runTurn(ctx, key, agentId, content, controller, turnId, opts)
         .finally(() => { inflight.delete(key); previews.delete(key) })
         .then(outcome => config.hooks?.onSettled?.({ ctx, key, outcome }))
