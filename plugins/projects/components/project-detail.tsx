@@ -850,7 +850,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
               <label className="text-[10px] font-medium text-zinc-600 uppercase tracking-wider block">Details</label>
               {!editing && (
                 <div className="flex items-center gap-0.5 bg-muted/50 rounded-lg p-0.5" data-testid="plan-view-toggle">
-                  {([['details', 'Details'], ['changes', 'Changes']] as const).map(([value, label]) => (
+                  {([['details', 'Details'], ['changes', 'Diff']] as const).map(([value, label]) => (
                     <button
                       key={value}
                       type="button"
