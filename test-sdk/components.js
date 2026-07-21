@@ -1,5 +1,6 @@
 import React from 'react'
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
+import { usePluginEvent } from './hooks.js'
 
 export function AgentAvatar({ agentId }) {
   return React.createElement('span', { 'data-testid': agentId ? `avatar-${agentId}` : 'avatar' }, agentId)
@@ -293,4 +294,97 @@ export function PluginHeader({ title, search, actions, children }) {
 
 export function SortableHead({ children, onSort, field }) {
   return React.createElement('th', { onClick: () => onSort?.(field) }, children)
+}
+
+// ── useConversationThread (#703) — functional minimum mirroring the real
+// bus-driven hook: optimistic user echo, plugin-event chunk accumulation
+// with same-format text coalescing, active-thread guards, settle-by-refetch,
+// server-seeded streaming rehydration. ──
+
+export function useConversationThread(options) {
+  const { threadKey, events } = options
+  const [messages, setMessages] = useState([])
+  const [meta, setMeta] = useState(null)
+  const [liveChunks, setLiveChunks] = useState(null)
+  const [streaming, setStreaming] = useState(false)
+  const [sendError, setSendError] = useState(null)
+  const activeKeyRef = useRef(threadKey)
+  activeKeyRef.current = threadKey
+  const optionsRef = useRef(options)
+  optionsRef.current = options
+
+  const loadTranscript = useCallback(async () => {
+    if (!threadKey) {
+      setMeta(null)
+      setMessages([])
+      return
+    }
+    const body = await optionsRef.current.load(threadKey)
+    if (!body || activeKeyRef.current !== threadKey) return
+    setMeta(body.meta ?? null)
+    setMessages(body.messages)
+    if (body.streaming) {
+      setStreaming(true)
+      setLiveChunks(prev => prev ?? [])
+    }
+  }, [threadKey])
+
+  useEffect(() => {
+    setLiveChunks(null)
+    setStreaming(false)
+    setSendError(null)
+    void loadTranscript()
+  }, [loadTranscript])
+
+  usePluginEvent(events.chunk, payload => {
+    if (optionsRef.current.keyOf(payload) !== activeKeyRef.current) return
+    const chunk = payload.chunk
+    if (!chunk?.type) return
+    setStreaming(true)
+    setLiveChunks(prev => {
+      const chunks = prev ?? []
+      const last = chunks[chunks.length - 1]
+      if (
+        chunk.type === 'text' && chunk.content &&
+        last?.type === 'text' && (last.format ?? 'markdown') === (chunk.format ?? 'markdown')
+      ) {
+        return [...chunks.slice(0, -1), { ...last, content: (last.content ?? '') + chunk.content }]
+      }
+      return [...chunks, chunk]
+    })
+  })
+
+  const settle = useCallback(payload => {
+    setStreaming(false)
+    setLiveChunks(null)
+    void loadTranscript()
+    optionsRef.current.onSettled?.(payload)
+  }, [loadTranscript])
+
+  usePluginEvent(events.done, payload => {
+    if (optionsRef.current.keyOf(payload) === activeKeyRef.current) settle(payload)
+  })
+  usePluginEvent(events.error, payload => {
+    if (optionsRef.current.keyOf(payload) === activeKeyRef.current) settle(payload)
+  })
+
+  const send = useCallback(async (content, attachments) => {
+    const key = activeKeyRef.current
+    if (!key) return
+    setSendError(null)
+    const row = optionsRef.current.optimisticRow
+      ? optionsRef.current.optimisticRow(content, attachments)
+      : { kind: 'user', ts: new Date().toISOString(), content }
+    setMessages(prev => [...prev, row])
+    setStreaming(true)
+    setLiveChunks([])
+    const res = await optionsRef.current.post(key, content, attachments)
+    if (!res.ok && activeKeyRef.current === key) {
+      setStreaming(false)
+      setLiveChunks(null)
+      setSendError(res.error ?? `send failed (${res.status ?? 'network'})`)
+    }
+  }, [])
+
+  return { messages, meta, liveChunks, streaming, sendError, send, refresh: loadTranscript }
 }

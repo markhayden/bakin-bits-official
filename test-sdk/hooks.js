@@ -252,3 +252,35 @@ export function useNavBadge(pluginId, navItemId, badge) {
   }, [pluginId, navItemId, key])
 }
 
+
+// ── Plugin-event bus (#703) — mirrors the shell's process-global emitter ──
+
+const pluginEventSubs = globalThis.__bakinPluginEventSubs ?? (globalThis.__bakinPluginEventSubs = new Map())
+
+export function emitPluginEvent(payload) {
+  const event = payload?.event
+  if (typeof event !== 'string') return
+  const set = pluginEventSubs.get(event)
+  if (!set) return
+  for (const handler of [...set]) {
+    try { handler(payload) } catch { /* a bad subscriber never breaks the bus */ }
+  }
+}
+
+export function usePluginEvent(event, handler) {
+  const handlerRef = useRef(handler)
+  handlerRef.current = handler
+  useEffect(() => {
+    const wrapped = payload => handlerRef.current(payload)
+    let set = pluginEventSubs.get(event)
+    if (!set) {
+      set = new Set()
+      pluginEventSubs.set(event, set)
+    }
+    set.add(wrapped)
+    return () => {
+      set.delete(wrapped)
+      if (set.size === 0) pluginEventSubs.delete(event)
+    }
+  }, [event])
+}
