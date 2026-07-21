@@ -13,6 +13,8 @@ mock.module('../../../plugins/projects/components/project-editor', () => ({
 }))
 
 import { ProjectDetail } from '../../../plugins/projects/components/project-detail'
+import { emitPluginEvent } from '@makinbakin/sdk/hooks'
+import { act } from '@testing-library/react'
 
 afterEach(() => {
   cleanup()
@@ -180,5 +182,89 @@ describe('ProjectDetail', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Detach Deleted image' }))
     expect(await screen.findByRole('dialog', { name: 'Detach asset?' })).toBeDefined()
     expect(screen.getByText(/Bakin can't find this asset/)).toBeDefined()
+  })
+})
+
+
+describe('ProjectDetail brainstorm durability (bakin#703)', () => {
+  function projectPayload(over: Record<string, unknown> = {}) {
+    return {
+      project: {
+        id: 'proj-703',
+        title: 'Durable Project',
+        status: 'active',
+        owner: 'main',
+        progress: 0,
+        tasks: [],
+        assets: [],
+        body: '# Durable Project',
+        updated: '2026-07-20T10:00:00.000Z',
+        resolvedTasks: {},
+        resolvedAssets: [],
+        brainstormMessages: [],
+        brainstormStreaming: false,
+        ...over,
+      },
+    }
+  }
+
+  it('echoes the user message immediately on send — before the 202 lands (the refresh bug)', async () => {
+    let resolvePost: () => void = () => {}
+    const askCalls: string[] = []
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : String(input)
+      if (url === '/api/plugins/projects/proj-703') {
+        return { ok: true, json: async () => projectPayload(), text: async () => '' } as Response
+      }
+      if (url === '/api/plugins/projects/proj-703/ask') {
+        askCalls.push(String(init?.body))
+        await new Promise<void>((resolve) => { resolvePost = resolve })
+        return { ok: true, status: 202, json: async () => ({ ok: true, streaming: true }), text: async () => '' } as Response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+
+    render(<ProjectDetail projectId="proj-703" onBack={() => {}} />)
+    const input = await screen.findByTestId('chat-input')
+    fireEvent.change(input, { target: { value: 'What next?' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    // Visible BEFORE the POST resolves — no refresh required.
+    await waitFor(() => expect(screen.getByText('What next?')).toBeDefined())
+    expect(askCalls).toHaveLength(1)
+    await act(async () => { resolvePost() })
+  })
+
+  it('rehydrates a mid-flight turn on mount: partial rows + seeded streaming + live bus chunks', async () => {
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : String(input)
+      if (url === '/api/plugins/projects/proj-703') {
+        return {
+          ok: true,
+          json: async () => projectPayload({
+            brainstormMessages: [
+              { kind: 'user', ts: '2026-07-20T10:00:01.000Z', content: 'Long question' },
+              { kind: 'assistant', ts: '2026-07-20T10:00:02.000Z', agentId: 'main', content: 'Partial reply so far' },
+            ],
+            brainstormStreaming: true,
+          }),
+          text: async () => '',
+        } as Response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+
+    render(<ProjectDetail projectId="proj-703" onBack={() => {}} />)
+    // The incrementally-persisted partial reply is there on return...
+    await waitFor(() => expect(screen.getByText('Partial reply so far')).toBeDefined())
+    // ...and the still-running turn keeps streaming over the bus.
+    act(() => {
+      emitPluginEvent({
+        event: 'projects.brainstorm.chunk',
+        projectId: 'proj-703',
+        chunk: { type: 'text', content: 'live continuation' },
+      })
+    })
+    await waitFor(() => expect(screen.getByText(/live continuation/)).toBeDefined())
   })
 })
