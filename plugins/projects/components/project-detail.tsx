@@ -843,22 +843,29 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
               </h1>
             )}
 
-            {/* Details (spec) */}
-            <div className="flex items-center justify-between mb-1.5">
+            {/* Details (spec) — the header row stays pinned while the plan
+                scrolls; Details|Changes uses the segmented toggle pattern
+                (project-grid status tabs). */}
+            <div className="sticky top-0 z-10 -mx-1 px-1 bg-background flex items-center justify-between pt-1 pb-1.5">
               <label className="text-[10px] font-medium text-zinc-600 uppercase tracking-wider block">Details</label>
               {!editing && (
-                <button
-                  type="button"
-                  data-testid="plan-changes-toggle"
-                  onClick={() => setShowChanges((v) => !v)}
-                  className={`px-2 py-0.5 rounded-md text-[10px] font-medium border transition-colors ${
-                    showChanges
-                      ? 'bg-zinc-700/70 text-foreground border-[rgba(255,255,255,0.12)]'
-                      : 'bg-transparent text-zinc-500 hover:text-zinc-300 border-[rgba(255,255,255,0.06)]'
-                  }`}
-                >
-                  {showChanges ? 'Hide changes' : 'Changes'}
-                </button>
+                <div className="flex items-center gap-0.5 bg-muted/50 rounded-lg p-0.5" data-testid="plan-view-toggle">
+                  {([['details', 'Details'], ['changes', 'Changes']] as const).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      data-testid={value === 'changes' ? 'plan-changes-toggle' : 'plan-details-toggle'}
+                      onClick={() => setShowChanges(value === 'changes')}
+                      className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
+                        (value === 'changes') === showChanges
+                          ? 'bg-accent text-accent-foreground'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
             <div className="mb-6">
