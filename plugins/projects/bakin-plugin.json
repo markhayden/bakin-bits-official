@@ -498,7 +498,10 @@
     ],
     "docs": {
       "slug": "official/projects"
-    }
+    },
+    "slots": [
+      "nav-badge-providers"
+    ]
   },
   "devWatch": [
     "**/*.ts",

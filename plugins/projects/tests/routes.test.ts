@@ -1022,6 +1022,55 @@ describe('Routes', () => {
       expect(body.error).toMatch(/not found/i)
     })
 
+    it('attention totals: unread counts projects with unseen replies; seen clears; inflight lists running turns', async () => {
+      writeProjectFixture('proj-att', { title: 'Attention Project' })
+      mockRuntimeStream(['A reply'])
+      const settled = nextSettle()
+      const askRoute = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      await callRoute(askRoute, plugin.ctx, {
+        body: { projectId: 'proj-att', prompt: 'hi' },
+      })
+      await settled
+
+      const attentionRoute = findRoute(plugin.routes, 'GET', '/brainstorm/attention')!
+      let res = await callRoute(attentionRoute, plugin.ctx, {})
+      expect(res.body).toMatchObject({ unreadTotal: 1, inflight: [] })
+
+      const seenRoute = findRoute(plugin.routes, 'POST', '/:projectId/brainstorm/seen')!
+      const seen = await callRoute(seenRoute, plugin.ctx, { searchParams: { projectId: 'proj-att' } })
+      expect(seen.status).toBe(200)
+
+      res = await callRoute(attentionRoute, plugin.ctx, {})
+      expect(res.body).toMatchObject({ unreadTotal: 0, inflight: [] })
+
+      // Ghost project seen → 404.
+      const ghost = await callRoute(seenRoute, plugin.ctx, { searchParams: { projectId: 'ghost' } })
+      expect(ghost.status).toBe(404)
+    })
+
+    it('attention inflight lists a mid-turn project (working-dot truth)', async () => {
+      writeProjectFixture('proj-att2', { title: 'Attention 2' })
+      let release: () => void = () => {}
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      plugin.ctx.runtime.messaging.stream = mock((args: MessageArgs) => {
+        void args
+        return (async function* (): AsyncIterable<ChatChunk> {
+          yield { type: 'text', content: 'partial' }
+          await gate
+          yield { type: 'done' }
+        })()
+      })
+      const settled = nextSettle()
+      const askRoute = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      await callRoute(askRoute, plugin.ctx, { body: { projectId: 'proj-att2', prompt: 'go' } })
+
+      const attentionRoute = findRoute(plugin.routes, 'GET', '/brainstorm/attention')!
+      const midTurn = await callRoute(attentionRoute, plugin.ctx, {})
+      expect(midTurn.body.inflight).toEqual(['proj-att2'])
+      release()
+      await settled
+    })
+
     it('a failing runtime stream settles as an error turn — durable error row + bus error event', async () => {
       writeProjectFixture('proj-fail', { title: 'Fail Project' })
       mockRuntimeStreamError('unreachable')

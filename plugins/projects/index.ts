@@ -130,6 +130,8 @@ const projectsPlugin: BakinPlugin = {
     legacyRoute('DELETE', '/:projectId/assets/:assetId', 'Detach asset'),
     legacyRoute('POST', '/:projectId/ask', 'Ask agent about project (202; streams over the plugin-event bus)'),
     legacyRoute('POST', '/:projectId/ask/abort', 'Abort the in-flight brainstorm turn'),
+    legacyRoute('GET', '/brainstorm/attention', 'Brainstorm attention totals (unread + in-flight)'),
+    legacyRoute('POST', '/:projectId/brainstorm/seen', 'Mark a project brainstorm as seen'),
   ],
 
   async activate(ctx: PluginContext) {
@@ -597,6 +599,36 @@ const projectsPlugin: BakinPlugin = {
       const id = url.searchParams.get('projectId')
       if (!id) return json({ error: 'Missing projectId' }, 400)
       if (!brainstormTurns.abort(id)) return json({ error: 'No brainstorm turn in flight' }, 409)
+      return json({ ok: true })
+    })
+
+    /** A project counts as unread when agent activity landed after the last view. */
+    function hasUnseenBrainstormReply(id: string): boolean {
+      const rows = readBrainstormMessages(id)
+      const lastAgentTs = [...rows].reverse().find(r => r.kind === 'assistant' || r.kind === 'error')?.ts
+      if (!lastAgentTs) return false
+      const seenAt = repo.readBrainstormSeen(id)
+      return !seenAt || lastAgentTs > seenAt
+    }
+
+    // GET /brainstorm/attention — totals for the nav badge provider:
+    // unreadTotal counts PROJECTS with unseen agent replies; inflight lists
+    // projects with a running turn (server truth for the working dot).
+    routeHandlers.set('GET /brainstorm/attention', async () => {
+      const unread = readAllProjects().filter(p => hasUnseenBrainstormReply(p.id))
+      return json({
+        unreadTotal: unread.length,
+        inflight: brainstormTurns.listInFlight().map(t => t.key),
+      })
+    })
+
+    // POST /:projectId/brainstorm/seen — viewing the brainstorm clears unread.
+    routeHandlers.set('POST /:projectId/brainstorm/seen', async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const id = url.searchParams.get('projectId')
+      if (!id) return json({ error: 'Missing projectId' }, 400)
+      if (!readProject(id)) return json({ error: 'Project not found' }, 404)
+      repo.writeBrainstormSeen(id, new Date().toISOString())
       return json({ ok: true })
     })
 

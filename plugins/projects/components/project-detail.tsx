@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { useRouter, useHorizontalResize, toast } from '@makinbakin/sdk/hooks'
+import { useRouter, useHorizontalResize, toast, emitPluginEvent } from '@makinbakin/sdk/hooks'
 import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, ChevronDown, Search, Pencil, Trash2, Link2 } from 'lucide-react'
 import { useMainAgentId } from "@makinbakin/sdk/hooks"
 import { AgentSelect, ConversationPanel, useConversationThread } from "@makinbakin/sdk/components"
@@ -406,8 +406,16 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
       const body = await res.json().catch(() => ({}))
       return { ok: false, status: res.status, ...(body.error ? { error: String(body.error) } : {}) }
     }, []),
-    // Refresh after a reply settles — the agent may have updated the spec.
-    onSettled: useCallback(() => { fetchProject() }, [fetchProject]),
+    // Refresh after a reply settles — the agent may have updated the spec —
+    // and the reply landed while the user was looking at this project.
+    onSettled: useCallback(() => {
+      fetchProject()
+      if (currentId && !isNew) {
+        void fetch(`/api/plugins/projects/${currentId}/brainstorm/seen`, { method: 'POST' })
+          .then(() => emitPluginEvent({ event: 'projects.brainstorm.seen', projectId: currentId }))
+          .catch(() => {})
+      }
+    }, [fetchProject, currentId, isNew]),
   })
 
   // Send failures (409 busy, network) surface as a toast; the optimistic
@@ -415,6 +423,21 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   useEffect(() => {
     if (brainstorm.sendError) toast(brainstorm.sendError, 'error')
   }, [brainstorm.sendError])
+
+  // Viewing the project (or a reply landing while viewing) marks the
+  // brainstorm seen; the synthetic bus event refreshes the nav badge only
+  // AFTER the write lands (the chat pattern — refreshing on done alone
+  // races the seen POST).
+  const markBrainstormSeen = useCallback(() => {
+    if (!currentId || isNew) return
+    void fetch(`/api/plugins/projects/${currentId}/brainstorm/seen`, { method: 'POST' })
+      .then(() => emitPluginEvent({ event: 'projects.brainstorm.seen', projectId: currentId }))
+      .catch(() => {})
+  }, [currentId, isNew])
+
+  useEffect(() => {
+    markBrainstormSeen()
+  }, [markBrainstormSeen])
 
   const abortBrainstorm = useCallback(() => {
     if (!currentId) return

@@ -1024,6 +1024,37 @@ declare module '@makinbakin/sdk/components' {
     options: ConversationThreadOptions<Meta, Attachment>,
   ): ConversationThread<Meta, Attachment>
 
+  export interface ConversationDonePayload {
+    key: string
+    agentId: string
+    preview?: string
+    aborted?: boolean
+  }
+
+  export interface ConversationAttentionTotals {
+    unreadTotal: number
+    inflightKeys: string[]
+  }
+
+  export interface ConversationAttentionConfig {
+    pluginId: string
+    navItemId: string
+    events: { chunk: string; done: string; error: string; refresh?: string[] }
+    keyOf: (payload: Record<string, unknown>) => string
+    visibleKey: () => string
+    refreshTotals: () => Promise<ConversationAttentionTotals | null>
+    settings?: () => { sound: boolean; toasts: boolean }
+    renderToast: (payload: ConversationDonePayload, dismiss: () => void) => ReactNode | string
+    osNotification: (payload: ConversationDonePayload) => { title: string; body: string; href: string } | null
+    errorToast?: (payload: Record<string, unknown>) => string | null
+    titlePrefix?: boolean
+    chime?: () => void
+  }
+
+  export function useConversationAttention(config: ConversationAttentionConfig): void
+
+  export function visibleIdFromLocation(pathname: string, base: string, opts?: { exclude?: readonly string[] }): string
+
   export function readConversationSseStream(
     response: Response,
     handlers: {

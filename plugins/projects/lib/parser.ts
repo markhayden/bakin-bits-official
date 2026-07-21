@@ -50,6 +50,10 @@ function projectBrainstormPath(id: string): string {
   return `projects/${id}.brainstorm.json`
 }
 
+function projectBrainstormSeenPath(id: string): string {
+  return `projects/${id}.brainstorm-seen.json`
+}
+
 // ---------------------------------------------------------------------------
 // Parse / Serialize
 // ---------------------------------------------------------------------------
@@ -137,6 +141,8 @@ export interface ProjectRepository {
   writeProject(project: Project): void
   readBrainstormMessages(id: string): ProjectBrainstormMessage[]
   writeBrainstormMessages(id: string, messages: ProjectBrainstormMessage[]): void
+  readBrainstormSeen(id: string): string | null
+  writeBrainstormSeen(id: string, lastSeenAt: string): void
   deleteProjectFile(id: string): boolean
   projectStoragePath(id: string): string
   projectBrainstormStoragePath(id: string): string
@@ -186,12 +192,30 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
       storage.write(projectBrainstormPath(id), JSON.stringify(messages, null, 2))
     },
 
+    /** When the user last viewed this project's brainstorm (null = never). */
+    readBrainstormSeen(id: string): string | null {
+      const content = storage.read(projectBrainstormSeenPath(id))
+      if (!content) return null
+      try {
+        const parsed = JSON.parse(content) as { lastSeenAt?: unknown }
+        return typeof parsed.lastSeenAt === 'string' ? parsed.lastSeenAt : null
+      } catch {
+        return null
+      }
+    },
+
+    writeBrainstormSeen(id: string, lastSeenAt: string): void {
+      storage.write(projectBrainstormSeenPath(id), JSON.stringify({ lastSeenAt }))
+    },
+
     deleteProjectFile(id: string): boolean {
       const path = projectPath(id)
       if (!storage.exists(path)) return false
       storage.remove?.(path)
       const brainstormPath = projectBrainstormPath(id)
       if (storage.exists(brainstormPath)) storage.remove?.(brainstormPath)
+      const seenPath = projectBrainstormSeenPath(id)
+      if (storage.exists(seenPath)) storage.remove?.(seenPath)
       return true
     },
 

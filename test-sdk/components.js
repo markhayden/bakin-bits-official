@@ -1,6 +1,6 @@
 import React from 'react'
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { usePluginEvent } from './hooks.js'
+import { usePluginEvent, useNavBadge as hookUseNavBadge, toast as hookToast } from './hooks.js'
 
 export function AgentAvatar({ agentId }) {
   return React.createElement('span', { 'data-testid': agentId ? `avatar-${agentId}` : 'avatar' }, agentId)
@@ -387,4 +387,78 @@ export function useConversationThread(options) {
   }, [])
 
   return { messages, meta, liveChunks, streaming, sendError, send, refresh: loadTranscript }
+}
+
+// ── Attention kit (#703) — pure rules + provider hook, mirroring the real
+// kit (OS notification and chime are inert in tests). ──
+
+export function visibleIdFromLocation(pathname, base, opts) {
+  const match = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/([^/]+)/?$`).exec(pathname)
+  if (!match) return ''
+  const id = decodeURIComponent(match[1])
+  return opts?.exclude?.includes(id) ? '' : id
+}
+
+export function badgeFor(totalUnread, inflightCount) {
+  if (totalUnread > 0) return { count: totalUnread, tone: 'attention' }
+  if (inflightCount > 0) return { tone: 'info' }
+  return null
+}
+
+export function useConversationAttention(config) {
+  const [unreadTotal, setUnreadTotal] = useState(0)
+  const [inflight, setInflight] = useState(new Set())
+  const configRef = useRef(config)
+  configRef.current = config
+
+  const refreshTotals = useCallback(async () => {
+    try {
+      const totals = await configRef.current.refreshTotals()
+      if (!totals) return
+      setUnreadTotal(totals.unreadTotal)
+      setInflight(new Set(totals.inflightKeys))
+    } catch { /* hiccups never break the shell */ }
+  }, [])
+
+  useEffect(() => { void refreshTotals() }, [refreshTotals])
+
+  usePluginEvent(config.events.chunk, payload => {
+    const key = configRef.current.keyOf(payload)
+    setInflight(prev => (prev.has(key) ? prev : new Set(prev).add(key)))
+  })
+
+  usePluginEvent(config.events.done, payload => {
+    const cfg = configRef.current
+    const key = cfg.keyOf(payload)
+    setInflight(prev => { const next = new Set(prev); next.delete(key); return next })
+    const viewing = cfg.visibleKey() === key
+    const settings = cfg.settings?.() ?? { sound: true, toasts: true }
+    if (!payload.aborted && !viewing && settings.toasts) {
+      const node = cfg.renderToast(
+        { key, agentId: String(payload.agentId ?? ''), preview: payload.preview, aborted: payload.aborted },
+        () => {},
+      )
+      hookToast(node, 'info')
+    }
+    if (!payload.aborted && !viewing && settings.sound) cfg.chime?.()
+    void refreshTotals()
+  })
+
+  usePluginEvent(config.events.error, payload => {
+    const cfg = configRef.current
+    const key = cfg.keyOf(payload)
+    setInflight(prev => { const next = new Set(prev); next.delete(key); return next })
+    const settings = cfg.settings?.() ?? { sound: true, toasts: true }
+    if (cfg.visibleKey() !== key && settings.toasts) {
+      const message = cfg.errorToast?.(payload)
+      if (message) hookToast(message, 'error')
+    }
+    void refreshTotals()
+  })
+
+  const refreshEvents = config.events.refresh ?? []
+  usePluginEvent(refreshEvents[0] ?? `${config.pluginId}.__attention_noop_0`, () => { void refreshTotals() })
+  usePluginEvent(refreshEvents[1] ?? `${config.pluginId}.__attention_noop_1`, () => { void refreshTotals() })
+
+  hookUseNavBadge(config.pluginId, config.navItemId, badgeFor(unreadTotal, inflight.size))
 }

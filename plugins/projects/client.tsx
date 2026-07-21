@@ -7,6 +7,7 @@ import { useRouter } from '@makinbakin/sdk/hooks'
 import { Suspense, useEffect, type ReactNode } from 'react'
 import { ProjectGrid } from './components/project-grid'
 import { ProjectDetail } from './components/project-detail'
+import { BrainstormBadgeProvider } from './components/brainstorm-badge-provider'
 
 const navItems: NavItem[] = [
   {
@@ -97,5 +98,8 @@ registerPlugin({
     '/projects/new': ProjectsNewRoute,
     '/projects/[id]': ProjectDetailRoute,
     '/projects/[id]/edit': ProjectEditRoute,
+  },
+  slots: {
+    'nav-badge-providers': BrainstormBadgeProvider,
   },
 })
