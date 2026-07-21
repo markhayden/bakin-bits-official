@@ -59,6 +59,9 @@ describe('ProjectDetail', () => {
           text: async () => '',
         } as Response
       }
+      if (url.endsWith('/history')) {
+        return { ok: true, json: async () => ({ history: [] }), text: async () => '' } as Response
+      }
       throw new Error(`Unexpected fetch: ${url}`)
     }) as unknown as typeof fetch
 
@@ -101,6 +104,9 @@ describe('ProjectDetail', () => {
           }),
           text: async () => '',
         } as Response
+      }
+      if (url.endsWith('/history')) {
+        return { ok: true, json: async () => ({ history: [] }), text: async () => '' } as Response
       }
       throw new Error(`Unexpected fetch: ${url}`)
     }) as unknown as typeof fetch
@@ -167,6 +173,9 @@ describe('ProjectDetail', () => {
           text: async () => '',
         } as Response
       }
+      if (url.endsWith('/history')) {
+        return { ok: true, json: async () => ({ history: [] }), text: async () => '' } as Response
+      }
       throw new Error(`Unexpected fetch: ${url}`)
     }) as unknown as typeof fetch
 
@@ -221,6 +230,9 @@ describe('ProjectDetail brainstorm durability (bakin#703)', () => {
         await new Promise<void>((resolve) => { resolvePost = resolve })
         return { ok: true, status: 202, json: async () => ({ ok: true, streaming: true }), text: async () => '' } as Response
       }
+      if (url.endsWith('/history')) {
+        return { ok: true, json: async () => ({ history: [] }), text: async () => '' } as Response
+      }
       throw new Error(`Unexpected fetch: ${url}`)
     }) as unknown as typeof fetch
 
@@ -250,6 +262,9 @@ describe('ProjectDetail brainstorm durability (bakin#703)', () => {
           }),
           text: async () => '',
         } as Response
+      }
+      if (url.endsWith('/history')) {
+        return { ok: true, json: async () => ({ history: [] }), text: async () => '' } as Response
       }
       throw new Error(`Unexpected fetch: ${url}`)
     }) as unknown as typeof fetch
