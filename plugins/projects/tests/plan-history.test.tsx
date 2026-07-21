@@ -114,37 +114,49 @@ describe('block-level change hints (rendered view)', () => {
     ])
   })
 
-  it('markChangedBlocks marks edited and added blocks; deletions mark the next surviving block', async () => {
-    const { markChangedBlocks } = await import('../../../plugins/projects/lib/block-diff')
+  it('diffBlocks: edits are green-only, pure deletions become removal markers, identical is clean', async () => {
+    const { diffBlocks } = await import('../../../plugins/projects/lib/block-diff')
     const previous = '# Title\n\nintro\n\nmiddle\n\noutro'
 
-    // Edited middle block
-    expect(markChangedBlocks(previous, '# Title\n\nintro\n\nmiddle EDITED\n\noutro')).toEqual([
-      { text: '# Title', changed: false },
-      { text: 'intro', changed: false },
-      { text: 'middle EDITED', changed: true },
-      { text: 'outro', changed: false },
+    // Edited middle block — a modification collapses to one changed block,
+    // no removal marker.
+    expect(diffBlocks(previous, '# Title\n\nintro\n\nmiddle EDITED\n\noutro')).toEqual([
+      { type: 'block', text: '# Title', changed: false },
+      { type: 'block', text: 'intro', changed: false },
+      { type: 'block', text: 'middle EDITED', changed: true },
+      { type: 'block', text: 'outro', changed: false },
     ])
 
-    // Pure deletion: the block after the gap carries the mark
-    expect(markChangedBlocks(previous, '# Title\n\nintro\n\noutro')).toEqual([
-      { text: '# Title', changed: false },
-      { text: 'intro', changed: false },
-      { text: 'outro', changed: true },
+    // Pure deletion: an explicit marker at the removal site.
+    expect(diffBlocks(previous, '# Title\n\nintro\n\noutro')).toEqual([
+      { type: 'block', text: '# Title', changed: false },
+      { type: 'block', text: 'intro', changed: false },
+      { type: 'removed' },
+      { type: 'block', text: 'outro', changed: false },
     ])
 
-    // Trailing deletion marks the last surviving block
-    expect(markChangedBlocks(previous, '# Title\n\nintro\n\nmiddle')).toEqual([
-      { text: '# Title', changed: false },
-      { text: 'intro', changed: false },
-      { text: 'middle', changed: true },
+    // Trailing deletion: marker at the end.
+    expect(diffBlocks(previous, '# Title\n\nintro\n\nmiddle')).toEqual([
+      { type: 'block', text: '# Title', changed: false },
+      { type: 'block', text: 'intro', changed: false },
+      { type: 'block', text: 'middle', changed: false },
+      { type: 'removed' },
     ])
 
-    // Identical bodies: nothing marked
-    expect(markChangedBlocks(previous, previous).every((b) => !b.changed)).toBe(true)
+    // Pure addition: green block, no marker.
+    expect(diffBlocks(previous, '# Title\n\nintro\n\nNEW\n\nmiddle\n\noutro')).toEqual([
+      { type: 'block', text: '# Title', changed: false },
+      { type: 'block', text: 'intro', changed: false },
+      { type: 'block', text: 'NEW', changed: true },
+      { type: 'block', text: 'middle', changed: false },
+      { type: 'block', text: 'outro', changed: false },
+    ])
+
+    // Identical bodies: nothing marked.
+    expect(diffBlocks(previous, previous).every((e) => e.type === 'block' && !e.changed)).toBe(true)
   })
 
-  it('RenderedPlan highlights only the blocks the latest edit touched', async () => {
+  it('RenderedPlan draws a green edge bar on the edited block only', async () => {
     const { RenderedPlan } = await import('../../../plugins/projects/components/rendered-plan')
     globalThis.fetch = mock(async (input: RequestInfo | URL) => {
       const url = String(input)
@@ -162,7 +174,29 @@ describe('block-level change hints (rendered view)', () => {
     await waitFor(() => expect(container.querySelectorAll('[data-plan-changed-block]').length).toBe(1))
     const marked = container.querySelector('[data-plan-changed-block]')!
     expect(marked.textContent).toContain('new section')
+    expect(marked.className).toContain('border-emerald-500')
+    expect(container.querySelectorAll('[data-plan-removed-marker]').length).toBe(0)
     expect(screen.getByText('# Plan')).toBeDefined()
+  })
+
+  it('RenderedPlan draws a red tick where content was removed', async () => {
+    const { RenderedPlan } = await import('../../../plugins/projects/components/rendered-plan')
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/history')) {
+        return {
+          ok: true,
+          json: async () => ({ history: [{ ts: '2026-07-20T10:00:00Z', author: 'user', body: '# Plan\n\ndoomed section\n\nending' }] }),
+          text: async () => '',
+        } as Response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+
+    const { container } = render(<RenderedPlan projectId="p1" body={'# Plan\n\nending'} />)
+    await waitFor(() => expect(container.querySelectorAll('[data-plan-removed-marker]').length).toBe(1))
+    expect(container.querySelector('[data-plan-removed-marker]')!.className).toContain('bg-red-500')
+    expect(container.querySelectorAll('[data-plan-changed-block]').length).toBe(0)
   })
 
   it('RenderedPlan renders plain when there is no history baseline', async () => {
@@ -173,3 +207,4 @@ describe('block-level change hints (rendered view)', () => {
     expect(container.querySelectorAll('[data-plan-changed-block]').length).toBe(0)
   })
 })
+

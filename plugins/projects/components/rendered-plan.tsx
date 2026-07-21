@@ -2,16 +2,17 @@
 
 /**
  * RenderedPlan — the read-only Details view with a subtle "what just
- * changed" hint (bakin#703): blocks the latest edit touched carry a thin
- * accent bar + faint tint, so a small edit in a long plan is scannable
+ * changed" hint (bakin#703): a solid green bar along the left edge of
+ * blocks the latest edit added or changed, and a short red tick where
+ * content was removed — so a small edit in a long plan is scannable
  * without rereading everything. Baseline is the newest history snapshot
- * (the same default the Diff view compares against); the exact line-level
- * review lives in the Diff toggle.
+ * (the same default the Diff view compares against); the exact
+ * line-level review lives in the Diff toggle.
  */
 import { useEffect, useState } from 'react'
 import { MarkdownEditor } from '@makinbakin/sdk/components'
 import type { PlanSnapshot } from '../types'
-import { markChangedBlocks } from '../lib/block-diff'
+import { diffBlocks } from '../lib/block-diff'
 
 export function RenderedPlan({ projectId, body }: { projectId: string; body: string }) {
   // null = no baseline (no history yet, or still loading) → plain render.
@@ -35,27 +36,39 @@ export function RenderedPlan({ projectId, body }: { projectId: string; body: str
     // the baseline must follow it so only the LATEST change stays marked.
   }, [projectId, body])
 
-  const blocks = previousBody !== null ? markChangedBlocks(previousBody, body) : null
-  if (!blocks || !blocks.some((block) => block.changed)) {
+  const entries = previousBody !== null ? diffBlocks(previousBody, body) : null
+  const hasChanges = entries?.some((entry) => entry.type === 'removed' || (entry.type === 'block' && entry.changed))
+  if (!entries || !hasChanges) {
     return <MarkdownEditor content={body} editing={false} onChange={() => {}} placeholder="Project details, goals, background..." format="markdown" />
   }
 
   return (
     <div data-testid="rendered-plan" className="space-y-3">
-      {blocks.map((block, index) => (
-        <div
-          key={index}
-          {...(block.changed
-            ? {
-                'data-plan-changed-block': true,
-                title: 'Changed in the latest edit',
-                className: 'relative -ml-3 rounded-r-md border-l-2 border-[#5e6ad2]/60 bg-[#5e6ad2]/[0.06] pl-3 py-0.5',
-              }
-            : {})}
-        >
-          <MarkdownEditor content={block.text} editing={false} onChange={() => {}} format="markdown" />
-        </div>
-      ))}
+      {entries.map((entry, index) =>
+        entry.type === 'removed' ? (
+          // Deleted content has no block to mark — a solid red tick shows
+          // where it used to be.
+          <div
+            key={index}
+            data-plan-removed-marker
+            title="Content removed here in the latest edit"
+            className="-ml-3 h-[3px] w-12 rounded-full bg-red-500"
+          />
+        ) : (
+          <div
+            key={index}
+            {...(entry.changed
+              ? {
+                  'data-plan-changed-block': true,
+                  title: 'Added or edited in the latest edit',
+                  className: 'relative -ml-3 border-l-[3px] border-emerald-500 pl-3',
+                }
+              : {})}
+          >
+            <MarkdownEditor content={entry.text} editing={false} onChange={() => {}} format="markdown" />
+          </div>
+        ),
+      )}
     </div>
   )
 }

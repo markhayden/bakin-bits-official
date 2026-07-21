@@ -1,17 +1,15 @@
 /**
  * Block-level change marking for the rendered plan view (bakin#703).
- * Rendering destroys line identity, so the subtle "what just changed"
- * hint works at markdown-block granularity: split on blank lines
- * (fence-aware), LCS over blocks against the previous snapshot, and mark
- * the current blocks the last edit touched. Pure deletions have no block
- * of their own — the next surviving block carries the mark so the reader
- * still knows where to look.
+ * Rendering destroys line identity, so the "what just changed" hint works
+ * at markdown-block granularity: split on blank lines (fence-aware), LCS
+ * over blocks against the previous snapshot. Added/edited blocks get a
+ * green edge bar; pure deletions surface as an explicit red marker at the
+ * removal site (they have no block of their own to mark).
  */
 
-export interface PlanBlock {
-  text: string
-  changed: boolean
-}
+export type PlanDiffEntry =
+  | { type: 'block'; text: string; changed: boolean }
+  | { type: 'removed' }
 
 /** Split markdown into blank-line-separated blocks; code fences stay intact. */
 export function splitBlocks(markdown: string): string[] {
@@ -33,8 +31,14 @@ export function splitBlocks(markdown: string): string[] {
   return blocks
 }
 
-/** The current body's blocks, marked where they differ from `previous`. */
-export function markChangedBlocks(previous: string, current: string): PlanBlock[] {
+/**
+ * The current body's blocks plus removal markers, diffed against
+ * `previous`. Added/edited blocks are `changed` (green bar); a removal
+ * that is NOT part of an edit (no adjacent added block) becomes an
+ * explicit `removed` marker at the spot the content used to be, so pure
+ * deletions stay visible without implying the neighbors changed.
+ */
+export function diffBlocks(previous: string, current: string): PlanDiffEntry[] {
   const a = splitBlocks(previous)
   const b = splitBlocks(current)
 
@@ -45,34 +49,35 @@ export function markChangedBlocks(previous: string, current: string): PlanBlock[
     }
   }
 
-  const out: PlanBlock[] = []
+  const out: PlanDiffEntry[] = []
   let i = 0
   let j = 0
   let pendingRemoval = false
+  const flushRemoval = () => {
+    if (pendingRemoval) out.push({ type: 'removed' })
+    pendingRemoval = false
+  }
   while (i < a.length && j < b.length) {
     if (a[i] === b[j]) {
-      out.push({ text: b[j], changed: pendingRemoval })
-      pendingRemoval = false
+      flushRemoval()
+      out.push({ type: 'block', text: b[j], changed: false })
       i++
       j++
     } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
-      pendingRemoval = true // deletion: the next surviving block carries the mark
+      pendingRemoval = true
       i++
     } else {
-      out.push({ text: b[j], changed: true })
+      // An addition right after removals is an EDIT — green only, no marker.
       pendingRemoval = false
+      out.push({ type: 'block', text: b[j], changed: true })
       j++
     }
   }
+  if (i < a.length) pendingRemoval = true
   while (j < b.length) {
-    out.push({ text: b[j++], changed: true })
     pendingRemoval = false
+    out.push({ type: 'block', text: b[j++], changed: true })
   }
-  while (i < a.length) {
-    pendingRemoval = true
-    i++
-  }
-  // Trailing deletion: mark the last surviving block.
-  if (pendingRemoval && out.length > 0) out[out.length - 1].changed = true
+  flushRemoval()
   return out
 }
