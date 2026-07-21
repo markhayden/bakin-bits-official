@@ -1,10 +1,10 @@
 'use client'
 
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { useRouter, useHorizontalResize } from '@makinbakin/sdk/hooks'
+import { useRouter, useHorizontalResize, toast } from '@makinbakin/sdk/hooks'
 import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, ChevronDown, Search, Pencil, Trash2, Link2 } from 'lucide-react'
 import { useMainAgentId } from "@makinbakin/sdk/hooks"
-import { AgentSelect, ConversationPanel, useConversationStream } from "@makinbakin/sdk/components"
+import { AgentSelect, ConversationPanel, useConversationThread } from "@makinbakin/sdk/components"
 import type { ConversationMessage } from "@makinbakin/sdk/components"
 import { ProjectChecklist } from './project-checklist'
 import { ProjectEditor } from './project-editor'
@@ -214,7 +214,6 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
 
   // Brainstorm
   const [brainstormAgent, setBrainstormAgent] = useState(mainAgentId)
-  const [brainstormMessages, setBrainstormMessages] = useState<ConversationMessage[]>([])
 
   // Dropdowns
   const [statusOpen, setStatusOpen] = useState(false)
@@ -251,7 +250,6 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
         setEditOwner(data.project.owner)
         setEditStatus(data.project.status)
         setEditBody(data.project.body)
-        setBrainstormMessages(Array.isArray(data.project.brainstormMessages) ? data.project.brainstormMessages : [])
         const shouldEdit = enterEdit ?? false
         setEditing(shouldEdit)
         onEditChange?.(shouldEdit)
@@ -374,27 +372,54 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   // Brainstorm
   // ---------------------------------------------------------------------------
 
-  // The server owns the transcript (ConversationMessage rows in the
-  // project payload); the kit stream hook drives the live turn over the
-  // `chunk` SSE frames the ask route emits.
-  const brainstorm = useConversationStream({
-    fetcher: useCallback(
-      (content: string, ctx: { signal: AbortSignal }) => {
-        if (!currentId) throw new Error('Create the project before starting a brainstorm.')
-        return fetch(`/api/plugins/projects/${currentId}/ask`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: ctx.signal,
-          body: JSON.stringify({ projectId: currentId, prompt: content, agent: brainstormAgent }),
-        })
-      },
-      [currentId, brainstormAgent],
-    ),
-    // Refresh after a reply lands — the agent may have updated the spec,
-    // and the durable transcript replaces the live chunks.
-    onDone: () => fetchProject(),
-    onError: () => fetchProject(),
+  // The server owns the transcript AND the turn (bakin#703): the ask route
+  // 202s and the turn streams as projects.brainstorm.* bus events, so
+  // navigating away never kills it and remounting rehydrates mid-stream
+  // (server-seeded `brainstormStreaming`). The kit hook adds the
+  // synchronous optimistic user echo.
+  const brainstormAgentRef = useRef(brainstormAgent)
+  brainstormAgentRef.current = brainstormAgent
+  const brainstorm = useConversationThread({
+    threadKey: currentId ?? '',
+    events: {
+      chunk: 'projects.brainstorm.chunk',
+      done: 'projects.brainstorm.done',
+      error: 'projects.brainstorm.error',
+    },
+    keyOf: useCallback((payload: Record<string, unknown>) => payload.projectId, []),
+    load: useCallback(async (key: string) => {
+      const res = await fetch(`/api/plugins/projects/${key}`)
+      if (!res.ok) return null
+      const data = await res.json()
+      return {
+        messages: Array.isArray(data.project?.brainstormMessages) ? data.project.brainstormMessages : [],
+        streaming: data.project?.brainstormStreaming === true,
+      }
+    }, []),
+    post: useCallback(async (key: string, content: string) => {
+      const res = await fetch(`/api/plugins/projects/${key}/ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: key, prompt: content, agent: brainstormAgentRef.current }),
+      })
+      if (res.ok) return { ok: true }
+      const body = await res.json().catch(() => ({}))
+      return { ok: false, status: res.status, ...(body.error ? { error: String(body.error) } : {}) }
+    }, []),
+    // Refresh after a reply settles — the agent may have updated the spec.
+    onSettled: useCallback(() => { fetchProject() }, [fetchProject]),
   })
+
+  // Send failures (409 busy, network) surface as a toast; the optimistic
+  // row stays visible in the panel.
+  useEffect(() => {
+    if (brainstorm.sendError) toast(brainstorm.sendError, 'error')
+  }, [brainstorm.sendError])
+
+  const abortBrainstorm = useCallback(() => {
+    if (!currentId) return
+    void fetch(`/api/plugins/projects/${currentId}/ask/abort`, { method: 'POST' }).catch(() => {})
+  }, [currentId])
 
   // ---------------------------------------------------------------------------
   // Assets
@@ -805,11 +830,11 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
 
           {/* ── Brainstorm — pinned at bottom ── */}
           <ConversationPanel
-            messages={brainstormMessages}
+            messages={brainstorm.messages}
             liveChunks={brainstorm.liveChunks}
             streaming={brainstorm.streaming}
             onSend={brainstorm.send}
-            onAbort={brainstorm.abort}
+            onAbort={abortBrainstorm}
             agentId={brainstormAgent}
             onAgentChange={setBrainstormAgent}
             storageKey={`project:${currentId}`}

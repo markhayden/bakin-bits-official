@@ -5,7 +5,7 @@
 import { z } from 'zod'
 import { defineRoute } from '@makinbakin/sdk'
 import type { BakinPlugin, PluginContext, RuntimeAgent } from '@makinbakin/sdk/types'
-import { conversationThreadId, createTurnRecorder } from '@makinbakin/sdk/utils'
+import { conversationThreadId } from '@makinbakin/sdk/utils'
 import { createProjectRepository, projectToSummary } from './lib/parser'
 import { createProjectService } from './lib/project-service'
 import type { Project, ProjectBrainstormMessage, ProjectStatus } from './types'
@@ -53,10 +53,6 @@ const PROJECT_BRAINSTORM_INSTRUCTIONS = [
   'If the user asks for advice only, answer in chat and call out any optional plan update separately.',
   'If suggesting tasks, format them as a numbered list.',
 ].join('\n')
-
-function newTurnId(): string {
-  return `turn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-}
 
 // ---------------------------------------------------------------------------
 // Declarative routes (late-binding)
@@ -132,7 +128,8 @@ const projectsPlugin: BakinPlugin = {
     legacyRoute('POST', '/:projectId/assets', 'Attach asset'),
     legacyRoute('PATCH', '/:projectId/assets/:assetId', 'Relink asset reference'),
     legacyRoute('DELETE', '/:projectId/assets/:assetId', 'Detach asset'),
-    legacyRoute('POST', '/:projectId/ask', 'Ask agent about project (streams tokens via SSE)'),
+    legacyRoute('POST', '/:projectId/ask', 'Ask agent about project (202; streams over the plugin-event bus)'),
+    legacyRoute('POST', '/:projectId/ask/abort', 'Abort the in-flight brainstorm turn'),
   ],
 
   async activate(ctx: PluginContext) {
@@ -162,6 +159,34 @@ const projectsPlugin: BakinPlugin = {
     const readAllProjects = repo.readAllProjects
     const readBrainstormMessages = repo.readBrainstormMessages
     const writeBrainstormMessages = repo.writeBrainstormMessages
+
+    // Brainstorm turns run on the shared conversation turn engine
+    // (bakin#703): server-owned background turns, streamed as
+    // projects.brainstorm.* plugin-events, persisted incrementally into the
+    // per-project transcript — navigating away never kills a turn. The
+    // runtime thread stays the durable per-(project, agent) session.
+    const brainstormTurns = ctx.conversations.createTurnService({
+      name: 'projects.brainstorm',
+      events: {
+        chunk: 'projects.brainstorm.chunk',
+        done: 'projects.brainstorm.done',
+        error: 'projects.brainstorm.error',
+      },
+      payload: (key) => ({ projectId: key }),
+      resolveThread: async (key) =>
+        readProject(key) ? { agentId: await getRuntimeMainAgentId(ctx) } : null,
+      appendRow: (key, row) => {
+        writeBrainstormMessages(key, [
+          ...readBrainstormMessages(key),
+          row as unknown as ProjectBrainstormMessage,
+        ])
+      },
+      threadId: (key, agentId) => conversationThreadId('projects', key, agentId),
+      metering: {
+        workClass: 'chat',
+        runId: (key, turnId) => `brainstorm:projects:${key}:turn:${turnId}`,
+      },
+    })
 
     // ─── Search Content Type Registration ─────────────────────────────
 
@@ -301,6 +326,9 @@ const projectsPlugin: BakinPlugin = {
         project: {
           ...(await resolveLinkedTaskStatuses(project)),
           brainstormMessages: readBrainstormMessages(id),
+          // Server-seeded in-flight flag — a remount mid-turn rehydrates the
+          // streaming indicator instead of looking idle.
+          brainstormStreaming: brainstormTurns.isInFlight(id),
         },
       })
     }
@@ -516,130 +544,61 @@ const projectsPlugin: BakinPlugin = {
     }
     routeHandlers.set('DELETE /:projectId/assets/:assetId', detachHandler)
 
-    // POST /:projectId/ask — agent brainstorm (SSE stream, kit `chunk` frames)
+    // POST /:projectId/ask — agent brainstorm on the turn engine (bakin#703):
+    // 202 immediately, the turn streams as projects.brainstorm.* bus events
+    // and persists incrementally. One turn per project (busy → 409). The
+    // assembled context rides opts.runtimeContent — the transcript keeps the
+    // user's clean prompt.
     routeHandlers.set('POST /:projectId/ask', async (req: Request) => {
-        const body = await readBody<{
-          projectId: string
-          prompt: string
-          agent?: string
-        }>(req)
-        if (!body.projectId || !body.prompt) return json({ error: 'Missing projectId or prompt' }, 400)
-        const project = readProject(body.projectId)
-        if (!project) return json({ error: 'Project not found' }, 404)
-        const agentId = body.agent || await getRuntimeMainAgentId(ctx)
-        let persistedMessages = readBrainstormMessages(body.projectId)
+      const body = await readBody<{
+        projectId: string
+        prompt: string
+        agent?: string
+      }>(req)
+      if (!body.projectId || !body.prompt) return json({ error: 'Missing projectId or prompt' }, 400)
+      const project = readProject(body.projectId)
+      if (!project) return json({ error: 'Project not found' }, 404)
+      const agentId = body.agent || await getRuntimeMainAgentId(ctx)
 
-        const assetLines = project.assets.length > 0
-          ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.assetId}${a.label ? ` — ${a.label}` : ''}`)]
-          : []
+      const assetLines = project.assets.length > 0
+        ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.assetId}${a.label ? ` — ${a.label}` : ''}`)]
+        : []
 
-        const context = [
-          `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
-          `Progress: ${project.progress}% (${project.tasks.filter(t => t.checked).length}/${project.tasks.length} items checked)`,
-          '',
-          'Project spec:',
-          project.body.slice(0, 3000),
-          '',
-          'Checklist items:',
-          ...project.tasks.map(t => `- [${t.checked ? 'x' : ' '}] ${t.title}${t.taskId ? ` (linked: ${t.taskId})` : ''}`),
-          ...assetLines,
-          PROJECT_BRAINSTORM_INSTRUCTIONS,
-          '',
-          'User request:',
-          body.prompt,
-          '',
-          'Respond concisely.',
-        ].join('\n')
+      const context = [
+        `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
+        `Progress: ${project.progress}% (${project.tasks.filter(t => t.checked).length}/${project.tasks.length} items checked)`,
+        '',
+        'Project spec:',
+        project.body.slice(0, 3000),
+        '',
+        'Checklist items:',
+        ...project.tasks.map(t => `- [${t.checked ? 'x' : ' '}] ${t.title}${t.taskId ? ` (linked: ${t.taskId})` : ''}`),
+        ...assetLines,
+        PROJECT_BRAINSTORM_INSTRUCTIONS,
+        '',
+        'User request:',
+        body.prompt,
+        '',
+        'Respond concisely.',
+      ].join('\n')
 
-        const sessionKey = conversationThreadId('projects', body.projectId, agentId)
-        const turnId = newTurnId()
-        persistedMessages = [
-          ...persistedMessages,
-          { kind: 'user', ts: new Date().toISOString(), content: body.prompt },
-        ]
-        writeBrainstormMessages(body.projectId, persistedMessages)
-
-        const stream = new ReadableStream({
-          async start(controller) {
-            const encoder = new TextEncoder()
-            function send(event: string, data: unknown): void {
-              controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
-            }
-            const recorder = createTurnRecorder({ turnId, agentId })
-            function persistRows(rows: ProjectBrainstormMessage[]): void {
-              if (rows.length === 0) return
-              persistedMessages = [...persistedMessages, ...rows]
-              writeBrainstormMessages(body.projectId, persistedMessages)
-            }
-
-            let fullContent = ''
-            let useStreaming = true
-            let chunks: ReturnType<PluginContext['runtime']['messaging']['stream']> | undefined
-
-            try {
-              chunks = ctx.runtime.messaging.stream({
-                agentId,
-                content: context,
-                threadId: sessionKey,
-              })
-            } catch (err) {
-              // Fall back to one-shot runtime messaging below. Log at warn level
-              // so a real runtime transport outage is still debuggable.
-              log.warn('runtime stream failed, falling back to runtime send', {
-                error: err instanceof Error ? err.message : String(err),
-                agentId,
-              })
-              useStreaming = false
-            }
-
-            try {
-              if (useStreaming && chunks) {
-                for await (const chunk of chunks) {
-                  if (chunk.type === 'error') {
-                    throw new Error(chunk.content ?? 'Runtime stream error')
-                  }
-                  if (chunk.type === 'text' && chunk.content) fullContent += chunk.content
-                  if (chunk.type === 'text' || chunk.type === 'tool' || chunk.type === 'status') {
-                    send('chunk', chunk)
-                  }
-                  recorder.ingest(chunk)
-                  persistRows(recorder.drain())
-                }
-              } else {
-                const result = await ctx.runtime.messaging.send({
-                  agentId,
-                  content: context,
-                  threadId: sessionKey,
-                })
-                fullContent = result.content ?? ''
-                if (fullContent) {
-                  const chunk = { type: 'text' as const, content: fullContent }
-                  send('chunk', chunk)
-                  recorder.ingest(chunk)
-                }
-              }
-              persistRows(recorder.finish())
-              send('done', { content: fullContent })
-            } catch (err: unknown) {
-              log.error('Agent ask failed', err)
-              const message = err instanceof Error ? err.message : String(err)
-              persistRows(recorder.finish())
-              persistRows([{ kind: 'error', ts: new Date().toISOString(), turnId, message }])
-              send('error', { message })
-            } finally {
-              controller.close()
-            }
-          },
-        })
-
-        return new Response(stream, {
-          headers: {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-          },
-        })
+      const result = await brainstormTurns.start(ctx, body.projectId, body.prompt, {
+        agentId,
+        runtimeContent: context,
       })
+      if (result === 'not_found') return json({ error: 'Project not found' }, 404)
+      if (result === 'busy') return json({ error: 'A brainstorm turn is already running for this project' }, 409)
+      return json({ ok: true, streaming: true }, 202)
+    })
+
+    // POST /:projectId/ask/abort — stop the in-flight brainstorm turn.
+    routeHandlers.set('POST /:projectId/ask/abort', async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const id = url.searchParams.get('projectId')
+      if (!id) return json({ error: 'Missing projectId' }, 400)
+      if (!brainstormTurns.abort(id)) return json({ error: 'No brainstorm turn in flight' }, 409)
+      return json({ ok: true })
+    })
 
     // -----------------------------------------------------------------
     // MCP Exec Tools
