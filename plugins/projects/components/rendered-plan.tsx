@@ -63,7 +63,7 @@ export function RenderedPlan({ projectId, body }: { projectId: string; body: str
             {...(entry.changed
               ? { 'data-plan-changed-block': true, title: 'Added or edited in the latest edit' }
               : {})}
-            className={`border-l-[3px] pl-3 ${entry.changed ? 'border-emerald-500' : 'border-transparent'}`}
+            className={`border-l-[3px] pl-3 ${entry.changed ? 'border-emerald-500 bg-emerald-500/[0.07] rounded-r-md py-1' : 'border-transparent'}`}
           >
             <MarkdownEditor content={entry.text} editing={false} onChange={() => {}} format="markdown" />
           </div>
