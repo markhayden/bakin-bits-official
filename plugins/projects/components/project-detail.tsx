@@ -10,7 +10,7 @@ import { ProjectChecklist } from './project-checklist'
 import { ProjectEditor } from './project-editor'
 import { PlanHistoryPanel } from './plan-history'
 import { RenderedPlan } from './rendered-plan'
-import { Skeleton } from "@makinbakin/sdk/ui"
+import { Skeleton, Switch } from "@makinbakin/sdk/ui"
 import type { ProjectStatus } from '../types'
 
 // ---------------------------------------------------------------------------
@@ -217,8 +217,16 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   // Brainstorm
   const [brainstormAgent, setBrainstormAgent] = useState(mainAgentId)
 
-  // Plan history "Changes" view (bakin#703)
+  // Plan history "Diff" view (bakin#703)
   const [showChanges, setShowChanges] = useState(false)
+  // Change hints on the rendered view — sticky preference.
+  const [showChangeHints, setShowChangeHints] = useState(() => {
+    try { return localStorage.getItem('projects-show-change-hints') !== 'false' } catch { return true }
+  })
+  const toggleChangeHints = (next: boolean) => {
+    setShowChangeHints(next)
+    try { localStorage.setItem('projects-show-change-hints', String(next)) } catch { /* private mode */ }
+  }
 
   // Dropdowns
   const [statusOpen, setStatusOpen] = useState(false)
@@ -850,22 +858,30 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
             <div className="sticky top-0 z-10 -mx-1 px-1 bg-background flex items-center justify-between pt-1 pb-1.5">
               <label className="text-[10px] font-medium text-zinc-600 uppercase tracking-wider block">Details</label>
               {!editing && (
-                <div className="flex items-center gap-0.5 bg-muted/50 rounded-lg p-0.5" data-testid="plan-view-toggle">
-                  {([['details', 'Details'], ['changes', 'Diff']] as const).map(([value, label]) => (
-                    <button
-                      key={value}
-                      type="button"
-                      data-testid={value === 'changes' ? 'plan-changes-toggle' : 'plan-details-toggle'}
-                      onClick={() => setShowChanges(value === 'changes')}
-                      className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
-                        (value === 'changes') === showChanges
-                          ? 'bg-accent text-accent-foreground'
-                          : 'text-muted-foreground hover:text-foreground'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-3">
+                  {!showChanges && (
+                    <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer select-none" data-testid="show-changes-switch">
+                      Show changes
+                      <Switch size="sm" checked={showChangeHints} onCheckedChange={toggleChangeHints} />
+                    </label>
+                  )}
+                  <div className="flex items-center gap-0.5 bg-muted/50 rounded-lg p-0.5" data-testid="plan-view-toggle">
+                    {([['details', 'Rendered'], ['changes', 'Diff']] as const).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        data-testid={value === 'changes' ? 'plan-changes-toggle' : 'plan-details-toggle'}
+                        onClick={() => setShowChanges(value === 'changes')}
+                        className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
+                          (value === 'changes') === showChanges
+                            ? 'bg-accent text-accent-foreground'
+                            : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -883,7 +899,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                   onChange={setEditBody}
                 />
               ) : (
-                <RenderedPlan projectId={currentId ?? ''} body={project.body} />
+                <RenderedPlan projectId={currentId ?? ''} body={project.body} hintsEnabled={showChangeHints} />
               )}
             </div>
 

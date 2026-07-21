@@ -208,3 +208,25 @@ describe('block-level change hints (rendered view)', () => {
   })
 })
 
+
+describe('show-changes preference', () => {
+  it('RenderedPlan renders plain (no hints, no history fetch dependence) when hints are disabled', async () => {
+    const { RenderedPlan } = await import('../../../plugins/projects/components/rendered-plan')
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/history')) {
+        return {
+          ok: true,
+          json: async () => ({ history: [{ ts: '2026-07-20T10:00:00Z', author: 'agent', body: 'old body' }] }),
+          text: async () => '',
+        } as Response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+
+    const { container } = render(<RenderedPlan projectId="p1" body="new body" hintsEnabled={false} />)
+    await waitFor(() => expect(screen.getByText('new body')).toBeDefined())
+    expect(container.querySelectorAll('[data-plan-changed-block]').length).toBe(0)
+    expect(container.querySelectorAll('[data-plan-removed-marker]').length).toBe(0)
+  })
+})

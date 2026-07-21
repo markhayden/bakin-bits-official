@@ -14,7 +14,7 @@ import { MarkdownEditor } from '@makinbakin/sdk/components'
 import type { PlanSnapshot } from '../types'
 import { diffBlocks } from '../lib/block-diff'
 
-export function RenderedPlan({ projectId, body }: { projectId: string; body: string }) {
+export function RenderedPlan({ projectId, body, hintsEnabled = true }: { projectId: string; body: string; hintsEnabled?: boolean }) {
   // null = no baseline (no history yet, or still loading) → plain render.
   const [previousBody, setPreviousBody] = useState<string | null>(null)
 
@@ -36,7 +36,7 @@ export function RenderedPlan({ projectId, body }: { projectId: string; body: str
     // the baseline must follow it so only the LATEST change stays marked.
   }, [projectId, body])
 
-  const entries = previousBody !== null ? diffBlocks(previousBody, body) : null
+  const entries = hintsEnabled && previousBody !== null ? diffBlocks(previousBody, body) : null
   const hasChanges = entries?.some((entry) => entry.type === 'removed' || (entry.type === 'block' && entry.changed))
   if (!entries || !hasChanges) {
     return <MarkdownEditor content={body} editing={false} onChange={() => {}} placeholder="Project details, goals, background..." format="markdown" />
