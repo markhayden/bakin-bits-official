@@ -104,6 +104,8 @@ export interface ProjectService {
   createProject(opts: CreateProjectOpts): Promise<{ id: string; taskItems: { id: string; title: string }[] }>
   updateProject(id: string, updates: UpdateProjectOpts, agent?: string): Promise<void>
   applyProjectPlan(id: string, updates: ApplyProjectPlanOpts, agent?: string): Promise<ApplyProjectPlanResult>
+  /** Restore a plan snapshot by history index; snapshots the current body first (bakin#703). */
+  restorePlanVersion(id: string, index: number): Promise<void>
   deleteProject(id: string, agent?: string): Promise<void>
   addChecklistItem(projectId: string, title: string): Promise<{ taskItemId: string }>
   markChecklistItem(projectId: string, taskItemId: string, checked: boolean): Promise<{ progress: number }>
@@ -185,7 +187,16 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       }
       if (updates.title !== undefined) project.title = updates.title
       if (updates.status !== undefined) project.status = updates.status
-      if (updates.body !== undefined) project.body = updates.body
+      if (updates.body !== undefined && updates.body !== project.body) {
+        // Snapshot the PRIOR body before it changes (bakin#703) — no-op
+        // writes never snapshot.
+        repo.appendPlanSnapshot(id, {
+          ts: new Date().toISOString(),
+          author: agent ? 'agent' : 'user',
+          body: project.body,
+        })
+        project.body = updates.body
+      }
       if (updates.owner !== undefined) project.owner = updates.owner
       project.updated = new Date().toISOString()
       project.progress = computeProgress(project.tasks)
@@ -223,10 +234,16 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       if (updates.title !== undefined) project.title = updates.title
       if (updates.status !== undefined) project.status = updates.status
       if (updates.owner !== undefined) project.owner = updates.owner
+      const priorBody = project.body
       if (updates.body !== undefined) {
         project.body = updates.body
       } else if (updates.appendBody !== undefined) {
         project.body = [project.body.trimEnd(), updates.appendBody.trim()].filter(Boolean).join('\n\n')
+      }
+      if (project.body !== priorBody) {
+        // Snapshot the PRIOR body (bakin#703) — every agent edit is
+        // visible in the plan history and revertable.
+        repo.appendPlanSnapshot(id, { ts: new Date().toISOString(), author: 'agent', body: priorBody })
       }
 
       project.updated = new Date().toISOString()
@@ -500,8 +517,30 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     return { ...project, resolvedTasks: resolved, resolvedAssets }
   }
 
+  /**
+   * Restore a plan-history snapshot (bakin#703). The current body is
+   * snapshotted first, so restore itself is never destructive.
+   */
+  async function restorePlanVersion(id: string, index: number): Promise<void> {
+    return withProjectLock(() => {
+      const project = repo.readProject(id)
+      if (!project) throw new Error(`Project not found: ${id}`)
+      const history = repo.readPlanHistory(id)
+      const snapshot = history[index]
+      if (!snapshot) throw new Error(`No plan snapshot at index ${index}`)
+      if (snapshot.body === project.body) return
+      repo.appendPlanSnapshot(id, { ts: new Date().toISOString(), author: 'user', body: project.body })
+      project.body = snapshot.body
+      project.updated = new Date().toISOString()
+      repo.writeProject(project)
+      ctx.activity.audit('plan.restored', project.owner, { id, snapshotTs: snapshot.ts })
+      broadcast({ type: 'project.updated', id, title: project.title })
+    })
+  }
+
   return {
     rebuildIndex,
+    restorePlanVersion,
     getProjectForTask,
     getProjectTitleForTask,
     createProject,

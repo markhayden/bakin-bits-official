@@ -6,7 +6,7 @@
  */
 import type { StorageAdapter } from '@makinbakin/sdk/types'
 import yaml from 'js-yaml'
-import type { Project, ProjectFrontmatter, ProjectTask, ProjectAsset, ProjectBrainstormMessage, ProjectSummary } from '../types'
+import type { PlanSnapshot, Project, ProjectFrontmatter, ProjectTask, ProjectAsset, ProjectBrainstormMessage, ProjectSummary } from '../types'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -53,6 +53,13 @@ function projectBrainstormPath(id: string): string {
 function projectBrainstormSeenPath(id: string): string {
   return `projects/${id}.brainstorm-seen.json`
 }
+
+function projectHistoryPath(id: string): string {
+  return `projects/${id}.history.json`
+}
+
+/** Bounded plan history — the last N prior bodies (bakin#703). */
+export const PLAN_HISTORY_CAP = 20
 
 // ---------------------------------------------------------------------------
 // Parse / Serialize
@@ -143,6 +150,8 @@ export interface ProjectRepository {
   writeBrainstormMessages(id: string, messages: ProjectBrainstormMessage[]): void
   readBrainstormSeen(id: string): string | null
   writeBrainstormSeen(id: string, lastSeenAt: string): void
+  readPlanHistory(id: string): PlanSnapshot[]
+  appendPlanSnapshot(id: string, snapshot: PlanSnapshot): void
   deleteProjectFile(id: string): boolean
   projectStoragePath(id: string): string
   projectBrainstormStoragePath(id: string): string
@@ -208,6 +217,23 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
       storage.write(projectBrainstormSeenPath(id), JSON.stringify({ lastSeenAt }))
     },
 
+    readPlanHistory(id: string): PlanSnapshot[] {
+      const content = storage.read(projectHistoryPath(id))
+      if (!content) return []
+      try {
+        const parsed = JSON.parse(content)
+        return Array.isArray(parsed) ? (parsed as PlanSnapshot[]) : []
+      } catch {
+        return []
+      }
+    },
+
+    /** Append one snapshot (oldest first), dropping past the cap. */
+    appendPlanSnapshot(id: string, snapshot: PlanSnapshot): void {
+      const history = [...this.readPlanHistory(id), snapshot].slice(-PLAN_HISTORY_CAP)
+      storage.write(projectHistoryPath(id), JSON.stringify(history, null, 2))
+    },
+
     deleteProjectFile(id: string): boolean {
       const path = projectPath(id)
       if (!storage.exists(path)) return false
@@ -216,6 +242,8 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
       if (storage.exists(brainstormPath)) storage.remove?.(brainstormPath)
       const seenPath = projectBrainstormSeenPath(id)
       if (storage.exists(seenPath)) storage.remove?.(seenPath)
+      const historyPath = projectHistoryPath(id)
+      if (storage.exists(historyPath)) storage.remove?.(historyPath)
       return true
     },
 

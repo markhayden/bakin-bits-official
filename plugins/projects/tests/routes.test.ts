@@ -1071,6 +1071,38 @@ describe('Routes', () => {
       await settled
     })
 
+    it('history routes: GET lists snapshots; restore round-trips through the service', async () => {
+      writeProjectFixture('proj-hist', { title: 'History Project', body: 'original body' })
+      const putRoute = findRoute(plugin.routes, 'PUT', '/:projectId')!
+      await callRoute(putRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-hist' },
+        body: { body: 'edited body' },
+      })
+
+      const historyRoute = findRoute(plugin.routes, 'GET', '/:projectId/history')!
+      const history = await callRoute(historyRoute, plugin.ctx, { searchParams: { projectId: 'proj-hist' } })
+      expect(history.status).toBe(200)
+      expect(history.body.history).toMatchObject([{ author: 'user', body: 'original body' }])
+
+      const restoreRoute = findRoute(plugin.routes, 'POST', '/:projectId/history/:index/restore')!
+      const restored = await callRoute(restoreRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-hist', index: '0' },
+      })
+      expect(restored.status).toBe(200)
+
+      const getRoute = findRoute(plugin.routes, 'GET', '/:projectId')!
+      const hydrated = await callRoute(getRoute, plugin.ctx, { searchParams: { projectId: 'proj-hist' } })
+      expect(hydrated.body.project.body).toBe('original body')
+
+      // Bad index → 400; ghost project → 404.
+      const bad = await callRoute(restoreRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-hist', index: '99' },
+      })
+      expect(bad.status).toBe(400)
+      const ghost = await callRoute(historyRoute, plugin.ctx, { searchParams: { projectId: 'ghost' } })
+      expect(ghost.status).toBe(404)
+    })
+
     it('a failing runtime stream settles as an error turn — durable error row + bus error event', async () => {
       writeProjectFixture('proj-fail', { title: 'Fail Project' })
       mockRuntimeStreamError('unreachable')

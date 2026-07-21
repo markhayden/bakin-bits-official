@@ -560,3 +560,64 @@ assets:
     expect(readProject('legacy')!.assets).toEqual([])
   })
 })
+
+describe('plan history (bakin#703)', () => {
+  it('snapshots the PRIOR body on agent and user edits, with attribution; no-op writes never snapshot', async () => {
+    const { id } = await createProject({ title: 'History', body: 'v1' })
+    await service.applyProjectPlan(id, { body: 'v2' })          // agent edit
+    await updateProject(id, { body: 'v3' })                     // user edit (no agent arg)
+    await updateProject(id, { body: 'v3' })                     // no-op — must not snapshot
+    await updateProject(id, { title: 'Renamed' })               // body untouched — no snapshot
+
+    const history = repo.readPlanHistory(id)
+    expect(history.map((s) => ({ author: s.author, body: s.body }))).toEqual([
+      { author: 'agent', body: 'v1' },
+      { author: 'user', body: 'v2' },
+    ])
+    expect(repo.readProject(id)?.body).toBe('v3')
+  })
+
+  it('appendBody changes snapshot too', async () => {
+    const { id } = await createProject({ title: 'Append', body: 'base' })
+    await service.applyProjectPlan(id, { appendBody: 'more' })
+    const history = repo.readPlanHistory(id)
+    expect(history).toHaveLength(1)
+    expect(history[0]).toMatchObject({ author: 'agent', body: 'base' })
+    expect(repo.readProject(id)?.body).toBe('base\n\nmore')
+  })
+
+  it('caps history at 20 snapshots, dropping the oldest', async () => {
+    const { id } = await createProject({ title: 'Capped', body: 'v0' })
+    for (let i = 1; i <= 25; i++) {
+      await updateProject(id, { body: `v${i}` })
+    }
+    const history = repo.readPlanHistory(id)
+    expect(history).toHaveLength(20)
+    expect(history[0].body).toBe('v5')   // v0..v4 dropped
+    expect(history[19].body).toBe('v24')
+  })
+
+  it('restore snapshots the current body first (never destructive) and applies the chosen version', async () => {
+    const { id } = await createProject({ title: 'Restore', body: 'first' })
+    await service.applyProjectPlan(id, { body: 'second' })
+    await service.applyProjectPlan(id, { body: 'third' })
+
+    await service.restorePlanVersion(id, 0) // back to 'first'
+    expect(repo.readProject(id)?.body).toBe('first')
+    const history = repo.readPlanHistory(id)
+    // first, second, then 'third' pushed by the restore itself.
+    expect(history.map((s) => s.body)).toEqual(['first', 'second', 'third'])
+    expect(history[2]).toMatchObject({ author: 'user' })
+
+    await expect(service.restorePlanVersion(id, 99)).rejects.toThrow(/No plan snapshot/)
+    await expect(service.restorePlanVersion('ghost', 0)).rejects.toThrow(/not found/i)
+  })
+
+  it('deleting a project removes its history sidecar', async () => {
+    const { id } = await createProject({ title: 'Gone', body: 'a' })
+    await updateProject(id, { body: 'b' })
+    expect(repo.readPlanHistory(id)).toHaveLength(1)
+    await deleteProject(id)
+    expect(repo.readPlanHistory(id)).toEqual([])
+  })
+})

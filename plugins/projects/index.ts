@@ -132,6 +132,8 @@ const projectsPlugin: BakinPlugin = {
     legacyRoute('POST', '/:projectId/ask/abort', 'Abort the in-flight brainstorm turn'),
     legacyRoute('GET', '/brainstorm/attention', 'Brainstorm attention totals (unread + in-flight)'),
     legacyRoute('POST', '/:projectId/brainstorm/seen', 'Mark a project brainstorm as seen'),
+    legacyRoute('GET', '/:projectId/history', 'Plan body snapshot history (oldest first)'),
+    legacyRoute('POST', '/:projectId/history/:index/restore', 'Restore a plan snapshot (snapshots current first)'),
   ],
 
   async activate(ctx: PluginContext) {
@@ -630,6 +632,33 @@ const projectsPlugin: BakinPlugin = {
       if (!readProject(id)) return json({ error: 'Project not found' }, 404)
       repo.writeBrainstormSeen(id, new Date().toISOString())
       return json({ ok: true })
+    })
+
+    // GET /:projectId/history — plan snapshots, oldest first (bakin#703).
+    routeHandlers.set('GET /:projectId/history', async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const id = url.searchParams.get('projectId')
+      if (!id) return json({ error: 'Missing projectId' }, 400)
+      if (!readProject(id)) return json({ error: 'Project not found' }, 404)
+      return json({ history: repo.readPlanHistory(id) })
+    })
+
+    // POST /:projectId/history/:index/restore — never destructive: the
+    // current body becomes a snapshot before the restore lands.
+    routeHandlers.set('POST /:projectId/history/:index/restore', async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const id = url.searchParams.get('projectId')
+      const index = Number(url.searchParams.get('index'))
+      if (!id || !Number.isInteger(index) || index < 0) return json({ error: 'Missing projectId or index' }, 400)
+      try {
+        await projectService.restorePlanVersion(id, index)
+        indexProject(id).catch(() => {})
+        return json({ ok: true })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        const status = message.startsWith('Project not found') ? 404 : 400
+        return json({ error: message }, status)
+      }
     })
 
     // -----------------------------------------------------------------
