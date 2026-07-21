@@ -1002,6 +1002,84 @@ describe('Routes', () => {
       expect(plugin.meteredTurns[0].workClass).toBe('chat')
     })
 
+    it('honors the PATH projectId (no body id needed) and 400s on a path/body mismatch', async () => {
+      writeProjectFixture('proj-path', { title: 'Path Project' })
+      mockRuntimeStream(['ok'])
+      const settled = nextSettle()
+      const route = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      const res = await callRoute(route, plugin.ctx, {
+        searchParams: { projectId: 'proj-path' },
+        body: { prompt: 'path only' },
+      })
+      expect(res.status).toBe(202)
+      await settled
+
+      writeProjectFixture('proj-other', { title: 'Other' })
+      const mismatch = await callRoute(route, plugin.ctx, {
+        searchParams: { projectId: 'proj-path' },
+        body: { projectId: 'proj-other', prompt: 'sneaky' },
+      })
+      expect(mismatch.status).toBe(400)
+    })
+
+    it('deleting a project aborts its in-flight brainstorm turn (no sidecar resurrection)', async () => {
+      writeProjectFixture('proj-del', { title: 'Doomed' })
+      let sawAbort = false
+      let release: () => void = () => {}
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      plugin.ctx.runtime.messaging.stream = mock((args: MessageArgs) => (async function* (): AsyncIterable<ChatChunk> {
+        args.signal?.addEventListener('abort', () => { sawAbort = true; release() }, { once: true })
+        yield { type: 'text', content: 'doomed reply' }
+        await gate
+        yield { type: 'done' }
+      })())
+      const settled = nextSettle()
+      const askRoute = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      await callRoute(askRoute, plugin.ctx, { body: { projectId: 'proj-del', prompt: 'go' } })
+
+      const deleteRoute = findRoute(plugin.routes, 'DELETE', '/:projectId')!
+      const res = await callRoute(deleteRoute, plugin.ctx, { searchParams: { projectId: 'proj-del' } })
+      expect(res.status).toBe(200)
+      await settled
+      expect(sawAbort).toBe(true)
+      // The turn's post-delete rows must NOT resurrect the sidecar.
+      const { existsSync: fsExists } = await import('fs')
+      expect(fsExists(join(testDir, 'projects', 'proj-del.brainstorm.json'))).toBe(false)
+    })
+
+    it('restore pins the snapshot by ts — a stale list 409s instead of restoring the wrong version', async () => {
+      writeProjectFixture('proj-ts', { title: 'TS Project', body: 'v1' })
+      const putRoute = findRoute(plugin.routes, 'PUT', '/:projectId')!
+      await callRoute(putRoute, plugin.ctx, { searchParams: { projectId: 'proj-ts' }, body: { body: 'v2' } })
+
+      const restoreRoute = findRoute(plugin.routes, 'POST', '/:projectId/history/:index/restore')!
+      const stale = await callRoute(restoreRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-ts', index: '0' },
+        body: { expectedTs: '2020-01-01T00:00:00.000Z' },
+      })
+      expect(stale.status).toBe(409)
+
+      const historyRoute = findRoute(plugin.routes, 'GET', '/:projectId/history')!
+      const history = await callRoute(historyRoute, plugin.ctx, { searchParams: { projectId: 'proj-ts' } })
+      const ts = (history.body.history as Array<{ ts: string }>)[0].ts
+      const ok = await callRoute(restoreRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-ts', index: '0' },
+        body: { expectedTs: ts },
+      })
+      expect(ok.status).toBe(200)
+      expect(ok.body.changed).toBe(true)
+    })
+
+    it('PUT rejects an unknown status instead of silently coercing to draft', async () => {
+      writeProjectFixture('proj-status', { title: 'Status Project' })
+      const putRoute = findRoute(plugin.routes, 'PUT', '/:projectId')!
+      const res = await callRoute(putRoute, plugin.ctx, {
+        searchParams: { projectId: 'proj-status' },
+        body: { status: 'bogus' },
+      })
+      expect(res.status).toBe(400)
+    })
+
     it('returns 400 when projectId or prompt is missing', async () => {
       const route = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
       const { status } = await callRoute(route, plugin.ctx, {

@@ -159,6 +159,18 @@ export interface ProjectRepository {
 }
 
 export function createProjectRepository(storage: StorageAdapter): ProjectRepository {
+  // Local so sibling methods can call it after destructuring (no `this`).
+  function readPlanHistory(id: string): PlanSnapshot[] {
+    const content = storage.read(projectHistoryPath(id))
+    if (!content) return []
+    try {
+      const parsed = JSON.parse(content)
+      return Array.isArray(parsed) ? (parsed as PlanSnapshot[]) : []
+    } catch {
+      return []
+    }
+  }
+
   return {
     readProject(id: string): Project | null {
       const content = storage.read(projectPath(id))
@@ -217,20 +229,11 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
       storage.write(projectBrainstormSeenPath(id), JSON.stringify({ lastSeenAt }))
     },
 
-    readPlanHistory(id: string): PlanSnapshot[] {
-      const content = storage.read(projectHistoryPath(id))
-      if (!content) return []
-      try {
-        const parsed = JSON.parse(content)
-        return Array.isArray(parsed) ? (parsed as PlanSnapshot[]) : []
-      } catch {
-        return []
-      }
-    },
+    readPlanHistory,
 
     /** Append one snapshot (oldest first), dropping past the cap. */
     appendPlanSnapshot(id: string, snapshot: PlanSnapshot): void {
-      const history = [...this.readPlanHistory(id), snapshot].slice(-PLAN_HISTORY_CAP)
+      const history = [...readPlanHistory(id), snapshot].slice(-PLAN_HISTORY_CAP)
       storage.write(projectHistoryPath(id), JSON.stringify(history, null, 2))
     },
 

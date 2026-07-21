@@ -10,8 +10,10 @@ export interface DiffLine {
 }
 
 export function diffLines(before: string, after: string): DiffLine[] {
-  const a = before.split('\n')
-  const b = after.split('\n')
+  // ''.split() yields [''] — an empty side must diff as zero lines, not one
+  // spurious blank line.
+  const a = before === '' ? [] : before.split('\n')
+  const b = after === '' ? [] : after.split('\n')
 
   // lcs[i][j] = LCS length of a[i..] vs b[j..]
   const lcs: number[][] = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0))

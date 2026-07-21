@@ -105,7 +105,7 @@ export interface ProjectService {
   updateProject(id: string, updates: UpdateProjectOpts, agent?: string): Promise<void>
   applyProjectPlan(id: string, updates: ApplyProjectPlanOpts, agent?: string): Promise<ApplyProjectPlanResult>
   /** Restore a plan snapshot by history index; snapshots the current body first (bakin#703). */
-  restorePlanVersion(id: string, index: number): Promise<void>
+  restorePlanVersion(id: string, index: number, expectedTs?: string): Promise<{ changed: boolean }>
   deleteProject(id: string, agent?: string): Promise<void>
   addChecklistItem(projectId: string, title: string): Promise<{ taskItemId: string }>
   markChecklistItem(projectId: string, taskItemId: string, checked: boolean): Promise<{ progress: number }>
@@ -521,20 +521,27 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
    * Restore a plan-history snapshot (bakin#703). The current body is
    * snapshotted first, so restore itself is never destructive.
    */
-  async function restorePlanVersion(id: string, index: number): Promise<void> {
+  async function restorePlanVersion(id: string, index: number, expectedTs?: string): Promise<{ changed: boolean }> {
     return withProjectLock(() => {
       const project = repo.readProject(id)
       if (!project) throw new Error(`Project not found: ${id}`)
       const history = repo.readPlanHistory(id)
       const snapshot = history[index]
       if (!snapshot) throw new Error(`No plan snapshot at index ${index}`)
-      if (snapshot.body === project.body) return
+      // Indexes shift when the cap trims or a concurrent edit appends — the
+      // client pins the snapshot it showed the user; a mismatch means the
+      // list went stale and a blind restore would apply the WRONG version.
+      if (expectedTs !== undefined && snapshot.ts !== expectedTs) {
+        throw new Error('History changed since the list was loaded — refresh and retry')
+      }
+      if (snapshot.body === project.body) return { changed: false }
       repo.appendPlanSnapshot(id, { ts: new Date().toISOString(), author: 'user', body: project.body })
       project.body = snapshot.body
       project.updated = new Date().toISOString()
       repo.writeProject(project)
       ctx.activity.audit('plan.restored', project.owner, { id, snapshotTs: snapshot.ts })
       broadcast({ type: 'project.updated', id, title: project.title })
+      return { changed: true }
     })
   }
 

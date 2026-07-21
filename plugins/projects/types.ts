@@ -2,7 +2,8 @@
  * Projects plugin — type definitions.
  */
 
-export type ProjectStatus = 'draft' | 'active' | 'completed' | 'archived'
+export const PROJECT_STATUSES = ['draft', 'active', 'completed', 'archived'] as const
+export type ProjectStatus = (typeof PROJECT_STATUSES)[number]
 
 export interface ProjectTask {
   id: string          // "t001", "t002" — auto-incrementing

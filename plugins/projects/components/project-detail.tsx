@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { useRouter, useHorizontalResize, toast, emitPluginEvent } from '@makinbakin/sdk/hooks'
+import { useRouter, useHorizontalResize, toast, emitPluginEvent, usePluginEvent } from '@makinbakin/sdk/hooks'
 import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, ChevronDown, Search, Pencil, Trash2, Link2 } from 'lucide-react'
 import { useMainAgentId } from "@makinbakin/sdk/hooks"
 import { AgentSelect, ConversationPanel, useConversationThread } from "@makinbakin/sdk/components"
@@ -252,6 +252,12 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   // Data fetching
   // ---------------------------------------------------------------------------
 
+  // Read at refetch time so a brainstorm settling minutes later can't
+  // clobber a draft the user is typing (review C1: settle used to wipe
+  // unsaved edits and silently exit edit mode).
+  const editingRef = useRef(false)
+  editingRef.current = editing
+
   const fetchProject = useCallback(async (enterEdit?: boolean) => {
     if (!currentId) return
     try {
@@ -259,6 +265,11 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
       if (res.ok) {
         const data = await res.json()
         setProject(data.project)
+        if (editingRef.current && enterEdit === undefined) {
+          // Mid-edit background refresh: update the server copy only —
+          // never the draft fields or the mode.
+          return
+        }
         setEditTitle(data.project.title)
         setEditOwner(data.project.owner)
         setEditStatus(data.project.status)
@@ -392,6 +403,9 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   // synchronous optimistic user echo.
   const brainstormAgentRef = useRef(brainstormAgent)
   brainstormAgentRef.current = brainstormAgent
+  // Bridged via ref: markBrainstormSeen is defined below (it needs state
+  // declared after this hook), while onSettled here needs to call it.
+  const markBrainstormSeenRef = useRef<() => void>(() => {})
   const brainstorm = useConversationThread({
     threadKey: currentId ?? '',
     events: {
@@ -423,12 +437,8 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
     // and the reply landed while the user was looking at this project.
     onSettled: useCallback(() => {
       fetchProject()
-      if (currentId && !isNew) {
-        void fetch(`/api/plugins/projects/${currentId}/brainstorm/seen`, { method: 'POST' })
-          .then(() => emitPluginEvent({ event: 'projects.brainstorm.seen', projectId: currentId }))
-          .catch(() => {})
-      }
-    }, [fetchProject, currentId, isNew]),
+      markBrainstormSeenRef.current()
+    }, [fetchProject]),
   })
 
   // Send failures (409 busy, network) surface as a toast; the optimistic
@@ -437,16 +447,28 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
     if (brainstorm.sendError) toast(brainstorm.sendError, 'error')
   }, [brainstorm.sendError])
 
+  // The agent edits the plan MID-turn (apply_plan tool calls) — refresh the
+  // visible plan when tool activity lands instead of waiting for settle
+  // (review I1: "Applied a project plan" rows next to an unchanged plan).
+  usePluginEvent('projects.brainstorm.chunk', (payload) => {
+    if (payload.projectId !== currentId) return
+    const chunk = payload.chunk as { type?: string } | undefined
+    if (chunk?.type === 'tool') void fetchProject()
+  })
+
   // Viewing the project (or a reply landing while viewing) marks the
   // brainstorm seen; the synthetic bus event refreshes the nav badge only
   // AFTER the write lands (the chat pattern — refreshing on done alone
-  // races the seen POST).
+  // races the seen POST). Hidden/background tabs never mark seen — nobody
+  // saw anything.
   const markBrainstormSeen = useCallback(() => {
-    if (!currentId || isNew) return
+    if (!currentId || isNew || document.visibilityState !== 'visible') return
     void fetch(`/api/plugins/projects/${currentId}/brainstorm/seen`, { method: 'POST' })
       .then(() => emitPluginEvent({ event: 'projects.brainstorm.seen', projectId: currentId }))
       .catch(() => {})
   }, [currentId, isNew])
+
+  markBrainstormSeenRef.current = markBrainstormSeen
 
   useEffect(() => {
     markBrainstormSeen()
@@ -456,6 +478,12 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
     if (!currentId) return
     void fetch(`/api/plugins/projects/${currentId}/ask/abort`, { method: 'POST' }).catch(() => {})
   }, [currentId])
+
+  // "Try again" on an error turn re-sends the newest user message (chat parity).
+  const retryBrainstorm = useCallback(() => {
+    const lastUser = [...brainstorm.messages].reverse().find((m) => m.kind === 'user')
+    if (lastUser?.kind === 'user' && lastUser.content) void brainstorm.send(lastUser.content)
+  }, [brainstorm])
 
   // ---------------------------------------------------------------------------
   // Assets
@@ -912,11 +940,22 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
             streaming={brainstorm.streaming}
             onSend={brainstorm.send}
             onAbort={abortBrainstorm}
+            onRetry={retryBrainstorm}
             agentId={brainstormAgent}
             onAgentChange={setBrainstormAgent}
             storageKey={`project:${currentId}`}
             showHeader={false}
             placeholder="Ask about this project..."
+            emptyState={
+              <div className="px-6 text-center text-sm text-muted-foreground">
+                <p className="font-medium text-foreground">Brainstorm this project with an agent</p>
+                <p className="mt-1">
+                  The agent treats the plan above as its working document — it applies small edits
+                  directly (every change is snapshotted, see the Diff view) and asks before big
+                  rewrites. Try "flesh out the plan", "what's missing?", or "break this into tasks".
+                </p>
+              </div>
+            }
           />
         </div>
 

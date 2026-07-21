@@ -517,6 +517,75 @@ describe('Brainstorm turns (engine-backed)', () => {
     expect(row.unread).toBe(false)
   })
 
+  it('a 409d concurrent send never destroys the running turns proposal state (review C1)', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    mockRuntimeStream.mockImplementationOnce(() => (async function* () {
+      yield { type: 'text' as const, content: 'Ideas:\n' }
+      await gate
+      yield { type: 'text' as const, content: '```json\n[{"title":"Survivor","targetDate":"2026-08-01","brief":"tip","suggestedChannels":["x"]}]\n```' }
+      yield { type: 'done' as const }
+    })())
+
+    const sessionId = await createTestSession()
+    const settled = nextSettle()
+    expect((await sendMessage(sessionId, 'go')).status).toBe(202)
+    // Concurrent send mid-turn: 409, and it must NOT clobber turn state.
+    expect((await sendMessage(sessionId, 'again')).status).toBe(409)
+    release()
+    await settled
+
+    const sessionPath = join(testDir, 'messaging', 'sessions', `${sessionId}.json`)
+    const session = JSON.parse(readFileSync(sessionPath, 'utf-8'))
+    // The proposal parsed after the 409 survived AND got linked.
+    expect(session.proposals).toHaveLength(1)
+    expect(session.proposals[0].title).toBe('Survivor')
+    const assistantMsg = session.messages.find((m: Record<string, unknown>) => m.role === 'assistant')
+    expect(assistantMsg.proposalIds).toEqual([session.proposals[0].id])
+  })
+
+  it('aborted turns do not count as unseen activity (no self-inflicted unread)', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    mockRuntimeStream.mockImplementationOnce(() => (async function* () {
+      await gate
+      yield { type: 'done' as const }
+    })())
+    const sessionId = await createTestSession()
+    const settled = nextSettle()
+    await sendMessage(sessionId, 'go')
+    const abortRoute = findRoute(plugin.routes, 'POST', '/sessions/:id/abort')!
+    await callRoute(abortRoute, plugin.ctx, { searchParams: { id: sessionId } })
+    release()
+    await settled
+
+    const attentionRoute = findRoute(plugin.routes, 'GET', '/brainstorm/attention')!
+    const res = await callRoute(attentionRoute, plugin.ctx, {})
+    expect(res.body).toMatchObject({ unreadTotal: 0 })
+  })
+
+  it('deleting a session aborts its in-flight turn', async () => {
+    let sawAbort = false
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    mockRuntimeStream.mockImplementationOnce((args: MessageArgs) => (async function* () {
+      const signal = args.signal as AbortSignal
+      signal?.addEventListener('abort', () => { sawAbort = true; release() }, { once: true })
+      yield { type: 'text' as const, content: 'doomed' }
+      await gate
+      yield { type: 'done' as const }
+    })())
+    const sessionId = await createTestSession()
+    const settled = nextSettle()
+    await sendMessage(sessionId, 'go')
+
+    const deleteRoute = findRoute(plugin.routes, 'DELETE', '/sessions/:id')!
+    const res = await callRoute(deleteRoute, plugin.ctx, { searchParams: { id: sessionId } })
+    expect(res.status).toBe(200)
+    await settled
+    expect(sawAbort).toBe(true)
+  })
+
   it('attention totals: unread counts sessions with unseen agent activity; seen clears', async () => {
     streamRuntimeResponse('A reply.')
     const sessionId = await createTestSession()

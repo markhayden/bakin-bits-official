@@ -14,7 +14,7 @@ import { Badge } from "@makinbakin/sdk/ui"
 import { Button } from "@makinbakin/sdk/ui"
 import { Skeleton } from "@makinbakin/sdk/ui"
 import { ArrowLeft, CalendarDays, CheckCircle2, Circle, ClipboardList, ExternalLink, FileText, Globe2, Info, Instagram, MessageCircle, MessageSquareText, Music2, Rocket, Slack, Trash2, Twitter, type LucideIcon } from 'lucide-react'
-import type { BrainstormSession, ContentTypeOption, Deliverable, Plan, PlanChannel, PlanStatus, SessionMessage } from '../types'
+import type { BrainstormSession, ContentTypeOption, Deliverable, Plan, PlanChannel, PlanStatus } from '../types'
 import { sessionMessageToConversation } from '../lib/session-to-conversation'
 import { setVisiblePlanSourceSession } from './brainstorm-badge-provider'
 import { PLAN_STATUS_BADGE } from '../constants'
@@ -447,6 +447,12 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
     void fetch(`/api/plugins/messaging/sessions/${encoded}/abort?id=${encoded}`, { method: 'POST' }).catch(() => {})
   }, [plan?.sourceSessionId])
 
+  // "Try again" on an error turn re-sends the newest user message (chat parity).
+  const retryBrainstorm = useCallback(() => {
+    const lastUser = [...brainstorm.messages].reverse().find((m) => m.kind === 'user')
+    if (lastUser?.kind === 'user' && lastUser.content) void brainstorm.send(lastUser.content)
+  }, [brainstorm])
+
   const handleDeletePlan = async () => {
     if (!plan) return
     setDeleting(true)
@@ -756,11 +762,18 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                     streaming={brainstorm.streaming}
                     onSend={brainstorm.send}
                     onAbort={abortBrainstorm}
+                    onRetry={retryBrainstorm}
                     agentId={plan.agent}
                     storageKey={`messaging-plan:${plan.id}`}
                     placeholder="Refine the angle, channels, timeline, or content pieces..."
                     fitParent
                     showHeader={false}
+                    emptyState={
+                      <div className="px-6 text-center text-sm text-muted-foreground">
+                        <p className="font-medium text-foreground">Refine this plan with its agent</p>
+                        <p className="mt-1">Suggested channel, timeline, or angle changes apply to the plan directly — a good first note is which channels to use and what to avoid.</p>
+                      </div>
+                    }
                   />
                 </div>
               ) : (

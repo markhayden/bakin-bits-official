@@ -17,7 +17,7 @@ import { Button } from "@makinbakin/sdk/ui"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@makinbakin/sdk/ui"
 import { Input } from "@makinbakin/sdk/ui"
 import { ArrowLeft, CalendarDays, Check, ClipboardList, Columns2, Plus, SquareStack, Trash2, X } from 'lucide-react'
-import type { BrainstormSession, PlanProposal, SessionMessage } from '../types'
+import type { BrainstormSession, PlanProposal } from '../types'
 import { sessionMessageToConversation } from '../lib/session-to-conversation'
 
 interface SessionSummary {
@@ -696,6 +696,12 @@ export function BrainstormView() {
       const response = await fetch(`/api/plugins/messaging/sessions/${encoded}?id=${encoded}`)
       if (!response.ok) {
         setActiveSession(null)
+        if (response.status === 404) {
+          // Stale deep link (old toast/notification) — say so and return to
+          // the list instead of a silent empty view with the param stuck.
+          toast('That brainstorm session no longer exists', 'error')
+          pushSessionId('')
+        }
         return null
       }
       const data = await response.json() as { session?: BrainstormSession; streaming?: boolean }
@@ -705,7 +711,7 @@ export function BrainstormView() {
         messages: data.session.messages.map(message => sessionMessageToConversation(data.session!.agentId, message)).filter((m): m is ConversationMessage => m !== null),
         streaming: data.streaming === true,
       }
-    }, []),
+    }, [pushSessionId]),
     post: useCallback(async (key: string, content: string) => {
       const encoded = encodeURIComponent(key)
       const response = await fetch(`/api/plugins/messaging/sessions/${encoded}/messages?id=${encoded}`, {
@@ -752,6 +758,12 @@ export function BrainstormView() {
     void fetch(`/api/plugins/messaging/sessions/${encoded}/abort?id=${encoded}`, { method: 'POST' }).catch(() => {})
   }, [sessionId])
 
+  // "Try again" on an error turn re-sends the newest user message (chat parity).
+  const retryBrainstorm = useCallback(() => {
+    const lastUser = [...brainstorm.messages].reverse().find((m) => m.kind === 'user')
+    if (lastUser?.kind === 'user' && lastUser.content) void brainstorm.send(lastUser.content)
+  }, [brainstorm])
+
   const sessionPendingDelete = deleteSessionId
     ? activeSession?.id === deleteSessionId
       ? activeSession
@@ -790,6 +802,7 @@ export function BrainstormView() {
           streaming={brainstorm.streaming}
           onSend={brainstorm.send}
           onAbort={abortBrainstorm}
+          onRetry={retryBrainstorm}
           agentId={activeSession.agentId}
           storageKey={`messaging:${activeSession.id}`}
           placeholder="Ask for content topics, campaign ideas, or revisions..."
@@ -798,6 +811,16 @@ export function BrainstormView() {
           readOnlyNotice={<Badge variant="outline">Archived session</Badge>}
           fitParent
           showHeader={false}
+          emptyState={
+            <div className="px-6 text-center text-sm text-muted-foreground">
+              <p className="font-medium text-foreground">Brainstorm content ideas with this agent</p>
+              <p className="mt-1">
+                Proposals the agent suggests land in the side panel for review — approve the good
+                ones and materialize them into Plans. Try "plan next week's posts" or "give me five
+                topic ideas for the launch".
+              </p>
+            </div>
+          }
         />
       </div>
     )

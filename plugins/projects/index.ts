@@ -8,6 +8,7 @@ import type { BakinPlugin, PluginContext, RuntimeAgent } from '@makinbakin/sdk/t
 import { conversationThreadId } from '@makinbakin/sdk/utils'
 import { createProjectRepository, projectToSummary } from './lib/parser'
 import { createProjectService } from './lib/project-service'
+import { PROJECT_STATUSES } from './types'
 import type { Project, ProjectBrainstormMessage, ProjectStatus } from './types'
 
 const log = {
@@ -55,7 +56,7 @@ const PROJECT_BRAINSTORM_INSTRUCTIONS = [
   'ASK FIRST — in chat, before applying — for wholesale rewrites or large deletions of existing content: propose the change and wait for confirmation.',
   'Every plan edit is snapshotted with a visible diff and one-click restore, so direct incremental edits are safe.',
   'Invoke Bakin tools as described in your Tool access section — the exact call form depends on the active runtime.',
-  'If the user asks for advice only, answer in chat and call out any optional plan update separately.',
+  'If the user asks for advice only, lead with the answer in chat; plan upkeep still applies — make any needed incremental edit afterwards and mention it.',
   'If suggesting tasks, format them as a numbered list.',
 ].join('\n')
 
@@ -65,16 +66,24 @@ function buildProjectBrainstormContext(project: Project, request: string): strin
   const assetLines = project.assets.length > 0
     ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.assetId}${a.label ? ` — ${a.label}` : ''}`)]
     : []
+  const SPEC_CAP = 3000
+  const truncated = project.body.length > SPEC_CAP
   return [
     `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
     `Progress: ${project.progress}% (${project.tasks.filter(t => t.checked).length}/${project.tasks.length} items checked)`,
     '',
     'Project spec:',
-    project.body.slice(0, 3000),
+    project.body.slice(0, SPEC_CAP),
+    // Visible omission marker — an agent told the plan is its primary
+    // artifact must never mistake a truncated view for the whole spec.
+    ...(truncated
+      ? [`[... spec truncated: showing ${SPEC_CAP} of ${project.body.length} chars — read the full plan with bakin_exec_projects_get before any rewrite; prefer appendBody or single-item edits.]`]
+      : []),
     '',
     'Checklist items:',
     ...project.tasks.map(t => `- [${t.checked ? 'x' : ' '}] ${t.title}${t.taskId ? ` (linked: ${t.taskId})` : ''}`),
     ...assetLines,
+    '',
     PROJECT_BRAINSTORM_INSTRUCTIONS,
     '',
     'User request:',
@@ -210,6 +219,10 @@ const projectsPlugin: BakinPlugin = {
       resolveThread: async (key) =>
         readProject(key) ? { agentId: await getRuntimeMainAgentId(ctx) } : null,
       appendRow: (key, row) => {
+        // A turn racing a delete must not resurrect the sidecar as a
+        // permanent orphan — the throw surfaces as the engine's logged
+        // append failure.
+        if (!readProject(key)) throw new Error(`project ${key} is gone — dropping brainstorm row`)
         writeBrainstormMessages(key, [
           ...readBrainstormMessages(key),
           row as unknown as ProjectBrainstormMessage,
@@ -396,6 +409,9 @@ const projectsPlugin: BakinPlugin = {
       const body = await readBody<{ id?: string; title?: string; status?: ProjectStatus; body?: string; owner?: string }>(req)
       const id = url.searchParams.get('projectId') || body.id
       if (!id) return json({ error: 'Missing id' }, 400)
+      if (body.status !== undefined && !PROJECT_STATUSES.includes(body.status)) {
+        return json({ error: `Invalid status: ${String(body.status)}` }, 400)
+      }
       try {
         await updateProject(id, body)
         ctx.activity.audit('updated', 'system', { projectId: id })
@@ -414,6 +430,9 @@ const projectsPlugin: BakinPlugin = {
       const body = await readBody<{ id?: string; deleteLinkedTasks?: boolean }>(req).catch(() => ({} as { id?: string; deleteLinkedTasks?: boolean }))
       const id = url.searchParams.get('projectId') || body.id
       if (!id) return json({ error: 'Missing id' }, 400)
+      // A live brainstorm must die with its project — otherwise it keeps
+      // billing and resurrects the transcript sidecar (review I2).
+      brainstormTurns.abort(id)
       try {
         if (body.deleteLinkedTasks) {
           const project = readProject(id)
@@ -593,18 +612,25 @@ const projectsPlugin: BakinPlugin = {
     // assembled context rides opts.runtimeContent — the transcript keeps the
     // user's clean prompt.
     routeHandlers.set('POST /:projectId/ask', async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
       const body = await readBody<{
-        projectId: string
+        projectId?: string
         prompt: string
         agent?: string
       }>(req)
-      if (!body.projectId || !body.prompt) return json({ error: 'Missing projectId or prompt' }, 400)
-      const project = readProject(body.projectId)
+      const projectId = url.searchParams.get('projectId') || body.projectId
+      if (!projectId || !body.prompt) return json({ error: 'Missing projectId or prompt' }, 400)
+      // A body id diverging from the path would silently brainstorm (and
+      // mutate) a DIFFERENT project under this URL — refuse.
+      if (body.projectId && body.projectId !== projectId) {
+        return json({ error: 'projectId mismatch between path and body' }, 400)
+      }
+      const project = readProject(projectId)
       if (!project) return json({ error: 'Project not found' }, 404)
       const agentId = body.agent || await getRuntimeMainAgentId(ctx)
       const context = buildProjectBrainstormContext(project, body.prompt)
 
-      const result = await brainstormTurns.start(ctx, body.projectId, body.prompt, {
+      const result = await brainstormTurns.start(ctx, projectId, body.prompt, {
         agentId,
         runtimeContent: context,
       })
@@ -667,14 +693,17 @@ const projectsPlugin: BakinPlugin = {
       const url = new URL(req.url, 'http://localhost')
       const id = url.searchParams.get('projectId')
       const index = Number(url.searchParams.get('index'))
+      const body = await readBody<{ expectedTs?: string }>(req).catch(() => ({} as { expectedTs?: string }))
       if (!id || !Number.isInteger(index) || index < 0) return json({ error: 'Missing projectId or index' }, 400)
       try {
-        await projectService.restorePlanVersion(id, index)
+        const { changed } = await projectService.restorePlanVersion(id, index, body.expectedTs)
         indexProject(id).catch(() => {})
-        return json({ ok: true })
+        return json({ ok: true, changed })
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        const status = message.startsWith('Project not found') ? 404 : 400
+        const status = message.startsWith('Project not found') ? 404
+          : message.startsWith('History changed') ? 409
+          : 400
         return json({ error: message }, status)
       }
     })

@@ -9,8 +9,8 @@
  * arrives while the user is elsewhere (viewing the project stays silent —
  * the detail page marks it seen).
  */
-import { useConversationAttention, visibleIdFromLocation } from '@makinbakin/sdk/components'
-import { useRouter } from '@makinbakin/sdk/hooks'
+import { useConversationAttention, visibleIdFromLocation, AgentAvatar } from '@makinbakin/sdk/components'
+import { useAgent, useRouter } from '@makinbakin/sdk/hooks'
 
 function ReplyToast({ projectId, agentId, preview, onNavigate }: {
   projectId: string
@@ -18,6 +18,7 @@ function ReplyToast({ projectId, agentId, preview, onNavigate }: {
   preview?: string
   onNavigate?: () => void
 }) {
+  const agent = useAgent(agentId)
   const router = useRouter()
   return (
     <button
@@ -29,8 +30,9 @@ function ReplyToast({ projectId, agentId, preview, onNavigate }: {
       }}
       className="flex max-w-sm items-start gap-2 text-left"
     >
+      <AgentAvatar agentId={agentId} size="xs" />
       <span className="min-w-0">
-        <span className="block text-sm font-medium">{agentId} replied in a project brainstorm</span>
+        <span className="block text-sm font-medium">{agent?.name ?? agentId} replied in a project brainstorm</span>
         {preview ? <span className="block truncate text-xs text-muted-foreground">{preview}</span> : null}
       </span>
     </button>
@@ -50,7 +52,17 @@ export function BrainstormBadgeProvider() {
       refresh: ['projects.brainstorm.seen'],
     },
     keyOf: (payload) => String(payload.projectId ?? ''),
-    visibleKey: () => visibleIdFromLocation(window.location.pathname, '/projects', { exclude: ['new'] }),
+    // Both /projects/<id> AND /projects/<id>/edit render the detail (and
+    // its brainstorm) — a reply while editing must not toast/chime.
+    visibleKey: () => {
+      const pathname = window.location.pathname
+      return (
+        visibleIdFromLocation(pathname, '/projects', { exclude: ['new'] }) ||
+        (pathname.endsWith('/edit')
+          ? visibleIdFromLocation(pathname.slice(0, -'/edit'.length), '/projects', { exclude: ['new'] })
+          : '')
+      )
+    },
     refreshTotals: async () => {
       const res = await fetch('/api/plugins/projects/brainstorm/attention')
       if (!res.ok) return null

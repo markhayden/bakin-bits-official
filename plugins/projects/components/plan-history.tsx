@@ -8,7 +8,7 @@
  * modal. Restore is never destructive — the server snapshots the current
  * body before applying (deliberately not a document-management system).
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from '@makinbakin/sdk/hooks'
 import type { PlanSnapshot } from '../types'
 import { diffLines } from '../lib/line-diff'
@@ -53,12 +53,22 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored }: {
   const restore = async (index: number) => {
     setRestoring(true)
     try {
-      const res = await fetch(`/api/plugins/projects/${projectId}/history/${index}/restore`, { method: 'POST' })
+      const res = await fetch(`/api/plugins/projects/${projectId}/history/${index}/restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // Pin the snapshot the confirm dialog NAMED — if history shifted
+        // underneath (agent edit, cap trim) the server 409s instead of
+        // silently restoring the wrong version.
+        body: JSON.stringify({ expectedTs: history?.[index]?.ts }),
+      })
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
         toast(body.error ?? `restore failed (${res.status})`, 'error')
+        if (res.status === 409) await load()
         return
       }
+      const body = (await res.json().catch(() => ({}))) as { changed?: boolean }
+      if (body.changed === false) toast('Plan already matches that version', 'info')
       setConfirmRestore(null)
       onRestored()
       await load()
@@ -67,6 +77,19 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored }: {
     }
   }
 
+  const snapshot = selected !== null ? history?.[selected] : undefined
+
+  // Memoized: the parent re-renders per streamed chunk, and LCS is O(n·m).
+  const DIFF_LINE_LIMIT = 5000
+  const diffResult = useMemo(() => {
+    if (!snapshot) return { diff: [] as ReturnType<typeof diffLines>, tooLarge: false }
+    const total = snapshot.body.split('\n').length + currentBody.split('\n').length
+    if (total > DIFF_LINE_LIMIT) return { diff: [] as ReturnType<typeof diffLines>, tooLarge: true }
+    return { diff: diffLines(snapshot.body, currentBody), tooLarge: false }
+  }, [snapshot, currentBody])
+  const diff = diffResult.diff
+  const changed = diff.filter((l) => l.type !== 'same').length
+
   if (history === null) {
     return <p className="text-[12px] text-zinc-500">Loading history…</p>
   }
@@ -74,9 +97,6 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored }: {
     return <p className="text-[12px] text-zinc-500">No plan versions yet — edits (yours or the agent's) snapshot the previous version here.</p>
   }
 
-  const snapshot = selected !== null ? history[selected] : undefined
-  const diff = snapshot ? diffLines(snapshot.body, currentBody) : []
-  const changed = diff.filter((l) => l.type !== 'same').length
 
   return (
     <div data-testid="plan-history" className="space-y-3">
@@ -108,6 +128,9 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored }: {
       </div>
 
       <div data-testid="plan-history-diff" className="rounded-lg border border-[rgba(255,255,255,0.06)] bg-zinc-950/60 overflow-auto max-h-[420px] font-mono text-[12px] leading-5">
+        {diffResult.tooLarge && (
+          <p className="px-3 py-2 text-zinc-500">Diff too large to render inline (over {DIFF_LINE_LIMIT.toLocaleString()} lines) — restore still works.</p>
+        )}
         {diff.map((line, i) => (
           <div
             key={i}

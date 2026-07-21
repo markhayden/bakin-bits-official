@@ -9,7 +9,7 @@
  * (the same default the Diff view compares against); the exact
  * line-level review lives in the Diff toggle.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { MarkdownEditor } from '@makinbakin/sdk/components'
 import type { PlanSnapshot } from '../types'
 import { diffBlocks } from '../lib/block-diff'
@@ -36,7 +36,11 @@ export function RenderedPlan({ projectId, body, hintsEnabled = true }: { project
     // the baseline must follow it so only the LATEST change stays marked.
   }, [projectId, body])
 
-  const entries = hintsEnabled && previousBody !== null ? diffBlocks(previousBody, body) : null
+  // Memoized: the detail page re-renders per streamed chunk.
+  const entries = useMemo(
+    () => (hintsEnabled && previousBody !== null ? diffBlocks(previousBody, body) : null),
+    [hintsEnabled, previousBody, body],
+  )
   const hasChanges = entries?.some((entry) => entry.type === 'removed' || (entry.type === 'block' && entry.changed))
   if (!entries || !hasChanges) {
     return <MarkdownEditor content={body} editing={false} onChange={() => {}} placeholder="Project details, goals, background..." format="markdown" />

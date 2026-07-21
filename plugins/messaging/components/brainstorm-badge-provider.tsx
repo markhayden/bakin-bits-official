@@ -9,8 +9,8 @@
  * lands while the user is elsewhere. The brainstorm view marks sessions
  * seen (`?session=` query — the visible key lives in the query string).
  */
-import { useConversationAttention } from '@makinbakin/sdk/components'
-import { useRouter } from '@makinbakin/sdk/hooks'
+import { useConversationAttention, AgentAvatar } from '@makinbakin/sdk/components'
+import { useAgent, useRouter } from '@makinbakin/sdk/hooks'
 
 /**
  * The session whose turns are on screen. Two surfaces qualify: the
@@ -36,6 +36,7 @@ function ReplyToast({ sessionId, agentId, preview, onNavigate }: {
   preview?: string
   onNavigate?: () => void
 }) {
+  const agent = useAgent(agentId)
   const router = useRouter()
   return (
     <button
@@ -47,8 +48,9 @@ function ReplyToast({ sessionId, agentId, preview, onNavigate }: {
       }}
       className="flex max-w-sm items-start gap-2 text-left"
     >
+      <AgentAvatar agentId={agentId} size="xs" />
       <span className="min-w-0">
-        <span className="block text-sm font-medium">{agentId} replied in a brainstorm</span>
+        <span className="block text-sm font-medium">{agent?.name ?? agentId} replied in a brainstorm</span>
         {preview ? <span className="block truncate text-xs text-muted-foreground">{preview}</span> : null}
       </span>
     </button>

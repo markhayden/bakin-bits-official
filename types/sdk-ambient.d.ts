@@ -779,7 +779,7 @@ declare module '@makinbakin/sdk/types' {
     framing?: string
     ephemeral?: boolean
     metering?: {
-      workClass: string
+      workClass: 'chat'
       runId: (key: string, turnId: string) => string
     }
     hooks?: {
@@ -978,22 +978,6 @@ declare module '@makinbakin/sdk/components' {
     | { kind: 'error'; ts: string; turnId?: string; message: string; errorKind?: string }
     | { kind: 'aborted'; ts: string; turnId?: string }
 
-  export interface ConversationStreamOptions {
-    fetcher: (content: string, ctx: { signal: AbortSignal }) => Promise<Response>
-    onCustom?: (event: string, data: unknown) => void
-    onDone?: (finalContent: string) => void | Promise<void>
-    onError?: (message: string) => void
-    onAborted?: () => void
-  }
-
-  export interface ConversationStream {
-    liveChunks: import('@makinbakin/sdk/types').RuntimeChatChunk[] | null
-    streaming: boolean
-    send: (content: string) => Promise<void>
-    abort: () => void
-  }
-
-  export function useConversationStream(options: ConversationStreamOptions): ConversationStream
 
   export interface ConversationThreadLoad<Meta = unknown> {
     messages: ConversationMessage[]
@@ -1040,7 +1024,7 @@ declare module '@makinbakin/sdk/components' {
   export interface ConversationAttentionConfig {
     pluginId: string
     navItemId: string
-    events: { chunk: string; done: string; error: string; refresh?: string[] }
+    events: { chunk: string; done: string; error: string; refresh?: [string] | [string, string] }
     keyOf: (payload: Record<string, unknown>) => string
     visibleKey: () => string
     refreshTotals: () => Promise<ConversationAttentionTotals | null>
@@ -1056,14 +1040,6 @@ declare module '@makinbakin/sdk/components' {
 
   export function visibleIdFromLocation(pathname: string, base: string, opts?: { exclude?: readonly string[] }): string
 
-  export function readConversationSseStream(
-    response: Response,
-    handlers: {
-      signal: AbortSignal
-      onChunk: (chunk: import('@makinbakin/sdk/types').RuntimeChatChunk) => void
-      onCustom?: (event: string, data: unknown) => void
-    },
-  ): Promise<{ content: string }>
 
   export function foldConversation(
     messages: readonly ConversationMessage[],

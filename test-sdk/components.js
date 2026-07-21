@@ -39,53 +39,6 @@ export function FacetFilter() {
 // exercise real flows: the SSE reader parses real frames, the stream hook
 // drives fetcher → chunks → done, and the panel renders messages + input.
 
-export async function readConversationSseStream(response, handlers) {
-  if (!response.ok || !response.body) {
-    const text = await response.text().catch(() => '')
-    throw new Error(text || `Server returned ${response.status}`)
-  }
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let accumulated = ''
-  let finalContent = ''
-
-  function dispatch(frame) {
-    if (frame.event === 'chunk') {
-      const chunk = frame.data
-      if (!chunk || typeof chunk.type !== 'string') return
-      if (chunk.type === 'text') accumulated += chunk.content ?? ''
-      handlers.onChunk(chunk)
-      return
-    }
-    if (frame.event === 'done') {
-      finalContent = typeof frame.data?.content === 'string' ? frame.data.content : accumulated
-      return
-    }
-    if (frame.event === 'error') {
-      throw new Error(typeof frame.data?.message === 'string' ? frame.data.message : 'Unknown error')
-    }
-    handlers.onCustom?.(frame.event, frame.data)
-  }
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const parts = buffer.split(/\r?\n\r?\n/)
-    buffer = parts.pop() ?? ''
-    for (const part of parts) {
-      const frame = parseSseFrame(part)
-      if (frame) dispatch(frame)
-    }
-  }
-  buffer += decoder.decode()
-  if (buffer.trim()) {
-    const frame = parseSseFrame(buffer)
-    if (frame) dispatch(frame)
-  }
-  return { content: finalContent || accumulated }
-}
 
 function parseSseFrame(frame) {
   let event = 'message'
@@ -104,53 +57,6 @@ function parseSseFrame(frame) {
   return { event, data }
 }
 
-export function useConversationStream(options) {
-  const [liveChunks, setLiveChunks] = useState(null)
-  const [streaming, setStreaming] = useState(false)
-  const controllerRef = useRef(null)
-  const optionsRef = useRef(options)
-  optionsRef.current = options
-
-  const abort = useCallback(() => {
-    controllerRef.current?.abort()
-  }, [])
-
-  const send = useCallback(async (content) => {
-    if (controllerRef.current) return
-    const controller = new AbortController()
-    controllerRef.current = controller
-    setStreaming(true)
-    setLiveChunks([])
-    const chunks = []
-    try {
-      const response = await optionsRef.current.fetcher(content, { signal: controller.signal })
-      const { content: finalContent } = await readConversationSseStream(response, {
-        signal: controller.signal,
-        onChunk: (chunk) => {
-          chunks.push(chunk)
-          setLiveChunks([...chunks])
-        },
-        onCustom: (event, data) => optionsRef.current.onCustom?.(event, data),
-      })
-      setLiveChunks(null)
-      await optionsRef.current.onDone?.(finalContent)
-    } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') {
-        setLiveChunks(null)
-        optionsRef.current.onAborted?.()
-      } else {
-        const message = err instanceof Error ? err.message : String(err)
-        setLiveChunks([...chunks, { type: 'error', content: message }])
-        optionsRef.current.onError?.(message)
-      }
-    } finally {
-      controllerRef.current = null
-      setStreaming(false)
-    }
-  }, [])
-
-  return { liveChunks, streaming, send, abort }
-}
 
 function messageText(message, transformText) {
   if (message.kind === 'user') return message.content
