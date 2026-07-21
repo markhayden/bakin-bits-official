@@ -282,6 +282,10 @@ async function deleteDeliverableAndLinkedWork(
 }
 
 interface BrainstormSessionSummary {
+  /** Unseen agent activity since the last view (bakin#703 attention). */
+  unread: boolean
+  /** A turn is running right now (server truth for the working dot). */
+  streaming: boolean
   id: string
   agentId: string
   title: string
@@ -471,9 +475,16 @@ function normalizeProposalInputs(items: unknown[]): NormalizedProposalInput[] {
     .filter((item): item is NormalizedProposalInput => item !== null)
 }
 
+/** Unseen agent activity: any non-user message newer than the last view. */
+function sessionHasUnseenReply(session: BrainstormSession): boolean {
+  const lastAgent = [...session.messages].reverse().find(m => m.role !== 'user')?.timestamp
+  if (!lastAgent) return false
+  return !session.lastSeenAt || lastAgent > session.lastSeenAt
+}
+
 function listBrainstormSessionSummaries(
   contentStore: MessagingContentStorage,
-  opts: { status?: string; agentId?: string } = {},
+  opts: { status?: string; agentId?: string; inflight?: ReadonlySet<string> } = {},
 ): BrainstormSessionSummary[] {
   return contentStore.listBrainstormSessions()
     .filter(session => !opts.status || session.status === opts.status)
@@ -487,6 +498,8 @@ function listBrainstormSessionSummaries(
       updatedAt: session.updatedAt,
       proposalCount: session.proposals.length,
       approvedCount: session.proposals.filter(proposal => proposal.status === 'approved').length,
+      unread: sessionHasUnseenReply(session),
+      streaming: opts.inflight?.has(session.id) ?? false,
     }))
 }
 
@@ -1029,7 +1042,11 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const url = new URL(req.url)
         const status = url.searchParams.get('status') || undefined
         const agentId = url.searchParams.get('agentId') || undefined
-        const sessions = listBrainstormSessionSummaries(contentStore, { status, agentId })
+        const sessions = listBrainstormSessionSummaries(contentStore, {
+          status,
+          agentId,
+          inflight: new Set(brainstormTurns.listInFlight().map(t => t.key)),
+        })
         return json({ sessions })
       })
 
@@ -1343,12 +1360,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
     // unreadTotal counts SESSIONS with agent activity newer than the last
     // view; inflight lists sessions with a running turn.
     routeHandlers.set('GET /brainstorm/attention', async () => {
-        const sessions = contentStore.listBrainstormSessions()
-        const unread = sessions.filter(session => {
-          const lastAgent = [...session.messages].reverse().find(m => m.role !== 'user')?.timestamp
-          if (!lastAgent) return false
-          return !session.lastSeenAt || lastAgent > session.lastSeenAt
-        })
+        const unread = contentStore.listBrainstormSessions().filter(sessionHasUnseenReply)
         return json({
           unreadTotal: unread.length,
           inflight: brainstormTurns.listInFlight().map(t => t.key),

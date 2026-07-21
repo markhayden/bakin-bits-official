@@ -28,6 +28,8 @@ interface SessionSummary {
   updatedAt: string
   proposalCount: number
   approvedCount: number
+  unread: boolean
+  streaming: boolean
 }
 
 interface AgentOption {
@@ -582,6 +584,17 @@ export function BrainstormView() {
     loadSessions()
   }, [loadSessions])
 
+  // Keep the per-row unread/working indicators live: settles and seen
+  // writes refresh; the first chunk of a NEW turn refreshes once so the
+  // working dot appears without waiting for settle.
+  usePluginEvent('messaging.brainstorm.done', () => { void loadSessions() })
+  usePluginEvent('messaging.brainstorm.error', () => { void loadSessions() })
+  usePluginEvent('messaging.brainstorm.seen', () => { void loadSessions() })
+  usePluginEvent('messaging.brainstorm.chunk', (payload) => {
+    const id = String(payload.sessionId ?? '')
+    if (id && !sessions.some(s => s.id === id && s.streaming)) void loadSessions()
+  })
+
   useEffect(() => {
     if (!sessionId) setActiveSession(null)
   }, [sessionId])
@@ -1068,6 +1081,11 @@ export function BrainstormView() {
                     <div className="flex min-w-0 items-center gap-2">
                       <AgentAvatar agentId={session.agentId} size="xs" />
                       <h2 className="truncate text-sm font-medium">{session.title}</h2>
+                      {session.streaming ? (
+                        <span data-testid="session-streaming" title="Reply in progress" className="h-2 w-2 shrink-0 rounded-full bg-sky-400 animate-pulse" />
+                      ) : session.unread ? (
+                        <span data-testid="session-unread" title="Unseen reply" className="h-2 w-2 shrink-0 rounded-full bg-amber-400" />
+                      ) : null}
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {session.proposalCount} proposals, {session.approvedCount} accepted

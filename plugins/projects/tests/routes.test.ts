@@ -1019,6 +1019,34 @@ describe('Routes', () => {
       expect(body.error).toMatch(/not found/i)
     })
 
+    it('the project list carries per-project attention flags (unread + streaming)', async () => {
+      writeProjectFixture('proj-flags', { title: 'Flags Project' })
+      mockRuntimeStream(['flag reply'])
+      const settled = nextSettle()
+      const askRoute = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+      await callRoute(askRoute, plugin.ctx, { body: { projectId: 'proj-flags', prompt: 'hi' } })
+      await settled
+      // The slot releases just after the done event — wait for idle.
+      const getProjFlags = findRoute(plugin.routes, 'GET', '/:projectId')!
+      for (let i = 0; i < 50; i++) {
+        const check = await callRoute(getProjFlags, plugin.ctx, { searchParams: { projectId: 'proj-flags' } })
+        if (check.body.project.brainstormStreaming === false) break
+        await new Promise(resolve => setTimeout(resolve, 5))
+      }
+
+      const listRoute = findRoute(plugin.routes, 'GET', '/')!
+      const list = await callRoute(listRoute, plugin.ctx, {})
+      const row = (list.body.projects as Array<Record<string, unknown>>).find(p => p.id === 'proj-flags')!
+      expect(row.brainstormUnread).toBe(true)
+      expect(row.brainstormStreaming).toBe(false)
+
+      const seenRoute = findRoute(plugin.routes, 'POST', '/:projectId/brainstorm/seen')!
+      await callRoute(seenRoute, plugin.ctx, { searchParams: { projectId: 'proj-flags' } })
+      const after = await callRoute(listRoute, plugin.ctx, {})
+      const rowAfter = (after.body.projects as Array<Record<string, unknown>>).find(p => p.id === 'proj-flags')!
+      expect(rowAfter.brainstormUnread).toBe(false)
+    })
+
     it('attention totals: unread counts projects with unseen replies; seen clears; inflight lists running turns', async () => {
       writeProjectFixture('proj-att', { title: 'Attention Project' })
       mockRuntimeStream(['A reply'])

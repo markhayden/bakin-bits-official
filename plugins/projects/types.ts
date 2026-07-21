@@ -57,4 +57,7 @@ export interface ProjectSummary {
   taskCount: number
   assetCount: number
   updated: string
+  /** Brainstorm attention (bakin#703): unseen agent reply / turn running. */
+  brainstormUnread?: boolean
+  brainstormStreaming?: boolean
 }

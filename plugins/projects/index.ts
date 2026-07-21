@@ -345,7 +345,16 @@ const projectsPlugin: BakinPlugin = {
       const statusFilter = url.searchParams.get('status') as ProjectStatus | null
       let projects = readAllProjects()
       if (statusFilter) projects = projects.filter(p => p.status === statusFilter)
-      return json({ projects: projects.map(projectToSummary) })
+      // Per-project attention flags so list rows can show WHICH project has
+      // an unseen reply / running turn (the nav badge names only the count).
+      const inflight = new Set(brainstormTurns.listInFlight().map(t => t.key))
+      return json({
+        projects: projects.map(p => ({
+          ...projectToSummary(p),
+          brainstormUnread: hasUnseenBrainstormReply(p.id),
+          brainstormStreaming: inflight.has(p.id),
+        })),
+      })
     }
     routeHandlers.set('GET /', listHandler)
 

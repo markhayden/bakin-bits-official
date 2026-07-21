@@ -499,6 +499,24 @@ describe('Brainstorm turns (engine-backed)', () => {
     expect(idle.status).toBe(409)
   })
 
+  it('session summaries carry unread + streaming flags', async () => {
+    streamRuntimeResponse('summary reply')
+    const sessionId = await createTestSession()
+    await sendAndSettle(sessionId, 'hi')
+
+    const listRoute = findRoute(plugin.routes, 'GET', '/sessions')!
+    let list = await callRoute(listRoute, plugin.ctx, {})
+    let row = (list.body.sessions as Array<Record<string, unknown>>).find(s => s.id === sessionId)!
+    expect(row.unread).toBe(true)
+    expect(row.streaming).toBe(false)
+
+    const seenRoute = findRoute(plugin.routes, 'POST', '/sessions/:id/seen')!
+    await callRoute(seenRoute, plugin.ctx, { searchParams: { id: sessionId } })
+    list = await callRoute(listRoute, plugin.ctx, {})
+    row = (list.body.sessions as Array<Record<string, unknown>>).find(s => s.id === sessionId)!
+    expect(row.unread).toBe(false)
+  })
+
   it('attention totals: unread counts sessions with unseen agent activity; seen clears', async () => {
     streamRuntimeResponse('A reply.')
     const sessionId = await createTestSession()
