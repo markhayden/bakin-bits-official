@@ -1028,6 +1028,13 @@ describe('Routes', () => {
         body: { projectId: 'proj-att', prompt: 'hi' },
       })
       await settled
+      // The slot releases just after the done event — wait for idle.
+      const getProj = findRoute(plugin.routes, 'GET', '/:projectId')!
+      for (let i = 0; i < 50; i++) {
+        const check = await callRoute(getProj, plugin.ctx, { searchParams: { projectId: 'proj-att' } })
+        if (check.body.project.brainstormStreaming === false) break
+        await new Promise(resolve => setTimeout(resolve, 5))
+      }
 
       const attentionRoute = findRoute(plugin.routes, 'GET', '/brainstorm/attention')!
       let res = await callRoute(attentionRoute, plugin.ctx, {})

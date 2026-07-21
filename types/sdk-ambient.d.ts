@@ -785,6 +785,7 @@ declare module '@makinbakin/sdk/types' {
     hooks?: {
       onChunk?: (key: string, chunk: RuntimeChatChunk) => void
       meter?: (info: { key: string; agentId: string; turnId: string; usage?: unknown }) => Promise<void> | void
+      onTurnComplete?: (info: { key: string; aborted: boolean }) => Promise<void> | void
       onSettled?: (info: { ctx: ConversationTurnContext; key: string; outcome: ConversationTurnOutcome }) => Promise<unknown> | unknown
     }
   }

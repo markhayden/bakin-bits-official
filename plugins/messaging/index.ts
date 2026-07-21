@@ -490,29 +490,6 @@ function listBrainstormSessionSummaries(
     }))
 }
 
-/**
- * Map a runtime tool/status chunk into messaging's own SessionMessage
- * activity row (storage stays messaging-shaped; the wire carries the raw
- * chunk and the conversation kit folds it client-side). Successor to the
- * deleted SDK brainstorm normalizers.
- */
-function sessionActivityFromChunk(
-  chunk: { type: string; content?: string; data?: unknown },
-): { role: 'activity'; content: string; kind: string; data?: unknown } | null {
-  if (chunk.type === 'status') {
-    const content = (chunk.content ?? 'Agent status update').trim().slice(0, 500)
-    if (!content) return null
-    return { role: 'activity', kind: 'runtime_status', content, ...(chunk.data !== undefined ? { data: chunk.data } : {}) }
-  }
-  if (chunk.type === 'tool') {
-    const data = chunk.data as { toolName?: string; summary?: string } | undefined
-    const content = (chunk.content || (data?.toolName ? `${data.toolName}${data.summary ? `: ${data.summary}` : ''}` : 'Tool call')).trim().slice(0, 500)
-    if (!content) return null
-    return { role: 'activity', kind: 'tool_call', content, ...(chunk.data !== undefined ? { data: chunk.data } : {}) }
-  }
-  return null
-}
-
 function appendBrainstormMessage(
   contentStore: MessagingContentStorage,
   sessionId: string,
@@ -648,19 +625,6 @@ async function sendRuntimeChatCompletion(ctx: PluginContext, opts: RuntimeChatOp
     metadata: { model: opts.model, maxTokens: opts.maxTokens },
   })
   return result.content ?? ''
-}
-
-async function streamRuntimeChatCompletion(
-  ctx: PluginContext,
-  opts: RuntimeChatOpts,
-): Promise<ReturnType<PluginContext['runtime']['messaging']['stream']>> {
-  void opts.signal
-  return ctx.runtime.messaging.stream({
-    agentId: opts.agentId,
-    content: flattenChatMessages(opts.messages),
-    threadId: opts.sessionKey,
-    metadata: { model: opts.model, maxTokens: opts.maxTokens },
-  })
 }
 
 /**
@@ -842,7 +806,10 @@ const messagingPlugin: BakinPlugin = {
     legacyRoute('POST', '/sessions', 'Create a planning session'),
     legacyRoute('PUT', '/sessions/:id', 'Update a planning session'),
     legacyRoute('DELETE', '/sessions/:id', 'Delete a planning session without deleting Plans prepared from it'),
-    legacyRoute('POST', '/sessions/:id/messages', 'Send a message in a planning session (SSE streaming)'),
+    legacyRoute('POST', '/sessions/:id/messages', 'Send a message in a planning session (202; streams over the plugin-event bus)'),
+    legacyRoute('POST', '/sessions/:id/abort', 'Abort the in-flight brainstorm turn'),
+    legacyRoute('POST', '/sessions/:id/seen', 'Mark a brainstorm session as seen'),
+    legacyRoute('GET', '/brainstorm/attention', 'Brainstorm attention totals (unread + in-flight)'),
     legacyRoute('PUT', '/sessions/:id/proposals/:proposalId', 'Update a proposal in a planning session'),
     legacyRoute('POST', '/sessions/:id/materialize', 'Prepare Plans from accepted brainstorm proposals'),
     legacyRoute('GET', '/plans', 'List content Plans'),
@@ -1073,7 +1040,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         if (!id) return json({ error: 'id required' }, 400)
         const session = contentStore.getBrainstormSession(id)
         if (!session) return json({ error: 'Session not found' }, 404)
-        return json({ session })
+        // Server-seeded in-flight flag — a remount mid-turn rehydrates the
+        // streaming indicator instead of looking idle (bakin#703).
+        return json({ session, streaming: brainstormTurns.isInFlight(id) })
       })
 
     // POST /sessions — create session
@@ -1121,7 +1090,200 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         return json({ ok: true, planIds: [], taskIds: [] })
       })
 
-    // POST /sessions/:id/messages — send message with SSE streaming
+    // ── Brainstorm turns on the shared conversation turn engine (bakin#703) ──
+    // Server-owned background turns streamed as messaging.brainstorm.* bus
+    // events; assistant text persists INCREMENTALLY (the per-request era
+    // lost the whole reply on an interrupted turn). Messaging-shaped
+    // storage (segmented assistant messages, activity rows, proposal
+    // linking) happens in appendRow/onSettled; proposals parsed mid-stream
+    // ride the bus as messaging.brainstorm.proposal events.
+
+    interface BrainstormTurnState {
+      planId?: string
+      fullContent: string
+      proposalIds: string[]
+      assistantMessageIds: string[]
+    }
+    const brainstormTurnState = new Map<string, BrainstormTurnState>()
+
+    /** Parse newly completed ```json blocks; upsert + emit proposals live. */
+    function emitCompletedProposalBlocks(sessionId: string, state: BrainstormTurnState): void {
+      if (state.planId) return
+      const blockRegex = /```json\s*\n([\s\S]*?)```/g
+      let match: RegExpExecArray | null
+      let blockIndex = 0
+      const processed = state.proposalIds.length
+      const seenBefore = new Set(state.proposalIds)
+      while ((match = blockRegex.exec(state.fullContent)) !== null) {
+        if (blockIndex < processed) { blockIndex++; continue }
+        try {
+          const parsed = JSON.parse(match[1].trim())
+          const items = Array.isArray(parsed) ? parsed : [parsed]
+          const saved = upsertBrainstormProposals(contentStore, sessionId, `streaming-${Date.now()}`, items)
+          for (const p of saved) {
+            if (!seenBefore.has(p.id)) state.proposalIds.push(p.id)
+            ctx.events.emit('messaging.brainstorm.proposal', { sessionId, proposal: p as unknown as Record<string, unknown> })
+          }
+        } catch {
+          // JSON not valid yet or malformed — skip
+        }
+        blockIndex++
+      }
+    }
+
+    /** Turn end: final proposal passes, plan refinement, proposal linking. */
+    function finalizeBrainstormTurn(sessionId: string): void {
+      const state = brainstormTurnState.get(sessionId)
+      brainstormTurnState.delete(sessionId)
+      if (!state) return
+      try {
+        emitCompletedProposalBlocks(sessionId, state)
+
+        // Legacy array format (single block with [...]) — parity with the
+        // per-request era.
+        if (!state.planId && state.proposalIds.length === 0) {
+          const jsonMatch = state.fullContent.match(/```json\s*([\s\S]*?)\s*```/)
+          if (jsonMatch) {
+            try {
+              const parsed = JSON.parse(jsonMatch[1].trim())
+              const items = Array.isArray(parsed) ? parsed : [parsed]
+              const saved = upsertBrainstormProposals(contentStore, sessionId, `final-${Date.now()}`, items)
+              for (const p of saved) {
+                state.proposalIds.push(p.id)
+                ctx.events.emit('messaging.brainstorm.proposal', { sessionId, proposal: p as unknown as Record<string, unknown> })
+              }
+            } catch { /* ignore malformed JSON */ }
+          }
+        }
+
+        if (state.planId) {
+          const plan = contentStore.getPlan(state.planId)
+          const refined = plan ? applyPlanRefinementUpdates(contentStore, plan, extractJsonBlocks(state.fullContent)) : null
+          if (refined) {
+            ctx.activity.audit('plan.updated', 'system', { planId: refined.id, source: 'brainstorm' })
+            ctx.events.emit('messaging.brainstorm.plan_update', { sessionId, plan: refined as unknown as Record<string, unknown> })
+          }
+        }
+
+        // Pure-JSON replies persist a placeholder carrying the proposals.
+        if (state.assistantMessageIds.length === 0) {
+          const msg = appendBrainstormMessage(contentStore, sessionId, { role: 'assistant', content: '' }, state.proposalIds.length > 0 ? state.proposalIds : undefined)
+          state.assistantMessageIds.push(msg.id)
+        }
+
+        // Link proposals to the first assistant message of the turn.
+        if (state.proposalIds.length > 0) {
+          const reloaded = contentStore.getBrainstormSession(sessionId)
+          if (reloaded) {
+            const firstMsg = reloaded.messages.find(m => m.id === state.assistantMessageIds[0])
+            if (firstMsg) firstMsg.proposalIds = state.proposalIds
+            for (const p of reloaded.proposals) {
+              if (state.proposalIds.includes(p.id)) p.messageId = state.assistantMessageIds[0]
+            }
+            contentStore.updateBrainstormSession(sessionId, {
+              messages: reloaded.messages,
+              proposals: reloaded.proposals,
+            })
+          }
+        }
+      } catch (err) {
+        log.error('brainstorm turn finalize failed', err)
+      }
+    }
+
+    const brainstormTurns = ctx.conversations.createTurnService({
+      name: 'messaging.brainstorm',
+      events: {
+        chunk: 'messaging.brainstorm.chunk',
+        done: 'messaging.brainstorm.done',
+        error: 'messaging.brainstorm.error',
+      },
+      payload: (key) => ({ sessionId: key }),
+      resolveThread: (key) => {
+        const session = contentStore.getBrainstormSession(key)
+        if (!session || session.status === 'archived') return null
+        return { agentId: session.agentId }
+      },
+      appendRow: (key, row) => {
+        const session = contentStore.getBrainstormSession(key)
+        if (!session) return
+        const state = brainstormTurnState.get(key)
+        if (row.kind === 'user') {
+          appendBrainstormMessage(contentStore, key, { role: 'user', content: row.content })
+          return
+        }
+        if (row.kind === 'assistant') {
+          // Segment at ```json boundaries — parity with the per-request
+          // era: "intro ```json…``` outro" stores as separate messages.
+          const segments = row.content
+            .split(/```json[\s\S]*?```/)
+            .map(part => part.trim())
+            .filter(part => part.length > 0)
+          for (const segment of segments) {
+            const msg = appendBrainstormMessage(contentStore, key, { role: 'assistant', content: segment, agentId: session.agentId })
+            state?.assistantMessageIds.push(msg.id)
+          }
+          return
+        }
+        if (row.kind === 'tool') {
+          // The recorder already merged call→result (summary/previews); the
+          // durable activity row carries the structured row as data.
+          const label = `${row.toolName}${row.summary ? `: ${row.summary}` : ''}`.trim().slice(0, 500)
+          appendBrainstormMessage(contentStore, key, {
+            role: 'activity',
+            kind: 'tool_call',
+            content: label || 'Tool call',
+            data: row as unknown,
+            agentId: session.agentId,
+          })
+          return
+        }
+        if (row.kind === 'error') {
+          appendBrainstormMessage(contentStore, key, {
+            role: 'activity',
+            kind: 'turn_error',
+            content: `Turn failed: ${row.message}`.slice(0, 500),
+          })
+          return
+        }
+        if (row.kind === 'aborted') {
+          appendBrainstormMessage(contentStore, key, { role: 'activity', kind: 'turn_aborted', content: 'Turn stopped.' })
+        }
+      },
+      // Plan-refinement turns run on the plan's own thread; the state map is
+      // written before start(), so the per-turn mode is visible here.
+      threadId: (key, agentId) => {
+        const planId = brainstormTurnState.get(key)?.planId
+        return planId
+          ? conversationThreadId('messaging-plan', planId, agentId)
+          : conversationThreadId('messaging', key, agentId)
+      },
+      metering: {
+        workClass: 'chat',
+        runId: (key, turnId) => `brainstorm:messaging:${key}:turn:${turnId}`,
+      },
+      hooks: {
+        onChunk: (key, chunk) => {
+          const state = brainstormTurnState.get(key)
+          if (!state) return
+          if (chunk.type === 'text' && chunk.content) {
+            state.fullContent += chunk.content
+            if (chunk.content.includes('`')) emitCompletedProposalBlocks(key, state)
+          }
+        },
+        // Finalize BEFORE the done event so proposal linking / plan updates
+        // are durable when clients react to done. Error turns skip finalize
+        // (the error row is the honest record); onSettled just sweeps state.
+        onTurnComplete: ({ key }) => {
+          finalizeBrainstormTurn(key)
+        },
+        onSettled: ({ key }) => {
+          brainstormTurnState.delete(key)
+        },
+      },
+    })
+
+    // POST /sessions/:id/messages — 202; the turn runs on the engine.
     routeHandlers.set('POST /sessions/:id/messages', async (req: Request) => {
         const url = new URL(req.url)
         const body = await readBody<{ id?: string; message?: string; planId?: string }>(req)
@@ -1136,218 +1298,60 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         if (body.planId && !plan) return json({ error: 'Plan not found' }, 404)
         if (plan && plan.sourceSessionId !== id) return json({ error: 'Plan is not linked to this session' }, 400)
 
-        // Append user message
-        appendBrainstormMessage(contentStore, id, { role: 'user', content: body.message })
-
-        // Build current-turn prompt; durable history is held by the runtime
-        // adapter through the stable threadId.
+        // Current-turn prompt from the PRE-turn session (the engine appends
+        // the user row); durable history stays with the runtime thread.
         const promptOptions = await resolvePromptOptions(ctx, session.agentId)
         const messages = plan
           ? buildPlanRefinementMessages(session, plan, body.message, promptOptions)
           : buildMessages(session, body.message, promptOptions)
-        const sessionKey = plan
-          ? conversationThreadId('messaging-plan', plan.id, session.agentId)
-          : conversationThreadId('messaging', id, session.agentId)
 
-        // Create a ReadableStream that pipes runtime SSE to the client
-        const stream = new ReadableStream({
-          async start(controller) {
-            const encoder = new TextEncoder()
-
-            function send(event: string, data: unknown): void {
-              controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
-            }
-
-            try {
-              let fullContent = ''
-              // Track proposals emitted incrementally during streaming
-              const streamedProposalIds: string[] = []
-              const sessionId = id as string // narrowed by early return above
-              let refinedPlan: Plan | null = null
-
-              /**
-               * Check fullContent for newly completed ```json blocks.
-               * Parse and upsert each one, emit SSE event immediately.
-               * Uses a temp message ID during streaming; patched to real ID after.
-               */
-              function checkForCompletedBlocks(): void {
-                if (plan) return
-                // Find all complete ```json...``` blocks we haven't processed yet
-                const processed = streamedProposalIds.length
-                const blockRegex = /```json\s*\n([\s\S]*?)```/g
-                let match: RegExpExecArray | null
-                let blockIndex = 0
-                while ((match = blockRegex.exec(fullContent)) !== null) {
-                  if (blockIndex < processed) { blockIndex++; continue }
-                  try {
-                    const parsed = JSON.parse(match[1].trim())
-                    const items = Array.isArray(parsed) ? parsed : [parsed]
-                    const saved = upsertBrainstormProposals(contentStore, sessionId, `streaming-${Date.now()}`, items)
-                    for (const p of saved) {
-                      streamedProposalIds.push(p.id)
-                      send('proposal', { proposal: p })
-                    }
-                  } catch {
-                    // JSON not valid yet or malformed — skip
-                  }
-                  blockIndex++
-                }
-              }
-
-              // Try streaming first, fall back to non-streaming
-              let useStreaming = true
-              let runtimeChunks: ReturnType<PluginContext['runtime']['messaging']['stream']> | null = null
-
-              try {
-                runtimeChunks = await streamRuntimeChatCompletion(ctx, {
-                  messages,
-                  agentId: session.agentId,
-                  sessionKey,
-                })
-              } catch {
-                // Runtime doesn't support streaming — fall back
-                useStreaming = false
-                runtimeChunks = null
-              }
-
-              if (useStreaming && runtimeChunks) {
-                for await (const chunk of runtimeChunks) {
-                  if (chunk.type === 'text' && chunk.content) {
-                    fullContent += chunk.content
-                    send('chunk', chunk)
-                    // Check if a ```json block just completed
-                    if (chunk.content.includes('`')) {
-                      checkForCompletedBlocks()
-                    }
-                  } else if (chunk.type === 'error') {
-                    throw new Error(chunk.content ?? 'Runtime stream error')
-                  } else if (chunk.type === 'tool' || chunk.type === 'status') {
-                    // Raw chunks on the wire (the kit folds them client-side);
-                    // storage keeps messaging's own SessionMessage activity rows
-                    // with the structured chunk payload.
-                    send('chunk', chunk)
-                    const activity = sessionActivityFromChunk(chunk)
-                    if (activity) {
-                      appendBrainstormMessage(contentStore, sessionId, {
-                        ...activity,
-                        agentId: session.agentId,
-                      })
-                    }
-                  }
-                }
-              } else {
-                // Non-streaming fallback
-                try {
-                  fullContent = await sendRuntimeChatCompletion(ctx, {
-                    messages,
-                    agentId: session.agentId,
-                    sessionKey,
-                  })
-                  // Send entire response as a single text chunk
-                  send('chunk', { type: 'text', content: fullContent })
-                } catch (err) {
-                  send('error', { message: err instanceof Error ? err.message : String(err) })
-                  controller.close()
-                  return
-                }
-              }
-
-              // Final pass: pick up any remaining ```json blocks not caught during streaming
-              checkForCompletedBlocks()
-
-              // Also handle legacy array format (single block with [...])
-              if (!plan && streamedProposalIds.length === 0) {
-                const jsonMatch = fullContent.match(/```json\s*([\s\S]*?)\s*```/)
-                if (jsonMatch) {
-                  try {
-                    const parsed = JSON.parse(jsonMatch[1].trim())
-                    const items = Array.isArray(parsed) ? parsed : [parsed]
-                    const saved = upsertBrainstormProposals(contentStore, sessionId, `final-${Date.now()}`, items)
-                    for (const p of saved) {
-                      streamedProposalIds.push(p.id)
-                      send('proposal', { proposal: p })
-                    }
-                  } catch { /* ignore malformed JSON */ }
-                }
-              }
-
-              if (plan) {
-                refinedPlan = applyPlanRefinementUpdates(contentStore, plan, extractJsonBlocks(fullContent))
-                if (refinedPlan) {
-                  ctx.activity.audit('plan.updated', 'system', { planId: refinedPlan.id, source: 'brainstorm' })
-                  send('plan_update', { plan: refinedPlan })
-                }
-              }
-
-              // Split content at JSON block boundaries into separate messages
-              // e.g. "intro text ```json...``` day one text ```json...``` closing"
-              // becomes 3 messages: "intro text", "day one text", "closing"
-              const segments = fullContent
-                .split(/```json[\s\S]*?```/)
-                .map(s => s.trim())
-                .filter(s => s.length > 0)
-
-              const messageIds: string[] = []
-              for (const segment of segments) {
-                const msg = appendBrainstormMessage(contentStore, sessionId, {
-                  role: 'assistant',
-                  content: segment,
-                })
-                messageIds.push(msg.id)
-              }
-
-              // If no text segments (pure JSON response), save a placeholder
-              if (messageIds.length === 0) {
-                const msg = appendBrainstormMessage(contentStore, sessionId, {
-                  role: 'assistant',
-                  content: '',
-                }, streamedProposalIds)
-                messageIds.push(msg.id)
-              }
-
-              // Link proposals to the first message and patch messageIds on proposals
-              if (streamedProposalIds.length > 0) {
-                const reloadedSession = contentStore.getBrainstormSession(sessionId)
-                if (reloadedSession) {
-                  // Attach proposalIds to the first assistant message
-                  const firstMsg = reloadedSession.messages.find(m => m.id === messageIds[0])
-                  if (firstMsg) firstMsg.proposalIds = streamedProposalIds
-
-                  // Patch proposal messageIds to real assistant message
-                  for (const p of reloadedSession.proposals) {
-                    if (streamedProposalIds.includes(p.id)) {
-                      p.messageId = messageIds[0]
-                    }
-                  }
-                  contentStore.updateBrainstormSession(sessionId, {
-                    messages: reloadedSession.messages,
-                    proposals: reloadedSession.proposals,
-                  })
-                }
-              }
-
-              send('done', {
-                messageId: messageIds[0],
-                content: segments.join('\n\n'),
-                segments: segments.map((content, i) => ({
-                  id: messageIds[i],
-                  content,
-                })),
-              })
-            } catch (err) {
-              send('error', { message: err instanceof Error ? err.message : String(err) })
-            } finally {
-              controller.close()
-            }
-          },
+        brainstormTurnState.set(id, {
+          ...(plan ? { planId: plan.id } : {}),
+          fullContent: '',
+          proposalIds: [],
+          assistantMessageIds: [],
         })
+        const result = await brainstormTurns.start(ctx, id, body.message, {
+          runtimeContent: flattenChatMessages(messages),
+        })
+        if (result !== 'accepted') brainstormTurnState.delete(id)
+        if (result === 'not_found') return json({ error: 'Session not found' }, 404)
+        if (result === 'busy') return json({ error: 'A brainstorm turn is already running for this session' }, 409)
+        return json({ ok: true, streaming: true }, 202)
+      })
 
-        return new Response(stream, {
-          headers: {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-          },
+    // POST /sessions/:id/abort — stop the in-flight turn.
+    routeHandlers.set('POST /sessions/:id/abort', async (req: Request) => {
+        const url = new URL(req.url)
+        const id = url.searchParams.get('id')
+        if (!id) return json({ error: 'id required' }, 400)
+        if (!brainstormTurns.abort(id)) return json({ error: 'No brainstorm turn in flight' }, 409)
+        return json({ ok: true })
+      })
+
+    // POST /sessions/:id/seen — viewing a session clears its unread state.
+    routeHandlers.set('POST /sessions/:id/seen', async (req: Request) => {
+        const url = new URL(req.url)
+        const id = url.searchParams.get('id')
+        if (!id) return json({ error: 'id required' }, 400)
+        if (!contentStore.getBrainstormSession(id)) return json({ error: 'Session not found' }, 404)
+        contentStore.updateBrainstormSession(id, { lastSeenAt: new Date().toISOString() })
+        return json({ ok: true })
+      })
+
+    // GET /brainstorm/attention — totals for the nav badge provider:
+    // unreadTotal counts SESSIONS with agent activity newer than the last
+    // view; inflight lists sessions with a running turn.
+    routeHandlers.set('GET /brainstorm/attention', async () => {
+        const sessions = contentStore.listBrainstormSessions()
+        const unread = sessions.filter(session => {
+          const lastAgent = [...session.messages].reverse().find(m => m.role !== 'user')?.timestamp
+          if (!lastAgent) return false
+          return !session.lastSeenAt || lastAgent > session.lastSeenAt
+        })
+        return json({
+          unreadTotal: unread.length,
+          inflight: brainstormTurns.listInFlight().map(t => t.key),
         })
       })
 

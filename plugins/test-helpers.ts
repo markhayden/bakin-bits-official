@@ -73,6 +73,7 @@ function createTestTurnService(config: TurnConfig, meteredTurns: Array<Record<st
       await persist(recorder.finish())
       const aborted = controller.signal.aborted
       if (aborted) await persist([{ kind: 'aborted', ts: new Date().toISOString(), turnId }])
+      try { await config.hooks?.onTurnComplete?.({ key, aborted }) } catch { /* mirrors the engine: never throws */ }
       if (config.metering) {
         meteredTurns.push({ runId: config.metering.runId(key, turnId), workClass: config.metering.workClass, agent: agentId, turnId, usage: doneUsage })
       }
