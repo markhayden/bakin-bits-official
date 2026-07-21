@@ -18,6 +18,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@makinbakin/sd
 import { Input } from "@makinbakin/sdk/ui"
 import { ArrowLeft, CalendarDays, Check, ClipboardList, Columns2, Plus, SquareStack, Trash2, X } from 'lucide-react'
 import type { BrainstormSession, PlanProposal, SessionMessage } from '../types'
+import { sessionMessageToConversation } from '../lib/session-to-conversation'
 
 interface SessionSummary {
   id: string
@@ -66,35 +67,6 @@ function persistBrainstormLayoutMode(mode: BrainstormLayoutMode): void {
   }
 }
 
-function toConversation(agentId: string, message: SessionMessage): ConversationMessage | null {
-  if (message.role === 'user') {
-    return { kind: 'user', ts: message.timestamp, content: message.content }
-  }
-  if (message.role === 'assistant') {
-    return { kind: 'assistant', ts: message.timestamp, agentId, content: message.content }
-  }
-  // Activity rows: structured tool payloads render as tool rows; status
-  // noise stays out of the durable timeline; errors render honestly.
-  if (message.kind === 'tool_call') {
-    const data = (message.data ?? {}) as { callId?: string; toolName?: string; status?: string; summary?: string; inputPreview?: string; outputPreview?: string; durationMs?: number }
-    return {
-      kind: 'tool',
-      ts: message.timestamp,
-      agentId,
-      toolName: data.toolName ?? 'tool',
-      status: data.status === 'failed' ? 'failed' : 'completed',
-      ...(data.callId ? { callId: data.callId } : {}),
-      summary: data.summary ?? message.content,
-      ...(data.inputPreview ? { inputPreview: data.inputPreview } : {}),
-      ...(data.outputPreview ? { outputPreview: data.outputPreview } : {}),
-      ...(typeof data.durationMs === 'number' ? { durationMs: data.durationMs } : {}),
-    }
-  }
-  if (message.kind === 'error') {
-    return { kind: 'error', ts: message.timestamp, message: message.content }
-  }
-  return null
-}
 
 function BrainstormLayoutToggle({
   value,
@@ -730,7 +702,7 @@ export function BrainstormView() {
       if (!data.session) return null
       setActiveSession(data.session)
       return {
-        messages: data.session.messages.map(message => toConversation(data.session!.agentId, message)).filter((m): m is ConversationMessage => m !== null),
+        messages: data.session.messages.map(message => sessionMessageToConversation(data.session!.agentId, message)).filter((m): m is ConversationMessage => m !== null),
         streaming: data.streaming === true,
       }
     }, []),

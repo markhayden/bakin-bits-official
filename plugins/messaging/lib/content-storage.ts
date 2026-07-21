@@ -84,6 +84,7 @@ export interface MessagingContentStorage {
   getBrainstormSession(id: string): BrainstormSession | null
   listBrainstormSessions(): BrainstormSession[]
   updateBrainstormSession(id: string, patch: Partial<BrainstormSession>): BrainstormSession
+  markBrainstormSessionSeen(id: string, lastSeenAt: string): BrainstormSession
   deleteBrainstormSession(id: string): void
   createPlan(input: CreatePlanInput): Plan
   getPlan(id: string): Plan | null
@@ -141,6 +142,16 @@ export function createMessagingContentStorage(storage: StorageAdapter): Messagin
       id: existing.id,
       updatedAt: nowIso(),
     }
+    saveBrainstormSession(next)
+    return next
+  }
+
+  /** Seen writes must not bump updatedAt — viewing a session would reorder
+   *  the list and trigger watcher/search churn (bakin#703 review). */
+  function markBrainstormSessionSeen(id: string, lastSeenAt: string): BrainstormSession {
+    const existing = getBrainstormSession(id)
+    if (!existing) throw new Error(`Brainstorm session ${id} not found`)
+    const next: BrainstormSession = { ...existing, lastSeenAt }
     saveBrainstormSession(next)
     return next
   }
@@ -259,6 +270,7 @@ export function createMessagingContentStorage(storage: StorageAdapter): Messagin
     getBrainstormSession,
     listBrainstormSessions,
     updateBrainstormSession,
+    markBrainstormSessionSeen,
     deleteBrainstormSession,
     createPlan,
     getPlan,

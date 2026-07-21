@@ -12,7 +12,20 @@
 import { useConversationAttention } from '@makinbakin/sdk/components'
 import { useRouter } from '@makinbakin/sdk/hooks'
 
+/**
+ * The session whose turns are on screen. Two surfaces qualify: the
+ * brainstorm view (`?session=` in the URL) and the plan workspace (which
+ * runs refinement turns for its plan's SOURCE session — resolved from
+ * plan data, not the URL, so the workspace publishes it via a global the
+ * provider reads at event time).
+ */
+export function setVisiblePlanSourceSession(sessionId: string | null): void {
+  ;(globalThis as Record<string, unknown>).__messagingVisiblePlanSession = sessionId ?? undefined
+}
+
 function visibleSessionId(): string {
+  const planSession = (globalThis as Record<string, unknown>).__messagingVisiblePlanSession
+  if (typeof planSession === 'string' && planSession) return planSession
   if (!window.location.pathname.startsWith('/messaging/brainstorm')) return ''
   return new URLSearchParams(window.location.search).get('session') ?? ''
 }

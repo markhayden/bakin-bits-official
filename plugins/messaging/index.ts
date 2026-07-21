@@ -475,9 +475,12 @@ function normalizeProposalInputs(items: unknown[]): NormalizedProposalInput[] {
     .filter((item): item is NormalizedProposalInput => item !== null)
 }
 
-/** Unseen agent activity: any non-user message newer than the last view. */
+/** Unseen agent activity: any non-user message newer than the last view
+ *  (abort markers excluded — the user stopped it themselves). */
 function sessionHasUnseenReply(session: BrainstormSession): boolean {
-  const lastAgent = [...session.messages].reverse().find(m => m.role !== 'user')?.timestamp
+  const lastAgent = [...session.messages]
+    .reverse()
+    .find(m => m.role !== 'user' && m.kind !== 'turn_aborted')?.timestamp
   if (!lastAgent) return false
   return !session.lastSeenAt || lastAgent > session.lastSeenAt
 }
@@ -619,9 +622,6 @@ interface RuntimeChatOpts {
   agentId: string
   messages: Array<{ role: string; content: string }>
   sessionKey?: string
-  signal?: AbortSignal
-  model?: string
-  maxTokens?: number
 }
 
 function flattenChatMessages(messages: Array<{ role: string; content: string }>): string {
@@ -630,12 +630,10 @@ function flattenChatMessages(messages: Array<{ role: string; content: string }>)
 }
 
 async function sendRuntimeChatCompletion(ctx: PluginContext, opts: RuntimeChatOpts): Promise<string> {
-  void opts.signal
   const result = await ctx.runtime.messaging.send({
     agentId: opts.agentId,
     content: flattenChatMessages(opts.messages),
     threadId: opts.sessionKey,
-    metadata: { model: opts.model, maxTokens: opts.maxTokens },
   })
   return result.content ?? ''
 }
@@ -1101,6 +1099,9 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         if (!id) return json({ error: 'id required' }, 400)
         const session = contentStore.getBrainstormSession(id)
         if (!session) return json({ error: 'Session not found' }, 404)
+        // A live turn must die with its session — otherwise it keeps
+        // billing and its settle toasts point at a ghost.
+        brainstormTurns.abort(id)
         contentStore.deleteBrainstormSession(id)
         ctx.activity.audit('session.deleted', 'system', { sessionId: id })
         ctx.activity.log('system', `Deleted planning session ${id}`)
@@ -1120,36 +1121,43 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       fullContent: string
       proposalIds: string[]
       assistantMessageIds: string[]
+      /** ```json blocks already parsed by the incremental pass. */
+      processedBlocks: number
     }
     const brainstormTurnState = new Map<string, BrainstormTurnState>()
 
     /** Parse newly completed ```json blocks; upsert + emit proposals live. */
     function emitCompletedProposalBlocks(sessionId: string, state: BrainstormTurnState): void {
       if (state.planId) return
-      const blockRegex = /```json\s*\n([\s\S]*?)```/g
+      // ONE tolerant regex family everywhere (parse here, strip in
+      // appendRow, extractJsonBlocks for plans) — a fence without a
+      // newline must never be stripped-but-unparsed (review I4).
+      const blockRegex = /```json\s*([\s\S]*?)```/g
       let match: RegExpExecArray | null
       let blockIndex = 0
-      const processed = state.proposalIds.length
-      const seenBefore = new Set(state.proposalIds)
       while ((match = blockRegex.exec(state.fullContent)) !== null) {
-        if (blockIndex < processed) { blockIndex++; continue }
+        // The cursor counts BLOCKS, not proposals — an array block with two
+        // proposals must not skip the next block (review S1).
+        if (blockIndex < state.processedBlocks) { blockIndex++; continue }
         try {
           const parsed = JSON.parse(match[1].trim())
           const items = Array.isArray(parsed) ? parsed : [parsed]
           const saved = upsertBrainstormProposals(contentStore, sessionId, `streaming-${Date.now()}`, items)
           for (const p of saved) {
-            if (!seenBefore.has(p.id)) state.proposalIds.push(p.id)
+            if (!state.proposalIds.includes(p.id)) state.proposalIds.push(p.id)
             ctx.events.emit('messaging.brainstorm.proposal', { sessionId, proposal: p as unknown as Record<string, unknown> })
           }
+          state.processedBlocks = blockIndex + 1
         } catch {
-          // JSON not valid yet or malformed — skip
+          // Expected while the block is still streaming in (or genuinely
+          // malformed JSON) — the final pass retries every unprocessed block.
         }
         blockIndex++
       }
     }
 
     /** Turn end: final proposal passes, plan refinement, proposal linking. */
-    function finalizeBrainstormTurn(sessionId: string): void {
+    function finalizeBrainstormTurn(sessionId: string, aborted = false): void {
       const state = brainstormTurnState.get(sessionId)
       brainstormTurnState.delete(sessionId)
       if (!state) return
@@ -1174,16 +1182,31 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         }
 
         if (state.planId) {
-          const plan = contentStore.getPlan(state.planId)
-          const refined = plan ? applyPlanRefinementUpdates(contentStore, plan, extractJsonBlocks(state.fullContent)) : null
-          if (refined) {
-            ctx.activity.audit('plan.updated', 'system', { planId: refined.id, source: 'brainstorm' })
-            ctx.events.emit('messaging.brainstorm.plan_update', { sessionId, plan: refined as unknown as Record<string, unknown> })
+          // A refinement that can't apply (e.g. locked channels) must be
+          // HONEST: the agent's reply claims the plan changed — persist the
+          // failure as its own row instead of swallowing it (review I2),
+          // and never let it abort the rest of finalize.
+          try {
+            const plan = contentStore.getPlan(state.planId)
+            const refined = plan ? applyPlanRefinementUpdates(contentStore, plan, extractJsonBlocks(state.fullContent)) : null
+            if (refined) {
+              ctx.activity.audit('plan.updated', 'system', { planId: refined.id, source: 'brainstorm' })
+              ctx.events.emit('messaging.brainstorm.plan_update', { sessionId, plan: refined as unknown as Record<string, unknown> })
+            }
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err)
+            log.error('plan refinement failed', err)
+            appendBrainstormMessage(contentStore, sessionId, {
+              role: 'activity',
+              kind: 'turn_error',
+              content: `Turn failed: plan update could not be applied — ${message}`.slice(0, 500),
+            })
           }
         }
 
-        // Pure-JSON replies persist a placeholder carrying the proposals.
-        if (state.assistantMessageIds.length === 0) {
+        // Pure-JSON replies persist a placeholder carrying the proposals;
+        // an abort with nothing to link gets no empty bubble.
+        if (state.assistantMessageIds.length === 0 && !(aborted && state.proposalIds.length === 0)) {
           const msg = appendBrainstormMessage(contentStore, sessionId, { role: 'assistant', content: '' }, state.proposalIds.length > 0 ? state.proposalIds : undefined)
           state.assistantMessageIds.push(msg.id)
         }
@@ -1291,8 +1314,8 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         // Finalize BEFORE the done event so proposal linking / plan updates
         // are durable when clients react to done. Error turns skip finalize
         // (the error row is the honest record); onSettled just sweeps state.
-        onTurnComplete: ({ key }) => {
-          finalizeBrainstormTurn(key)
+        onTurnComplete: ({ key, aborted }) => {
+          finalizeBrainstormTurn(key, aborted)
         },
         onSettled: ({ key }) => {
           brainstormTurnState.delete(key)
@@ -1322,16 +1345,32 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
           ? buildPlanRefinementMessages(session, plan, body.message, promptOptions)
           : buildMessages(session, body.message, promptOptions)
 
-        brainstormTurnState.set(id, {
+        // A running turn OWNS the session's state entry — a concurrent send
+        // must 409 BEFORE staging, or it would clobber the live turn's
+        // accumulated proposals/plan mode (review C1).
+        if (brainstormTurnState.has(id) || brainstormTurns.isInFlight(id)) {
+          return json({ error: 'A brainstorm turn is already running for this session' }, 409)
+        }
+        const staged: BrainstormTurnState = {
           ...(plan ? { planId: plan.id } : {}),
           fullContent: '',
           proposalIds: [],
           assistantMessageIds: [],
-        })
-        const result = await brainstormTurns.start(ctx, id, body.message, {
-          runtimeContent: flattenChatMessages(messages),
-        })
-        if (result !== 'accepted') brainstormTurnState.delete(id)
+          processedBlocks: 0,
+        }
+        brainstormTurnState.set(id, staged)
+        let result: Awaited<ReturnType<typeof brainstormTurns.start>>
+        try {
+          result = await brainstormTurns.start(ctx, id, body.message, {
+            runtimeContent: flattenChatMessages(messages),
+          })
+        } catch (err) {
+          if (brainstormTurnState.get(id) === staged) brainstormTurnState.delete(id)
+          throw err
+        }
+        // Identity-guarded cleanup: only remove OUR staged entry, never a
+        // competing turn's live state.
+        if (result !== 'accepted' && brainstormTurnState.get(id) === staged) brainstormTurnState.delete(id)
         if (result === 'not_found') return json({ error: 'Session not found' }, 404)
         if (result === 'busy') return json({ error: 'A brainstorm turn is already running for this session' }, 409)
         return json({ ok: true, streaming: true }, 202)
@@ -1352,7 +1391,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const id = url.searchParams.get('id')
         if (!id) return json({ error: 'id required' }, 400)
         if (!contentStore.getBrainstormSession(id)) return json({ error: 'Session not found' }, 404)
-        contentStore.updateBrainstormSession(id, { lastSeenAt: new Date().toISOString() })
+        contentStore.markBrainstormSessionSeen(id, new Date().toISOString())
         return json({ ok: true })
       })
 
@@ -2151,6 +2190,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         if (!params.sessionId) return { ok: false, error: 'sessionId required' }
         const session = contentStore.getBrainstormSession(params.sessionId as string)
         if (!session) return { ok: false, error: 'Session not found' }
+        brainstormTurns.abort(params.sessionId as string)
         contentStore.deleteBrainstormSession(params.sessionId as string)
         ctx.activity.audit('session.deleted', 'system', { sessionId: params.sessionId })
         return { ok: true, planIds: [], taskIds: [] }

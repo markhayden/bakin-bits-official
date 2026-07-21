@@ -9,12 +9,14 @@ import {
   useConversationThread,
 } from "@makinbakin/sdk/components"
 import type { ConversationMessage } from "@makinbakin/sdk/components"
-import { toast, useHorizontalResize, usePluginEvent } from "@makinbakin/sdk/hooks"
+import { emitPluginEvent, toast, useHorizontalResize, usePluginEvent } from "@makinbakin/sdk/hooks"
 import { Badge } from "@makinbakin/sdk/ui"
 import { Button } from "@makinbakin/sdk/ui"
 import { Skeleton } from "@makinbakin/sdk/ui"
 import { ArrowLeft, CalendarDays, CheckCircle2, Circle, ClipboardList, ExternalLink, FileText, Globe2, Info, Instagram, MessageCircle, MessageSquareText, Music2, Rocket, Slack, Trash2, Twitter, type LucideIcon } from 'lucide-react'
 import type { BrainstormSession, ContentTypeOption, Deliverable, Plan, PlanChannel, PlanStatus, SessionMessage } from '../types'
+import { sessionMessageToConversation } from '../lib/session-to-conversation'
+import { setVisiblePlanSourceSession } from './brainstorm-badge-provider'
 import { PLAN_STATUS_BADGE } from '../constants'
 import { usePlan } from '../hooks/use-plan'
 import { getContentTypeLabel, useContentTypes } from '../hooks/use-content-types'
@@ -85,29 +87,6 @@ const DISTRIBUTION_CHANNEL_OPTIONS: DistributionChannelOption[] = MESSAGING_DIST
 }))
 const DELETE_REQUEST_TIMEOUT_MS = 10000
 
-function toConversation(agentId: string, message: SessionMessage): ConversationMessage | null {
-  if (message.role === 'user') {
-    return { kind: 'user', ts: message.timestamp, content: message.content }
-  }
-  if (message.role === 'assistant') {
-    return { kind: 'assistant', ts: message.timestamp, agentId, content: message.content }
-  }
-  if (message.kind === 'tool_call') {
-    const data = (message.data ?? {}) as { callId?: string; toolName?: string; status?: string; summary?: string }
-    return {
-      kind: 'tool',
-      ts: message.timestamp,
-      agentId,
-      toolName: data.toolName ?? 'tool',
-      status: data.status === 'failed' ? 'failed' : 'completed',
-      summary: data.summary ?? message.content,
-    }
-  }
-  if (message.kind === 'error') {
-    return { kind: 'error', ts: message.timestamp, message: message.content }
-  }
-  return null
-}
 
 function formatDateTime(value: string): string {
   const date = new Date(value)
@@ -393,6 +372,25 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
 
   // Plan refinements ride the same sessions route with planId; plan_update
   // custom events land via the post-turn refresh.
+  // Watching refinements here counts as viewing the source session: the
+  // badge provider suppresses toast/chime for it, and seen marks keep the
+  // Brainstorm nav badge honest (review I3 — replies watched in the plan
+  // workspace stayed "unread" forever).
+  const markSourceSessionSeen = useCallback(() => {
+    const sessionId = plan?.sourceSessionId
+    if (!sessionId || document.visibilityState !== 'visible') return
+    const encoded = encodeURIComponent(sessionId)
+    void fetch(`/api/plugins/messaging/sessions/${encoded}/seen?id=${encoded}`, { method: 'POST' })
+      .then(() => emitPluginEvent({ event: 'messaging.brainstorm.seen', sessionId }))
+      .catch(() => {})
+  }, [plan?.sourceSessionId])
+
+  useEffect(() => {
+    setVisiblePlanSourceSession(plan?.sourceSessionId ?? null)
+    markSourceSessionSeen()
+    return () => setVisiblePlanSourceSession(null)
+  }, [plan?.sourceSessionId, markSourceSessionSeen])
+
   // Plan-refinement turns run server-side on the conversation turn engine
   // (bakin#703): they share the source session's transcript + bus events,
   // so navigation never kills a refinement and returning rehydrates it.
@@ -413,7 +411,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
       const data = await response.json() as { session?: BrainstormSession; streaming?: boolean }
       if (!data.session) return null
       return {
-        messages: data.session.messages.map((message) => toConversation(data.session!.agentId, message)).filter((m): m is ConversationMessage => m !== null),
+        messages: data.session.messages.map((message) => sessionMessageToConversation(data.session!.agentId, message)).filter((m): m is ConversationMessage => m !== null),
         streaming: data.streaming === true,
       }
     }, []),
@@ -430,7 +428,8 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
     }, []),
     onSettled: useCallback(() => {
       void refresh()
-    }, [refresh]),
+      markSourceSessionSeen()
+    }, [refresh, markSourceSessionSeen]),
   })
 
   // Plan updates parsed from refinement replies ride the bus.
