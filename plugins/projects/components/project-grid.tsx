@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from '@makinbakin/sdk/hooks'
 import { Plus, ListFilter, FolderKanban } from 'lucide-react'
 import { Button } from "@makinbakin/sdk/ui"
-import { PluginHeader } from "@makinbakin/sdk/components"
+import { PluginHeader, SegmentedControl } from "@makinbakin/sdk/components"
 import { EmptyState } from "@makinbakin/sdk/components"
 import { Skeleton } from "@makinbakin/sdk/ui"
 import { useQueryState } from "@makinbakin/sdk/hooks"
@@ -149,21 +149,12 @@ export function ProjectGrid() {
       {/* Status filter */}
       <div className="flex items-center gap-3">
         <ListFilter className="size-3.5 text-muted-foreground shrink-0" />
-        <div className="flex items-center gap-0.5 bg-muted/50 rounded-lg p-0.5">
-          {STATUS_TABS.map((tab) => (
-            <button
-              key={tab.value}
-              onClick={() => setStatus(tab.value)}
-              className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
-                status === tab.value
-                  ? 'bg-accent text-accent-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          options={STATUS_TABS}
+          value={status}
+          onValueChange={setStatus}
+          ariaLabel="Project status filter"
+        />
       </div>
 
       {/* Grid */}

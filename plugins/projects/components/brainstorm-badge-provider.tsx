@@ -9,35 +9,7 @@
  * arrives while the user is elsewhere (viewing the project stays silent —
  * the detail page marks it seen).
  */
-import { useConversationAttention, visibleIdFromLocation, AgentAvatar } from '@makinbakin/sdk/components'
-import { useAgent, useRouter } from '@makinbakin/sdk/hooks'
-
-function ReplyToast({ projectId, agentId, preview, onNavigate }: {
-  projectId: string
-  agentId: string
-  preview?: string
-  onNavigate?: () => void
-}) {
-  const agent = useAgent(agentId)
-  const router = useRouter()
-  return (
-    <button
-      type="button"
-      data-project-brainstorm-toast={projectId}
-      onClick={() => {
-        onNavigate?.()
-        router.push(`/projects/${encodeURIComponent(projectId)}`)
-      }}
-      className="flex max-w-sm items-start gap-2 text-left"
-    >
-      <AgentAvatar agentId={agentId} size="xs" />
-      <span className="min-w-0">
-        <span className="block text-sm font-medium">{agent?.name ?? agentId} replied in a project brainstorm</span>
-        {preview ? <span className="block truncate text-xs text-muted-foreground">{preview}</span> : null}
-      </span>
-    </button>
-  )
-}
+import { useConversationAttention, visibleIdFromLocation, ConversationReplyToast } from '@makinbakin/sdk/components'
 
 export function BrainstormBadgeProvider() {
   useConversationAttention({
@@ -70,7 +42,14 @@ export function BrainstormBadgeProvider() {
       return { unreadTotal: body.unreadTotal ?? 0, inflightKeys: body.inflight ?? [] }
     },
     renderToast: (done, dismiss) => (
-      <ReplyToast projectId={done.key} agentId={done.agentId} preview={done.preview} onNavigate={dismiss} />
+      <ConversationReplyToast
+        agentId={done.agentId}
+        title="replied in a project brainstorm"
+        preview={done.preview}
+        to={`/projects/${encodeURIComponent(done.key)}`}
+        onNavigate={dismiss}
+        testId={{ attr: 'data-project-brainstorm-toast', value: done.key }}
+      />
     ),
     osNotification: (done) => ({
       title: `${done.agentId} replied`,

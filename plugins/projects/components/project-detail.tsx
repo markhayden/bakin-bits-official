@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { useRouter, useHorizontalResize, toast, emitPluginEvent, usePluginEvent } from '@makinbakin/sdk/hooks'
 import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, ChevronDown, Search, Pencil, Trash2, Link2 } from 'lucide-react'
 import { useMainAgentId } from "@makinbakin/sdk/hooks"
-import { AgentSelect, ConversationPanel, useConversationThread } from "@makinbakin/sdk/components"
+import { AgentSelect, ConversationPanel, SegmentedControl, useConversationThread } from "@makinbakin/sdk/components"
 import type { ConversationMessage } from "@makinbakin/sdk/components"
 import { ProjectChecklist } from './project-checklist'
 import { ProjectEditor } from './project-editor'
@@ -421,6 +421,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
       return {
         messages: Array.isArray(data.project?.brainstormMessages) ? data.project.brainstormMessages : [],
         streaming: data.project?.brainstormStreaming === true,
+        ...(typeof data.project?.brainstormStreamingText === 'string' ? { streamingText: data.project.brainstormStreamingText } : {}),
       }
     }, []),
     post: useCallback(async (key: string, content: string) => {
@@ -881,8 +882,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
             )}
 
             {/* Details (spec) — the header row stays pinned while the plan
-                scrolls; Details|Changes uses the segmented toggle pattern
-                (project-grid status tabs). */}
+                scrolls; Rendered|Diff rides the SDK SegmentedControl. */}
             <div className="sticky top-0 z-10 -mx-1 px-1 bg-background flex items-center justify-between pt-1 pb-1.5">
               <label className="text-[10px] font-medium text-zinc-600 uppercase tracking-wider block">Details</label>
               {!editing && (
@@ -893,23 +893,12 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                       <Switch size="sm" checked={showChangeHints} onCheckedChange={toggleChangeHints} />
                     </label>
                   )}
-                  <div className="flex items-center gap-0.5 bg-muted/50 rounded-lg p-0.5" data-testid="plan-view-toggle">
-                    {([['details', 'Rendered'], ['changes', 'Diff']] as const).map(([value, label]) => (
-                      <button
-                        key={value}
-                        type="button"
-                        data-testid={value === 'changes' ? 'plan-changes-toggle' : 'plan-details-toggle'}
-                        onClick={() => setShowChanges(value === 'changes')}
-                        className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
-                          (value === 'changes') === showChanges
-                            ? 'bg-accent text-accent-foreground'
-                            : 'text-muted-foreground hover:text-foreground'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+                  <SegmentedControl
+                    options={[{ value: 'details', label: 'Rendered' }, { value: 'changes', label: 'Diff' }]}
+                    value={showChanges ? 'changes' : 'details'}
+                    onValueChange={(value) => setShowChanges(value === 'changes')}
+                    ariaLabel="Plan view"
+                  />
                 </div>
               )}
             </div>

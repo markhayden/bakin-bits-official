@@ -408,11 +408,12 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
       const encoded = encodeURIComponent(key)
       const response = await fetch(`/api/plugins/messaging/sessions/${encoded}?id=${encoded}`)
       if (!response.ok) return null
-      const data = await response.json() as { session?: BrainstormSession; streaming?: boolean }
+      const data = await response.json() as { session?: BrainstormSession; streaming?: boolean; streamingText?: string }
       if (!data.session) return null
       return {
         messages: data.session.messages.map((message) => sessionMessageToConversation(data.session!.agentId, message)).filter((m): m is ConversationMessage => m !== null),
         streaming: data.streaming === true,
+        ...(typeof data.streamingText === 'string' ? { streamingText: data.streamingText } : {}),
       }
     }, []),
     post: useCallback(async (key: string, content: string) => {

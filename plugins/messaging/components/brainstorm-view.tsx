@@ -704,12 +704,13 @@ export function BrainstormView() {
         }
         return null
       }
-      const data = await response.json() as { session?: BrainstormSession; streaming?: boolean }
+      const data = await response.json() as { session?: BrainstormSession; streaming?: boolean; streamingText?: string }
       if (!data.session) return null
       setActiveSession(data.session)
       return {
         messages: data.session.messages.map(message => sessionMessageToConversation(data.session!.agentId, message)).filter((m): m is ConversationMessage => m !== null),
         streaming: data.streaming === true,
+        ...(typeof data.streamingText === 'string' ? { streamingText: data.streamingText } : {}),
       }
     }, [pushSessionId]),
     post: useCallback(async (key: string, content: string) => {

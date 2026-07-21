@@ -794,6 +794,7 @@ declare module '@makinbakin/sdk/types' {
     start(ctx: ConversationTurnContext, key: string, content: string, opts?: ConversationStartTurnOptions): Promise<ConversationStartTurnResult>
     abort(key: string): boolean
     isInFlight(key: string): boolean
+    inflightPreview(key: string): string | null
     waitFor(key: string): Promise<void>
     listInFlight(): ConversationInflightTurnInfo[]
   }
@@ -1053,6 +1054,28 @@ declare module '@makinbakin/sdk/components' {
   export const ThinkingIndicator: SDKComponent
 
   export const AgentAvatar: ComponentType<{ agentId?: string; agent?: AgentInfo | null; size?: string | number; className?: string }>
+  export interface SegmentedControlOption<T extends string = string> {
+    value: T
+    label: ReactNode
+    icon?: ComponentType<{ className?: string }>
+    hideLabel?: boolean
+  }
+  export function SegmentedControl<T extends string>(props: {
+    options: ReadonlyArray<SegmentedControlOption<T>>
+    value: T
+    onValueChange: (value: T) => void
+    size?: 'sm' | 'md'
+    ariaLabel: string
+    className?: string
+  }): ReactNode
+  export const ConversationReplyToast: ComponentType<{
+    agentId: string
+    title: string
+    preview?: string
+    to: string
+    onNavigate?: () => void
+    testId?: { attr: string; value: string }
+  }>
   export const AgentFilter: SDKComponent
   export const AgentSelect: SDKComponent
   export const BakinDrawer: SDKComponent

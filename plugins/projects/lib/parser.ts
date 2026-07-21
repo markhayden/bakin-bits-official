@@ -61,6 +61,10 @@ function projectHistoryPath(id: string): string {
 /** Bounded plan history — the last N prior bodies (bakin#703). */
 export const PLAN_HISTORY_CAP = 20
 
+/** Brainstorm transcripts are working conversations, not archives —
+ *  bounded so the per-row full-file rewrite stays cheap (bakin#706). */
+export const BRAINSTORM_ROW_CAP = 300
+
 // ---------------------------------------------------------------------------
 // Parse / Serialize
 // ---------------------------------------------------------------------------
@@ -150,6 +154,7 @@ export interface ProjectRepository {
   writeBrainstormMessages(id: string, messages: ProjectBrainstormMessage[]): void
   readBrainstormSeen(id: string): string | null
   writeBrainstormSeen(id: string, lastSeenAt: string): void
+  readLastAgentActivityTs(id: string): string | null
   readPlanHistory(id: string): PlanSnapshot[]
   appendPlanSnapshot(id: string, snapshot: PlanSnapshot): void
   deleteProjectFile(id: string): boolean
@@ -159,7 +164,26 @@ export interface ProjectRepository {
 }
 
 export function createProjectRepository(storage: StorageAdapter): ProjectRepository {
-  // Local so sibling methods can call it after destructuring (no `this`).
+  // The attention endpoint polls every project's transcript for its last
+  // agent-activity timestamp — cache it against the sidecar's mtime+size so
+  // steady-state polls never re-read/re-parse full transcripts (bakin#706).
+  const lastAgentTsCache = new Map<string, { mtimeMs: number; size: number; ts: string | null }>()
+
+  // Local so sibling methods can call them after destructuring (no `this`).
+  function readBrainstormMessages(id: string): ProjectBrainstormMessage[] {
+    const content = storage.read(projectBrainstormPath(id))
+    if (!content) return []
+    try {
+      const parsed = JSON.parse(content)
+      if (!Array.isArray(parsed)) return []
+      return parsed
+        .map(normalizeConversationRow)
+        .filter((message): message is ProjectBrainstormMessage => message !== null)
+    } catch {
+      return []
+    }
+  }
+
   function readPlanHistory(id: string): PlanSnapshot[] {
     const content = storage.read(projectHistoryPath(id))
     if (!content) return []
@@ -195,22 +219,10 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
       storage.write(projectPath(project.id), serializeProject(project))
     },
 
-    readBrainstormMessages(id: string): ProjectBrainstormMessage[] {
-      const content = storage.read(projectBrainstormPath(id))
-      if (!content) return []
-      try {
-        const parsed = JSON.parse(content)
-        if (!Array.isArray(parsed)) return []
-        return parsed
-          .map(normalizeConversationRow)
-          .filter((message): message is ProjectBrainstormMessage => message !== null)
-      } catch {
-        return []
-      }
-    },
+    readBrainstormMessages,
 
     writeBrainstormMessages(id: string, messages: ProjectBrainstormMessage[]): void {
-      storage.write(projectBrainstormPath(id), JSON.stringify(messages, null, 2))
+      storage.write(projectBrainstormPath(id), JSON.stringify(messages.slice(-BRAINSTORM_ROW_CAP), null, 2))
     },
 
     /** When the user last viewed this project's brainstorm (null = never). */
@@ -227,6 +239,22 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
 
     writeBrainstormSeen(id: string, lastSeenAt: string): void {
       storage.write(projectBrainstormSeenPath(id), JSON.stringify({ lastSeenAt }))
+    },
+
+    /** Timestamp of the last assistant/error row, mtime-cached. */
+    readLastAgentActivityTs(id: string): string | null {
+      const path = projectBrainstormPath(id)
+      const stat = storage.stat?.(path)
+      if (!stat) {
+        lastAgentTsCache.delete(id)
+        return null
+      }
+      const cached = lastAgentTsCache.get(id)
+      if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.ts
+      const rows = readBrainstormMessages(id)
+      const ts = [...rows].reverse().find(r => r.kind === 'assistant' || r.kind === 'error')?.ts ?? null
+      lastAgentTsCache.set(id, { mtimeMs: stat.mtimeMs, size: stat.size, ts })
+      return ts
     },
 
     readPlanHistory,
