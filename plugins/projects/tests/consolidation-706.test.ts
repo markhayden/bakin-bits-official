@@ -143,6 +143,43 @@ describe('interrupted-turn boot sweep', () => {
   })
 })
 
+describe('started attention event (bakin#707)', () => {
+  it('emits projects.brainstorm.started at accept, before any chunk', async () => {
+    writeProjectFixture('startle')
+    const events: string[] = []
+    const off = plugin.ctx.events.on('*', (event) => {
+      if (event.startsWith('projects.brainstorm.')) events.push(event)
+    })
+    const settled = new Promise<void>((resolve) => {
+      const offDone = plugin.ctx.events.on('*', (event) => {
+        if (event === 'projects.brainstorm.done' || event === 'projects.brainstorm.error') {
+          offDone()
+          resolve()
+        }
+      })
+    })
+    plugin.ctx.runtime.messaging.stream = mock(() => (async function* (): AsyncIterable<ChatChunk> {
+      yield { type: 'text', content: 'ok' }
+    })()) as typeof plugin.ctx.runtime.messaging.stream
+
+    const askRoute = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+    const { response } = await callRoute(askRoute, plugin.ctx, {
+      body: { projectId: 'startle', prompt: 'go' },
+      rawResponse: true,
+    })
+    expect(response.status).toBe(202)
+    // started is out at accept — chunks may not have arrived yet.
+    expect(events[0]).toBe('projects.brainstorm.started')
+    await settled
+    off()
+    expect(events).toEqual([
+      'projects.brainstorm.started',
+      'projects.brainstorm.chunk',
+      'projects.brainstorm.done',
+    ])
+  })
+})
+
 describe('mid-turn streamed-text preview', () => {
   it('GET /:projectId carries brainstormStreamingText while a turn is in flight, and drops it after', async () => {
     writeProjectFixture('previewed')

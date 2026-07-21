@@ -771,7 +771,7 @@ declare module '@makinbakin/sdk/types' {
 
   export interface ConversationTurnServiceConfig {
     name: string
-    events: { chunk: string; done: string; error: string }
+    events: { chunk: string; done: string; error: string; started?: string }
     payload: (key: string) => Record<string, unknown>
     resolveThread: (key: string) => { agentId: string } | null | Promise<{ agentId: string } | null>
     appendRow: (key: string, row: ConversationTurnRow) => void | Promise<void>
@@ -1025,7 +1025,7 @@ declare module '@makinbakin/sdk/components' {
   export interface ConversationAttentionConfig {
     pluginId: string
     navItemId: string
-    events: { chunk: string; done: string; error: string; refresh?: [string] | [string, string] }
+    events: { chunk: string; done: string; error: string; started?: string; refresh?: [string] | [string, string] }
     keyOf: (payload: Record<string, unknown>) => string
     visibleKey: () => string
     refreshTotals: () => Promise<ConversationAttentionTotals | null>

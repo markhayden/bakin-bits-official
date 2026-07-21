@@ -374,6 +374,11 @@ export function useConversationAttention(config) {
 
   useEffect(() => { void refreshTotals() }, [refreshTotals])
 
+  usePluginEvent(config.events.started ?? '__attention_noop_started', payload => {
+    const key = configRef.current.keyOf(payload)
+    setInflight(prev => (prev.has(key) ? prev : new Set(prev).add(key)))
+  })
+
   usePluginEvent(config.events.chunk, payload => {
     const key = configRef.current.keyOf(payload)
     setInflight(prev => (prev.has(key) ? prev : new Set(prev).add(key)))
