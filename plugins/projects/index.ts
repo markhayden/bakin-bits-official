@@ -41,18 +41,48 @@ async function getRuntimeMainAgentId(ctx: PluginContext): Promise<string> {
   return main?.id ?? 'main'
 }
 
+// The plan-first brainstorm posture (bakin#703): the plan document is the
+// PRIMARY working artifact. Incremental edits apply directly (every body
+// write is snapshotted with a visible diff + restore, so they are safe);
+// wholesale rewrites ask in chat first. ONE constant — the /ask route and
+// the bakin_exec_projects_ask tool must never drift apart.
 const PROJECT_BRAINSTORM_INSTRUCTIONS = [
   'Project brainstorm mode:',
-  'This brainstorm is for maintaining and improving the project plan.',
-  'Treat chat as the working conversation, but keep the project body and checklist as the durable source of truth.',
-  'Default toward identifying plan updates, checklist changes, open questions, and next actions that would keep the project current.',
-  'Do not edit the project body or checklist until the user explicitly asks you to update it or confirms your proposed changes.',
-  'When updates are warranted, propose the exact project body and checklist changes first.',
-  'After confirmation, prefer bakin_exec_projects_apply_plan for combined body and checklist updates.',
+  'The project plan (body + checklist) is your PRIMARY working artifact — actively create, edit, and refine it as the conversation evolves; the chat is the working conversation around it.',
+  'If the project body is empty or stale, draft or update it without being asked.',
+  'Apply INCREMENTAL updates directly, then report exactly what you changed: additions, checklist changes (add/check/update items), and section-scoped edits are yours to make via the project tools.',
+  'Prefer bakin_exec_projects_apply_plan for combined body and checklist updates; use the checklist item tools for single-item changes.',
+  'ASK FIRST — in chat, before applying — for wholesale rewrites or large deletions of existing content: propose the change and wait for confirmation.',
+  'Every plan edit is snapshotted with a visible diff and one-click restore, so direct incremental edits are safe.',
   'Invoke Bakin tools as described in your Tool access section — the exact call form depends on the active runtime.',
   'If the user asks for advice only, answer in chat and call out any optional plan update separately.',
   'If suggesting tasks, format them as a numbered list.',
 ].join('\n')
+
+/** Shared brainstorm context — the /ask route and the _ask exec tool build
+ *  the SAME prompt so the plan-first posture can never drift between them. */
+function buildProjectBrainstormContext(project: Project, request: string): string {
+  const assetLines = project.assets.length > 0
+    ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.assetId}${a.label ? ` — ${a.label}` : ''}`)]
+    : []
+  return [
+    `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
+    `Progress: ${project.progress}% (${project.tasks.filter(t => t.checked).length}/${project.tasks.length} items checked)`,
+    '',
+    'Project spec:',
+    project.body.slice(0, 3000),
+    '',
+    'Checklist items:',
+    ...project.tasks.map(t => `- [${t.checked ? 'x' : ' '}] ${t.title}${t.taskId ? ` (linked: ${t.taskId})` : ''}`),
+    ...assetLines,
+    PROJECT_BRAINSTORM_INSTRUCTIONS,
+    '',
+    'User request:',
+    request,
+    '',
+    'Respond concisely.',
+  ].join('\n')
+}
 
 // ---------------------------------------------------------------------------
 // Declarative routes (late-binding)
@@ -563,28 +593,7 @@ const projectsPlugin: BakinPlugin = {
       const project = readProject(body.projectId)
       if (!project) return json({ error: 'Project not found' }, 404)
       const agentId = body.agent || await getRuntimeMainAgentId(ctx)
-
-      const assetLines = project.assets.length > 0
-        ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.assetId}${a.label ? ` — ${a.label}` : ''}`)]
-        : []
-
-      const context = [
-        `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
-        `Progress: ${project.progress}% (${project.tasks.filter(t => t.checked).length}/${project.tasks.length} items checked)`,
-        '',
-        'Project spec:',
-        project.body.slice(0, 3000),
-        '',
-        'Checklist items:',
-        ...project.tasks.map(t => `- [${t.checked ? 'x' : ' '}] ${t.title}${t.taskId ? ` (linked: ${t.taskId})` : ''}`),
-        ...assetLines,
-        PROJECT_BRAINSTORM_INSTRUCTIONS,
-        '',
-        'User request:',
-        body.prompt,
-        '',
-        'Respond concisely.',
-      ].join('\n')
+      const context = buildProjectBrainstormContext(project, body.prompt)
 
       const result = await brainstormTurns.start(ctx, body.projectId, body.prompt, {
         agentId,
@@ -1025,26 +1034,7 @@ const projectsPlugin: BakinPlugin = {
         const project = readProject(projectId)
         if (!project) return { ok: false, error: `Project not found: ${projectId}` }
 
-        const assetLines = project.assets.length > 0
-          ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.assetId}${a.label ? ` — ${a.label}` : ''}`)]
-          : []
-
-        const context = [
-          `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
-          `Progress: ${project.progress}% (${project.tasks.filter(t => t.checked).length}/${project.tasks.length} items checked)`,
-          '',
-          'Project spec:',
-          project.body.slice(0, 3000),
-          '',
-          'Checklist items:',
-          ...project.tasks.map(t => `- [${t.checked ? 'x' : ' '}] ${t.title}${t.taskId ? ` (linked: ${t.taskId})` : ''}`),
-          ...assetLines,
-          '',
-          'User request:',
-          message,
-          '',
-          'Respond concisely. If suggesting tasks, format them as a numbered list.',
-        ].join('\n')
+        const context = buildProjectBrainstormContext(project, message)
 
         try {
           const agentId = (params.agent as string) || await getRuntimeMainAgentId(ctx)

@@ -763,7 +763,7 @@ describe('Routes', () => {
       expect(hydrated.body.project.brainstormStreaming).toBe(false)
     })
 
-    it('instructs brainstorm agents to maintain the project plan but ask before editing', async () => {
+    it('instructs brainstorm agents to treat the plan as the primary artifact: apply incremental edits, ask before big rewrites', async () => {
       writeProjectFixture('proj-plan-prompt', { title: 'Plan Prompt Project' })
       const streamMock = mockRuntimeStream(['ok'])
       const settled = nextSettle()
@@ -774,31 +774,28 @@ describe('Routes', () => {
       })
       await settled
 
-      expect(streamMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          content: expect.stringContaining('This brainstorm is for maintaining and improving the project plan.'),
-        }),
-      )
-      expect(streamMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          content: expect.stringContaining('Do not edit the project body or checklist until the user explicitly asks you to update it or confirms your proposed changes.'),
-        }),
-      )
-      expect(streamMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          content: expect.stringContaining('When updates are warranted, propose the exact project body and checklist changes first.'),
-        }),
-      )
-      expect(streamMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          content: expect.stringContaining('After confirmation, prefer bakin_exec_projects_apply_plan for combined body and checklist updates.'),
-        }),
-      )
-      expect(streamMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          content: expect.stringContaining('Invoke Bakin tools as described in your Tool access section — the exact call form depends on the active runtime.'),
-        }),
-      )
+      const prompt = String(streamMock.mock.calls[0]?.[0]?.content ?? '')
+      expect(prompt).toContain('PRIMARY working artifact — actively create, edit, and refine it')
+      expect(prompt).toContain('Apply INCREMENTAL updates directly, then report exactly what you changed')
+      expect(prompt).toContain('ASK FIRST — in chat, before applying — for wholesale rewrites or large deletions')
+      expect(prompt).toContain('Prefer bakin_exec_projects_apply_plan for combined body and checklist updates')
+      expect(prompt).toContain('snapshotted with a visible diff and one-click restore')
+      expect(prompt).toContain('Invoke Bakin tools as described in your Tool access section — the exact call form depends on the active runtime.')
+    })
+
+    it('the bakin_exec_projects_ask tool sends the SAME plan-first instructions (single shared constant)', async () => {
+      writeProjectFixture('proj-tool-prompt', { title: 'Tool Prompt Project' })
+      const sendMock = mock(async (args: MessageArgs) => ({ id: 'msg-1', content: 'tool reply', ...(args ? {} : {}) }))
+      plugin.ctx.runtime.messaging.send = sendMock
+
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_ask')!
+      const result = await callTool(tool, { projectId: 'proj-tool-prompt', message: 'What next?' })
+      expect(result).toMatchObject({ ok: true, reply: 'tool reply' })
+
+      const prompt = String(sendMock.mock.calls[0]?.[0]?.content ?? '')
+      expect(prompt).toContain('PRIMARY working artifact — actively create, edit, and refine it')
+      expect(prompt).toContain('ASK FIRST — in chat, before applying — for wholesale rewrites or large deletions')
+      expect(prompt).toContain('User request:\nWhat next?')
     })
 
     it('persists brainstorm turns without replaying them into durable runtime prompts', async () => {
