@@ -8,6 +8,7 @@ import { AgentSelect, ConversationPanel, useConversationThread } from "@makinbak
 import type { ConversationMessage } from "@makinbakin/sdk/components"
 import { ProjectChecklist } from './project-checklist'
 import { ProjectEditor } from './project-editor'
+import { PlanHistoryPanel } from './plan-history'
 import { Skeleton } from "@makinbakin/sdk/ui"
 import type { ProjectStatus } from '../types'
 
@@ -214,6 +215,9 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
 
   // Brainstorm
   const [brainstormAgent, setBrainstormAgent] = useState(mainAgentId)
+
+  // Plan history "Changes" view (bakin#703)
+  const [showChanges, setShowChanges] = useState(false)
 
   // Dropdowns
   const [statusOpen, setStatusOpen] = useState(false)
@@ -840,13 +844,37 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
             )}
 
             {/* Details (spec) */}
-            <label className="text-[10px] font-medium text-zinc-600 uppercase tracking-wider mb-1.5 block">Details</label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-[10px] font-medium text-zinc-600 uppercase tracking-wider block">Details</label>
+              {!editing && (
+                <button
+                  type="button"
+                  data-testid="plan-changes-toggle"
+                  onClick={() => setShowChanges((v) => !v)}
+                  className={`px-2 py-0.5 rounded-md text-[10px] font-medium border transition-colors ${
+                    showChanges
+                      ? 'bg-zinc-700/70 text-foreground border-[rgba(255,255,255,0.12)]'
+                      : 'bg-transparent text-zinc-500 hover:text-zinc-300 border-[rgba(255,255,255,0.06)]'
+                  }`}
+                >
+                  {showChanges ? 'Hide changes' : 'Changes'}
+                </button>
+              )}
+            </div>
             <div className="mb-6">
-              <ProjectEditor
-                body={editBody}
-                editing={editing}
-                onChange={setEditBody}
-              />
+              {showChanges && !editing ? (
+                <PlanHistoryPanel
+                  projectId={currentId ?? ''}
+                  currentBody={project.body}
+                  onRestored={() => fetchProject()}
+                />
+              ) : (
+                <ProjectEditor
+                  body={editBody}
+                  editing={editing}
+                  onChange={setEditBody}
+                />
+              )}
             </div>
 
           </div>
