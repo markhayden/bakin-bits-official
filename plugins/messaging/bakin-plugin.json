@@ -346,6 +346,30 @@
         "permissions": [
           "search.read"
         ]
+      },
+      {
+        "method": "POST",
+        "path": "/sessions/:id/abort",
+        "summary": "Abort the in-flight brainstorm turn",
+        "permissions": [
+          "runtime.messaging"
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/sessions/:id/seen",
+        "summary": "Mark a brainstorm session as seen",
+        "permissions": [
+          "storage.write"
+        ]
+      },
+      {
+        "method": "GET",
+        "path": "/brainstorm/attention",
+        "summary": "Brainstorm attention totals (unread + in-flight)",
+        "permissions": [
+          "storage.read"
+        ]
       }
     ],
     "execTools": [
