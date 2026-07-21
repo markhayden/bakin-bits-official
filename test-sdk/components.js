@@ -270,8 +270,11 @@ export function foldConversation(messages = [], opts = {}) {
   return turns
 }
 
-export function MarkdownEditor({ value = '', onChange }) {
-  return React.createElement('textarea', { value, onChange: event => onChange?.(event.target.value) })
+export function MarkdownEditor({ value = '', content, editing, onChange }) {
+  if (editing === false) {
+    return React.createElement('div', { 'data-testid': 'markdown-rendered' }, content ?? value)
+  }
+  return React.createElement('textarea', { value: content ?? value, onChange: event => onChange?.(event.target.value) })
 }
 
 export function PluginHeader({ title, search, actions, children }) {

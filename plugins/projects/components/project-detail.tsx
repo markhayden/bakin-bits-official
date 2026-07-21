@@ -9,6 +9,7 @@ import type { ConversationMessage } from "@makinbakin/sdk/components"
 import { ProjectChecklist } from './project-checklist'
 import { ProjectEditor } from './project-editor'
 import { PlanHistoryPanel } from './plan-history'
+import { RenderedPlan } from './rendered-plan'
 import { Skeleton } from "@makinbakin/sdk/ui"
 import type { ProjectStatus } from '../types'
 
@@ -875,12 +876,14 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                   currentBody={project.body}
                   onRestored={() => fetchProject()}
                 />
-              ) : (
+              ) : editing ? (
                 <ProjectEditor
                   body={editBody}
                   editing={editing}
                   onChange={setEditBody}
                 />
+              ) : (
+                <RenderedPlan projectId={currentId ?? ''} body={project.body} />
               )}
             </div>
 

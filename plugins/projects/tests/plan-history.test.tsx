@@ -102,3 +102,74 @@ describe('PlanHistoryPanel', () => {
     await waitFor(() => expect(screen.getByText(/No plan versions yet/)).toBeDefined())
   })
 })
+
+describe('block-level change hints (rendered view)', () => {
+  it('splitBlocks separates on blank lines but keeps fenced code intact', async () => {
+    const { splitBlocks } = await import('../../../plugins/projects/lib/block-diff')
+    expect(splitBlocks('# A\n\npara one\n\n```js\ncode\n\nstill code\n```\n\npara two')).toEqual([
+      '# A',
+      'para one',
+      '```js\ncode\n\nstill code\n```',
+      'para two',
+    ])
+  })
+
+  it('markChangedBlocks marks edited and added blocks; deletions mark the next surviving block', async () => {
+    const { markChangedBlocks } = await import('../../../plugins/projects/lib/block-diff')
+    const previous = '# Title\n\nintro\n\nmiddle\n\noutro'
+
+    // Edited middle block
+    expect(markChangedBlocks(previous, '# Title\n\nintro\n\nmiddle EDITED\n\noutro')).toEqual([
+      { text: '# Title', changed: false },
+      { text: 'intro', changed: false },
+      { text: 'middle EDITED', changed: true },
+      { text: 'outro', changed: false },
+    ])
+
+    // Pure deletion: the block after the gap carries the mark
+    expect(markChangedBlocks(previous, '# Title\n\nintro\n\noutro')).toEqual([
+      { text: '# Title', changed: false },
+      { text: 'intro', changed: false },
+      { text: 'outro', changed: true },
+    ])
+
+    // Trailing deletion marks the last surviving block
+    expect(markChangedBlocks(previous, '# Title\n\nintro\n\nmiddle')).toEqual([
+      { text: '# Title', changed: false },
+      { text: 'intro', changed: false },
+      { text: 'middle', changed: true },
+    ])
+
+    // Identical bodies: nothing marked
+    expect(markChangedBlocks(previous, previous).every((b) => !b.changed)).toBe(true)
+  })
+
+  it('RenderedPlan highlights only the blocks the latest edit touched', async () => {
+    const { RenderedPlan } = await import('../../../plugins/projects/components/rendered-plan')
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/history')) {
+        return {
+          ok: true,
+          json: async () => ({ history: [{ ts: '2026-07-20T10:00:00Z', author: 'agent', body: '# Plan\n\nold section\n\nending' }] }),
+          text: async () => '',
+        } as Response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+
+    const { container } = render(<RenderedPlan projectId="p1" body={'# Plan\n\nnew section\n\nending'} />)
+    await waitFor(() => expect(container.querySelectorAll('[data-plan-changed-block]').length).toBe(1))
+    const marked = container.querySelector('[data-plan-changed-block]')!
+    expect(marked.textContent).toContain('new section')
+    expect(screen.getByText('# Plan')).toBeDefined()
+  })
+
+  it('RenderedPlan renders plain when there is no history baseline', async () => {
+    const { RenderedPlan } = await import('../../../plugins/projects/components/rendered-plan')
+    globalThis.fetch = mock(async () => ({ ok: true, json: async () => ({ history: [] }), text: async () => '' }) as Response) as unknown as typeof fetch
+    const { container } = render(<RenderedPlan projectId="p1" body="# Plan" />)
+    await waitFor(() => expect(screen.getByText('# Plan')).toBeDefined())
+    expect(container.querySelectorAll('[data-plan-changed-block]').length).toBe(0)
+  })
+})
