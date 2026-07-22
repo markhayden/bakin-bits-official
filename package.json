@@ -13,7 +13,9 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test --isolate --preload ./test/setup-dom.ts",
     "test:coverage": "bun test --isolate --preload ./test/setup-dom.ts --coverage --coverage-reporter=lcov",
-    "lint": "eslint plugins"
+    "lint": "eslint plugins",
+    "ui:conformance": "bun run scripts/verify-plugin-ui.ts",
+    "ui:conformance:coverage": "bun run scripts/verify-plugin-ui.ts --coverage-only"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

@@ -61,3 +61,50 @@ jobs:
           files: ./coverage/lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+  ui:
+    name: Official plugin UI conformance
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.60.0-noble
+      options: --init --ipc=host
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout official Bits
+        uses: actions/checkout@v6
+
+      - name: Checkout compatible Bakin SDK source
+        uses: actions/checkout@v6
+        with:
+          repository: markhayden/bakin
+          ref: main
+          path: .bakin-source
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install Bakin SDK build dependencies
+        working-directory: .bakin-source
+        run: bun install --frozen-lockfile
+
+      - name: Assemble the compatible SDK
+        working-directory: .bakin-source
+        run: bun run scripts/publish-sdk.ts --dry-run --version 0.1.1-rc.1 --package-dir "$RUNNER_TEMP/sdk-package" --keep-package-dir
+
+      - name: Run official plugin UI conformance
+        env:
+          BAKIN_SDK_PACKAGE_DIR: ${{ runner.temp }}/sdk-package
+        run: bun run ui:conformance
+
+      - name: Upload plugin UI failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: official-plugin-ui-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: test-results/plugin-ui-conformance
