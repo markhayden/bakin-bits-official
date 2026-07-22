@@ -1,9 +1,9 @@
 /**
  * Server entry — _template plugin.
  *
- * This file demonstrates the BakinPlugin contract. Copy this directory
- * to start a new plugin; the lifecycle methods below are pre-wired for
- * hot-reload safety.
+ * This file demonstrates the modern BakinPlugin contract. Copy this directory
+ * to start a new plugin; declarative routes and lifecycle methods are
+ * pre-wired for typed docs and hot-reload safety.
  *
  * Hot-reload contract reminder:
  *   - All side effects (timers, watchers, sockets) MUST live inside
@@ -13,7 +13,10 @@
  *   - Don't capture closures from one activate that outlive it — each
  *     reload runs a fresh `activate` against a fresh module.
  */
-import type { BakinPlugin, PluginContext } from '@makinbakin/sdk/types'
+import { definePlugin, defineRoute } from '@makinbakin/sdk'
+import type { PluginContext } from '@makinbakin/sdk/types'
+import { healthHealthy, healthObserved } from '@makinbakin/sdk/utils'
+import { z } from 'zod'
 
 interface TemplateState {
   /** Example timer that gets cleared in onShutdown. */
@@ -22,32 +25,44 @@ interface TemplateState {
 
 const state: TemplateState = {}
 
-const plugin: BakinPlugin = {
+const plugin = definePlugin({
   id: '_template',
   name: 'Plugin Template',
   version: '0.0.0',
 
-  async activate(ctx: PluginContext): Promise<void> {
-    // Register a route under /api/plugins/_template/.
-    ctx.registerRoute({
+  // Declarative routes are registered before activate(), appear in generated
+  // API docs, and keep request validation next to the handler.
+  routes: [
+    defineRoute({
       path: '/',
       method: 'GET',
-      description: 'Returns a hello payload — proves the plugin is live.',
+      summary: 'Read template plugin status',
+      description: 'Returns a small payload proving the plugin is installed and responsive.',
       handler: async () => Response.json({ ok: true, plugin: '_template' }),
-    })
+    }),
+    defineRoute({
+      path: '/greet',
+      method: 'POST',
+      summary: 'Create a template greeting',
+      description: 'Demonstrates a validated form mutation through the plugin API.',
+      body: z.object({ name: z.string().trim().min(1).max(80) }),
+      handler: async (_request, _ctx, parsed) => (
+        Response.json({ message: `Hello, ${parsed.body.name}. Your plugin route is working.` })
+      ),
+    }),
+  ],
 
+  async activate(ctx: PluginContext): Promise<void> {
     // Register a health check — surfaces in `bakin doctor`.
     ctx.registerHealthCheck({
       id: 'reachability',
       name: 'Template plugin reachability',
-      run: async () => [
-        {
-          check: '_template.reachability',
-          status: 'ok' as const,
-          message: 'Plugin is loaded and responding',
-          autoFixable: false,
-        },
-      ],
+      description: 'Checks that the starter plugin activated and can serve its example API.',
+      group: { key: '_template', label: 'Plugin Template' },
+      run: async () => healthObserved([healthHealthy({
+        key: 'reachability',
+        summary: 'The template plugin is loaded and responding.',
+      })]),
     })
 
     // Example: a side effect that survives hot reload because it's
@@ -65,6 +80,6 @@ const plugin: BakinPlugin = {
       state.heartbeat = undefined
     }
   },
-}
+})
 
 export default plugin

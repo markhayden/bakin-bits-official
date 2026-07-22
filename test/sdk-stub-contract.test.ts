@@ -32,7 +32,7 @@ type ImportUse = { file: string; module: string; names: string[] };
 // imports are erased at runtime and don't need a stub export, so
 // `import type ...` statements and inline `type X` specifiers are skipped.
 const IMPORT_RE =
-  /^import\s+(type\s+)?([\w$*,\s]*(?:\{[^}]*\})?[\w$*,\s]*)\s*from\s*["']@makinbakin\/sdk(\/[a-z-]+)?["']/gm;
+  /^import\s+(type\s+)?([\w$*,\s]*(?:\{[^}]*\})?[\w$*,\s]*)\s*from\s*["']@makinbakin\/sdk(\/[a-z-/]+)?["']/gm;
 
 function parseImports(file: string): ImportUse[] {
   const content = readFileSync(file, "utf-8");

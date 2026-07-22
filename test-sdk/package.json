@@ -1,16 +1,22 @@
 {
   "name": "@makinbakin/sdk",
-  "version": "0.0.1-rc.1",
+  "version": "0.1.1-rc.1",
   "type": "module",
   "main": "./index.js",
   "exports": {
     ".": "./index.js",
     "./hooks": "./hooks.js",
     "./ui": "./ui.js",
+    "./layout": "./layout.js",
+    "./patterns": "./patterns.js",
+    "./navigation": "./navigation.js",
     "./components": "./components.js",
     "./slots": "./slots.js",
     "./utils": "./utils.js",
-    "./types": "./types.js"
+    "./types": "./types.js",
+    "./testing/ui": "./testing/ui.js",
+    "./testing/ui/conformance": "./testing/ui/conformance.js",
+    "./styles.css": "./styles.css"
   },
   "peerDependencies": {
     "react": "^19.0.0"

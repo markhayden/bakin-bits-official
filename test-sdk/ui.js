@@ -7,10 +7,17 @@ function createElement(tag, defaultProps = {}) {
 }
 
 export const Alert = createElement('div')
+export const AlertDescription = createElement('div')
+export const AlertTitle = createElement('div')
 export const Avatar = createElement('span')
 export const Badge = createElement('span', { 'data-testid': 'badge' })
 export const Button = createElement('button')
 export const Card = createElement('div')
+export const CardAction = createElement('div')
+export const CardContent = createElement('div')
+export const CardDescription = createElement('div')
+export const CardHeader = createElement('div')
+export const CardTitle = createElement('div')
 export const Checkbox = createElement('input', { type: 'checkbox' })
 export const Collapsible = createElement('div')
 export const Command = createElement('div')
@@ -24,6 +31,10 @@ export const DropdownMenuContent = createElement('div')
 export const DropdownMenuItem = createElement('button')
 export const DropdownMenuSeparator = createElement('hr')
 export const Form = createElement('form')
+export const FormActions = createElement('div')
+export const Field = createElement('div')
+export const FieldDescription = createElement('div')
+export const FieldLabel = createElement('label')
 export const Input = createElement('input')
 export const InputGroup = createElement('div')
 export const Label = createElement('label')
@@ -47,3 +58,19 @@ export const TableCell = createElement('td')
 export const Tabs = createElement('div')
 export const Textarea = createElement('textarea')
 export const Tooltip = createElement('span')
+
+export const SubmitButton = createElement('button', { type: 'submit' })
+
+export function SystemState({ action, description, title, ...props }) {
+  return React.createElement(
+    'section',
+    props,
+    React.createElement('h2', null, title),
+    description ? React.createElement('p', null, description) : null,
+    action,
+  )
+}
+
+export function buttonVariants({ className = '' } = {}) {
+  return className
+}

@@ -251,7 +251,7 @@ declare module '@makinbakin/sdk/types' {
     handler: (
       req: Request,
       ctx: PluginContext,
-      parsed: { params?: Record<string, string>; query?: Record<string, unknown>; body?: unknown },
+      parsed: { params?: Record<string, string>; query?: Record<string, unknown>; body?: any },
     ) => Response | Promise<Response>
     summary?: string
     description?: string
@@ -696,17 +696,23 @@ declare module '@makinbakin/sdk/types' {
     icon?: string
   }
 
-  export interface HealthCheckResult {
-    check: string
-    status: 'ok' | 'warn' | 'error' | 'fixed'
-    message: string
-    autoFixable: boolean
+  export interface HealthObservationInput {
+    key: string
+    status: 'healthy' | 'warning' | 'error' | 'unknown'
+    summary: string
+    evidence?: Record<string, unknown>
   }
+
+  export type HealthCheckRunInput =
+    | { outcome: 'observed'; observations: [HealthObservationInput, ...HealthObservationInput[]] }
+    | { outcome: 'not_applicable'; reason: string }
 
   export interface PluginHealthCheckInput {
     id: string
     name: string
-    run: () => Promise<HealthCheckResult[]>
+    description: string
+    group: { key: string; label: string }
+    run: () => Promise<HealthCheckRunInput>
     autoFix?: boolean
   }
 
@@ -799,10 +805,17 @@ declare module '@makinbakin/sdk/ui' {
   type UIComponent = ComponentType<UIProps>
 
   export const Alert: UIComponent
+  export const AlertDescription: UIComponent
+  export const AlertTitle: UIComponent
   export const Avatar: UIComponent
   export const Badge: UIComponent
   export const Button: UIComponent
   export const Card: UIComponent
+  export const CardAction: UIComponent
+  export const CardContent: UIComponent
+  export const CardDescription: UIComponent
+  export const CardHeader: UIComponent
+  export const CardTitle: UIComponent
   export const Checkbox: UIComponent
   export const Collapsible: UIComponent
   export const Command: UIComponent
@@ -816,6 +829,10 @@ declare module '@makinbakin/sdk/ui' {
   export const DropdownMenuItem: UIComponent
   export const DropdownMenuSeparator: UIComponent
   export const Form: UIComponent
+  export const FormActions: UIComponent
+  export const Field: UIComponent
+  export const FieldDescription: UIComponent
+  export const FieldLabel: UIComponent
   export const Input: UIComponent
   export const InputGroup: UIComponent
   export const Label: UIComponent
@@ -839,6 +856,45 @@ declare module '@makinbakin/sdk/ui' {
   export const Tabs: UIComponent
   export const Textarea: UIComponent
   export const Tooltip: UIComponent
+  export const SubmitButton: UIComponent
+  export const SystemState: UIComponent
+  export function buttonVariants(options?: Record<string, unknown>): string
+}
+
+declare module '@makinbakin/sdk/layout' {
+  import type { ComponentType, ReactNode } from 'react'
+  interface LayoutProps {
+    as?: keyof JSX.IntrinsicElements
+    children?: ReactNode
+    [key: string]: any
+  }
+  type LayoutComponent = ComponentType<LayoutProps>
+  export const Stack: LayoutComponent
+  export const Inline: LayoutComponent
+  export const Grid: LayoutComponent
+  export const PageShell: LayoutComponent
+}
+
+declare module '@makinbakin/sdk/patterns' {
+  import type { ComponentType, ReactNode } from 'react'
+  interface PatternProps {
+    children?: ReactNode
+    [key: string]: any
+  }
+  type PatternComponent = ComponentType<PatternProps>
+  export const DetailPage: PatternComponent
+  export const DetailPageBody: PatternComponent
+  export const DetailPageMain: PatternComponent
+  export const PageHeader: PatternComponent
+}
+
+declare module '@makinbakin/sdk/navigation' {
+  import type { ComponentType, ReactNode } from 'react'
+  export const PluginLink: ComponentType<{
+    to: string
+    children?: ReactNode
+    className?: string
+  }>
 }
 
 declare module '@makinbakin/sdk/components' {
@@ -988,6 +1044,12 @@ declare module '@makinbakin/sdk/hooks' {
   export function useQueryState(key: string, defaultValue: string): [string, (next: string, opts?: unknown) => void, (next: string, opts?: unknown) => void]
   export function useQueryArrayState(key: string): [string[], (next: string[]) => void]
   export function useSearch(opts?: Record<string, unknown>): UseSearchReturn
+  export function usePluginJsonFetch<T>(pluginId: string, path: string | null): {
+    data: T | null
+    loading: boolean
+    error: string | null
+    refresh(): void
+  }
   export function useAgent(agentId: string): AgentInfo | null
   export function useAgentList(): AgentInfo[]
   export function useAgentIds(): string[]
@@ -1042,6 +1104,20 @@ declare module '@makinbakin/sdk/utils' {
   export function cn(...args: Array<string | undefined | null | false>): string
   export function formatAge(date: Date | string): string
   export function formatSize(bytes: number): string
+  export function pluginFetch(
+    pluginId: string,
+    path: string,
+    init?: Omit<RequestInit, 'body'> & { body?: RequestInit['body'] | Record<string, unknown> },
+  ): Promise<Response>
+  export function healthHealthy(input: {
+    key: string
+    summary: string
+    evidence?: Record<string, unknown>
+  }): { key: string; summary: string; status: 'healthy'; evidence?: Record<string, unknown> }
+  export function healthObserved<T>(observations: [T, ...T[]]): {
+    outcome: 'observed'
+    observations: [T, ...T[]]
+  }
 
   // Conversation kit server helpers (successors to the brainstorm utils).
   export function conversationThreadId(scope: string, entityId: string, agentId: string): string
@@ -1053,4 +1129,14 @@ declare module '@makinbakin/sdk/utils' {
   export function createTurnRecorder(options: { turnId: string; agentId?: string; now?: () => string }): TurnRecorder
   export const SUMMARY_MAX_CHARS: number
   export const PREVIEW_MAX_CHARS: number
+}
+
+declare module '@makinbakin/sdk/testing/ui' {
+  import type { ComponentType } from 'react'
+  export const DEFAULT_PLUGIN_UI_FIXTURE: Record<string, unknown>
+  export const PluginUiFixtureHost: ComponentType<Record<string, unknown>>
+}
+
+declare module '@makinbakin/sdk/testing/ui/conformance' {
+  export function definePluginUiConformance<T extends Record<string, unknown>>(config: T): T
 }

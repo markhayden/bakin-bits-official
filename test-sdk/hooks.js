@@ -143,6 +143,40 @@ export function toast(...args) {
   const override = hookOverride('toast')
   if (override) return override(...args)
 }
+
+export function usePluginJsonFetch(pluginId, path) {
+  const clean = path?.startsWith('/') ? path.slice(1) : path
+  const url = path === null ? null : `/api/plugins/${pluginId}/${clean ?? ''}`
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(url !== null)
+  const [error, setError] = useState(null)
+  const [nonce, setNonce] = useState(0)
+  const refresh = useCallback(() => setNonce(value => value + 1), [])
+
+  useEffect(() => {
+    if (url === null) return
+    const controller = new AbortController()
+    setLoading(true)
+    setError(null)
+    fetch(url, { signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) throw new Error(`Request failed (${response.status})`)
+        return response.json()
+      })
+      .then(value => {
+        if (!controller.signal.aborted) setData(value)
+      })
+      .catch(caught => {
+        if (!controller.signal.aborted) setError(caught instanceof Error ? caught.message : 'Request failed')
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+    return () => controller.abort()
+  }, [url, nonce])
+
+  return { data, loading, error, refresh }
+}
 export function useToastStore() {
   const override = hookOverride('useToastStore')
   if (override) return override()
@@ -251,4 +285,3 @@ export function useNavBadge(pluginId, navItemId, badge) {
     setNavBadge(pluginId, navItemId, badge)
   }, [pluginId, navItemId, key])
 }
-

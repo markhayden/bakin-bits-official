@@ -68,17 +68,22 @@ function registeredRoutes(pluginDir: string): string[] {
 }
 
 describe('official plugin package contracts', () => {
-  it('uses current host navigation disclosure and mirrors the template page slot', () => {
+  it('uses current host navigation disclosure and mirrors the template client route', () => {
     for (const plugin of ['messaging', 'projects', '_template']) {
       const manifest = JSON.parse(readFileSync(join(import.meta.dir, plugin, 'bakin-plugin.json'), 'utf-8')) as {
         contributes?: {
+          clientRoutes?: Array<{ path?: string }>
           nav?: Array<Record<string, unknown>>
+          routes?: Array<{ path?: string }>
           slots?: string[]
         }
       }
       expect((manifest.contributes?.nav ?? []).some(item => 'alwaysExpanded' in item)).toBe(false)
       if (plugin === '_template') {
-        expect(manifest.contributes?.slots).toContain('page:/_template')
+        expect(manifest.contributes?.routes).toContainEqual(expect.objectContaining({ path: '/_template' }))
+        expect(manifest.contributes?.clientRoutes).toContainEqual(expect.objectContaining({ path: '/_template' }))
+        expect(manifest.contributes?.slots).toContain('home-widget')
+        expect(manifest.contributes?.slots).not.toContain('page:/_template')
       }
     }
   })

@@ -1,0 +1,3 @@
+:where([data-bakin-plugin="_template"]) .template-ui__code {
+  overflow-wrap: anywhere;
+}
