@@ -305,6 +305,140 @@
       ],
       "defaultSelected": false,
       "screenshots": []
+    },
+    {
+      "id": "github",
+      "kind": "skill-pack",
+      "name": "GitHub",
+      "emoji": "🐙",
+      "description": "Lets your agents work GitHub the way you do — read issues and pull requests, watch CI runs, inspect diffs, and open PRs — through the official `gh` command line tool.",
+      "category": "Engineering",
+      "tags": [
+        "capability",
+        "engineering",
+        "github"
+      ],
+      "useCases": [
+        "Triage open issues and summarize what changed",
+        "Watch a CI run and report which check failed",
+        "Draft a pull request from a finished branch"
+      ],
+      "source": "github:markhayden/bakin-bits-official#packs/github",
+      "ref": null,
+      "trust": "official",
+      "capability": "github",
+      "runtimes": [
+        "*"
+      ],
+      "defaultSelected": false,
+      "screenshots": []
+    },
+    {
+      "id": "notion",
+      "kind": "skill-pack",
+      "name": "Notion",
+      "emoji": "📓",
+      "description": "Lets your agents read and write your Notion workspace — search pages, pull a doc's content as text, append notes, and query databases. Nothing to install; just connect a key.",
+      "category": "Productivity",
+      "tags": [
+        "capability",
+        "productivity",
+        "notes"
+      ],
+      "useCases": [
+        "Pull a spec out of Notion before starting work",
+        "Append meeting notes to a running page",
+        "Query a project database for what is in flight"
+      ],
+      "source": "github:markhayden/bakin-bits-official#packs/notion",
+      "ref": null,
+      "trust": "official",
+      "capability": "notion",
+      "runtimes": [
+        "*"
+      ],
+      "defaultSelected": false,
+      "screenshots": []
+    },
+    {
+      "id": "office-docs",
+      "kind": "skill-pack",
+      "name": "Word & Excel Documents",
+      "emoji": "📄",
+      "description": "Lets your agents read and write real Word and Excel files — pull the text out of a .docx, turn a spreadsheet into data they can reason over, and hand back a formatted document or workbook. Fully local, no Office install, no API key.",
+      "category": "Productivity",
+      "tags": [
+        "capability",
+        "documents",
+        "spreadsheets"
+      ],
+      "useCases": [
+        "Read a .docx someone attached and act on what it says",
+        "Turn a spreadsheet into numbers an agent can reason over",
+        "Hand back a formatted report or workbook as a deliverable"
+      ],
+      "source": "github:markhayden/bakin-bits-official#packs/office-docs",
+      "ref": null,
+      "trust": "official",
+      "capability": "office-docs",
+      "runtimes": [
+        "*"
+      ],
+      "defaultSelected": false,
+      "screenshots": []
+    },
+    {
+      "id": "google-workspace",
+      "kind": "skill-pack",
+      "name": "Google Workspace",
+      "emoji": "📬",
+      "description": "Lets your agents work your Google account — search Gmail, read and add calendar events, find files in Drive, and read or update Sheets and Docs — through the open-source `gog` command line tool.",
+      "category": "Productivity",
+      "tags": [
+        "capability",
+        "productivity",
+        "email"
+      ],
+      "useCases": [
+        "Search this week's mail for what needs a reply",
+        "Check the calendar before scheduling anything",
+        "Read or update a Google Sheet in place"
+      ],
+      "source": "github:markhayden/bakin-bits-official#packs/google-workspace",
+      "ref": null,
+      "trust": "official",
+      "capability": "google-workspace",
+      "runtimes": [
+        "*"
+      ],
+      "defaultSelected": false,
+      "screenshots": []
+    },
+    {
+      "id": "skill-porter",
+      "kind": "skill-pack",
+      "name": "Skill Porter",
+      "emoji": "🔌",
+      "description": "Sharpens `bakin skills map` — teaches your agent where skill bundles actually hide their API keys and command-line prerequisites, so an installed skill's readiness reflects what it really needs instead of guesses.",
+      "category": "Engineering",
+      "tags": [
+        "skills",
+        "ecosystem",
+        "readiness"
+      ],
+      "useCases": [
+        "Map an installed hub skill's requirements more accurately",
+        "Catch the API key a pasted skill never declared",
+        "Keep readiness honest for skills from outside ClawHub"
+      ],
+      "source": "github:markhayden/bakin-bits-official#packs/skill-porter",
+      "ref": null,
+      "trust": "official",
+      "runtimes": [
+        "*"
+      ],
+      "defaultSelected": false,
+      "screenshots": []
     }
   ]
 }

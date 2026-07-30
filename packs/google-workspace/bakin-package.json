@@ -1,0 +1,28 @@
+{
+  "id": "google-workspace",
+  "kind": "skill-pack",
+  "name": "Google Workspace",
+  "version": "1.0.0",
+  "description": "Lets your agents work your Google account — search Gmail, read and add calendar events, find files in Drive, and read or update Sheets and Docs — through the open-source `gog` command line tool.",
+  "author": "Bakin (uses gog by the OpenClaw project, MIT)",
+  "bakin": "^1.0.0",
+  "capability": "google-workspace",
+  "runtimes": [
+    "*"
+  ],
+  "contributions": {
+    "skills": [
+      "skills/google-workspace"
+    ]
+  },
+  "requires": {
+    "prereqs": [
+      {
+        "name": "gog (Google Workspace CLI)",
+        "kind": "binary",
+        "probe": "gog",
+        "help": "https://gogcli.sh"
+      }
+    ]
+  }
+}
