@@ -1,0 +1,17 @@
+{
+  "id": "skill-porter",
+  "kind": "skill-pack",
+  "name": "Skill Porter",
+  "version": "1.0.0",
+  "description": "Sharpens `bakin skills map` — teaches your agent where skill bundles actually hide their API keys and command-line prerequisites, so an installed skill's readiness reflects what it really needs instead of guesses.",
+  "author": "Bakin",
+  "bakin": "^1.0.0",
+  "runtimes": [
+    "*"
+  ],
+  "contributions": {
+    "skills": [
+      "skills/skill-porter"
+    ]
+  }
+}

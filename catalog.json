@@ -305,6 +305,32 @@
       ],
       "defaultSelected": false,
       "screenshots": []
+    },
+    {
+      "id": "skill-porter",
+      "kind": "skill-pack",
+      "name": "Skill Porter",
+      "emoji": "🔌",
+      "description": "Sharpens `bakin skills map` — teaches your agent where skill bundles actually hide their API keys and command-line prerequisites, so an installed skill's readiness reflects what it really needs instead of guesses.",
+      "category": "Engineering",
+      "tags": [
+        "skills",
+        "ecosystem",
+        "readiness"
+      ],
+      "useCases": [
+        "Map an installed hub skill's requirements more accurately",
+        "Catch the API key a pasted skill never declared",
+        "Keep readiness honest for skills from outside ClawHub"
+      ],
+      "source": "github:markhayden/bakin-bits-official#packs/skill-porter",
+      "ref": null,
+      "trust": "official",
+      "runtimes": [
+        "*"
+      ],
+      "defaultSelected": false,
+      "screenshots": []
     }
   ]
 }
