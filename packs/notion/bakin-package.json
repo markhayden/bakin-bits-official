@@ -1,0 +1,27 @@
+{
+  "id": "notion",
+  "kind": "skill-pack",
+  "name": "Notion",
+  "version": "1.0.0",
+  "description": "Lets your agents read and write your Notion workspace — search pages, pull a doc's content as text, append notes, and query databases. Nothing to install; just connect a key.",
+  "author": "Bakin",
+  "bakin": "^1.0.0",
+  "capability": "notion",
+  "runtimes": [
+    "*"
+  ],
+  "contributions": {
+    "skills": [
+      "skills/notion"
+    ]
+  },
+  "secrets": [
+    {
+      "name": "NOTION_TOKEN",
+      "description": "Notion internal integration secret. Create an integration, copy its secret, then share each page or database you want agents to reach with that integration — Notion grants no access by default.",
+      "required": true,
+      "secretSlot": "skills.notion.NOTION_TOKEN",
+      "help": "https://www.notion.so/profile/integrations"
+    }
+  ]
+}

@@ -23,6 +23,15 @@ const repoRoot = join(packsRoot, '..')
 /** Platform keys follow process.platform-process.arch (Bakin's pin convention). */
 const PLATFORM_KEYS = new Set(['darwin-arm64', 'darwin-x64', 'linux-x64', 'linux-arm64'])
 
+/**
+ * Slots outside a pack's own `skills.*` namespace that Bakin's injection
+ * layer still binds, from core's STATIC_ENV_SECRET_MAPPINGS. Keep in sync
+ * with `src/core/secret-env.ts`; a slot that is in neither place is dead.
+ */
+const STATIC_FIRST_PARTY_SLOTS: Record<string, string> = {
+  BRAVE_SEARCH_API_KEY: 'brave.apiKey',
+}
+
 interface BinDownload {
   url?: string
   sha256?: string
@@ -138,12 +147,22 @@ describe('pack contracts', () => {
         }
       })
 
-      it('declares secrets as env vars with a namespaced slot and a help link', () => {
+      it('declares secrets as env vars with a bindable slot and a help link', () => {
         for (const secret of manifest.secrets ?? []) {
           expect(secret.name).toMatch(/^[A-Z_][A-Z0-9_]*$/)
           expect(secret.description).toBeTruthy()
           expect(typeof secret.required).toBe('boolean')
-          if (secret.secretSlot) expect(secret.secretSlot).toMatch(/^[a-z0-9][a-z0-9._-]*\.[a-zA-Z0-9][a-zA-Z0-9._-]*$/)
+          if (secret.secretSlot) {
+            // Bakin's env-injection layer binds a pack slot only when it is
+            // in the pack's own `skills.<packId>.<ENV_VAR>` namespace or in
+            // core's static first-party table. Anything else parses fine,
+            // installs fine, and then never reaches the agent — the operator
+            // types a key into a slot that goes nowhere. Caught live on the
+            // notion pack, which shipped `notion.token` and was refused.
+            const minted = `skills.${packId}.${secret.name}`
+            const bindable = secret.secretSlot === minted || STATIC_FIRST_PARTY_SLOTS[secret.name!] === secret.secretSlot
+            expect(bindable, `${packId}: secret ${secret.name} declares unbindable slot "${secret.secretSlot}" (expected "${minted}")`).toBe(true)
+          }
           // A key the operator cannot find is a dead install — every declared
           // secret says where to get it.
           expect(secret.help, `${packId}: secret ${secret.name} has no help URL`).toMatch(/^https:\/\//)
