@@ -984,7 +984,9 @@ declare module '@makinbakin/sdk/patterns' {
     id: string
     icon?: string
   }
+  export type ChannelIconSize = 'sm' | 'md' | 'lg'
   export const ChannelIcon: ComponentType<{
+    size?: ChannelIconSize
     channelId: string
     className?: string
     channels?: readonly ChannelIconChannel[]
