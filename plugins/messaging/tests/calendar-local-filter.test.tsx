@@ -35,13 +35,6 @@ mock.module('@/core/watcher', () => ({
   registerUnlinkHook: mock(),
 }))
 
-mock.module('@makinbakin/sdk/components', () => ({
-  AgentSelect: () => <select />,
-  Drawer: ({ children, open }: { children: React.ReactNode; open: boolean }) =>
-    open ? <div>{children}</div> : null,
-  ChannelIcon: ({ channelId }: { channelId: string }) => <span data-testid={`channel-icon-${channelId}`} />,
-}))
-
 mock.module('@makinbakin/sdk/patterns', () => ({
   AgentAvatar: ({ agent }: { agent: { id: string } }) => <span data-testid={`avatar-${agent.id}`}>{agent.id}</span>,
   CalendarGrid: ({ items, renderItem, label, view, renderDayHeader }: {

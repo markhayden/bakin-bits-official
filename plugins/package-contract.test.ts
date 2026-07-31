@@ -7,7 +7,6 @@ const PLUGINS = ['messaging', 'projects'] as const
 
 const HOST_EXTERNALS = new Set([
   '@makinbakin/sdk',
-  '@makinbakin/sdk/components',
   '@makinbakin/sdk/hooks',
   '@makinbakin/sdk/slots',
   '@makinbakin/sdk/types',

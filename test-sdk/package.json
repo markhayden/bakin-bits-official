@@ -10,7 +10,6 @@
     "./layout": "./layout.js",
     "./patterns": "./patterns.js",
     "./navigation": "./navigation.js",
-    "./components": "./components.js",
     "./conversation": "./conversation.js",
     "./content": "./content.js",
     "./slots": "./slots.js",

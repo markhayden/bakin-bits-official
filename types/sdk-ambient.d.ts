@@ -1117,112 +1117,6 @@ declare module '@makinbakin/sdk/navigation' {
   ): [string[], (value: string[]) => void, (value: string[]) => void]
 }
 
-declare module '@makinbakin/sdk/components' {
-  import type { ComponentType, ReactNode } from 'react'
-  interface SDKProps {
-    children?: ReactNode
-    onClick?: (event: any) => void
-    onChange?: (value: any) => void
-    onOpenChange?: (open: any) => void
-    onValueChange?: (value: any) => void
-    [key: string]: any
-  }
-  type SDKComponent = ComponentType<SDKProps>
-
-  export interface AgentInfo {
-    id: string
-    name: string
-    color?: string
-    avatar?: string
-    headshot?: string
-  }
-
-  export type SortDir = 'asc' | 'desc'
-
-  // ── Conversation kit (successor to IntegratedBrainstorm) ──────────────
-  export interface DisplayAttachment {
-    name: string
-    mimeType: string
-    url: string
-  }
-
-  export type ConversationMessage =
-    | { kind: 'user'; ts: string; content: string; attachments?: DisplayAttachment[] }
-    | { kind: 'assistant'; ts: string; turnId?: string; agentId?: string; content: string }
-    | {
-        kind: 'tool'
-        ts: string
-        turnId?: string
-        agentId?: string
-        callId?: string
-        toolName: string
-        status?: 'running' | 'completed' | 'failed' | string
-        summary?: string
-        inputPreview?: string
-        outputPreview?: string
-        durationMs?: number
-        metadata?: Record<string, unknown>
-      }
-    | { kind: 'error'; ts: string; turnId?: string; message: string; errorKind?: string }
-    | { kind: 'aborted'; ts: string; turnId?: string }
-
-  export interface ConversationStreamOptions {
-    fetcher: (content: string, ctx: { signal: AbortSignal }) => Promise<Response>
-    onCustom?: (event: string, data: unknown) => void
-    onDone?: (finalContent: string) => void | Promise<void>
-    onError?: (message: string) => void
-    onAborted?: () => void
-  }
-
-  export interface ConversationStream {
-    liveChunks: import('@makinbakin/sdk/types').RuntimeChatChunk[] | null
-    streaming: boolean
-    send: (content: string) => Promise<void>
-    abort: () => void
-  }
-
-  export function useConversationStream(options: ConversationStreamOptions): ConversationStream
-
-  export function readConversationSseStream(
-    response: Response,
-    handlers: {
-      signal: AbortSignal
-      onChunk: (chunk: import('@makinbakin/sdk/types').RuntimeChatChunk) => void
-      onCustom?: (event: string, data: unknown) => void
-    },
-  ): Promise<{ content: string }>
-
-  export function foldConversation(
-    messages: readonly ConversationMessage[],
-    opts?: { liveChunks?: readonly import('@makinbakin/sdk/types').RuntimeChatChunk[]; liveAgentId?: string },
-  ): unknown[]
-
-  export const ConversationPanel: SDKComponent
-  export const Conversation: SDKComponent
-  export const Composer: SDKComponent
-  export const ConversationEmptyState: SDKComponent
-  export const ThinkingIndicator: SDKComponent
-
-  export const AgentAvatar: ComponentType<{ agentId?: string; agent?: AgentInfo | null; size?: string | number; className?: string }>
-  export const AgentFilter: SDKComponent
-  export const AgentSelect: SDKComponent
-  export const Drawer: SDKComponent
-  export const ChannelIcon: SDKComponent
-  export const EmptyState: SDKComponent
-  export const FacetFilter: SDKComponent
-  export const MarkdownEditor: SDKComponent
-  export const PluginHeader: ComponentType<{
-    title: string
-    subtitle?: string
-    count?: number
-    search?: Record<string, unknown>
-    actions?: ReactNode
-    meta?: ReactNode
-    children?: ReactNode
-  }>
-  export const SortableHead: ComponentType<Record<string, unknown> & { children?: ReactNode }>
-}
-
 declare module '@makinbakin/sdk/conversation' {
   import type { ComponentType, ReactNode } from 'react'
 
@@ -1484,7 +1378,7 @@ declare module '@makinbakin/sdk/slots' {
 
 declare module '@makinbakin/sdk/utils' {
   import type { RuntimeChatChunk } from '@makinbakin/sdk/types'
-  import type { ConversationMessage } from '@makinbakin/sdk/components'
+  import type { ConversationMessage } from '@makinbakin/sdk/conversation'
 
   export function cn(...args: Array<string | undefined | null | false>): string
   export function formatAge(date: Date | string): string
