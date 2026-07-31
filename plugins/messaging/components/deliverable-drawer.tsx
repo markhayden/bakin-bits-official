@@ -3,11 +3,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AgentAvatar } from "@makinbakin/sdk/patterns"
 import { useAgentList } from "@makinbakin/sdk/hooks"
-import { Drawer } from "@makinbakin/sdk/ui"
-import { Badge } from "@makinbakin/sdk/ui"
-import { Button } from "@makinbakin/sdk/ui"
-import { Textarea } from "@makinbakin/sdk/ui"
-import { Separator } from "@makinbakin/sdk/ui"
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  Badge,
+  Button,
+  Drawer,
+  Separator,
+  Textarea,
+} from "@makinbakin/sdk/ui"
 import { AlertCircle, CalendarDays, Check, Clock, ImageIcon, RefreshCcw, RotateCcw, Trash2, Video, X } from 'lucide-react'
 import type { AssetRequirement, ContentTypeOption, Deliverable, DeliverableFailureStage } from '../types'
 import { getContentTypeLabel, useContentTypes } from '../hooks/use-content-types'
@@ -234,7 +239,7 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
       title={deliverable.title}
     >
       <div className="space-y-5">
-        <section className="flex items-start gap-4 rounded-md border border-border bg-surface p-4">
+        <section className="flex items-start gap-4 rounded-md border border-bakin-border-subtle/30 bg-bakin-canvas-default p-4">
           {agentIdentity && <AgentAvatar agent={agentIdentity} size="lg" />}
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
@@ -242,20 +247,20 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
               <Badge variant="outline">{deliverable.channel}</Badge>
               <Badge variant="outline">{getContentTypeLabel(deliverable.contentType, contentTypes)}</Badge>
             </div>
-            <p className="mt-2 text-sm text-muted-foreground">{deliverable.brief}</p>
+            <p className="mt-2 text-sm text-bakin-text-muted">{deliverable.brief}</p>
           </div>
         </section>
 
         <div className="grid grid-cols-2 gap-3">
-          <div className="rounded-md bg-surface p-3">
-            <div className="flex items-center gap-1.5 text-[11px] uppercase text-muted-foreground">
+          <div className="rounded-md bg-bakin-canvas-default p-3">
+            <div className="flex items-center gap-1.5 text-bakin-typography-size-meta uppercase text-bakin-text-muted">
               <CalendarDays className="size-3" />
               Publish
             </div>
             <div className="mt-1 text-sm font-medium">{formatDateTime(deliverable.publishAt)}</div>
           </div>
-          <div className="rounded-md bg-surface p-3">
-            <div className="flex items-center gap-1.5 text-[11px] uppercase text-muted-foreground">
+          <div className="rounded-md bg-bakin-canvas-default p-3">
+            <div className="flex items-center gap-1.5 text-bakin-typography-size-meta uppercase text-bakin-text-muted">
               <Clock className="size-3" />
               Prep
             </div>
@@ -293,7 +298,7 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
           )}
           <Button
             size="sm"
-            variant={confirmingDelete ? 'destructive' : 'outline'}
+            variant={confirmingDelete ? 'danger' : 'outline'}
             disabled={actionLoading}
             onClick={handleDelete}
           >
@@ -316,24 +321,24 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
         </div>
 
         {deliverable.failureReason && (
-          <div className="rounded-md border border-red-500/30 bg-red-500/10 p-3">
-            <div className="text-sm font-medium text-red-300">Failure reason</div>
-            <p className="mt-1 text-sm text-red-200">{deliverable.failureReason}</p>
-          </div>
+          <Alert tone="danger">
+            <AlertTitle>Failure reason</AlertTitle>
+            <AlertDescription>{deliverable.failureReason}</AlertDescription>
+          </Alert>
         )}
 
         {actionError && (
-          <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
-            <AlertCircle className="mt-0.5 size-4 shrink-0" />
-            <span>{actionError}</span>
-          </div>
+          <Alert tone="danger">
+            <AlertCircle className="size-4" />
+            <AlertDescription>{actionError}</AlertDescription>
+          </Alert>
         )}
 
         {missingRequirement && (
-          <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-300">
-            <AlertCircle className="mt-0.5 size-4 shrink-0" />
-            <span>{missingRequirement}</span>
-          </div>
+          <Alert tone="attention">
+            <AlertCircle className="size-4" />
+            <AlertDescription>{missingRequirement}</AlertDescription>
+          </Alert>
         )}
 
         {rejecting && (
@@ -342,11 +347,11 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
               value={rejectionNote}
               onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setRejectionNote(event.target.value)}
               placeholder="Change request note"
-              className="min-h-[84px] bg-surface"
+              className="min-h-21 bg-bakin-canvas-default"
             />
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setRejecting(false)}>Cancel</Button>
-              <Button variant="destructive" disabled={actionLoading} onClick={handleReject}>Send changes</Button>
+              <Button variant="danger" disabled={actionLoading} onClick={handleReject}>Send changes</Button>
             </div>
           </div>
         )}
@@ -356,23 +361,23 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
         <section className="space-y-3">
           <h3 className="text-sm font-medium">Draft</h3>
           {deliverable.draft.caption && (
-            <p className="whitespace-pre-wrap rounded-md bg-surface p-3 text-sm">{deliverable.draft.caption}</p>
+            <p className="whitespace-pre-wrap rounded-md bg-bakin-canvas-default p-3 text-sm">{deliverable.draft.caption}</p>
           )}
           {deliverable.draft.imagePrompt && (
-            <div className="rounded-md bg-surface p-3">
-              <div className="text-[11px] uppercase text-muted-foreground">Image prompt</div>
+            <div className="rounded-md bg-bakin-canvas-default p-3">
+              <div className="text-bakin-typography-size-meta uppercase text-bakin-text-muted">Image prompt</div>
               <p className="mt-1 text-sm">{deliverable.draft.imagePrompt}</p>
             </div>
           )}
           {deliverable.draft.videoPrompt && (
-            <div className="rounded-md bg-surface p-3">
-              <div className="text-[11px] uppercase text-muted-foreground">Video prompt</div>
+            <div className="rounded-md bg-bakin-canvas-default p-3">
+              <div className="text-bakin-typography-size-meta uppercase text-bakin-text-muted">Video prompt</div>
               <p className="mt-1 text-sm">{deliverable.draft.videoPrompt}</p>
             </div>
           )}
           {deliverable.draft.imageAssetId && (
             <div>
-              <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+              <div className="mb-1 flex items-center gap-1.5 text-xs text-bakin-text-muted">
                 <ImageIcon className="size-3.5" />
                 {deliverable.draft.imageAssetId}
               </div>
@@ -385,7 +390,7 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
           )}
           {deliverable.draft.videoAssetId && (
             <div>
-              <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+              <div className="mb-1 flex items-center gap-1.5 text-xs text-bakin-text-muted">
                 <Video className="size-3.5" />
                 {deliverable.draft.videoAssetId}
               </div>
@@ -397,9 +402,9 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
             </div>
           )}
           {deliverable.draft.agentNotes && (
-            <div className="rounded-md bg-surface p-3">
-              <div className="text-[11px] uppercase text-muted-foreground">Agent notes</div>
-              <p className="mt-1 text-sm text-muted-foreground">{deliverable.draft.agentNotes}</p>
+            <div className="rounded-md bg-bakin-canvas-default p-3">
+              <div className="text-bakin-typography-size-meta uppercase text-bakin-text-muted">Agent notes</div>
+              <p className="mt-1 text-sm text-bakin-text-muted">{deliverable.draft.agentNotes}</p>
             </div>
           )}
           {!deliverable.draft.caption &&
@@ -408,15 +413,15 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
             !deliverable.draft.imageAssetId &&
             !deliverable.draft.videoAssetId &&
             !deliverable.draft.agentNotes && (
-              <p className="text-sm text-muted-foreground">No draft yet</p>
+              <p className="text-sm text-bakin-text-muted">No draft yet</p>
             )}
         </section>
 
         {deliverable.rejectionNote && (
-          <div className="rounded-md border border-orange-500/30 bg-orange-500/10 p-3">
-            <div className="text-sm font-medium text-orange-300">Change request</div>
-            <p className="mt-1 text-sm text-orange-200">{deliverable.rejectionNote}</p>
-          </div>
+          <Alert tone="attention">
+            <AlertTitle>Change request</AlertTitle>
+            <AlertDescription>{deliverable.rejectionNote}</AlertDescription>
+          </Alert>
         )}
 
       </div>

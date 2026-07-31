@@ -5,14 +5,19 @@ import { AgentSelect } from "@makinbakin/sdk/patterns"
 // ChannelIcon has no focused home yet (public-API checkpoint gap — it dies
 // with the frozen barrel at P-final unless a focused home ships first).
 import { ChannelIcon } from "@makinbakin/sdk/components"
-import { Button } from "@makinbakin/sdk/ui"
-import { Input } from "@makinbakin/sdk/ui"
-import { Textarea } from "@makinbakin/sdk/ui"
 import {
+  Button,
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Textarea,
 } from "@makinbakin/sdk/ui"
 import { Paperclip, Plus, Search, X } from 'lucide-react'
 import type { ContentTone, DeliverableDraft } from '../types'
@@ -154,30 +159,30 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
         setOpen(nextOpen)
         if (!nextOpen) reset()
       }}>
-        <DialogContent className="max-w-lg border-border bg-card">
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Quick Post</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4">
             <div>
-              <label className="mb-1 block text-sm text-muted-foreground">Title</label>
+              <label className="mb-1 block text-sm text-bakin-text-muted">Title</label>
               <Input aria-label="Quick post title" value={title} onChange={(event) => setTitle(event.target.value)} />
             </div>
 
             <div>
-              <label className="mb-1 block text-sm text-muted-foreground">Brief</label>
+              <label className="mb-1 block text-sm text-bakin-text-muted">Brief</label>
               <Textarea
                 aria-label="Quick post brief"
                 value={brief}
                 onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setBrief(event.target.value)}
-                className="min-h-[96px]"
+                className="min-h-24"
               />
             </div>
 
             <div className="grid gap-3 md:grid-cols-2">
               <div>
-                <label className="mb-1 block text-sm text-muted-foreground">Agent</label>
+                <label className="mb-1 block text-sm text-bakin-text-muted">Agent</label>
                 <AgentSelect
                   value={agent}
                   onValueChange={(value) => setAgent(value ?? '')}
@@ -186,78 +191,93 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
                 />
               </div>
               <div>
-                <label className="mb-1 block text-sm text-muted-foreground">Publish</label>
+                <label className="mb-1 block text-sm text-bakin-text-muted">Publish</label>
                 <Input aria-label="Quick post publish time" type="datetime-local" value={publishAt} onChange={(event) => setPublishAt(event.target.value)} />
               </div>
               <div>
-                <label className="mb-1 block text-sm text-muted-foreground">Content Type</label>
-                <select
-                  aria-label="Quick post content type"
+                <label className="mb-1 block text-sm text-bakin-text-muted">Content Type</label>
+                <Select
+                  items={Object.fromEntries(contentTypes.map((type) => [type.id, type.label]))}
                   value={selectedContentType?.id ?? ''}
-                  onChange={(event) => setContentType(event.target.value)}
-                  className="h-9 w-full rounded-md border border-border bg-surface px-3 text-sm"
+                  onValueChange={(value) => setContentType(value ?? '')}
                 >
-                  {contentTypes.map((type) => (
-                    <option key={type.id} value={type.id}>{type.label}</option>
-                  ))}
-                </select>
+                  <SelectTrigger aria-label="Quick post content type" className="w-full">
+                    <SelectValue placeholder="Content type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {contentTypes.map((type) => (
+                      <SelectItem key={type.id} value={type.id}>{type.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div>
-                <label className="mb-1 block text-sm text-muted-foreground">Tone</label>
-                <select
-                  aria-label="Quick post tone"
+                <label className="mb-1 block text-sm text-bakin-text-muted">Tone</label>
+                <Select
+                  items={Object.fromEntries(Object.entries(TONE_LABELS))}
                   value={tone}
-                  onChange={(event) => setTone(event.target.value as ContentTone)}
-                  className="h-9 w-full rounded-md border border-border bg-surface px-3 text-sm"
+                  onValueChange={(value) => setTone((value ?? 'conversational') as ContentTone)}
                 >
-                  {(Object.entries(TONE_LABELS) as Array<[ContentTone, string]>).map(([value, label]) => (
-                    <option key={value} value={value}>{label}</option>
-                  ))}
-                </select>
+                  <SelectTrigger aria-label="Quick post tone" className="w-full">
+                    <SelectValue placeholder="Tone" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(Object.entries(TONE_LABELS) as Array<[ContentTone, string]>).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>{label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
             <div>
-              <label className="mb-1 block text-sm text-muted-foreground">Channel</label>
+              <label className="mb-1 block text-sm text-bakin-text-muted">Channel</label>
               <div className="flex flex-wrap gap-1.5">
                 {(channels.length > 0 ? channels : [{ id: DEFAULT_CHANNEL, label: DEFAULT_CHANNEL }]).map((item) => (
-                  <button
+                  <Button
                     key={item.id}
                     type="button"
+                    size="xs"
+                    variant="outline"
+                    aria-pressed={channel === item.id}
                     onClick={() => setChannel(item.id)}
-                    className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs ${
-                      channel === item.id
-                        ? 'border-accent bg-accent text-accent-foreground'
-                        : 'border-border text-muted-foreground'
-                    }`}
+                    className={channel === item.id
+                      ? 'border-bakin-signal-accent bg-bakin-signal-accent text-bakin-text-primary hover:bg-bakin-signal-accent'
+                      : 'border-bakin-border-subtle/30 text-bakin-text-muted'}
                   >
                     <ChannelIcon channelId={item.id} className="size-3.5" />
                     {item.label}
-                  </button>
+                  </Button>
                 ))}
               </div>
             </div>
 
             <div>
               <div className="mb-2 flex items-center justify-between">
-                <label className="text-sm text-muted-foreground">Existing Asset</label>
+                <label className="text-sm text-bakin-text-muted">Existing Asset</label>
                 <Button size="sm" variant="outline" onClick={loadAssets}>
                   <Paperclip className="size-3.5" data-icon="inline-start" />
                   Attach
                 </Button>
               </div>
               {selectedAsset && (
-                <div className="flex items-center justify-between rounded-md border border-border bg-surface px-3 py-2 text-sm">
+                <div className="flex items-center justify-between gap-2 rounded-md border border-bakin-border-subtle/30 bg-bakin-canvas-default px-3 py-2 text-sm">
                   <span className="truncate">{selectedAsset.description || selectedAsset.assetId}</span>
-                  <button type="button" onClick={() => setSelectedAsset(null)} aria-label="Remove selected asset">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() => setSelectedAsset(null)}
+                    aria-label="Remove selected asset"
+                  >
                     <X className="size-4" />
-                  </button>
+                  </Button>
                 </div>
               )}
               {assetPickerOpen && (
-                <div className="mt-2 rounded-md border border-border bg-surface p-2">
+                <div className="mt-2 rounded-md border border-bakin-border-subtle/30 bg-bakin-canvas-default p-2">
                   <div className="relative mb-2">
-                    <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                    <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-bakin-text-muted" />
                     <Input
                       value={assetSearch}
                       onChange={(event) => setAssetSearch(event.target.value)}
@@ -267,23 +287,24 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
                   </div>
                   <div className="max-h-44 overflow-auto">
                     {filteredAssets.length === 0 ? (
-                      <p className="p-2 text-sm text-muted-foreground">No assets available</p>
+                      <p className="p-2 text-sm text-bakin-text-muted">No assets available</p>
                     ) : (
                       filteredAssets.map((asset) => (
-                        <button
+                        <Button
                           key={asset.assetId}
                           type="button"
+                          variant="ghost"
                           onClick={() => {
                             setSelectedAsset(asset)
                             setAssetPickerOpen(false)
                           }}
-                          className="block w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/50"
+                          className="block h-auto w-full min-w-0 rounded-md px-2 py-1.5 text-left text-sm font-bakin-typography-weight-regular hover:bg-bakin-surface-default"
                         >
                           <span className="block truncate">{asset.assetId}</span>
                           {asset.description && (
-                            <span className="block truncate text-xs text-muted-foreground">{asset.description}</span>
+                            <span className="block truncate text-xs text-bakin-text-muted">{asset.description}</span>
                           )}
-                        </button>
+                        </Button>
                       ))
                     )}
                   </div>
