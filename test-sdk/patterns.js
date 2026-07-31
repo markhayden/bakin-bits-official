@@ -384,3 +384,8 @@ export function AssetPicker(props) {
     React.createElement(AssetPickerPanel, props),
   )
 }
+
+// ── ChannelIcon (focused successor to the frozen-barrel export) ──────────
+export function ChannelIcon({ channelId }) {
+  return React.createElement('span', { 'data-testid': `channel-icon-${channelId ?? 'unknown'}` })
+}

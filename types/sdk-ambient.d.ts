@@ -979,6 +979,17 @@ declare module '@makinbakin/sdk/patterns' {
     className?: string
   }>
 
+  // ── Notification channel identity (focused successor to the frozen barrel) ──
+  export interface ChannelIconChannel {
+    id: string
+    icon?: string
+  }
+  export const ChannelIcon: ComponentType<{
+    channelId: string
+    className?: string
+    channels?: readonly ChannelIconChannel[]
+  }>
+
   // ── ConfirmDialog (canonical confirm/danger flow) ──────────────────────
   export interface ConfirmDialogProps {
     open: boolean

@@ -1,13 +1,11 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-// ChannelIcon has no focused home yet (public-API checkpoint gap — it dies
-// with the frozen barrel at P-final unless a focused home ships first).
-import { ChannelIcon } from '@makinbakin/sdk/components'
 import {
   AgentAvatar,
   AgentFilter,
   CalendarGrid,
+  ChannelIcon,
   FacetFilter,
   ListRow,
   ListRowGroup,
