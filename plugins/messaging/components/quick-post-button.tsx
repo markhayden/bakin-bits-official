@@ -1,7 +1,9 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { AgentSelect } from "@makinbakin/sdk/components"
+import { AgentSelect } from "@makinbakin/sdk/patterns"
+// ChannelIcon has no focused home yet (public-API checkpoint gap — it dies
+// with the frozen barrel at P-final unless a focused home ships first).
 import { ChannelIcon } from "@makinbakin/sdk/components"
 import { Button } from "@makinbakin/sdk/ui"
 import { Input } from "@makinbakin/sdk/ui"
@@ -17,7 +19,7 @@ import type { ContentTone, DeliverableDraft } from '../types'
 import { DEFAULT_CHANNEL } from '../types'
 import { TONE_LABELS } from '../constants'
 import { useContentTypes } from '../hooks/use-content-types'
-import { useAgentIds } from "@makinbakin/sdk/hooks"
+import { useAgentIds, useAgentList } from "@makinbakin/sdk/hooks"
 import { useNotificationChannels } from "@makinbakin/sdk/hooks"
 
 interface AssetOption {
@@ -43,6 +45,17 @@ function assetDraftField(asset: AssetOption, requirement: string | undefined): k
 export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
   const contentTypes = useContentTypes()
   const agentIds = useAgentIds()
+  const agentList = useAgentList()
+  // The focused AgentSelect is presentation-only — the consumer supplies the
+  // selectable agents with resolved names and portraits.
+  const agentOptions = useMemo(() => {
+    const byId = new Map(agentList.map((candidate) => [candidate.id, candidate]))
+    return agentIds.map((id) => ({
+      id,
+      name: byId.get(id)?.name ?? id,
+      imageSrc: byId.get(id)?.headshot ?? null,
+    }))
+  }, [agentIds, agentList])
   const channels = useNotificationChannels()
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState('')
@@ -132,7 +145,7 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
 
   return (
     <>
-      <Button size="sm" onClick={() => setOpen(true)}>
+      <Button onClick={() => setOpen(true)}>
         <Plus className="size-3.5" data-icon="inline-start" />
         Quick Post
       </Button>
@@ -165,7 +178,12 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
             <div className="grid gap-3 md:grid-cols-2">
               <div>
                 <label className="mb-1 block text-sm text-muted-foreground">Agent</label>
-                <AgentSelect value={agent} onValueChange={(value) => setAgent(value ?? '')} agentIds={agentIds} />
+                <AgentSelect
+                  value={agent}
+                  onValueChange={(value) => setAgent(value ?? '')}
+                  agents={agentOptions}
+                  ariaLabel="Quick post agent"
+                />
               </div>
               <div>
                 <label className="mb-1 block text-sm text-muted-foreground">Publish</label>

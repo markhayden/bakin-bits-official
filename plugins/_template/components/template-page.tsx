@@ -1,9 +1,8 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { Stack } from '@makinbakin/sdk/layout'
 import {
-  DetailPage,
-  DetailPageBody,
-  DetailPageMain,
+  Page,
+  PageBody,
   PageHeader,
 } from '@makinbakin/sdk/patterns'
 import {
@@ -81,9 +80,9 @@ export function TemplatePage() {
   ) : undefined
 
   return (
-    <DetailPage
+    <Page
       data-template-ui-ready={data?.ok ? '' : undefined}
-      width="content"
+      width="standard"
     >
       <PageHeader
         description="A minimal plugin-owned page using the same public UI and routing contracts as Bakin."
@@ -92,7 +91,7 @@ export function TemplatePage() {
         title="Plugin template"
       />
 
-      <DetailPageBody
+      <PageBody
         feedback={feedback ? (
           <Alert tone={feedback.tone}>
             <AlertTitle>{feedback.tone === 'success' ? 'Greeting created' : 'Greeting failed'}</AlertTitle>
@@ -101,48 +100,46 @@ export function TemplatePage() {
         ) : undefined}
         state={state}
       >
-        <DetailPageMain>
-          <Card>
-            <CardHeader>
-              <CardTitle>Runtime contract</CardTitle>
-              <CardDescription>The page loaded this status through the plugin-scoped API helper.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Stack gap="dense">
-                <p>Server plugin: <code className="template-ui__code">{data?.plugin}</code></p>
-                <p>Endpoint: <code className="template-ui__code">GET /api/plugins/_template/</code></p>
-              </Stack>
-            </CardContent>
-          </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Runtime contract</CardTitle>
+            <CardDescription>The page loaded this status through the plugin-scoped API helper.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Stack gap="dense">
+              <p>Server plugin: <code className="template-ui__code">{data?.plugin}</code></p>
+              <p>Endpoint: <code className="template-ui__code">GET /api/plugins/_template/</code></p>
+            </Stack>
+          </CardContent>
+        </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Validated mutation</CardTitle>
-              <CardDescription>Copy this field, form, busy-state, and feedback composition for your primary action.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Form aria-label="Create a greeting" busy={submitting} onSubmit={submitGreeting}>
-                <Field name="name">
-                  <FieldLabel requirement="required">Your name</FieldLabel>
-                  <FieldDescription>The server validates this value before creating the greeting.</FieldDescription>
-                  <Input
-                    required
-                    autoComplete="name"
-                    maxLength={80}
-                    value={name}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => setName(event.currentTarget.value)}
-                  />
-                </Field>
-                <FormActions>
-                  <SubmitButton busyLabel="Creating greeting…" disabled={!name.trim()}>
-                    Create greeting
-                  </SubmitButton>
-                </FormActions>
-              </Form>
-            </CardContent>
-          </Card>
-        </DetailPageMain>
-      </DetailPageBody>
-    </DetailPage>
+        <Card>
+          <CardHeader>
+            <CardTitle>Validated mutation</CardTitle>
+            <CardDescription>Copy this field, form, busy-state, and feedback composition for your primary action.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Form aria-label="Create a greeting" busy={submitting} onSubmit={submitGreeting}>
+              <Field name="name">
+                <FieldLabel requirement="required">Your name</FieldLabel>
+                <FieldDescription>The server validates this value before creating the greeting.</FieldDescription>
+                <Input
+                  required
+                  autoComplete="name"
+                  maxLength={80}
+                  value={name}
+                  onChange={(event: ChangeEvent<HTMLInputElement>) => setName(event.currentTarget.value)}
+                />
+              </Field>
+              <FormActions>
+                <SubmitButton busyLabel="Creating greeting…" disabled={!name.trim()}>
+                  Create greeting
+                </SubmitButton>
+              </FormActions>
+            </Form>
+          </CardContent>
+        </Card>
+      </PageBody>
+    </Page>
   )
 }

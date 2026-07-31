@@ -247,11 +247,14 @@ describe('Plan client UI', () => {
     const onDeleted = mock()
     render(<PlanWorkspace planId="plan-1" onDeleted={onDeleted} />)
 
+    // Delete lives in the header overflow menu ("Plan actions" -> Delete),
+    // then confirms through the typed ConfirmDialog.
     await waitFor(() => {
-      expect(screen.getByLabelText('Delete plan')).toBeDefined()
+      expect(screen.getByLabelText('Plan actions')).toBeDefined()
     })
-    fireEvent.click(screen.getByLabelText('Delete plan'))
-    fireEvent.click(screen.getByText('Delete plan'))
+    fireEvent.click(screen.getByLabelText('Plan actions'))
+    fireEvent.click(await screen.findByText('Delete'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete plan' }))
 
     await waitFor(() => {
       expect(onDeleted).toHaveBeenCalled()

@@ -10,6 +10,7 @@ export const Alert = createElement('div')
 export const AlertDescription = createElement('div')
 export const AlertTitle = createElement('div')
 export const Avatar = createElement('span')
+export const Drawer = ({ children, open = true }) => open ? React.createElement('div', null, children) : null
 export const Badge = createElement('span', { 'data-testid': 'badge' })
 export const Button = createElement('button')
 export const Card = createElement('div')
@@ -55,7 +56,53 @@ export const TableBody = createElement('tbody')
 export const TableRow = createElement('tr')
 export const TableHead = createElement('th')
 export const TableCell = createElement('td')
-export const Tabs = createElement('div')
+const TabsContext = React.createContext({ value: undefined, onValueChange: undefined })
+
+export function Tabs({ children, value, defaultValue, onValueChange, ...props }) {
+  return React.createElement(
+    TabsContext.Provider,
+    { value: { value: value ?? defaultValue, onValueChange } },
+    React.createElement('div', props, children),
+  )
+}
+
+export function TabsList({ children, variant, activateOnFocus, ...props }) {
+  return React.createElement(
+    'div',
+    { ...props, role: 'tablist', 'data-variant': variant },
+    children,
+  )
+}
+
+export function TabsTrigger({ children, value, disabled, ...props }) {
+  return React.createElement(
+    TabsContext.Consumer,
+    null,
+    ({ value: activeValue, onValueChange }) => React.createElement(
+      'button',
+      {
+        ...props,
+        type: 'button',
+        role: 'tab',
+        'aria-selected': activeValue === value,
+        disabled,
+        onClick: () => onValueChange?.(value),
+      },
+      children,
+    ),
+  )
+}
+
+export function TabsContent({ children, value, ...props }) {
+  return React.createElement(
+    TabsContext.Consumer,
+    null,
+    ({ value: activeValue }) => activeValue === value
+      ? React.createElement('div', { ...props, role: 'tabpanel' }, children)
+      : null,
+  )
+}
+
 export const Textarea = createElement('textarea')
 export const Tooltip = createElement('span')
 

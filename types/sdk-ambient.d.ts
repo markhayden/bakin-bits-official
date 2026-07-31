@@ -808,6 +808,7 @@ declare module '@makinbakin/sdk/ui' {
   export const AlertDescription: UIComponent
   export const AlertTitle: UIComponent
   export const Avatar: UIComponent
+  export const Drawer: UIComponent
   export const Badge: UIComponent
   export const Button: UIComponent
   export const Card: UIComponent
@@ -854,6 +855,9 @@ declare module '@makinbakin/sdk/ui' {
   export const TableHead: UIComponent
   export const TableCell: UIComponent
   export const Tabs: UIComponent
+  export const TabsList: UIComponent
+  export const TabsTrigger: UIComponent
+  export const TabsContent: UIComponent
   export const Textarea: UIComponent
   export const Tooltip: UIComponent
   export const SubmitButton: UIComponent
@@ -873,6 +877,7 @@ declare module '@makinbakin/sdk/layout' {
   export const Inline: LayoutComponent
   export const Grid: LayoutComponent
   export const PageShell: LayoutComponent
+  export const BoundedOverflow: LayoutComponent
 }
 
 declare module '@makinbakin/sdk/patterns' {
@@ -882,10 +887,200 @@ declare module '@makinbakin/sdk/patterns' {
     [key: string]: any
   }
   type PatternComponent = ComponentType<PatternProps>
-  export const DetailPage: PatternComponent
-  export const DetailPageBody: PatternComponent
-  export const DetailPageMain: PatternComponent
+
+  // ── Consolidated Page family (storybook-refit T5.1) ────────────────────
+  export type PageWidth = 'standard' | 'full'
+  export type PageScroll = 'page' | 'contained'
+  export type PageDensity = 'default' | 'compact'
+  export const Page: ComponentType<PatternProps & {
+    width?: PageWidth
+    scroll?: PageScroll
+    density?: PageDensity
+  }>
+  export type PageBodyLayout = 'single' | 'aside'
+  export type PageBodyGap = 'content' | 'section' | 'page'
+  export const PageBody: ComponentType<PatternProps & {
+    layout?: PageBodyLayout
+    gap?: PageBodyGap
+    busy?: boolean
+    feedback?: ReactNode
+    state?: ReactNode
+    label?: string
+    labelledBy?: string
+  }>
+  export type PageControlsAs = 'section' | 'toolbar'
+  export const PageControls: ComponentType<PatternProps & {
+    as?: PageControlsAs
+    actions?: ReactNode
+    divider?: boolean
+    label?: string
+    labelledBy?: string
+  }>
+  export const PageAside: ComponentType<PatternProps & {
+    label?: string
+    labelledBy?: string
+  }>
+  export type PageCanvasOrientation = 'vertical' | 'horizontal'
+  export const PageCanvas: ComponentType<PatternProps & {
+    orientation?: PageCanvasOrientation
+  }>
+  export const PageTimeline: ComponentType<PatternProps & {
+    live?: 'off' | 'polite'
+    label?: string
+    labelledBy?: string
+  }>
+  export const PageComposer: PatternComponent
+
   export const PageHeader: PatternComponent
+  export const PageHeaderOverflowMenu: PatternComponent
+  export const SearchInput: PatternComponent
+  export const AgentAvatar: PatternComponent
+  export const AgentFilter: PatternComponent
+  export const FacetFilter: PatternComponent
+  export const SegmentedControl: PatternComponent
+  export const WorkspacePage: PatternComponent
+  export const WorkspacePageBody: PatternComponent
+  export const WorkspacePageHeader: PatternComponent
+  export const StatusBadge: PatternComponent
+  export const StatusMarker: PatternComponent
+
+  // ── Agent identity + assignment (focused successors to the frozen barrel) ──
+  export interface AgentIdentity {
+    id: string
+    name: string
+    imageSrc?: string | null
+    color?: string
+    initials?: string
+  }
+  export interface AgentSelectOption extends AgentIdentity {
+    disabled?: boolean
+  }
+  export interface AgentTeamOption {
+    id: string
+    label: string
+    color?: string
+    disabled?: boolean
+  }
+  export const AgentSelect: ComponentType<{
+    id?: string
+    name?: string
+    value: string
+    onValueChange: (value: string) => void
+    agents: readonly AgentSelectOption[]
+    teams?: readonly AgentTeamOption[]
+    includeAssigned?: boolean
+    assignedLabel?: string
+    allowNone?: boolean
+    noneLabel?: string
+    placeholder?: string
+    ariaLabel?: string
+    disabled?: boolean
+    required?: boolean
+    className?: string
+  }>
+
+  // ── ConfirmDialog (canonical confirm/danger flow) ──────────────────────
+  export interface ConfirmDialogProps {
+    open: boolean
+    title: ReactNode
+    description?: ReactNode
+    confirmLabel?: string
+    busyLabel?: string
+    cancelLabel?: string
+    confirmTone?: 'danger' | 'primary'
+    busy?: boolean
+    error?: ReactNode
+    confirmTestId?: string
+    className?: string
+    confirmValue?: string
+    confirmPrompt?: ReactNode
+    children?: ReactNode
+    onConfirm: () => void
+    onCancel: () => void
+  }
+  export const ConfirmDialog: ComponentType<ConfirmDialogProps>
+
+  // ── Vetted dense-row list (Lists taxonomy type 1) ──────────────────────
+  export type ListRowsVariant = 'bordered' | 'separated' | 'plain'
+  export type ListRowsColumnsAt = 'lg' | 'xl' | '2xl' | '3xl' | '4xl' | '5xl'
+  export type ListRowsColumnsAlign = 'start' | 'center' | 'end'
+  export const ListRows: ComponentType<PatternProps & {
+    variant?: ListRowsVariant
+    columns?: string
+    columnsAt?: ListRowsColumnsAt
+    columnsAlign?: ListRowsColumnsAlign
+  }>
+  export const ListRow: PatternComponent
+  export const ListRowLabels: PatternComponent
+  export const ListRowGroup: ComponentType<PatternProps & { label: ReactNode }>
+
+  // ── CalendarGrid (Lists taxonomy type 7; shared calendar STRUCTURE) ────
+  export type CalendarGridView = 'month' | 'week' | 'day'
+  export interface CalendarGridItem {
+    key: string
+    /** Plain `YYYY-MM-DD` strings parse as LOCAL midnight (kit-owned). */
+    date?: Date | string
+    start?: Date | string
+    end?: Date | string
+    allDay?: boolean
+  }
+  export interface CalendarGridProps<T extends CalendarGridItem> {
+    view: CalendarGridView
+    date: Date
+    items: ReadonlyArray<T>
+    renderItem: (item: T) => ReactNode
+    label: string
+    now?: Date
+    maxVisibleItems?: number
+    renderDayHeader?: (date: Date) => ReactNode
+    outsideDays?: 'hidden' | 'muted'
+    granularity?: 'hour' | 'day'
+    dimPastDays?: boolean
+    className?: string
+  }
+  export function CalendarGrid<T extends CalendarGridItem>(props: CalendarGridProps<T>): ReturnType<ComponentType>
+
+  // ── AssetPicker (presentation-only; consumer owns the collection data) ──
+  export interface AssetPickerAsset {
+    id: string
+    label: string
+    description?: string
+    type?: string
+    thumbnailSrc?: string
+    disabled?: boolean
+  }
+  export type AssetPickerCollection =
+    | { status: 'loading' }
+    | { status: 'error'; message?: string }
+    | { status: 'ready'; assets: readonly AssetPickerAsset[] }
+  export type AssetPickerView = 'grid' | 'list'
+  export type AssetPickerVariant = 'dialog' | 'inline'
+  interface AssetPickerBaseProps {
+    collection: AssetPickerCollection
+    query: string
+    onQueryChange: (query: string) => void
+    onPick: (assetId: string) => void
+    onRetry?: () => void
+    title?: string
+    description?: string
+    view?: AssetPickerView
+    busy?: boolean
+    toolbarAction?: ReactNode
+    dropActive?: boolean
+    dropZoneProps?: Record<string, unknown>
+    notice?: ReactNode
+    searchLabel?: string
+    searchPlaceholder?: string
+    emptyTitle?: string
+    emptyDescription?: string
+    noResultsTitle?: string
+    noResultsDescription?: string
+    className?: string
+  }
+  export type AssetPickerProps =
+    | (AssetPickerBaseProps & { variant?: 'dialog'; open: boolean; onOpenChange: (open: boolean) => void })
+    | (AssetPickerBaseProps & { variant: 'inline'; open?: never; onOpenChange?: never })
+  export const AssetPicker: ComponentType<AssetPickerProps>
 }
 
 declare module '@makinbakin/sdk/navigation' {
@@ -895,6 +1090,20 @@ declare module '@makinbakin/sdk/navigation' {
     children?: ReactNode
     className?: string
   }>
+  export function useRouter(): {
+    push: (to: string) => void
+    replace: (to: string) => void
+    back: () => void
+  }
+  export function usePathname(): string
+  export function useSearchParams(): URLSearchParams
+  export function useQueryState(
+    key: string,
+    defaultValue?: string,
+  ): [string, (value: string) => void, (value: string) => void]
+  export function useQueryArrayState(
+    key: string,
+  ): [string[], (value: string[]) => void, (value: string[]) => void]
 }
 
 declare module '@makinbakin/sdk/components' {
@@ -914,6 +1123,7 @@ declare module '@makinbakin/sdk/components' {
     name: string
     color?: string
     avatar?: string
+    headshot?: string
   }
 
   export type SortDir = 'asc' | 'desc'
@@ -985,7 +1195,7 @@ declare module '@makinbakin/sdk/components' {
   export const AgentAvatar: ComponentType<{ agentId?: string; agent?: AgentInfo | null; size?: string | number; className?: string }>
   export const AgentFilter: SDKComponent
   export const AgentSelect: SDKComponent
-  export const BakinDrawer: SDKComponent
+  export const Drawer: SDKComponent
   export const ChannelIcon: SDKComponent
   export const EmptyState: SDKComponent
   export const FacetFilter: SDKComponent
@@ -1002,12 +1212,176 @@ declare module '@makinbakin/sdk/components' {
   export const SortableHead: ComponentType<Record<string, unknown> & { children?: ReactNode }>
 }
 
+declare module '@makinbakin/sdk/conversation' {
+  import type { ComponentType, ReactNode } from 'react'
+
+  // ── Turn model (mirrors the kit's fold contract) ───────────────────────
+  export type ConversationTextFormat = 'markdown' | 'plain' | 'code'
+
+  export interface ConversationToolActivity {
+    phase: 'call' | 'result'
+    callId?: string
+    toolName: string
+    status?: 'running' | 'completed' | 'failed' | string
+    summary?: string
+    inputPreview?: string
+    outputPreview?: string
+    durationMs?: number
+    exitCode?: number
+    metadata?: Record<string, unknown>
+  }
+
+  export type ConversationChunk =
+    | { type: 'text'; content: string; format?: ConversationTextFormat; data?: Record<string, unknown> }
+    | { type: 'tool'; content?: string; data: ConversationToolActivity }
+    | { type: 'status'; content?: string; data?: Record<string, unknown> }
+    | { type: 'done'; content?: string; data?: Record<string, unknown> }
+    | { type: 'error'; content?: string; data?: Record<string, unknown> }
+
+  export interface DisplayAttachment {
+    name: string
+    mimeType: string
+    url: string
+  }
+
+  export type ConversationMessage =
+    | { kind: 'user'; ts: string; content: string; attachments?: DisplayAttachment[] }
+    | { kind: 'assistant'; ts: string; turnId?: string; agentId?: string; content: string }
+    | {
+        kind: 'tool'
+        ts: string
+        turnId?: string
+        agentId?: string
+        callId?: string
+        toolName: string
+        status?: 'running' | 'completed' | 'failed' | string
+        summary?: string
+        inputPreview?: string
+        outputPreview?: string
+        durationMs?: number
+        metadata?: Record<string, unknown>
+      }
+    | { kind: 'error'; ts: string; turnId?: string; message: string; errorKind?: string }
+    | { kind: 'aborted'; ts: string; turnId?: string }
+    | { kind: 'done'; ts: string; turnId?: string }
+
+  export function foldConversation(
+    messages: readonly ConversationMessage[],
+    opts?: { liveChunks?: readonly ConversationChunk[]; liveAgentId?: string },
+  ): unknown[]
+
+  // ── Presentation (consumer owns transport, identity lookup, routing) ───
+  export interface ConversationAgent {
+    id?: string
+    name: string
+    avatarUrl?: string
+  }
+  export type ConversationTextTransform = (text: string) => { text: string; extras?: ReactNode }
+
+  export interface ConversationPanelProps {
+    messages: readonly ConversationMessage[]
+    liveChunks?: readonly ConversationChunk[] | null
+    streaming?: boolean
+    /** Presentation-ready fallback identity; host stores stay outside the kit. */
+    agent?: ConversationAgent
+    resolveAgent?: (agentId?: string) => ConversationAgent | undefined
+    /** Consumer-owned selector or other control beside the composer. */
+    agentControl?: ReactNode
+    onSend: (content: string) => void | Promise<void>
+    onAbort?: () => void
+    onRetry?: () => void
+    transformText?: ConversationTextTransform
+    storageKey: string
+    title?: ReactNode
+    showHeader?: boolean
+    fitParent?: boolean
+    chrome?: 'panel' | 'top-divider'
+    readOnly?: boolean
+    readOnlyNotice?: ReactNode
+    placeholder?: string
+    inputLabel?: string
+    autoFocus?: boolean
+    emptyState?: ReactNode
+    maxLength?: number
+    defaultHeight?: number
+    minHeight?: number
+    maxHeight?: number
+    className?: string
+  }
+  export const ConversationPanel: ComponentType<ConversationPanelProps>
+
+  export const Conversation: ComponentType<{
+    turns: readonly unknown[]
+    agent?: ConversationAgent
+    resolveAgent?: (agentId?: string) => ConversationAgent | undefined
+    emptyState?: ReactNode
+    className?: string
+    [key: string]: unknown
+  }>
+  export const ConversationEmptyState: ComponentType<{
+    title?: ReactNode
+    description?: ReactNode
+    icon?: ReactNode
+    className?: string
+  }>
+  export const Composer: ComponentType<Record<string, unknown>>
+  export const ThinkingIndicator: ComponentType<{ label?: string }>
+}
+
+declare module '@makinbakin/sdk/content' {
+  import type { ComponentType, ReactNode } from 'react'
+
+  export interface MarkdownInternalLinkProps {
+    href: string
+    children: ReactNode
+    className?: string
+  }
+  export interface MarkdownContentProps {
+    content: string
+    className?: string
+    /** Use the established host/plugin link for internal SPA navigation. */
+    renderInternalLink?: (props: MarkdownInternalLinkProps) => ReactNode
+  }
+  export const MarkdownContent: ComponentType<MarkdownContentProps>
+
+  export type MarkdownEditorFormat = 'markdown' | 'yaml' | 'json' | 'text'
+  export type MarkdownEditorHeight = 'compact' | 'document' | 'viewport' | 'fill'
+  export type MarkdownEditorMode = 'edit' | 'preview'
+  /** Preferred controlled, host-composed editor contract. */
+  interface MarkdownEditorControlledProps {
+    label: string
+    content: string
+    mode: MarkdownEditorMode
+    onChange: (content: string) => void
+    placeholder?: string
+    format?: MarkdownEditorFormat
+    height?: MarkdownEditorHeight
+    className?: string
+    description?: ReactNode
+  }
+  /** Existing editor shape retained for source-compatible official consumers. */
+  interface MarkdownEditorCompatibilityProps {
+    label?: string
+    content: string
+    editing: boolean
+    onChange: (content: string) => void
+    placeholder?: string
+    format?: MarkdownEditorFormat
+    /** @deprecated Use the semantic `height` contract. */
+    minHeight?: string
+    className?: string
+  }
+  export type MarkdownEditorProps = MarkdownEditorControlledProps | MarkdownEditorCompatibilityProps
+  export const MarkdownEditor: ComponentType<MarkdownEditorProps>
+}
+
 declare module '@makinbakin/sdk/hooks' {
   export interface AgentInfo {
     id: string
     name: string
     color?: string
     avatar?: string
+    headshot?: string
   }
 
   export interface NotificationChannel {

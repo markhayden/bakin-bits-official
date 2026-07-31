@@ -17,7 +17,7 @@ export function AgentSelect({ value, onChange }) {
   })
 }
 
-export function BakinDrawer({ children, open = true }) {
+export function Drawer({ children, open = true }) {
   return open ? React.createElement('div', null, children) : null
 }
 
@@ -163,6 +163,9 @@ function messageText(message, transformText) {
 }
 
 export function ConversationPanel({
+  chrome,
+  autoFocus,
+  className,
   messages = [],
   liveChunks,
   streaming,
@@ -192,7 +195,12 @@ export function ConversationPanel({
 
   return React.createElement(
     'div',
-    { 'data-testid': 'conversation-panel' },
+    {
+      'data-testid': 'conversation-panel',
+      'data-chrome': chrome,
+      'data-auto-focus': autoFocus == null ? undefined : String(autoFocus),
+      className,
+    },
     readOnly && readOnlyNotice ? readOnlyNotice : null,
     messages.length === 0 && !liveText ? emptyState : null,
     ...messages.map((message, index) =>

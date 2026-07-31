@@ -1,13 +1,17 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { useRouter } from '@makinbakin/sdk/hooks'
-import { Plus, ListFilter, FolderKanban } from 'lucide-react'
-import { Button } from "@makinbakin/sdk/ui"
-import { PluginHeader } from "@makinbakin/sdk/components"
-import { EmptyState } from "@makinbakin/sdk/components"
-import { Skeleton } from "@makinbakin/sdk/ui"
-import { useQueryState } from "@makinbakin/sdk/hooks"
+import { Plus } from 'lucide-react'
+import { Badge, Button, Skeleton, SystemState } from "@makinbakin/sdk/ui"
+import {
+  Page,
+  PageBody,
+  PageControls,
+  PageHeader,
+  SearchInput,
+  SegmentedControl,
+} from "@makinbakin/sdk/patterns"
+import { useQueryState, useRouter } from "@makinbakin/sdk/navigation"
 import { useSearch } from "@makinbakin/sdk/hooks"
 import { useDebug } from "@makinbakin/sdk/hooks"
 import { ProjectCard } from './project-card'
@@ -121,56 +125,74 @@ export function ProjectGrid() {
   }
 
   return (
-    <div className="p-6 flex flex-col h-full min-h-0 gap-4">
-      {/* Header */}
-      <PluginHeader
+    <Page>
+      <PageHeader
         title="Projects"
-        count={loading ? undefined : filtered.length}
-        search={{ value: search, onChange: setSearch, placeholder: 'Search projects...' }}
-        actions={
-          <Button size="sm" onClick={handleNew}>
+        description="Organize related work, track progress, and keep project context, assets, and tasks together."
+        meta={loading ? undefined : (
+          <Badge size="xs" tone="neutral" variant="outline">{filtered.length} shown</Badge>
+        )}
+        controls={(
+          <SearchInput
+            align="end"
+            label="Search projects"
+            value={search}
+            onValueChange={setSearch}
+            placeholder="Search projects…"
+            mobileFullWidth
+          />
+        )}
+        actions={(
+          <Button onClick={handleNew}>
             <Plus className="size-4" />
             New Project
           </Button>
-        }
+        )}
       />
 
       {/* Status filter */}
-      <div className="flex items-center gap-3">
-        <ListFilter className="size-3.5 text-muted-foreground shrink-0" />
-        <div className="flex items-center gap-0.5 bg-muted/50 rounded-lg p-0.5">
-          {STATUS_TABS.map((tab) => (
-            <button
-              key={tab.value}
-              onClick={() => setStatus(tab.value)}
-              className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
-                status === tab.value
-                  ? 'bg-accent text-accent-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <PageControls label="Project filters">
+        <SegmentedControl
+          ariaLabel="Filter by status"
+          options={STATUS_TABS}
+          value={status}
+          onValueChange={setStatus}
+        />
+      </PageControls>
 
       {/* Grid */}
-      <div className="flex-1 min-h-0 overflow-auto">
+      <PageBody label="Projects">
         {loading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-bakin-4 sm:grid-cols-2 lg:grid-cols-3">
             {Array.from({ length: 6 }).map((_, i) => (
               <Skeleton key={i} className="h-40 w-full" />
             ))}
           </div>
         ) : filtered.length === 0 ? (
-          <EmptyState
-            icon={FolderKanban}
-            title={search ? 'No matching projects' : status === 'all' ? 'No projects yet' : `No ${status} projects`}
-            description={!search && status === 'all' ? 'Create one to get started.' : undefined}
-          />
+          search ? (
+            <SystemState
+              kind="no-results"
+              scope="section"
+              title="No matching projects"
+              description="Try another search or clear the current query."
+              action={<Button variant="outline" onClick={() => setSearch('')}>Clear search</Button>}
+            />
+          ) : (
+            <SystemState
+              kind="initial-empty"
+              scope="section"
+              title={status === 'all' ? 'No projects yet' : `No ${status} projects`}
+              description={status === 'all' ? 'Create one to get started.' : 'Projects with this status will appear here.'}
+              action={status === 'all' ? (
+                <Button onClick={handleNew}>
+                  <Plus className="size-4" />
+                  New Project
+                </Button>
+              ) : undefined}
+            />
+          )
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-bakin-4 sm:grid-cols-2 lg:grid-cols-3">
             {filtered.map((p) => {
               const scoreInfo = scoreMap.get(p.id)
               const showScores = debug && scoreInfo && search.trim()
@@ -200,7 +222,7 @@ export function ProjectGrid() {
             })}
           </div>
         )}
-      </div>
+      </PageBody>
 
       <NewProjectDialog
         open={newProjectOpen}
@@ -211,6 +233,6 @@ export function ProjectGrid() {
           if (!creatingProject) setNewProjectOpen(false)
         }}
       />
-    </div>
+    </Page>
   )
 }

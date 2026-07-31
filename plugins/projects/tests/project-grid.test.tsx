@@ -229,11 +229,11 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('ProjectGrid', () => {
-  it('renders the search input from PluginHeader', async () => {
+  it('renders the search input from the shared page header', async () => {
     render(<ProjectGrid />)
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText('Search projects...')).toBeDefined()
+      expect(screen.getByRole('searchbox', { name: 'Search projects' })).toBeDefined()
     })
   })
 
@@ -255,7 +255,7 @@ describe('ProjectGrid', () => {
       expect(screen.getByTestId('project-card-p1')).toBeDefined()
     })
 
-    fireEvent.change(screen.getByTestId('plugin-search-input'), { target: { value: 'alpha' } })
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search projects' }), { target: { value: 'alpha' } })
 
     await waitFor(() => {
       expect(searchSpy).toHaveBeenCalledWith('alpha')
@@ -274,7 +274,7 @@ describe('ProjectGrid', () => {
       expect(screen.getByTestId('project-card-p1')).toBeDefined()
     })
 
-    fireEvent.change(screen.getByTestId('plugin-search-input'), { target: { value: 'launch' } })
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search projects' }), { target: { value: 'launch' } })
 
     await waitFor(() => {
       // p3 is excluded entirely; p1 and p2 remain
@@ -298,7 +298,7 @@ describe('ProjectGrid', () => {
       expect(screen.getByTestId('project-card-p1')).toBeDefined()
     })
 
-    fireEvent.change(screen.getByTestId('plugin-search-input'), { target: { value: 'beta' } })
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search projects' }), { target: { value: 'beta' } })
 
     await waitFor(() => {
       expect(screen.queryByTestId('project-card-p2')).not.toBeNull()

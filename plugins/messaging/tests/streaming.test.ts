@@ -218,6 +218,17 @@ async function createMaterializedPlan(sessionId: string): Promise<string> {
 // ===========================================================================
 
 describe('Streaming endpoint', () => {
+  it('completes the brainstorm session when accepted proposals are materialized', async () => {
+    const sessionId = await createTestSession()
+    await createMaterializedPlan(sessionId)
+
+    const getSession = findRoute(plugin.routes, 'GET', '/sessions/:id')!
+    const result = await callRoute(getSession, plugin.ctx, { searchParams: { id: sessionId } })
+    const session = result.body.session as Record<string, unknown>
+
+    expect(session.status).toBe('archived')
+  })
+
   it('returns text/event-stream content type', async () => {
     streamRuntimeResponse('Hello world')
     const sessionId = await createTestSession()

@@ -10,8 +10,8 @@ mock.module('@bakin/core/main-agent', () => ({
   getMainAgentName: () => 'Main',
 }))
 
-mock.module('@/components/bakin-drawer', () => ({
-  BakinDrawer: ({ children, open, title }: { children: React.ReactNode; open: boolean; title?: string }) =>
+mock.module('@/components/drawer', () => ({
+  Drawer: ({ children, open, title }: { children: React.ReactNode; open: boolean; title?: string }) =>
     open ? <div data-testid="drawer"><h1>{title}</h1>{children}</div> : null,
 }))
 

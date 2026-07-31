@@ -66,6 +66,52 @@ describe('ProjectDetail', () => {
       expect(screen.getByText('What did we decide?')).toBeDefined()
       expect(screen.getByText('We decided to keep the launch plan focused.')).toBeDefined()
     })
+
+    const detail = document.querySelector('[data-slot="project-detail"]')
+    const toolbar = document.querySelector('[data-slot="project-detail-toolbar"]')
+    const body = document.querySelector('[data-slot="project-detail-body"]')
+    expect(detail?.className).toContain('min-w-0')
+    expect(toolbar?.className).toContain('grid-cols-[minmax(0,1fr)_auto]')
+    expect(screen.getByRole('button', { name: 'Project actions' })).toBeDefined()
+    expect(body?.className).toContain('lg:flex-row')
+    expect(body?.className).toContain('pt-bakin-6')
+    expect(screen.getByTestId('conversation-panel').getAttribute('data-chrome')).toBe('top-divider')
+    expect(screen.getByTestId('conversation-panel').getAttribute('data-auto-focus')).toBe('false')
+  })
+
+  it('renders the shared project conversation empty state when no messages exist', async () => {
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : String(input)
+      if (url === '/api/plugins/projects/proj-empty') {
+        return {
+          ok: true,
+          json: async () => ({
+            project: {
+              id: 'proj-empty',
+              title: 'Quiet Project',
+              status: 'active',
+              owner: 'main',
+              progress: 0,
+              tasks: [],
+              assets: [],
+              body: '# Quiet Project',
+              updated: '2026-05-09T10:00:00.000Z',
+              resolvedTasks: {},
+              resolvedAssets: [],
+              brainstormMessages: [],
+            },
+          }),
+          text: async () => '',
+        } as Response
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+
+    render(<ProjectDetail projectId="proj-empty" onBack={() => {}} />)
+
+    const emptyState = await screen.findByTestId('conversation-empty')
+    expect(emptyState.textContent).toContain('No project conversation yet')
+    expect(emptyState.textContent).toContain('Ask a question about this project to start the conversation.')
   })
 
   it('does not render non-image assets in the image lightbox', async () => {

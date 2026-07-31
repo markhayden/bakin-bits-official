@@ -1,23 +1,46 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
+import { ConversationPanel } from "@makinbakin/sdk/conversation"
+import type { ConversationAgent, ConversationMessage } from "@makinbakin/sdk/conversation"
+import { useAgentIds, useAgentList, useHorizontalResize, useSearch } from "@makinbakin/sdk/hooks"
+import { usePathname, useQueryState, useRouter, useSearchParams } from "@makinbakin/sdk/navigation"
 import {
   AgentAvatar,
   AgentFilter,
-  BakinDrawer,
-  ConversationPanel,
-  EmptyState,
-  PluginHeader,
-  useConversationStream,
-} from "@makinbakin/sdk/components"
-import type { ConversationMessage } from "@makinbakin/sdk/components"
-import { useAgentIds, useAgentList, useHorizontalResize, usePathname, useQueryState, useRouter, useSearch, useSearchParams } from "@makinbakin/sdk/hooks"
-import { Badge } from "@makinbakin/sdk/ui"
-import { Button } from "@makinbakin/sdk/ui"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@makinbakin/sdk/ui"
-import { Input } from "@makinbakin/sdk/ui"
-import { ArrowLeft, CalendarDays, Check, ClipboardList, Columns2, Plus, SquareStack, Trash2, X } from 'lucide-react'
+  ConfirmDialog,
+  ListRow,
+  ListRows,
+  Page,
+  PageBody,
+  PageControls,
+  PageHeader,
+  SearchInput,
+  SegmentedControl,
+  StatusBadge,
+  WorkspacePage,
+  WorkspacePageBody,
+  WorkspacePageHeader,
+} from "@makinbakin/sdk/patterns"
+import {
+  Badge,
+  Drawer,
+  Button,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DropdownMenuItem,
+  Input,
+  SystemState,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  Textarea,
+} from "@makinbakin/sdk/ui"
+import { ArrowLeft, Check, ClipboardList, Columns2, Plus, SquareStack, Trash2, X } from 'lucide-react'
 import type { BrainstormSession, PlanProposal, SessionMessage } from '../types'
+import { useConversationStream } from '../hooks/use-conversation-stream'
 
 interface SessionSummary {
   id: string
@@ -33,6 +56,7 @@ interface SessionSummary {
 interface AgentOption {
   id: string
   name: string
+  imageSrc?: string | null
 }
 
 const PROPOSAL_PANEL_MIN_WIDTH = 360
@@ -41,7 +65,6 @@ const PROPOSAL_PANEL_DEFAULT_WIDTH = 460
 const PROPOSAL_PANEL_STORAGE_KEY = 'messaging-proposal-panel-width'
 const BRAINSTORM_LAYOUT_STORAGE_KEY = 'messaging-brainstorm-layout'
 const DELETE_REQUEST_TIMEOUT_MS = 10000
-const REJECT_BUTTON_CLASS = 'border-red-500/50 text-red-400 hover:border-red-400 hover:bg-red-500/10 hover:text-red-300'
 
 type BrainstormLayoutMode = 'columns' | 'tabs'
 type BrainstormWorkspaceTab = 'brainstorm' | 'proposals'
@@ -49,7 +72,9 @@ type BrainstormWorkspaceTab = 'brainstorm' | 'proposals'
 function getStoredBrainstormLayoutMode(): BrainstormLayoutMode {
   if (typeof window === 'undefined') return 'columns'
   try {
-    return window.localStorage.getItem(BRAINSTORM_LAYOUT_STORAGE_KEY) === 'tabs' ? 'tabs' : 'columns'
+    const stored = window.localStorage.getItem(BRAINSTORM_LAYOUT_STORAGE_KEY)
+    if (stored === 'tabs' || stored === 'columns') return stored
+    return window.matchMedia?.('(max-width: 767px)').matches ? 'tabs' : 'columns'
   } catch {
     return 'columns'
   }
@@ -94,43 +119,10 @@ function toConversation(agentId: string, message: SessionMessage): ConversationM
   return null
 }
 
-function BrainstormLayoutToggle({
-  value,
-  onChange,
-}: {
-  value: BrainstormLayoutMode
-  onChange: (mode: BrainstormLayoutMode) => void
-}) {
-  const options = [
-    { id: 'columns' as const, label: 'Columns', ariaLabel: 'Columns layout', icon: Columns2 },
-    { id: 'tabs' as const, label: 'Tabs', ariaLabel: 'Tabs layout', icon: SquareStack },
-  ]
-
-  return (
-    <div className="inline-flex h-8 items-center overflow-hidden rounded-md border border-border bg-surface" aria-label="Brainstorm layout">
-      {options.map((option) => {
-        const Icon = option.icon
-        const selected = value === option.id
-        return (
-          <button
-            key={option.id}
-            type="button"
-            aria-label={option.ariaLabel}
-            aria-pressed={selected}
-            title={option.label}
-            onClick={() => onChange(option.id)}
-            className={`inline-flex h-full items-center gap-1.5 px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${
-              selected ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
-            }`}
-          >
-            <Icon className="size-3.5" aria-hidden="true" />
-            <span>{option.label}</span>
-          </button>
-        )
-      })}
-    </div>
-  )
-}
+const BRAINSTORM_LAYOUT_OPTIONS = [
+  { value: 'columns' as const, label: 'Columns', icon: Columns2 },
+  { value: 'tabs' as const, label: 'Tabs', icon: SquareStack },
+]
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
@@ -158,7 +150,7 @@ function transformAssistantReply(raw: string): { text: string; extras?: ReactNod
   return {
     text,
     extras: proposalCount > 0 ? (
-      <Badge variant="outline" className="mt-2 text-[10px]">
+      <Badge size="xs" variant="outline" className="mt-bakin-2">
         {proposalCount} {proposalCount === 1 ? 'Plan' : 'Plans'} proposed
       </Badge>
     ) : undefined,
@@ -179,17 +171,20 @@ function mergeProposal(proposals: PlanProposal[], incoming: PlanProposal): PlanP
 
 function ProposalStatusBadge({ proposal }: { proposal: PlanProposal }) {
   const status = proposal.planId ? 'approved' : proposal.status
-  const meta: Record<PlanProposal['status'], { label: string; className: string }> = {
-    proposed: { label: 'Needs review', className: 'bg-amber-500/20 text-amber-300' },
-    approved: { label: 'Accepted', className: 'bg-emerald-500/20 text-emerald-300' },
-    rejected: { label: 'Rejected', className: 'bg-red-500/20 text-red-400' },
-    revised: { label: 'Revised', className: 'bg-sky-500/20 text-sky-300' },
+  const meta: Record<PlanProposal['status'], {
+    label: string
+    tone: 'neutral' | 'success' | 'attention' | 'danger' | 'accent'
+  }> = {
+    proposed: { label: 'Needs review', tone: 'attention' },
+    approved: { label: 'Accepted', tone: 'success' },
+    rejected: { label: 'Rejected', tone: 'danger' },
+    revised: { label: 'Revised', tone: 'accent' },
   }
   const badge = meta[status]
   return (
-    <Badge className={`max-w-28 shrink-0 truncate ${badge.className}`}>
+    <StatusBadge className="max-w-28 shrink-0 truncate" size="xs" tone={badge.tone}>
       {badge.label}
-    </Badge>
+    </StatusBadge>
   )
 }
 
@@ -230,11 +225,11 @@ function NewBrainstormSessionDialog({
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !creating) onCancel() }}>
-      <DialogContent className="max-w-md border-border bg-card">
+      <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>New brainstorm</DialogTitle>
         </DialogHeader>
-        <form className="space-y-4" onSubmit={handleSubmit}>
+        <form className="space-y-bakin-4" onSubmit={handleSubmit}>
           <Input
             value={title}
             onChange={(event) => setTitle(event.target.value)}
@@ -242,9 +237,9 @@ function NewBrainstormSessionDialog({
             autoFocus
             disabled={creating}
           />
-          <div className="space-y-2">
-            <div className="text-xs font-medium uppercase text-muted-foreground">Agent</div>
-            <div className="grid max-h-56 gap-2 overflow-y-auto sm:grid-cols-2" role="radiogroup" aria-label="Brainstorm agent">
+          <div className="space-y-bakin-2">
+            <div className="text-bakin-typography-size-meta font-bakin-typography-weight-medium uppercase text-bakin-text-muted">Agent</div>
+            <div className="grid max-h-56 gap-bakin-2 overflow-y-auto sm:grid-cols-2" role="radiogroup" aria-label="Brainstorm agent">
               {agents.map(agent => {
                 const selected = agent.id === selectedAgentId
                 return (
@@ -255,19 +250,25 @@ function NewBrainstormSessionDialog({
                     aria-checked={selected}
                     disabled={creating}
                     onClick={() => setAgentId(agent.id)}
-                    className={`flex min-w-0 items-center gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors focus-visible:border-ring focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 ${
-                      selected ? 'border-emerald-500/70 bg-emerald-500/10' : 'border-border bg-surface hover:bg-muted/40'
+                    className={`flex min-w-0 items-center gap-bakin-2 rounded-bakin-control border px-bakin-3 py-bakin-2 text-left text-bakin-typography-size-body transition-colors focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-bakin-focus-ring disabled:cursor-not-allowed disabled:opacity-50 ${
+                      selected
+                        ? 'border-bakin-signal-accent bg-bakin-signal-accent/10'
+                        : 'border-bakin-border-subtle bg-bakin-surface-default hover:bg-bakin-surface-elevated'
                     }`}
                   >
-                    <AgentAvatar agentId={agent.id} size="sm" />
-                    <span className="truncate font-medium">{agent.name}</span>
+                    <AgentAvatar
+                      agent={{ id: agent.id, name: agent.name, imageSrc: agent.imageSrc ?? null }}
+                      size="sm"
+                      decorative
+                    />
+                    <span className="truncate font-bakin-typography-weight-medium">{agent.name}</span>
                   </button>
                 )
               })}
             </div>
           </div>
-          {error && <p className="text-xs text-red-400">{error}</p>}
-          <div className="flex justify-end gap-2">
+          {error && <p className="text-bakin-typography-size-meta text-bakin-signal-danger">{error}</p>}
+          <div className="flex justify-end gap-bakin-2">
             <Button type="button" variant="outline" onClick={onCancel} disabled={creating}>
               Cancel
             </Button>
@@ -334,8 +335,9 @@ function ProposalDrawer({
   if (!proposal) return null
 
   const disabled = Boolean(proposal.planId || saving)
-  const canReject = !proposal.planId && proposal.status !== 'rejected'
+  const canReject = !proposal.planId && (proposal.status === 'proposed' || proposal.status === 'revised')
   const canAccept = !proposal.planId && proposal.status !== 'approved'
+  const canCancelAcceptance = !proposal.planId && proposal.status === 'approved'
   const commitChannelDraft = () => {
     const parsed = parseChannelInput(channelDraft)
     if (parsed.length === 0) {
@@ -391,7 +393,7 @@ function ProposalDrawer({
   }
 
   return (
-    <BakinDrawer
+    <Drawer
       open={open}
       onOpenChange={(nextOpen) => {
         if (!nextOpen) onClose()
@@ -401,43 +403,43 @@ function ProposalDrawer({
       storageKey="messaging-proposal-review"
     >
       <div className="flex h-full min-h-0 flex-col">
-        <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-          <div className="space-y-5 pb-5">
-            <section className="rounded-md border border-border bg-surface p-4">
+        <div className="min-h-0 flex-1 overflow-y-auto pr-bakin-1">
+          <div className="space-y-bakin-5 pb-bakin-5">
+            <section className="rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default p-bakin-4">
               <ProposalStatusBadge proposal={proposal} />
-              <p className="mt-3 text-sm text-muted-foreground">{proposal.brief}</p>
+              <p className="mt-bakin-3 text-bakin-typography-size-body text-bakin-text-muted">{proposal.brief}</p>
             </section>
 
-            <section className="grid gap-4">
-              <label className="grid gap-1.5 text-sm font-medium">
+            <section className="grid gap-bakin-4">
+              <label className="grid gap-bakin-1 text-bakin-typography-size-body font-bakin-typography-weight-medium">
                 Title
                 <Input value={title} disabled={disabled} onChange={(event) => setTitle(event.target.value)} />
               </label>
-              <label className="grid gap-1.5 text-sm font-medium">
+              <label className="grid gap-bakin-1 text-bakin-typography-size-body font-bakin-typography-weight-medium">
                 Target date
                 <Input type="date" value={targetDate} disabled={disabled} onChange={(event) => setTargetDate(event.target.value)} />
               </label>
-              <label className="grid gap-1.5 text-sm font-medium">
+              <label className="grid gap-bakin-1 text-bakin-typography-size-body font-bakin-typography-weight-medium">
                 Brief
-                <textarea
+                <Textarea
                   value={brief}
                   disabled={disabled}
-                  onChange={(event) => setBrief(event.target.value)}
+                  onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setBrief(event.target.value)}
                   rows={6}
-                  className="min-h-32 rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="min-h-32"
                 />
               </label>
-              <label className="grid gap-1.5 text-sm font-medium">
+              <label className="grid gap-bakin-1 text-bakin-typography-size-body font-bakin-typography-weight-medium">
                 Suggested channels
                 <div
-                  className={`flex min-h-10 flex-wrap items-center gap-2 rounded-md border border-border bg-background px-2 py-1 text-sm outline-none transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 ${
+                  className={`flex min-h-bakin-10 flex-wrap items-center gap-bakin-2 rounded-bakin-control border border-bakin-border-subtle bg-bakin-canvas-default px-bakin-2 py-bakin-1 text-bakin-typography-size-body outline-none transition-colors focus-within:outline-2 focus-within:outline-solid focus-within:-outline-offset-1 focus-within:outline-bakin-focus-ring ${
                     disabled ? 'cursor-not-allowed opacity-50' : ''
                   }`}
                 >
                   {channels.map(channel => (
                     <span
                       key={channel}
-                      className="inline-flex h-7 max-w-full items-center gap-1.5 rounded-md border border-border bg-surface px-2 text-xs font-medium"
+                      className="inline-flex h-bakin-7 max-w-full items-center gap-bakin-1 rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default px-bakin-2 text-bakin-typography-size-meta font-bakin-typography-weight-medium"
                     >
                       <span className="truncate">{channel}</span>
                       {!disabled && (
@@ -445,7 +447,7 @@ function ProposalDrawer({
                           type="button"
                           aria-label={`Remove ${channel}`}
                           onClick={() => removeChannel(channel)}
-                          className="rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                          className="rounded-bakin-control text-bakin-text-muted transition-colors hover:text-bakin-text-primary focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-bakin-focus-ring"
                         >
                           <X className="size-3" />
                         </button>
@@ -461,17 +463,27 @@ function ProposalDrawer({
                     onPaste={handleChannelPaste}
                     placeholder={channels.length === 0 ? 'instagram, blog, youtube' : ''}
                     aria-label="Suggested channels"
-                    className="min-h-7 min-w-24 flex-1 bg-transparent px-1 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+                    className="min-h-bakin-7 min-w-24 flex-1 bg-transparent px-bakin-1 text-bakin-typography-size-body outline-none placeholder:text-bakin-text-muted disabled:cursor-not-allowed"
                   />
                 </div>
               </label>
-              {!proposal.planId && (canReject || canAccept) && (
-                <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
-                  {canReject && (
+              {!proposal.planId && (canReject || canAccept || canCancelAcceptance) && (
+                <div className="flex flex-wrap items-center justify-end gap-bakin-2 pt-bakin-1">
+                  {canCancelAcceptance && (
                     <Button
                       size="sm"
                       variant="outline"
-                      className={REJECT_BUTTON_CLASS}
+                      onClick={() => save('proposed')}
+                      disabled={saving}
+                    >
+                      <X className="size-3.5" />
+                      Cancel acceptance
+                    </Button>
+                  )}
+                  {canReject && (
+                    <Button
+                      size="sm"
+                      variant="danger"
                       onClick={() => save('rejected')}
                       disabled={saving}
                     >
@@ -492,7 +504,7 @@ function ProposalDrawer({
         </div>
 
         {!proposal.planId && (
-          <div className="shrink-0 border-t border-border bg-background/95 pt-4">
+          <div className="shrink-0 border-t border-bakin-border-subtle pt-bakin-4">
             <div>
               <Button className="w-full justify-center" variant="outline" onClick={() => save()} disabled={saving}>
                 Save changes
@@ -501,7 +513,7 @@ function ProposalDrawer({
           </div>
         )}
       </div>
-    </BakinDrawer>
+    </Drawer>
   )
 }
 
@@ -527,6 +539,11 @@ export function BrainstormView() {
   const [deletingSession, setDeletingSession] = useState(false)
   const [selectedProposalId, setSelectedProposalId] = useState<string | null>(null)
   const [layoutMode, setLayoutMode] = useState<BrainstormLayoutMode>(getStoredBrainstormLayoutMode)
+  const [compactWorkspace, setCompactWorkspace] = useState(() => (
+    typeof window !== 'undefined'
+      ? window.matchMedia?.('(max-width: 767px)').matches ?? false
+      : false
+  ))
   const [workspaceTab, setWorkspaceTab] = useState<BrainstormWorkspaceTab>('brainstorm')
   const { width: proposalPanelWidth, handleProps: proposalResizeProps } = useHorizontalResize({
     defaultWidth: PROPOSAL_PANEL_DEFAULT_WIDTH,
@@ -542,6 +559,18 @@ export function BrainstormView() {
   }, [])
 
   useEffect(() => {
+    const mediaQuery = window.matchMedia?.('(max-width: 767px)')
+    if (!mediaQuery) return
+
+    const updateCompactWorkspace = (event?: MediaQueryListEvent) => {
+      setCompactWorkspace(event?.matches ?? mediaQuery.matches)
+    }
+    updateCompactWorkspace()
+    mediaQuery.addEventListener?.('change', updateCompactWorkspace)
+    return () => mediaQuery.removeEventListener?.('change', updateCompactWorkspace)
+  }, [])
+
+  useEffect(() => {
     if (search) searchHook.search(search)
     else searchHook.clear()
   }, [search])
@@ -550,7 +579,11 @@ export function BrainstormView() {
     const byId = new Map<string, AgentOption>()
     for (const agent of agentList) {
       if (!agent.id) continue
-      byId.set(agent.id, { id: agent.id, name: agent.name ?? agent.id })
+      byId.set(agent.id, {
+        id: agent.id,
+        name: agent.name ?? agent.id,
+        imageSrc: agent.headshot ?? null,
+      })
     }
     for (const id of agentIds) {
       if (!byId.has(id)) byId.set(id, { id, name: id === 'main' ? 'Main' : id })
@@ -559,6 +592,35 @@ export function BrainstormView() {
   }, [agentIds, agentList])
 
   const defaultNewSessionAgentId = agentOptions[0]?.id ?? 'main'
+  const agentById = useMemo(
+    () => new Map(agentOptions.map(agent => [agent.id, agent])),
+    [agentOptions],
+  )
+  const agentFilterOptions = useMemo(
+    () => agentOptions.map(agent => ({
+      value: agent.id,
+      label: agent.name,
+      visual: (
+        <AgentAvatar
+          agent={{ id: agent.id, name: agent.name, imageSrc: agent.imageSrc ?? null }}
+          size="sm"
+          decorative
+        />
+      ),
+    })),
+    [agentOptions],
+  )
+  // The focused conversation kit never reads host stores — resolve the
+  // session agent's identity here and hand it down presentation-ready.
+  const sessionConversationAgent = useMemo<ConversationAgent | undefined>(() => {
+    if (!activeSession) return undefined
+    const agent = agentById.get(activeSession.agentId)
+    return {
+      id: activeSession.agentId,
+      name: agent?.name ?? activeSession.agentId,
+      ...(agent?.imageSrc ? { avatarUrl: agent.imageSrc } : {}),
+    }
+  }, [activeSession, agentById])
 
   const pushSessionId = useCallback((id: string) => {
     const params = new URLSearchParams(searchParams.toString())
@@ -747,38 +809,40 @@ export function BrainstormView() {
     : null
 
   const deleteSessionDialog = sessionPendingDelete ? (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/60" onClick={() => !deletingSession && setDeleteSessionId(null)} />
-      <div className="relative w-[420px] rounded-md border border-border bg-background p-5 shadow-2xl">
-        <h2 className="text-sm font-semibold">Delete this brainstorm session?</h2>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          This removes only the brainstorm. Plans already prepared from this session and their board tasks stay in place.
-        </p>
-        <p className="mt-3 truncate text-xs text-muted-foreground">{sessionPendingDelete.title}</p>
-        <div className="mt-5 flex justify-end gap-2">
-          <Button variant="outline" disabled={deletingSession} onClick={() => setDeleteSessionId(null)}>
-            Cancel
-          </Button>
-          <Button variant="destructive" disabled={deletingSession} onClick={deleteSession}>
-            {deletingSession ? 'Deleting...' : 'Delete session'}
-          </Button>
-        </div>
-      </div>
-    </div>
+    <ConfirmDialog
+      open
+      title="Delete this brainstorm session?"
+      description="This removes only the brainstorm. Plans already prepared from this session and their board tasks stay in place."
+      confirmLabel="Delete session"
+      busyLabel="Deleting..."
+      confirmTone="danger"
+      busy={deletingSession}
+      onConfirm={deleteSession}
+      onCancel={() => {
+        if (deletingSession) return
+        setDeleteSessionId(null)
+      }}
+    >
+      <p className="truncate text-bakin-typography-size-meta text-bakin-text-muted">{sessionPendingDelete.title}</p>
+    </ConfirmDialog>
   ) : null
 
   if (sessionId && activeSession) {
-    const approvedCount = activeSession.proposals.filter(proposal => proposal.status === 'approved' && !proposal.planId).length
+    const acceptedCount = activeSession.proposals.filter(proposal => proposal.status === 'approved').length
+    const pendingPlanCount = activeSession.proposals.filter(
+      proposal => proposal.status === 'approved' && !proposal.planId,
+    ).length
+    const canCompleteSession = activeSession.status === 'active' && acceptedCount > 0
     const selectedProposal = activeSession.proposals.find(proposal => proposal.id === selectedProposalId) ?? null
     const brainstormPane = (
-      <div className="min-h-0">
+      <div className="h-full min-h-0 min-w-0 overflow-hidden">
         <ConversationPanel
           messages={messages}
           liveChunks={brainstorm.liveChunks}
           streaming={brainstorm.streaming}
           onSend={brainstorm.send}
           onAbort={brainstorm.abort}
-          agentId={activeSession.agentId}
+          agent={sessionConversationAgent}
           storageKey={`messaging:${activeSession.id}`}
           placeholder="Ask for content topics, campaign ideas, or revisions..."
           transformText={transformAssistantReply}
@@ -786,29 +850,40 @@ export function BrainstormView() {
           readOnlyNotice={<Badge variant="outline">Archived session</Badge>}
           fitParent
           showHeader={false}
+          className="rounded-none border-0"
         />
       </div>
     )
     const renderProposalPanel = ({ showHeader, showResizeHandle }: { showHeader: boolean; showResizeHandle: boolean }) => (
-      <aside className={`relative flex min-h-0 flex-col overflow-hidden ${showHeader ? 'border-l border-border px-4' : ''}`}>
+      <aside
+        data-slot="brainstorm-proposal-panel"
+        className={`relative flex min-h-0 w-full max-w-full min-w-0 flex-col overflow-hidden ${showHeader ? 'border-l border-bakin-border-subtle px-bakin-4 py-bakin-4' : ''}`}
+      >
         {showResizeHandle && (
           <div
             aria-label="Resize proposal panel"
-            className="absolute inset-y-0 left-0 z-10 w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-accent/50 active:bg-accent"
+            className="absolute inset-y-0 left-0 z-10 w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-bakin-surface-elevated active:bg-bakin-border-subtle"
             {...proposalResizeProps}
           />
         )}
         {showHeader && (
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold">Plan proposals</h2>
-            <Badge variant="outline" className="text-[11px]">{activeSession.proposals.length}</Badge>
+          <div className="mb-bakin-3 flex items-center justify-between">
+            <h2 className="text-bakin-typography-size-body font-bakin-typography-weight-semibold">Plan proposals</h2>
+            <Badge size="xs" tone="neutral" variant="outline">{activeSession.proposals.length}</Badge>
           </div>
         )}
-        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1">
+        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
           {activeSession.proposals.length === 0 ? (
-            <EmptyState icon={ClipboardList} title="No proposals yet" />
+            <SystemState
+              kind="initial-empty"
+              scope="section"
+              headingLevel={3}
+              title="No proposals yet"
+              description="Ask the agent to propose campaign ideas, then review them here."
+              className="w-full max-w-full [&_[data-slot=system-state-copy]]:w-full [&_[data-slot=system-state-description]]:max-w-full [&_[data-slot=system-state-description]]:[overflow-wrap:anywhere]"
+            />
           ) : (
-            <div className="grid gap-2">
+            <div className="grid w-full max-w-full min-w-0 gap-bakin-2">
               {activeSession.proposals.map(proposal => (
                 <article
                   key={proposal.id}
@@ -821,30 +896,30 @@ export function BrainstormView() {
                       setSelectedProposalId(proposal.id)
                     }
                   }}
-                  className="w-full overflow-hidden rounded-md border border-border bg-card p-3 text-left transition-colors hover:bg-muted/30 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                  className="w-full max-w-full min-w-0 overflow-hidden rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default p-bakin-3 text-left transition-colors hover:bg-bakin-surface-elevated focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-bakin-focus-ring"
                 >
-                  <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start justify-between gap-bakin-3">
                     <div className="min-w-0 flex-1">
-                      <h3 className="line-clamp-2 text-sm font-medium">{proposal.title}</h3>
-                      <p className="mt-1 text-xs text-muted-foreground">{formatDate(proposal.targetDate)}</p>
+                      <h3 className="line-clamp-2 text-bakin-typography-size-body font-bakin-typography-weight-medium">{proposal.title}</h3>
+                      <p className="mt-bakin-1 text-bakin-typography-size-meta text-bakin-text-muted">{formatDate(proposal.targetDate)}</p>
                     </div>
                     <ProposalStatusBadge proposal={proposal} />
                   </div>
-                  <p className="mt-2 line-clamp-3 text-sm text-muted-foreground">{proposal.brief}</p>
+                  <p className="mt-bakin-2 line-clamp-3 text-bakin-typography-size-body text-bakin-text-muted">{proposal.brief}</p>
                   {proposal.suggestedChannels && proposal.suggestedChannels.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-1">
+                    <div className="mt-bakin-2 flex flex-wrap gap-bakin-1">
                       {proposal.suggestedChannels.map(channel => (
-                        <Badge key={channel} variant="outline" className="text-[10px]">{channel}</Badge>
+                        <Badge key={channel} size="xs" variant="outline">{channel}</Badge>
                       ))}
                     </div>
                   )}
                   {hasInlineProposalActions(proposal) && (
-                    <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+                    <div className="mt-bakin-3 flex flex-wrap items-center justify-end gap-bakin-2">
                       <Button
                         type="button"
                         size="sm"
-                        variant="outline"
-                        className={`px-3 ${REJECT_BUTTON_CLASS}`}
+                        variant="danger"
+                        className="px-bakin-3"
                         onClick={(event) => {
                           event.stopPropagation()
                           updateProposal(proposal, { status: 'rejected' })
@@ -856,7 +931,7 @@ export function BrainstormView() {
                       <Button
                         type="button"
                         size="sm"
-                        className="px-3"
+                        className="px-bakin-3"
                         onClick={(event) => {
                           event.stopPropagation()
                           updateProposal(proposal, { status: 'approved' })
@@ -872,103 +947,129 @@ export function BrainstormView() {
             </div>
           )}
         </div>
-        <div className="mt-3 border-t border-border pt-3">
-          <Button className="w-full justify-center" disabled={approvedCount === 0 || materializing} onClick={materialize}>
-            <ClipboardList className="size-4" />
-            Complete session and prepare plans
-          </Button>
-        </div>
+        {activeSession.status === 'active' && (
+          <div className="mt-bakin-3 shrink-0 border-t border-bakin-border-subtle pt-bakin-3">
+            <Button className="w-full justify-center" disabled={!canCompleteSession || materializing} onClick={materialize}>
+              <ClipboardList className="size-4" />
+              {pendingPlanCount > 0 ? 'Complete session and prepare plans' : 'Complete session'}
+            </Button>
+          </div>
+        )}
       </aside>
     )
-    const workspace = layoutMode === 'columns' ? (
+    const tabbedWorkspace = (
       <div
-        data-testid="brainstorm-workspace-columns"
-        className="mt-4 grid min-h-0 flex-1 gap-4 overflow-hidden"
-        style={{ gridTemplateColumns: `minmax(0, 1fr) ${proposalPanelWidth}px` }}
+        data-slot="brainstorm-tabbed-workspace"
+        className="flex min-h-0 w-full max-w-full min-w-0 flex-1 flex-col overflow-hidden"
       >
-        {brainstormPane}
-        {renderProposalPanel({ showHeader: true, showResizeHandle: true })}
-      </div>
-    ) : (
-      <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className="flex shrink-0 items-center gap-1 border-b border-border" role="tablist" aria-label="Brainstorm layout sections">
-          {[
-            { id: 'brainstorm' as const, label: 'Brainstorm' },
-            { id: 'proposals' as const, label: 'Plan proposals' },
-          ].map((tab) => {
-            const selected = workspaceTab === tab.id
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                role="tab"
-                aria-selected={selected}
-                onClick={() => setWorkspaceTab(tab.id)}
-                className={`border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
-                  selected
-                    ? 'border-foreground text-foreground'
-                    : 'border-transparent text-muted-foreground hover:text-foreground'
-                }`}
+        <Tabs
+          className="shrink-0"
+          value={workspaceTab}
+          onValueChange={(value) => setWorkspaceTab(value as BrainstormWorkspaceTab)}
+        >
+          <TabsList
+            variant="underline"
+            activateOnFocus
+            aria-label="Brainstorm layout sections"
+            className="px-bakin-4 pt-bakin-2"
+          >
+            {[
+              { id: 'brainstorm', label: 'Brainstorm' },
+              { id: 'proposals', label: `Plan proposals (${activeSession.proposals.length})` },
+            ].map((item) => (
+              <TabsTrigger
+                key={item.id}
+                value={item.id}
+                id={`brainstorm-workspace-tab-${item.id}`}
+                aria-controls={`brainstorm-workspace-panel-${item.id}`}
               >
-                <span>{tab.label}</span>
-                {tab.id === 'proposals' && (
-                  <Badge variant="outline" className="ml-1 text-[11px]">
-                    {activeSession.proposals.length}
-                  </Badge>
-                )}
-              </button>
-            )
-          })}
-        </div>
+                {item.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
         {workspaceTab === 'brainstorm' ? (
-          <div className="min-h-0 flex-1 pt-4" role="tabpanel" aria-label="Brainstorm">
+          <div
+            id="brainstorm-workspace-panel-brainstorm"
+            className="min-h-0 w-full max-w-full min-w-0 flex-1"
+            role="tabpanel"
+            aria-labelledby="brainstorm-workspace-tab-brainstorm"
+          >
             {brainstormPane}
           </div>
         ) : (
-          <div className="min-h-0 flex-1 pt-4" role="tabpanel" aria-label="Plan proposals">
+          <div
+            id="brainstorm-workspace-panel-proposals"
+            className="min-h-0 w-full max-w-full min-w-0 flex-1 overflow-hidden p-bakin-4"
+            role="tabpanel"
+            aria-labelledby="brainstorm-workspace-tab-proposals"
+          >
             {renderProposalPanel({ showHeader: false, showResizeHandle: false })}
           </div>
         )}
       </div>
     )
+    const effectiveLayoutMode: BrainstormLayoutMode = compactWorkspace ? 'tabs' : layoutMode
+    const workspace = effectiveLayoutMode === 'columns' ? (
+      <div
+        data-testid="brainstorm-workspace-columns"
+        className="grid min-h-0 min-w-0 flex-1 overflow-hidden"
+        style={{ gridTemplateColumns: `minmax(0, 1fr) ${proposalPanelWidth}px` }}
+      >
+        {brainstormPane}
+        {renderProposalPanel({ showHeader: true, showResizeHandle: true })}
+      </div>
+    ) : tabbedWorkspace
 
     return (
-      <div className="flex h-full min-h-0 flex-col">
-        <div className="flex items-center gap-3">
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-8 w-8 shrink-0 p-0"
-            aria-label="Back to sessions"
-            title="Back to sessions"
-            onClick={() => pushSessionId('')}
-          >
-            <ArrowLeft className="size-4" aria-hidden="true" />
-          </Button>
-          <div className="min-w-0 flex-1">
-            <PluginHeader
-              title={activeSession.title}
-              count={activeSession.proposals.length}
-              actions={
-                <div className="flex items-center gap-2">
-                  <BrainstormLayoutToggle value={layoutMode} onChange={changeLayoutMode} />
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="text-muted-foreground hover:text-red-400"
-                    aria-label="Delete brainstorm session"
-                    title="Delete brainstorm session"
-                    onClick={() => setDeleteSessionId(activeSession.id)}
-                  >
-                    <Trash2 className="size-4" aria-hidden="true" />
-                  </Button>
-                </div>
-              }
-            />
-          </div>
-        </div>
+      <WorkspacePage className="w-full max-w-full min-w-0">
+        <WorkspacePageHeader className="w-full max-w-full min-w-0 overflow-hidden">
+          <PageHeader
+            eyebrow="Messaging / Brainstorm"
+            title={activeSession.title}
+            description="Develop ideas with an agent, review its proposed plans, and prepare the directions you accept."
+            navigation={(
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                aria-label="Back to brainstorm sessions"
+                title="Back to brainstorm sessions"
+                onClick={() => pushSessionId('')}
+              >
+                <ArrowLeft aria-hidden="true" />
+              </Button>
+            )}
+            meta={(
+              <Badge size="xs" tone="neutral" variant="outline">
+                {activeSession.proposals.length} {activeSession.proposals.length === 1 ? 'proposal' : 'proposals'}
+              </Badge>
+            )}
+            controls={(
+              <div className="hidden md:block">
+                <SegmentedControl
+                  ariaLabel="Brainstorm workspace layout"
+                  options={BRAINSTORM_LAYOUT_OPTIONS}
+                  value={layoutMode}
+                  onValueChange={changeLayoutMode}
+                />
+              </div>
+            )}
+            overflowActionsLabel="Brainstorm actions"
+            overflowActions={(
+              <DropdownMenuItem
+                variant="danger"
+                onClick={() => setDeleteSessionId(activeSession.id)}
+              >
+                <Trash2 aria-hidden="true" />
+                Delete
+              </DropdownMenuItem>
+            )}
+          />
+        </WorkspacePageHeader>
 
-        {workspace}
+        <WorkspacePageBody className="w-full max-w-full min-w-0 border-t border-bakin-border-subtle">
+          {workspace}
+        </WorkspacePageBody>
 
         <ProposalDrawer
           proposal={selectedProposal}
@@ -977,32 +1078,75 @@ export function BrainstormView() {
           onUpdate={updateProposal}
         />
         {deleteSessionDialog}
-      </div>
+      </WorkspacePage>
     )
   }
 
+  const clearSessionFilters = () => {
+    setSearch('')
+    setAgentFilter('all')
+  }
+  const sessionState = sessionsLoading ? (
+    <SystemState
+      kind="loading"
+      scope="page"
+      title="Loading brainstorms"
+      description="Your recent idea sessions will appear here when they are ready."
+    />
+  ) : sessions.length === 0 ? (
+    <SystemState
+      kind="initial-empty"
+      scope="page"
+      title="No brainstorm sessions yet"
+      description="Start a session with an agent to develop campaign ideas and prepare plans."
+      action={(
+        <Button onClick={() => setNewSessionOpen(true)}>
+          <Plus data-icon="inline-start" />
+          New brainstorm
+        </Button>
+      )}
+    />
+  ) : visibleSessions.length === 0 ? (
+    <SystemState
+      kind="no-results"
+      scope="page"
+      title="No brainstorms match this view"
+      description="Clear the current search and agent filter to return to every session."
+      action={<Button variant="outline" onClick={clearSessionFilters}>Clear filters</Button>}
+    />
+  ) : undefined
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <PluginHeader
+    <Page>
+      <PageHeader
         title="Brainstorm"
-        count={visibleSessions.length}
-        search={{
-          value: search,
-          onChange: setSearch,
-          placeholder: 'Search sessions...',
-        }}
-        actions={
+        description="Develop ideas with an agent, revisit recent sessions, and turn accepted directions into campaign plans."
+        meta={(
+          <Badge size="xs" tone="neutral" variant="outline">
+            {visibleSessions.length} shown
+          </Badge>
+        )}
+        controls={(
+          <SearchInput
+            align="end"
+            label="Search brainstorm sessions"
+            value={search}
+            onValueChange={setSearch}
+            placeholder="Search brainstorms…"
+            mobileFullWidth
+          />
+        )}
+        actions={(
           <Button
-            size="sm"
             onClick={() => {
               setCreateError(null)
               setNewSessionOpen(true)
             }}
           >
-            <Plus className="size-3.5" data-icon="inline-start" />
-            New
+            <Plus data-icon="inline-start" />
+            New brainstorm
           </Button>
-        }
+        )}
       />
 
       <NewBrainstormSessionDialog
@@ -1018,42 +1162,63 @@ export function BrainstormView() {
         }}
       />
 
-      <div className="mt-4 flex items-center gap-3">
-        <AgentFilter agentIds={agentIds} value={agentFilter} onChange={setAgentFilter} />
-      </div>
+      <PageControls label="Brainstorm filters">
+        <AgentFilter
+          options={agentFilterOptions}
+          value={agentFilter}
+          onValueChange={setAgentFilter}
+          compact
+        />
+      </PageControls>
 
-      <div className="mt-4 min-h-0 flex-1 overflow-auto">
-        {sessionsLoading ? (
-          <p className="text-sm text-muted-foreground">Loading sessions...</p>
-        ) : visibleSessions.length === 0 ? (
-          <EmptyState icon={CalendarDays} title="No brainstorm sessions" />
-        ) : (
-          <div className="grid gap-2">
-            {visibleSessions.map(session => (
-              <button
-                key={session.id}
-                type="button"
-                onClick={() => pushSessionId(session.id)}
-                className="w-full rounded-md border border-border bg-card p-3 text-left transition-colors hover:bg-muted/40"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <AgentAvatar agentId={session.agentId} size="xs" />
-                      <h2 className="truncate text-sm font-medium">{session.title}</h2>
+      <PageBody label="Brainstorm sessions" state={sessionState}>
+        {!sessionState ? (
+          <ListRows variant="bordered" aria-label="Brainstorm sessions">
+            {visibleSessions.map(session => {
+              const agent = agentById.get(session.agentId)
+              return (
+              <ListRow key={session.id} className="overflow-hidden p-0">
+                <button
+                  type="button"
+                  onClick={() => pushSessionId(session.id)}
+                  className="w-full px-bakin-4 py-bakin-3 text-left transition-colors hover:bg-bakin-surface-elevated"
+                >
+                  <div className="flex min-w-0 items-start gap-bakin-3">
+                    <AgentAvatar
+                      agent={{
+                        id: session.agentId,
+                        name: agent?.name ?? session.agentId,
+                        imageSrc: agent?.imageSrc ?? null,
+                      }}
+                      size="md"
+                      decorative
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 flex-wrap items-center gap-bakin-2">
+                        <h2 className="min-w-0 truncate text-bakin-typography-size-body font-bakin-typography-weight-semibold text-bakin-text-primary">
+                          {session.title}
+                        </h2>
+                        <StatusBadge
+                          size="xs"
+                          tone={session.status === 'active' ? 'success' : 'neutral'}
+                          className="capitalize"
+                        >
+                          {session.status}
+                        </StatusBadge>
+                      </div>
+                      <p className="mt-bakin-1 text-bakin-typography-size-meta text-bakin-text-muted">
+                        {agent?.name ?? session.agentId} · {session.proposalCount} proposals · {session.approvedCount} accepted
+                      </p>
                     </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {session.proposalCount} proposals, {session.approvedCount} accepted
-                    </p>
                   </div>
-                  <Badge className="capitalize">{session.status}</Badge>
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+                </button>
+              </ListRow>
+              )
+            })}
+          </ListRows>
+        ) : null}
+      </PageBody>
       {deleteSessionDialog}
-    </div>
+    </Page>
   )
 }

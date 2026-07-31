@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { AgentAvatar } from "@makinbakin/sdk/components"
-import { BakinDrawer } from "@makinbakin/sdk/components"
+import { AgentAvatar } from "@makinbakin/sdk/patterns"
+import { useAgentList } from "@makinbakin/sdk/hooks"
+import { Drawer } from "@makinbakin/sdk/ui"
 import { Badge } from "@makinbakin/sdk/ui"
 import { Button } from "@makinbakin/sdk/ui"
 import { Textarea } from "@makinbakin/sdk/ui"
@@ -87,6 +88,16 @@ function recoveryActionFor(deliverable: Deliverable): { label: string; route: st
 
 export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: DeliverableDrawerProps) {
   const contentTypes = useContentTypes()
+  const agents = useAgentList()
+  const agentIdentity = useMemo(() => {
+    if (!deliverable) return null
+    const agent = agents.find((candidate) => candidate.id === deliverable.agent)
+    return {
+      id: deliverable.agent,
+      name: agent?.name || deliverable.agent,
+      imageSrc: agent?.headshot || null,
+    }
+  }, [agents, deliverable])
   const [rejecting, setRejecting] = useState(false)
   const [rejectionNote, setRejectionNote] = useState('')
   const [confirmingDelete, setConfirmingDelete] = useState(false)
@@ -215,7 +226,7 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
   }
 
   return (
-    <BakinDrawer
+    <Drawer
       open={open}
       onOpenChange={(nextOpen) => {
         if (!nextOpen) onClose()
@@ -224,7 +235,7 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
     >
       <div className="space-y-5">
         <section className="flex items-start gap-4 rounded-md border border-border bg-surface p-4">
-          <AgentAvatar agentId={deliverable.agent} size="lg" />
+          {agentIdentity && <AgentAvatar agent={agentIdentity} size="lg" />}
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <DeliverableStatusBadge status={deliverable.status} />
@@ -409,6 +420,6 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
         )}
 
       </div>
-    </BakinDrawer>
+    </Drawer>
   )
 }

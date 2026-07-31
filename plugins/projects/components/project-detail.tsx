@@ -1,15 +1,19 @@
 'use client'
 
-import { useState, useCallback, useRef, useEffect } from 'react'
-import { useRouter, useHorizontalResize } from '@makinbakin/sdk/hooks'
-import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, ChevronDown, Search, Pencil, Trash2, Link2 } from 'lucide-react'
-import { useMainAgentId } from "@makinbakin/sdk/hooks"
-import { AgentSelect, ConversationPanel, useConversationStream } from "@makinbakin/sdk/components"
-import type { ConversationMessage } from "@makinbakin/sdk/components"
+import { useState, useCallback, useMemo, useRef, useEffect, type CSSProperties } from 'react'
+import { useHorizontalResize } from '@makinbakin/sdk/hooks'
+import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, ChevronDown, Pencil, Trash2, Link2 } from 'lucide-react'
+import { useAgentList, useMainAgentId } from "@makinbakin/sdk/hooks"
+import { useRouter } from "@makinbakin/sdk/navigation"
+import { ConversationEmptyState, ConversationPanel } from "@makinbakin/sdk/conversation"
+import type { ConversationAgent, ConversationMessage } from "@makinbakin/sdk/conversation"
+import { AgentSelect, AssetPicker, Page, PageHeaderOverflowMenu } from "@makinbakin/sdk/patterns"
+import type { AssetPickerCollection } from "@makinbakin/sdk/patterns"
 import { ProjectChecklist } from './project-checklist'
 import { ProjectEditor } from './project-editor'
-import { Skeleton } from "@makinbakin/sdk/ui"
+import { DropdownMenuItem, Progress, Skeleton, SystemState } from "@makinbakin/sdk/ui"
 import type { ProjectStatus } from '../types'
+import { useConversationStream } from '../hooks/use-conversation-stream'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -82,25 +86,6 @@ function AssetThumb({ asset }: { asset: ResolvedAsset }) {
   }
   return (
     <div className="size-8 rounded bg-zinc-800/60 flex items-center justify-center shrink-0">
-      <AssetIcon type={asset.type} />
-    </div>
-  )
-}
-
-function PickerThumb({ asset }: { asset: { assetId: string; type: string } }) {
-  const [err, setErr] = useState(false)
-  if (IMAGE_TYPES.has(asset.type) && !err) {
-    return (
-      <img
-        src={`/api/assets/${encodeURIComponent(asset.assetId)}`}
-        alt={asset.assetId}
-        onError={() => setErr(true)}
-        className="size-7 rounded object-cover shrink-0 bg-zinc-800"
-      />
-    )
-  }
-  return (
-    <div className="size-7 rounded bg-zinc-800/60 flex items-center justify-center shrink-0">
       <AssetIcon type={asset.type} />
     </div>
   )
@@ -215,6 +200,26 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   // Brainstorm
   const [brainstormAgent, setBrainstormAgent] = useState(mainAgentId)
   const [brainstormMessages, setBrainstormMessages] = useState<ConversationMessage[]>([])
+  // The focused conversation kit and AgentSelect are presentation-only — the
+  // consumer resolves agent identity and supplies the selectable agents.
+  const agentList = useAgentList()
+  const selectableAgents = useMemo(
+    () => agentList.map((agent) => ({
+      id: agent.id,
+      name: agent.name ?? agent.id,
+      imageSrc: agent.headshot ?? null,
+    })),
+    [agentList],
+  )
+  const brainstormConversationAgent = useMemo<ConversationAgent | undefined>(() => {
+    if (!brainstormAgent) return undefined
+    const agent = agentList.find((candidate) => candidate.id === brainstormAgent)
+    return {
+      id: brainstormAgent,
+      name: agent?.name ?? brainstormAgent,
+      ...(agent?.headshot ? { avatarUrl: agent.headshot } : {}),
+    }
+  }, [agentList, brainstormAgent])
 
   // Dropdowns
   const [statusOpen, setStatusOpen] = useState(false)
@@ -224,7 +229,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   const [assetPickerOpen, setAssetPickerOpen] = useState(false)
   const [assetPickerMode, setAssetPickerMode] = useState<AssetPickerMode>({ type: 'attach' })
   const [assetSearch, setAssetSearch] = useState('')
-  const [availableAssets, setAvailableAssets] = useState<Array<{ assetId: string; type: string; description?: string }>>([])
+  const [assetCollection, setAssetCollection] = useState<AssetPickerCollection>({ status: 'loading' })
   const [previewAsset, setPreviewAsset] = useState<ResolvedAsset | null>(null)
   const [assetRelinkError, setAssetRelinkError] = useState<string | null>(null)
   const [relinkingAsset, setRelinkingAsset] = useState(false)
@@ -263,7 +268,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
 
   useEffect(() => {
     if (isNew) {
-      router.replace('/projects', { scroll: false })
+      router.replace('/projects')
     } else {
       fetchProject(initialEdit)
     }
@@ -375,7 +380,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   // ---------------------------------------------------------------------------
 
   // The server owns the transcript (ConversationMessage rows in the
-  // project payload); the kit stream hook drives the live turn over the
+  // project payload); the compatibility transport drives the live turn over the
   // `chunk` SSE frames the ask route emits.
   const brainstorm = useConversationStream({
     fetcher: useCallback(
@@ -400,51 +405,44 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   // Assets
   // ---------------------------------------------------------------------------
 
-  const assetPickerRef = useRef<HTMLDivElement>(null)
-
-  // Close asset picker on outside click
-  useEffect(() => {
-    if (!assetPickerOpen) return
-    const handler = (e: MouseEvent) => {
-      if (assetPickerRef.current && !assetPickerRef.current.contains(e.target as Node)) {
-        if (!relinkingAsset) setAssetPickerOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [assetPickerOpen, relinkingAsset])
-
-  const openAssetPicker = async (mode: AssetPickerMode) => {
+  // Load the pickable asset library for the SDK AssetPicker: the plugin owns
+  // the data (assets-plugin REST fetch + attached-filter), the pattern owns
+  // the presentation. Loading/error land as honest collection states.
+  const loadAssetCollection = useCallback(async (mode: AssetPickerMode) => {
+    setAssetCollection({ status: 'loading' })
     try {
       const res = await fetch('/api/plugins/assets/versioned')
-      if (res.ok) {
-        const data = await res.json()
-        const attached = new Set(
-          (project?.assets || [])
-            .filter(a => mode.type !== 'relink' || a.assetId !== mode.target.assetId)
-            .map(a => a.assetId)
-        )
-        setAvailableAssets(
-          (data.assets || [])
-            .filter((a: { assetId: string }) => !attached.has(a.assetId))
-            .map((a: { assetId: string; type: string; description?: string }) => ({
-              assetId: a.assetId, type: a.type, description: a.description,
-            }))
-        )
-        setAssetPickerMode(mode)
-        setAssetRelinkError(null)
-        setAssetSearch('')
-        setAssetPickerOpen(true)
-      }
-    } catch { /* assets plugin may not be available */ }
-  }
-
-  const toggleAssetPicker = async () => {
-    if (assetPickerOpen && assetPickerMode.type === 'attach') {
-      setAssetPickerOpen(false)
-      return
+      if (!res.ok) throw new Error(`Asset library returned ${res.status}`)
+      const data = await res.json()
+      const attached = new Set(
+        (project?.assets || [])
+          .filter(a => mode.type !== 'relink' || a.assetId !== mode.target.assetId)
+          .map(a => a.assetId)
+      )
+      setAssetCollection({
+        status: 'ready',
+        assets: (data.assets || [])
+          .filter((a: { assetId: string }) => !attached.has(a.assetId))
+          .map((a: { assetId: string; type: string; description?: string }) => ({
+            id: a.assetId,
+            label: a.assetId,
+            description: a.description,
+            type: a.type,
+            thumbnailSrc: IMAGE_TYPES.has(a.type) ? assetUrl(a.assetId) : undefined,
+          })),
+      })
+    } catch {
+      // assets plugin may not be available
+      setAssetCollection({ status: 'error', message: 'The asset library is unavailable right now.' })
     }
-    await openAssetPicker({ type: 'attach' })
+  }, [project])
+
+  const openAssetPicker = (mode: AssetPickerMode) => {
+    setAssetPickerMode(mode)
+    setAssetRelinkError(null)
+    setAssetSearch('')
+    setAssetPickerOpen(true)
+    void loadAssetCollection(mode)
   }
 
   const handleAttachAsset = async (assetId: string) => {
@@ -526,12 +524,6 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
     }
   }
 
-  const filteredPickerAssets = availableAssets.filter(a => {
-    if (!assetSearch.trim()) return true
-    const q = assetSearch.toLowerCase()
-    return a.assetId.toLowerCase().includes(q) || a.type.toLowerCase().includes(q) || (a.description || '').toLowerCase().includes(q)
-  })
-
   // ---------------------------------------------------------------------------
   // Delete
   // ---------------------------------------------------------------------------
@@ -560,110 +552,137 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
 
   if (loading) {
     return (
-      <div className="flex flex-col gap-3 py-4">
-        <Skeleton className="h-6 w-60" />
-        <Skeleton className="h-4 w-40" />
-        <Skeleton className="h-40 w-full" />
-      </div>
+      <Page>
+        <SystemState
+          kind="loading"
+          scope="section"
+          title="Loading project"
+          description="Project details will appear here."
+          preview={(
+            <div className="flex flex-col gap-bakin-3">
+              <Skeleton className="h-6 w-60" />
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-40 w-full" />
+            </div>
+          )}
+        />
+      </Page>
     )
   }
-  if (!project) return <div className="text-sm text-muted-foreground py-8">Project not found.</div>
+  if (!project) {
+    return (
+      <Page>
+        <SystemState
+          kind="error"
+          recovery="unavailable"
+          scope="section"
+          title="Project not found"
+          description="This project may have been deleted or its file moved."
+        />
+      </Page>
+    )
+  }
 
   const statusCfg = STATUS_CONFIG[editStatus]
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <Page scroll="contained">
+    <div data-slot="project-detail" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
 
       {/* ── Top bar ── */}
-      <div className="flex items-center justify-between pb-5 border-b border-[rgba(255,255,255,0.06)]">
+      <div
+        data-slot="project-detail-toolbar"
+        className="grid min-w-0 shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-bakin-3 border-b border-bakin-border-subtle pb-bakin-4 sm:grid-cols-[auto_minmax(0,1fr)_auto]"
+      >
         <button
           onClick={onBack}
-          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          className="flex shrink-0 items-center gap-bakin-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
-          <ArrowLeft className="size-3.5" />
+          <ArrowLeft className="size-4" />
           Projects
         </button>
 
-        <div className="flex items-center gap-3">
-          {/* Status */}
-          <div ref={statusRef} className="relative">
-            <button
-              onClick={() => setStatusOpen(!statusOpen)}
-              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[11px] font-medium text-zinc-300 bg-zinc-800/80 hover:bg-zinc-800 border border-[rgba(255,255,255,0.06)] transition-colors"
-            >
-              <span className={`size-1.5 rounded-full ${statusCfg.dot}`} />
-              {statusCfg.label}
-              <ChevronDown className="size-2.5 text-zinc-500" />
-            </button>
-            {statusOpen && (
-              <div className="absolute top-full right-0 mt-1 w-36 bg-zinc-900 border border-[rgba(255,255,255,0.08)] rounded-lg shadow-xl z-30 py-1">
-                {(Object.entries(STATUS_CONFIG) as [ProjectStatus, typeof statusCfg][]).map(([val, cfg]) => (
-                  <button
-                    key={val}
-                    onClick={() => { setEditStatus(val); setStatusOpen(false); if (!editing) saveField('status', val) }}
-                    className={`w-full text-left px-3 py-1.5 text-[11px] flex items-center gap-2 transition-colors ${
-                      val === editStatus ? 'text-foreground bg-zinc-800/60' : 'text-zinc-400 hover:text-foreground hover:bg-zinc-800/40'
-                    }`}
-                  >
-                    <span className={`size-1.5 rounded-full ${cfg.dot}`} />
-                    {cfg.label}
-                  </button>
-                ))}
-              </div>
-            )}
+        <div className="col-span-2 row-start-2 flex min-w-0 flex-col gap-bakin-2 sm:col-span-1 sm:col-start-2 sm:row-start-1 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+          <div className="flex min-w-0 items-center gap-bakin-2">
+            {/* Status */}
+            <div ref={statusRef} className="relative shrink-0">
+              <button
+                onClick={() => setStatusOpen(!statusOpen)}
+                className="inline-flex h-bakin-8 items-center gap-1.5 rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default px-bakin-3 text-sm font-medium text-bakin-text-primary transition-colors hover:bg-bakin-surface-elevated"
+              >
+                <span className={`size-1.5 rounded-full ${statusCfg.dot}`} />
+                {statusCfg.label}
+                <ChevronDown className="size-3 text-zinc-500" />
+              </button>
+              {statusOpen && (
+                <div className="absolute left-0 top-full z-30 mt-1 w-36 rounded-lg border border-[rgba(255,255,255,0.08)] bg-zinc-900 py-1 shadow-xl sm:left-auto sm:right-0">
+                  {(Object.entries(STATUS_CONFIG) as [ProjectStatus, typeof statusCfg][]).map(([val, cfg]) => (
+                    <button
+                      key={val}
+                      onClick={() => { setEditStatus(val); setStatusOpen(false); if (!editing) saveField('status', val) }}
+                      className={`w-full text-left px-3 py-1.5 text-[11px] flex items-center gap-2 transition-colors ${
+                        val === editStatus ? 'text-foreground bg-zinc-800/60' : 'text-zinc-400 hover:text-foreground hover:bg-zinc-800/40'
+                      }`}
+                    >
+                      <span className={`size-1.5 rounded-full ${cfg.dot}`} />
+                      {cfg.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Owner */}
+            <AgentSelect
+              value={editOwner}
+              onValueChange={(v) => { setEditOwner(v); if (!editing) saveField('owner', v) }}
+              agents={selectableAgents}
+              ariaLabel="Project owner"
+              className="h-bakin-8 min-w-0 flex-1 bg-bakin-surface-default text-sm sm:w-auto sm:min-w-[9rem] sm:flex-none"
+            />
           </div>
 
-          {/* Owner */}
-          <AgentSelect
-            value={editOwner}
-            onValueChange={(v) => { setEditOwner(v); if (!editing) saveField('owner', v) }}
-            className="h-7 w-auto min-w-[120px] text-[11px] bg-zinc-800/40 border-[rgba(255,255,255,0.04)]"
-          />
-
-          <span className="w-px h-4 bg-[rgba(255,255,255,0.06)]" />
-
-          {/* Edit / Save / Cancel */}
-          {editing ? (
-            <>
+          <div className="flex shrink-0 items-center gap-bakin-2">
+            {/* Edit / Save / Cancel */}
+            {editing ? (
+              <>
+                <button
+                  onClick={cancelEdit}
+                  className="h-bakin-8 rounded-bakin-control px-bakin-3 text-sm text-zinc-400 transition-colors hover:text-zinc-200"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSave}
+                  disabled={!isDirty}
+                  className={`h-bakin-8 rounded-bakin-control px-bakin-3 text-sm font-medium transition-all ${
+                    isDirty
+                      ? 'bg-[#5e6ad2] text-white hover:bg-[#6e7ae2] shadow-sm shadow-[#5e6ad2]/20'
+                      : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+                  }`}
+                >
+                  Save
+                </button>
+              </>
+            ) : (
               <button
-                onClick={cancelEdit}
-                className="h-7 px-3 rounded-lg text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+                onClick={enterEdit}
+                className="inline-flex h-bakin-8 items-center gap-bakin-2 rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default px-bakin-3 text-sm text-bakin-text-muted transition-colors hover:bg-bakin-surface-elevated hover:text-bakin-text-primary"
               >
-                Cancel
+                <Pencil className="size-4" />
+                Edit
               </button>
-              <button
-                onClick={handleSave}
-                disabled={!isDirty}
-                className={`h-7 px-3 rounded-lg text-xs font-medium transition-all ${
-                  isDirty
-                    ? 'bg-[#5e6ad2] text-white hover:bg-[#6e7ae2] shadow-sm shadow-[#5e6ad2]/20'
-                    : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
-                }`}
-              >
-                Save
-              </button>
-            </>
-          ) : (
-            <button
-              onClick={enterEdit}
-              className="inline-flex items-center gap-1.5 h-7 px-3 rounded-lg text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-800/60 hover:bg-zinc-800 border border-[rgba(255,255,255,0.06)] transition-colors"
-            >
-              <Pencil className="size-3" />
-              Edit
-            </button>
-          )}
+            )}
 
-          <span className="w-px h-4 bg-[rgba(255,255,255,0.06)]" />
-
-          {/* Delete */}
-          <button
-            onClick={() => setDeleteDialogOpen(true)}
-            className="p-1 rounded-lg text-zinc-600 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-            title="Delete project"
-          >
-            <Trash2 className="size-3.5" />
-          </button>
+          </div>
         </div>
+
+        <PageHeaderOverflowMenu label="Project actions">
+          <DropdownMenuItem variant="danger" onClick={() => setDeleteDialogOpen(true)}>
+            <Trash2 aria-hidden="true" />
+            Delete
+          </DropdownMenuItem>
+        </PageHeaderOverflowMenu>
       </div>
 
       {/* ── Delete confirmation dialog ── */}
@@ -767,13 +786,16 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
       )}
 
       {/* ── Two-column body ── */}
-      <div className="flex gap-6 pt-5 flex-1 min-h-0 overflow-hidden">
+      <div
+        data-slot="project-detail-body"
+        className="flex min-h-0 min-w-0 flex-1 flex-col gap-bakin-6 overflow-y-auto pt-bakin-6 lg:flex-row lg:overflow-hidden"
+      >
 
-        {/* ── Main column ── (min width keeps the resizable sidebar from collapsing it) */}
-        <div className="flex-1 min-w-[360px] flex flex-col">
+        {/* ── Main column ── */}
+        <div className="flex w-full min-w-0 shrink-0 flex-col lg:min-h-0 lg:flex-1">
 
           {/* Scrollable content area */}
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1" style={{ scrollbarGutter: 'stable' }}>
+          <div className="min-w-0 shrink-0 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-bakin-1">
             {/* Title */}
             <label className="text-[10px] font-medium text-zinc-600 uppercase tracking-wider mb-1.5 block">Title</label>
             {editing ? (
@@ -810,25 +832,41 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
             streaming={brainstorm.streaming}
             onSend={brainstorm.send}
             onAbort={brainstorm.abort}
-            agentId={brainstormAgent}
-            onAgentChange={setBrainstormAgent}
+            agent={brainstormConversationAgent}
+            agentControl={(
+              <AgentSelect
+                value={brainstormAgent}
+                onValueChange={setBrainstormAgent}
+                agents={selectableAgents}
+                ariaLabel="Brainstorm agent"
+                className="h-bakin-8"
+              />
+            )}
             storageKey={`project:${currentId}`}
             showHeader={false}
+            chrome="top-divider"
+            autoFocus={false}
             placeholder="Ask about this project..."
+            emptyState={(
+              <ConversationEmptyState
+                title="No project conversation yet"
+                description="Ask a question about this project to start the conversation."
+              />
+            )}
           />
         </div>
 
         {/* ── Right sidebar (resizable) ── */}
         <div
-          className="relative shrink-0 overflow-y-auto space-y-5 border-l border-[rgba(255,255,255,0.06)] pl-6 pr-2"
-          style={{ width: sidebarWidth, scrollbarGutter: 'stable' }}
+          className="relative w-full shrink-0 space-y-5 border-t border-bakin-border-subtle pt-bakin-6 lg:w-[var(--project-sidebar-width)] lg:overflow-y-auto lg:border-l lg:border-t-0 lg:pl-bakin-6 lg:pr-bakin-2 lg:pt-0"
+          style={{ '--project-sidebar-width': `${sidebarWidth}px` } as CSSProperties}
         >
           {/* Drag handle — sits over the left border to resize the sidebar.
               role / aria-orientation / tabIndex / aria-value* / keyboard all come from handleProps. */}
           <div
             {...sidebarResizeProps}
             aria-label="Resize progress panel"
-            className="absolute inset-y-0 left-0 z-10 w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-accent/50 active:bg-accent"
+            className="absolute inset-y-0 left-0 z-10 hidden w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-accent/50 active:bg-accent lg:block"
           />
 
           {/* Progress */}
@@ -837,12 +875,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
               <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Progress</h3>
               <span className="text-[11px] font-mono text-zinc-400 tabular-nums">{project.progress}%</span>
             </div>
-            <div className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
-              <div
-                className="h-full rounded-full bg-[#5e6ad2] transition-all duration-500"
-                style={{ width: `${project.progress}%` }}
-              />
-            </div>
+            <Progress value={project.progress} aria-label="Project progress" />
           </div>
 
           {/* Checklist */}
@@ -864,7 +897,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
               <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Assets</h3>
 
               <button
-                onClick={toggleAssetPicker}
+                onClick={() => openAssetPicker({ type: 'attach' })}
                 className="flex items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
               >
                 <Paperclip className="size-3" />
@@ -912,7 +945,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                     <div className={`${asset.missing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} mt-0.5 flex shrink-0 items-center gap-1 transition-opacity`}>
                       <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); void openAssetPicker({ type: 'relink', target: asset }) }}
+                        onClick={(e) => { e.stopPropagation(); openAssetPicker({ type: 'relink', target: asset }) }}
                         className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-200"
                         aria-label={`Relink ${assetName(asset)}`}
                       >
@@ -933,72 +966,6 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
               </div>
             )}
 
-            {/* Asset picker */}
-            {assetPickerOpen && (
-              <div ref={assetPickerRef} className="mt-2 mr-2 border border-[rgba(255,255,255,0.08)] rounded-lg bg-zinc-900 overflow-hidden max-w-[310px]">
-                {assetPickerMode.type === 'relink' && (
-                  <div className="border-b border-[rgba(255,255,255,0.06)] px-2.5 py-2">
-                    <p className="text-[11px] font-medium text-zinc-300">Relink asset</p>
-                    <p className="mt-0.5 truncate text-[10px] text-zinc-600">{assetName(assetPickerMode.target)}</p>
-                  </div>
-                )}
-                <div className="px-2.5 py-2 border-b border-[rgba(255,255,255,0.06)] flex items-center gap-1.5">
-                  <div className="flex-1 flex items-center gap-1.5 bg-zinc-800 rounded px-2 py-1">
-                    <Search className="size-3 text-zinc-500 shrink-0" />
-                    <input
-                      type="text"
-                      value={assetSearch}
-                      onChange={(e) => setAssetSearch(e.target.value)}
-                      placeholder="Search assets..."
-                      className="flex-1 text-[11px] bg-transparent text-foreground placeholder:text-zinc-500 focus:outline-none"
-                      autoFocus
-                    />
-                    {assetSearch && (
-                      <button onClick={() => setAssetSearch('')} className="text-zinc-600 hover:text-zinc-400">
-                        <X className="size-2.5" />
-                      </button>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => setAssetPickerOpen(false)}
-                    disabled={relinkingAsset}
-                    className="text-zinc-500 hover:text-zinc-300 transition-colors shrink-0"
-                  >
-                    <X className="size-3.5" />
-                  </button>
-                </div>
-                {assetRelinkError && (
-                  <p className="border-b border-red-500/20 bg-red-500/5 px-2.5 py-2 text-[11px] leading-snug text-red-300">
-                    {assetRelinkError}
-                  </p>
-                )}
-                <div className="max-h-52 overflow-y-auto">
-                  {filteredPickerAssets.length === 0 ? (
-                    <p className="text-[11px] text-zinc-600 p-3 text-center">
-                      {availableAssets.length === 0 ? 'No assets available.' : 'No matches.'}
-                    </p>
-                  ) : (
-                    filteredPickerAssets.map((asset) => (
-                      <button
-                        key={asset.assetId}
-                        onClick={() => handlePickerAssetSelect(asset.assetId)}
-                        disabled={relinkingAsset}
-                        className="w-full text-left px-2.5 py-2 text-[11px] hover:bg-zinc-800/60 transition-colors flex items-center gap-2.5 border-b border-[rgba(255,255,255,0.04)] last:border-0 disabled:opacity-50"
-                      >
-                        <PickerThumb asset={asset} />
-                        <div className="flex-1 min-w-0">
-                          <span className="text-zinc-300 truncate block">{asset.assetId}</span>
-                          {asset.description && <span className="text-zinc-600 truncate block text-[10px]">{asset.description}</span>}
-                        </div>
-                        {assetPickerMode.type === 'relink' && relinkingAsset && (
-                          <span className="shrink-0 text-[10px] text-zinc-500">Relinking...</span>
-                        )}
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Meta */}
@@ -1023,7 +990,31 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
 
       </div>
 
+      {/* ── Asset picker (SDK pattern; plugin owns the collection data) ── */}
+      <AssetPicker
+        open={assetPickerOpen}
+        onOpenChange={(open) => {
+          if (!open && relinkingAsset) return
+          setAssetPickerOpen(open)
+        }}
+        collection={assetCollection}
+        query={assetSearch}
+        onQueryChange={setAssetSearch}
+        onPick={(assetId) => { void handlePickerAssetSelect(assetId) }}
+        onRetry={() => { void loadAssetCollection(assetPickerMode) }}
+        busy={relinkingAsset}
+        notice={assetRelinkError}
+        view="list"
+        title={assetPickerMode.type === 'relink' ? 'Relink asset' : 'Attach asset'}
+        description={assetPickerMode.type === 'relink'
+          ? `Choose a replacement for ${assetName(assetPickerMode.target)}.`
+          : 'Choose an asset from the library to attach to this project.'}
+        emptyTitle="No assets available"
+        emptyDescription="Add an asset to the library, then return here to choose it."
+      />
+
       {previewAsset && <AssetPreviewModal asset={previewAsset} onClose={() => setPreviewAsset(null)} />}
     </div>
+    </Page>
   )
 }

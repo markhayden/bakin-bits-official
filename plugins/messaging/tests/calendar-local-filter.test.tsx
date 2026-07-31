@@ -36,21 +36,51 @@ mock.module('@/core/watcher', () => ({
 }))
 
 mock.module('@makinbakin/sdk/components', () => ({
-  AgentAvatar: ({ agentId }: { agentId: string }) => <span data-testid={`avatar-${agentId}`}>{agentId}</span>,
-  AgentFilter: ({ agentIds }: { agentIds: string[] }) => (
+  AgentSelect: () => <select />,
+  Drawer: ({ children, open }: { children: React.ReactNode; open: boolean }) =>
+    open ? <div>{children}</div> : null,
+  ChannelIcon: ({ channelId }: { channelId: string }) => <span data-testid={`channel-icon-${channelId}`} />,
+}))
+
+mock.module('@makinbakin/sdk/patterns', () => ({
+  AgentAvatar: ({ agent }: { agent: { id: string } }) => <span data-testid={`avatar-${agent.id}`}>{agent.id}</span>,
+  CalendarGrid: ({ items, renderItem, label, view, renderDayHeader }: {
+    items: Array<{ key: string; date: string }>
+    renderItem: (item: { key: string; date: string }) => React.ReactNode
+    label: string
+    view: string
+    renderDayHeader?: (date: Date) => React.ReactNode
+  }) => (
+    <div role="grid" aria-label={label} data-view={view}>
+      {renderDayHeader
+        ? [...new Set(items.map(item => item.date.slice(0, 10)))].map(key => (
+          <span key={`header-${key}`} data-slot="calendar-day-header">
+            {renderDayHeader(new Date(`${key}T00:00:00`))}
+          </span>
+        ))
+        : null}
+      {items.map(item => (
+        <span key={item.key} data-calendar-item="">{renderItem(item)}</span>
+      ))}
+    </div>
+  ),
+  ListRows: ({ children }: { children: React.ReactNode }) => <ul data-list-rows="">{children}</ul>,
+  ListRow: ({ children }: { children: React.ReactNode }) => <li data-slot="list-row">{children}</li>,
+  ListRowGroup: ({ label, children }: { label: React.ReactNode; children: React.ReactNode }) => (
+    <div data-slot="list-row-group">
+      <div data-slot="list-row-group-label">{label}</div>
+      {children}
+    </div>
+  ),
+  AgentFilter: ({ options }: { options: Array<{ value: string; label: string }> }) => (
     <div data-testid="agent-filter">
-      {agentIds.map((agentId) => (
-        <span key={agentId} data-testid={`agent-option-${agentId}`}>
-          {agentId}
+      {options.map((option) => (
+        <span key={option.value} data-testid={`agent-option-${option.value}`}>
+          {option.label}
         </span>
       ))}
     </div>
   ),
-  AgentSelect: () => <select />,
-  BakinDrawer: ({ children, open }: { children: React.ReactNode; open: boolean }) =>
-    open ? <div>{children}</div> : null,
-  ChannelIcon: ({ channelId }: { channelId: string }) => <span data-testid={`channel-icon-${channelId}`} />,
-  EmptyState: ({ title }: { title: string }) => <div>{title}</div>,
   FacetFilter: ({ label, options }: {
     label: string
     options: Array<{ value: string; label: string }>
@@ -63,18 +93,61 @@ mock.module('@makinbakin/sdk/components', () => ({
       ))}
     </div>
   ),
-  PluginHeader: ({ title, count, actions }: Record<string, unknown>) => (
-    <div data-testid="plugin-header">
+  Page: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  PageBody: ({ children, state }: { children: React.ReactNode; state?: React.ReactNode }) => (
+    <section>{state ?? children}</section>
+  ),
+  PageControls: ({ children }: { children: React.ReactNode }) => <section>{children}</section>,
+  PageHeader: ({ title, meta, controls, actions }: Record<string, unknown>) => (
+    <header data-testid="page-header">
       <h1>{title as string}</h1>
-      <span data-testid="header-count">{String(count ?? '')}</span>
+      <div>{meta as React.ReactNode}</div>
+      <div>{controls as React.ReactNode}</div>
       <div>{actions as React.ReactNode}</div>
+    </header>
+  ),
+  SearchInput: ({ label, value, onValueChange, placeholder }: {
+    label: string
+    value: string
+    onValueChange: (value: string) => void
+    placeholder: string
+  }) => (
+    <input
+      aria-label={label}
+      value={value}
+      onChange={(event) => onValueChange(event.target.value)}
+      placeholder={placeholder}
+    />
+  ),
+  SegmentedControl: ({ ariaLabel, options, value, onValueChange }: {
+    ariaLabel: string
+    options: Array<{ value: string; label: string }>
+    value: string
+    onValueChange: (value: string) => void
+  }) => (
+    <div role="tablist" aria-label={ariaLabel}>
+      {options.map(option => (
+        <button
+          key={option.value}
+          type="button"
+          role="tab"
+          aria-selected={option.value === value}
+          onClick={() => onValueChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
     </div>
+  ),
+  StatusMarker: ({ tone, label }: { tone: string; label?: string }) => (
+    <span data-testid="status-marker" data-tone={tone} aria-label={label} />
   ),
 }))
 
-mock.module('@/hooks/use-query-state', () => {
+mock.module('@makinbakin/sdk/navigation', () => {
   const { useState } = require('react') as typeof import('react')
   return {
+    useRouter: () => ({ push: () => {}, replace: () => {}, back: () => {} }),
     useQueryState: (_key: string, defaultValue?: string) => {
       const [value, setValue] = useState(defaultValue ?? '')
       return [value, setValue, setValue]
@@ -85,6 +158,10 @@ mock.module('@/hooks/use-query-state', () => {
     },
   }
 })
+
+mock.module('@makinbakin/sdk/layout', () => ({
+  BoundedOverflow: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}))
 
 mock.module('@/components/plugin-header', () => ({
   PluginHeader: ({ title, count, actions }: Record<string, unknown>) => (
@@ -274,6 +351,22 @@ describe('ContentCalendar (Deliverable local filter)', () => {
     })
   })
 
+  it('offers the shared list, today, week, and month calendar views', async () => {
+    render(<ContentCalendar />)
+    await waitFor(() => {
+      expect(screen.getByTestId('calendar-view-month')).toBeDefined()
+    })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Week' }))
+    expect(screen.getByTestId('calendar-view-week')).toBeDefined()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Today' }))
+    expect(screen.getByTestId('calendar-view-today')).toBeDefined()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'List' }))
+    expect(screen.getByTestId('calendar-view-list')).toBeDefined()
+  })
+
   it('shows only calendar-visible Deliverables when search query is empty', async () => {
     render(<ContentCalendar />)
     await waitFor(() => {
@@ -285,10 +378,10 @@ describe('ContentCalendar (Deliverable local filter)', () => {
     expect(screen.queryByTestId('calendar-deliverable-proposal')).toBeNull()
   })
 
-  it('exposes the "Search calendar..." placeholder on the input', async () => {
+  it('exposes the "Search calendar…" placeholder on the input', async () => {
     render(<ContentCalendar />)
     await waitFor(() => {
-      expect(screen.getByPlaceholderText('Search calendar...')).toBeDefined()
+      expect(screen.getByPlaceholderText('Search calendar…')).toBeDefined()
     })
   })
 
@@ -308,7 +401,7 @@ describe('ContentCalendar (Deliverable local filter)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('calendar-deliverable-a')).toBeDefined()
     })
-    fireEvent.change(screen.getByPlaceholderText('Search calendar...'), { target: { value: 'SMOOTHIE' } })
+    fireEvent.change(screen.getByPlaceholderText('Search calendar…'), { target: { value: 'SMOOTHIE' } })
     await waitFor(() => {
       expect(screen.queryByTestId('calendar-deliverable-b')).toBeNull()
     })
@@ -321,7 +414,7 @@ describe('ContentCalendar (Deliverable local filter)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('calendar-deliverable-b')).toBeDefined()
     })
-    fireEvent.change(screen.getByPlaceholderText('Search calendar...'), { target: { value: 'breathing' } })
+    fireEvent.change(screen.getByPlaceholderText('Search calendar…'), { target: { value: 'breathing' } })
     await waitFor(() => {
       expect(screen.queryByTestId('calendar-deliverable-a')).toBeNull()
     })
@@ -333,7 +426,7 @@ describe('ContentCalendar (Deliverable local filter)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('calendar-deliverable-a')).toBeDefined()
     })
-    fireEvent.change(screen.getByPlaceholderText('Search calendar...'), { target: { value: 'hit the trails' } })
+    fireEvent.change(screen.getByPlaceholderText('Search calendar…'), { target: { value: 'hit the trails' } })
     await waitFor(() => {
       expect(screen.queryByTestId('calendar-deliverable-a')).toBeNull()
     })
@@ -345,7 +438,7 @@ describe('ContentCalendar (Deliverable local filter)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('calendar-deliverable-a')).toBeDefined()
     })
-    fireEvent.change(screen.getByPlaceholderText('Search calendar...'), { target: { value: 'mango' } })
+    fireEvent.change(screen.getByPlaceholderText('Search calendar…'), { target: { value: 'mango' } })
     await waitFor(() => {
       expect(screen.queryByTestId('calendar-deliverable-b')).toBeNull()
     })
@@ -357,11 +450,11 @@ describe('ContentCalendar (Deliverable local filter)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('calendar-deliverable-a')).toBeDefined()
     })
-    fireEvent.change(screen.getByPlaceholderText('Search calendar...'), { target: { value: 'nothing-matches-xyz' } })
+    fireEvent.change(screen.getByPlaceholderText('Search calendar…'), { target: { value: 'nothing-matches-xyz' } })
     await waitFor(() => {
       expect(screen.queryByTestId('calendar-deliverable-a')).toBeNull()
     })
-    expect(screen.getByText('No deliverables match filters')).toBeDefined()
+    expect(screen.getByText('No deliverables match this view')).toBeDefined()
   })
 
   it('does not import useSearch', () => {

@@ -11,6 +11,8 @@
     "./patterns": "./patterns.js",
     "./navigation": "./navigation.js",
     "./components": "./components.js",
+    "./conversation": "./conversation.js",
+    "./content": "./content.js",
     "./slots": "./slots.js",
     "./utils": "./utils.js",
     "./types": "./types.js",

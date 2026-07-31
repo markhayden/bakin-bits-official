@@ -3,8 +3,8 @@
  */
 import { registerPlugin } from '@makinbakin/sdk'
 import type { NavItem } from '@makinbakin/sdk'
-import { useRouter } from '@makinbakin/sdk/hooks'
-import { Suspense, useEffect, type ReactNode } from 'react'
+import { useRouter } from '@makinbakin/sdk/navigation'
+import { Suspense, useEffect } from 'react'
 import { ContentCalendar } from './components/content-calendar'
 import { BrainstormView } from './components/brainstorm-view'
 import { PlanList } from './components/plan-list'
@@ -41,19 +41,11 @@ function MessagingIndexRoute() {
   return null
 }
 
-function MessagingPageFrame({ children }: { children: ReactNode }) {
-  return (
-    <div className="p-6 flex flex-col h-full min-h-0 min-w-0 overflow-hidden">
-      <Suspense>{children}</Suspense>
-    </div>
-  )
-}
-
 function MessagingCalendarRoute() {
   return (
-    <MessagingPageFrame>
+    <Suspense>
       <ContentCalendar />
-    </MessagingPageFrame>
+    </Suspense>
   )
 }
 
@@ -61,9 +53,12 @@ function MessagingPlansRoute() {
   const router = useRouter()
 
   return (
-    <MessagingPageFrame>
-      <PlanList onSelectPlan={(plan) => router.push(`/messaging/plans/${plan.id}`)} />
-    </MessagingPageFrame>
+    <Suspense>
+      <PlanList
+        onSelectPlan={(plan) => router.push(`/messaging/plans/${plan.id}`)}
+        onStartBrainstorm={() => router.push('/messaging/brainstorm')}
+      />
+    </Suspense>
   )
 }
 
@@ -84,21 +79,21 @@ function MessagingPlanWorkspaceRoute({ params, id }: PluginRouteProps) {
   if (!planId) return <MessagingPlansRedirectRoute />
 
   return (
-    <MessagingPageFrame>
+    <Suspense>
       <PlanWorkspace
         planId={planId}
         onBack={() => router.push('/messaging/plans')}
         onDeleted={() => router.push('/messaging/plans')}
       />
-    </MessagingPageFrame>
+    </Suspense>
   )
 }
 
 function MessagingBrainstormRoute() {
   return (
-    <MessagingPageFrame>
+    <Suspense>
       <BrainstormView />
-    </MessagingPageFrame>
+    </Suspense>
   )
 }
 

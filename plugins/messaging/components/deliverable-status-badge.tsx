@@ -1,8 +1,8 @@
 'use client'
 
-import { Badge } from "@makinbakin/sdk/ui"
+import { StatusBadge } from "@makinbakin/sdk/patterns"
 import type { DeliverableStatus } from '../types'
-import { DELIVERABLE_STATUS_BADGE } from '../constants'
+import { DELIVERABLE_STATUS_TONE } from '../constants'
 
 interface DeliverableStatusBadgeProps {
   status: DeliverableStatus
@@ -15,8 +15,8 @@ function formatStatus(status: DeliverableStatus): string {
 
 export function DeliverableStatusBadge({ status, className = '' }: DeliverableStatusBadgeProps) {
   return (
-    <Badge className={`capitalize ${DELIVERABLE_STATUS_BADGE[status]} ${className}`}>
+    <StatusBadge size="xs" tone={DELIVERABLE_STATUS_TONE[status]} className={`capitalize ${className}`}>
       {formatStatus(status)}
-    </Badge>
+    </StatusBadge>
   )
 }
