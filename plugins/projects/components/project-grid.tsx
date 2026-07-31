@@ -207,12 +207,12 @@ export function ProjectGrid() {
                     onClick={() => router.push(`/projects/${p.id}`)}
                   />
                   {showScores && scoreInfo && (
-                    <div className="absolute top-1.5 left-1.5 flex flex-col gap-0.5 font-mono text-[10px] bg-black/80 px-1.5 py-1 rounded pointer-events-none">
-                      <span className="text-amber-400">RRF {scoreInfo.score.toFixed(3)}</span>
-                      <span className="text-cyan-400">
+                    <div className="absolute top-1.5 left-1.5 flex flex-col gap-0.5 font-mono text-bakin-typography-size-meta bg-bakin-canvas-default/90 px-1.5 py-1 rounded pointer-events-none">
+                      <span className="text-bakin-signal-highlight">RRF {scoreInfo.score.toFixed(3)}</span>
+                      <span className="text-bakin-signal-info">
                         BM25 {(bm25Key ? scoreInfo.indexScores?.[bm25Key] ?? 0 : 0).toFixed(3)}
                       </span>
-                      <span className="text-purple-400">
+                      <span className="text-bakin-signal-accent">
                         SEM {(scoreInfo.indexScores?.[semKey] ?? 0).toFixed(3)}
                       </span>
                     </div>

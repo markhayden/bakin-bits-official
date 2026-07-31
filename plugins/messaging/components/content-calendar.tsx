@@ -233,14 +233,14 @@ function CalendarDeliverable({
 
   if (mode === 'row') {
     return (
-      <button
-        type="button"
+      <Button
+        variant="ghost"
         onClick={() => onSelect(deliverable)}
-        className="grid w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-bakin-3 px-bakin-3 py-bakin-3 text-left transition-colors hover:bg-bakin-surface-elevated"
+        className="flex !h-auto w-full min-w-0 items-center justify-start gap-bakin-3 whitespace-normal rounded-none px-bakin-3 py-bakin-3 text-left font-bakin-typography-weight-regular hover:bg-bakin-surface-elevated"
         data-testid={`calendar-deliverable-${deliverable.id}`}
       >
         <AgentAvatar agent={identity} size="sm" decorative />
-        <span className="min-w-0">
+        <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-bakin-2">
             <span className="truncate font-bakin-typography-weight-semibold">{deliverable.title}</span>
             <DeliverableStatusBadge status={deliverable.status} />
@@ -249,16 +249,16 @@ function CalendarDeliverable({
             {formatTime(deliverable.publishAt)} · {deliverable.channel} · {getContentTypeLabel(deliverable.contentType, contentTypes)}
           </span>
         </span>
-        <ChevronRight className="size-bakin-4 text-bakin-text-muted" aria-hidden="true" />
-      </button>
+        <ChevronRight className="size-bakin-4 shrink-0 text-bakin-text-muted" aria-hidden="true" />
+      </Button>
     )
   }
 
   return (
-    <button
-      type="button"
+    <Button
+      variant="outline"
       onClick={() => onSelect(deliverable)}
-      className="w-full rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default px-bakin-2 py-bakin-2 text-left transition-colors hover:bg-bakin-surface-elevated"
+      className="block !h-auto w-full whitespace-normal rounded-bakin-control bg-bakin-surface-default px-bakin-2 py-bakin-2 text-left font-bakin-typography-weight-regular hover:bg-bakin-surface-elevated"
       data-testid={`calendar-deliverable-${deliverable.id}`}
     >
       <div className="flex min-w-0 items-center gap-bakin-2">
@@ -282,7 +282,7 @@ function CalendarDeliverable({
           {getContentTypeLabel(deliverable.contentType, contentTypes)}
         </Badge>
       </div>
-    </button>
+    </Button>
   )
 }
 

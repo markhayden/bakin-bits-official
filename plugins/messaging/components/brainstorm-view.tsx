@@ -1178,10 +1178,10 @@ export function BrainstormView() {
               const agent = agentById.get(session.agentId)
               return (
               <ListRow key={session.id} className="overflow-hidden p-0">
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
                   onClick={() => pushSessionId(session.id)}
-                  className="w-full px-bakin-4 py-bakin-3 text-left transition-colors hover:bg-bakin-surface-elevated"
+                  className="block !h-auto w-full whitespace-normal rounded-none px-bakin-4 py-bakin-3 text-left font-bakin-typography-weight-regular hover:bg-bakin-surface-elevated"
                 >
                   <div className="flex min-w-0 items-start gap-bakin-3">
                     <AgentAvatar
@@ -1211,7 +1211,7 @@ export function BrainstormView() {
                       </p>
                     </div>
                   </div>
-                </button>
+                </Button>
               </ListRow>
               )
             })}

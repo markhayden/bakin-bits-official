@@ -167,7 +167,13 @@ export function ConfirmDialog({
   if (!open) return null
   return React.createElement(
     'div',
-    { role: 'dialog', 'aria-modal': 'true', 'data-testid': 'confirm-dialog' },
+    {
+      role: 'dialog',
+      'aria-modal': 'true',
+      // The real ConfirmDialog names the dialog from its title (aria-labelledby).
+      'aria-label': typeof title === 'string' ? title : undefined,
+      'data-testid': 'confirm-dialog',
+    },
     React.createElement('h2', null, title),
     description ? React.createElement('p', null, description) : null,
     children,

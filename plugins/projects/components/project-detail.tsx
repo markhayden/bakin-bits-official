@@ -1,17 +1,30 @@
 'use client'
 
-import { useState, useCallback, useMemo, useRef, useEffect, type CSSProperties } from 'react'
+import { useState, useCallback, useMemo, useEffect, type CSSProperties } from 'react'
 import { useHorizontalResize } from '@makinbakin/sdk/hooks'
 import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, ChevronDown, Pencil, Trash2, Link2 } from 'lucide-react'
 import { useAgentList, useMainAgentId } from "@makinbakin/sdk/hooks"
 import { useRouter } from "@makinbakin/sdk/navigation"
 import { ConversationEmptyState, ConversationPanel } from "@makinbakin/sdk/conversation"
 import type { ConversationAgent, ConversationMessage } from "@makinbakin/sdk/conversation"
-import { AgentSelect, AssetPicker, Page, PageHeaderOverflowMenu } from "@makinbakin/sdk/patterns"
+import { AgentSelect, AssetPicker, ConfirmDialog, Page, PageHeaderOverflowMenu, StatusMarker } from "@makinbakin/sdk/patterns"
 import type { AssetPickerCollection } from "@makinbakin/sdk/patterns"
 import { ProjectChecklist } from './project-checklist'
 import { ProjectEditor } from './project-editor'
-import { DropdownMenuItem, Progress, Skeleton, SystemState } from "@makinbakin/sdk/ui"
+import {
+  Alert,
+  AlertDescription,
+  Button,
+  Checkbox,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  Input,
+  Progress,
+  Skeleton,
+  SystemState,
+} from "@makinbakin/sdk/ui"
 import type { ProjectStatus } from '../types'
 import { useConversationStream } from '../hooks/use-conversation-stream'
 
@@ -49,11 +62,13 @@ type AssetPickerMode = { type: 'attach' } | { type: 'relink'; target: ResolvedAs
 // Constants
 // ---------------------------------------------------------------------------
 
-const STATUS_CONFIG: Record<ProjectStatus, { label: string; dot: string }> = {
-  draft: { label: 'Draft', dot: 'bg-zinc-400' },
-  active: { label: 'Active', dot: 'bg-[#5e6ad2]' },
-  completed: { label: 'Completed', dot: 'bg-emerald-400' },
-  archived: { label: 'Archived', dot: 'bg-zinc-600' },
+type StatusTone = 'neutral' | 'success' | 'attention' | 'danger' | 'accent'
+
+const STATUS_CONFIG: Record<ProjectStatus, { label: string; tone: StatusTone }> = {
+  draft: { label: 'Draft', tone: 'neutral' },
+  active: { label: 'Active', tone: 'accent' },
+  completed: { label: 'Completed', tone: 'success' },
+  archived: { label: 'Archived', tone: 'neutral' },
 }
 
 const IMAGE_TYPES = new Set(['images', 'image'])
@@ -69,7 +84,7 @@ const ASSET_ICONS: Record<string, typeof FileText> = {
 
 function AssetIcon({ type }: { type: string }) {
   const Icon = ASSET_ICONS[type] || File
-  return <Icon className="size-3.5 shrink-0 text-zinc-500" />
+  return <Icon className="size-3.5 shrink-0 text-bakin-text-muted" />
 }
 
 function AssetThumb({ asset }: { asset: ResolvedAsset }) {
@@ -80,12 +95,12 @@ function AssetThumb({ asset }: { asset: ResolvedAsset }) {
         src={`/api/assets/${encodeURIComponent(asset.assetId)}`}
         alt={asset.assetId}
         onError={() => setErr(true)}
-        className="size-8 rounded object-cover shrink-0 bg-zinc-800"
+        className="size-8 rounded object-cover shrink-0 bg-bakin-surface-elevated"
       />
     )
   }
   return (
-    <div className="size-8 rounded bg-zinc-800/60 flex items-center justify-center shrink-0">
+    <div className="size-8 rounded bg-bakin-surface-elevated flex items-center justify-center shrink-0">
       <AssetIcon type={asset.type} />
     </div>
   )
@@ -121,49 +136,54 @@ function AssetPreviewModal({ asset, onClose }: { asset: ResolvedAsset; onClose: 
       role="dialog"
       aria-modal="true"
       aria-label={name}
-      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-black/80 p-8"
+      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-bakin-canvas-default/90 p-8"
       onClick={onClose}
     >
       <div
-        className="flex max-h-[84vh] max-w-[90vw] flex-col items-center gap-3"
+        className="flex min-h-0 max-h-full w-full max-w-full flex-col items-center gap-3"
         onClick={(e) => e.stopPropagation()}
       >
         {IMAGE_TYPES.has(asset.type) ? (
           <img
             src={url}
             alt={name}
-            className="max-h-[80vh] max-w-[90vw] rounded object-contain"
+            className="min-h-0 max-h-full max-w-full rounded object-contain"
           />
         ) : VIDEO_TYPES.has(asset.type) ? (
           <video
             src={url}
             controls
-            className="max-h-[80vh] max-w-[90vw] rounded bg-black"
+            className="min-h-0 max-h-full max-w-full rounded bg-bakin-canvas-default"
           />
         ) : AUDIO_TYPES.has(asset.type) ? (
-          <div className="w-[min(90vw,520px)] rounded-lg border border-[rgba(255,255,255,0.10)] bg-zinc-950 p-4">
-            <div className="mb-3 flex items-center gap-2 text-sm text-zinc-200">
+          <div className="w-full max-w-lg rounded-lg border border-bakin-border-subtle bg-bakin-canvas-default p-4">
+            <div className="mb-3 flex items-center gap-2 text-sm text-bakin-text-primary">
               <AssetIcon type={asset.type} />
               <span className="truncate">{name}</span>
             </div>
             <audio src={url} controls className="w-full" />
           </div>
         ) : (
-          <div className="flex w-[min(90vw,420px)] flex-col items-center gap-3 rounded-lg border border-[rgba(255,255,255,0.10)] bg-zinc-950 p-6 text-center">
-            <div className="flex size-12 items-center justify-center rounded bg-zinc-900">
+          <div className="flex w-full max-w-md flex-col items-center gap-3 rounded-lg border border-bakin-border-subtle bg-bakin-canvas-default p-6 text-center">
+            <div className="flex size-12 items-center justify-center rounded bg-bakin-surface-elevated">
               <AssetIcon type={asset.type} />
             </div>
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-zinc-200">{name}</p>
-              <p className="mt-1 text-xs text-zinc-500">{asset.type}</p>
+              <p className="truncate text-sm font-medium text-bakin-text-primary">{name}</p>
+              <p className="mt-1 text-xs text-bakin-text-muted">{asset.type}</p>
             </div>
           </div>
         )}
-        <div className="flex items-center gap-4 text-sm text-zinc-300">
-          <a href={href} className="underline hover:text-white">Open asset</a>
-          <button type="button" onClick={onClose} className="flex items-center gap-1 hover:text-white">
+        <div className="flex items-center gap-4 text-sm text-bakin-text-muted">
+          <a href={href} className="underline hover:text-bakin-text-primary">Open asset</a>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            className="gap-1 px-bakin-1 text-sm font-bakin-typography-weight-regular text-bakin-text-muted hover:bg-transparent hover:text-bakin-text-primary"
+          >
             <X className="size-4" /> Close
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -221,10 +241,6 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
     }
   }, [agentList, brainstormAgent])
 
-  // Dropdowns
-  const [statusOpen, setStatusOpen] = useState(false)
-  const statusRef = useRef<HTMLDivElement>(null)
-
   // Assets
   const [assetPickerOpen, setAssetPickerOpen] = useState(false)
   const [assetPickerMode, setAssetPickerMode] = useState<AssetPickerMode>({ type: 'attach' })
@@ -236,6 +252,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
 
   // Delete confirmation
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleteLinkedTasks, setDeleteLinkedTasks] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [assetDetachTarget, setAssetDetachTarget] = useState<ResolvedAsset | null>(null)
   const [detachingAsset, setDetachingAsset] = useState(false)
@@ -283,15 +300,6 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
       setProject((prev) => (prev && !prev.owner ? { ...prev, owner: mainAgentId } : prev))
     }
   }, [mainAgentId, isNew])
-
-  // Close status dropdown on outside click
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (statusRef.current && !statusRef.current.contains(e.target as Node)) setStatusOpen(false)
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
 
   // ---------------------------------------------------------------------------
   // Dirty state — anything changed from server state
@@ -592,45 +600,48 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
       {/* ── Top bar ── */}
       <div
         data-slot="project-detail-toolbar"
-        className="grid min-w-0 shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-bakin-3 border-b border-bakin-border-subtle pb-bakin-4 sm:grid-cols-[auto_minmax(0,1fr)_auto]"
+        className="flex min-w-0 shrink-0 flex-wrap items-center gap-bakin-3 border-b border-bakin-border-subtle pb-bakin-4"
       >
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={onBack}
-          className="flex shrink-0 items-center gap-bakin-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          className="shrink-0 gap-bakin-2 px-0 text-sm font-bakin-typography-weight-regular text-bakin-text-muted hover:bg-transparent hover:text-bakin-text-primary"
         >
           <ArrowLeft className="size-4" />
           Projects
-        </button>
+        </Button>
 
-        <div className="col-span-2 row-start-2 flex min-w-0 flex-col gap-bakin-2 sm:col-span-1 sm:col-start-2 sm:row-start-1 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+        <div className="order-last flex w-full min-w-0 flex-col gap-bakin-2 sm:order-none sm:w-auto sm:min-w-0 sm:flex-1 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
           <div className="flex min-w-0 items-center gap-bakin-2">
             {/* Status */}
-            <div ref={statusRef} className="relative shrink-0">
-              <button
-                onClick={() => setStatusOpen(!statusOpen)}
-                className="inline-flex h-bakin-8 items-center gap-1.5 rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default px-bakin-3 text-sm font-medium text-bakin-text-primary transition-colors hover:bg-bakin-surface-elevated"
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={(
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    aria-label="Project status"
+                    className="shrink-0 gap-1.5 text-sm"
+                  />
+                )}
               >
-                <span className={`size-1.5 rounded-full ${statusCfg.dot}`} />
+                <StatusMarker tone={statusCfg.tone} size="sm" />
                 {statusCfg.label}
-                <ChevronDown className="size-3 text-zinc-500" />
-              </button>
-              {statusOpen && (
-                <div className="absolute left-0 top-full z-30 mt-1 w-36 rounded-lg border border-[rgba(255,255,255,0.08)] bg-zinc-900 py-1 shadow-xl sm:left-auto sm:right-0">
-                  {(Object.entries(STATUS_CONFIG) as [ProjectStatus, typeof statusCfg][]).map(([val, cfg]) => (
-                    <button
-                      key={val}
-                      onClick={() => { setEditStatus(val); setStatusOpen(false); if (!editing) saveField('status', val) }}
-                      className={`w-full text-left px-3 py-1.5 text-[11px] flex items-center gap-2 transition-colors ${
-                        val === editStatus ? 'text-foreground bg-zinc-800/60' : 'text-zinc-400 hover:text-foreground hover:bg-zinc-800/40'
-                      }`}
-                    >
-                      <span className={`size-1.5 rounded-full ${cfg.dot}`} />
-                      {cfg.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+                <ChevronDown className="size-3 text-bakin-text-muted" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {(Object.entries(STATUS_CONFIG) as [ProjectStatus, typeof statusCfg][]).map(([val, cfg]) => (
+                  <DropdownMenuItem
+                    key={val}
+                    onClick={() => { setEditStatus(val); if (!editing) saveField('status', val) }}
+                  >
+                    <StatusMarker tone={cfg.tone} size="sm" />
+                    {cfg.label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
 
             {/* Owner */}
             <AgentSelect
@@ -638,7 +649,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
               onValueChange={(v) => { setEditOwner(v); if (!editing) saveField('owner', v) }}
               agents={selectableAgents}
               ariaLabel="Project owner"
-              className="h-bakin-8 min-w-0 flex-1 bg-bakin-surface-default text-sm sm:w-auto sm:min-w-[9rem] sm:flex-none"
+              className="h-bakin-8 min-w-0 flex-1 bg-bakin-surface-default text-sm sm:w-auto sm:min-w-36 sm:flex-none"
             />
           </div>
 
@@ -646,144 +657,98 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
             {/* Edit / Save / Cancel */}
             {editing ? (
               <>
-                <button
-                  onClick={cancelEdit}
-                  className="h-bakin-8 rounded-bakin-control px-bakin-3 text-sm text-zinc-400 transition-colors hover:text-zinc-200"
-                >
+                <Button variant="ghost" size="sm" onClick={cancelEdit} className="font-bakin-typography-weight-regular text-bakin-text-muted hover:text-bakin-text-primary">
                   Cancel
-                </button>
-                <button
-                  onClick={handleSave}
-                  disabled={!isDirty}
-                  className={`h-bakin-8 rounded-bakin-control px-bakin-3 text-sm font-medium transition-all ${
-                    isDirty
-                      ? 'bg-[#5e6ad2] text-white hover:bg-[#6e7ae2] shadow-sm shadow-[#5e6ad2]/20'
-                      : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
-                  }`}
-                >
+                </Button>
+                <Button size="sm" onClick={handleSave} disabled={!isDirty}>
                   Save
-                </button>
+                </Button>
               </>
             ) : (
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={enterEdit}
-                className="inline-flex h-bakin-8 items-center gap-bakin-2 rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default px-bakin-3 text-sm text-bakin-text-muted transition-colors hover:bg-bakin-surface-elevated hover:text-bakin-text-primary"
+                className="gap-bakin-2 text-sm font-bakin-typography-weight-regular text-bakin-text-muted hover:text-bakin-text-primary"
               >
                 <Pencil className="size-4" />
                 Edit
-              </button>
+              </Button>
             )}
 
           </div>
         </div>
 
-        <PageHeaderOverflowMenu label="Project actions">
-          <DropdownMenuItem variant="danger" onClick={() => setDeleteDialogOpen(true)}>
-            <Trash2 aria-hidden="true" />
-            Delete
-          </DropdownMenuItem>
-        </PageHeaderOverflowMenu>
+        <div className="ml-auto shrink-0 sm:ml-0">
+          <PageHeaderOverflowMenu label="Project actions">
+            <DropdownMenuItem variant="danger" onClick={() => setDeleteDialogOpen(true)}>
+              <Trash2 aria-hidden="true" />
+              Delete
+            </DropdownMenuItem>
+          </PageHeaderOverflowMenu>
+        </div>
       </div>
 
       {/* ── Delete confirmation dialog ── */}
-      {deleteDialogOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60" onClick={() => !deleting && setDeleteDialogOpen(false)} />
-          <div className="relative bg-zinc-900 border border-[rgba(255,255,255,0.08)] rounded-xl shadow-2xl w-[420px] p-6">
-            <h3 className="text-sm font-semibold text-foreground mb-2">Delete project?</h3>
-            <p className="text-[12px] text-zinc-400 mb-4">
-              This will permanently delete <span className="text-zinc-200 font-medium">{project.title}</span> and all its checklist items.
+      <ConfirmDialog
+        open={deleteDialogOpen}
+        title="Delete project?"
+        description={(
+          <>This will permanently delete <span className="font-bakin-typography-weight-medium text-bakin-text-primary">{project.title}</span> and all its checklist items.</>
+        )}
+        confirmLabel="Delete"
+        busyLabel="Deleting..."
+        confirmTone="danger"
+        busy={deleting}
+        onConfirm={() => handleDelete(linkedTaskCount > 0 && deleteLinkedTasks)}
+        onCancel={() => {
+          if (deleting) return
+          setDeleteDialogOpen(false)
+          setDeleteLinkedTasks(false)
+        }}
+      >
+        {linkedTaskCount > 0 && (
+          <div className="flex flex-col gap-bakin-2">
+            <p className="text-bakin-typography-size-meta text-bakin-text-muted">
+              This project has <span className="font-bakin-typography-weight-medium text-bakin-text-primary">{linkedTaskCount}</span> linked board {linkedTaskCount === 1 ? 'task' : 'tasks'}. Unchecked, {linkedTaskCount === 1 ? 'it stays' : 'they stay'} on the board.
             </p>
-
-            {linkedTaskCount > 0 && (
-              <div className="mb-4 p-3 rounded-lg bg-zinc-800/60 border border-[rgba(255,255,255,0.06)]">
-                <p className="text-[11px] text-zinc-300 mb-2">
-                  This project has <span className="font-medium text-foreground">{linkedTaskCount}</span> linked board {linkedTaskCount === 1 ? 'task' : 'tasks'}. What should happen to {linkedTaskCount === 1 ? 'it' : 'them'}?
-                </p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleDelete(false)}
-                    disabled={deleting}
-                    className="flex-1 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-zinc-700/60 text-zinc-300 hover:text-foreground hover:bg-zinc-700 border border-[rgba(255,255,255,0.06)] transition-colors disabled:opacity-50"
-                  >
-                    {deleting ? 'Deleting...' : 'Keep tasks on board'}
-                  </button>
-                  <button
-                    onClick={() => handleDelete(true)}
-                    disabled={deleting}
-                    className="flex-1 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/20 transition-colors disabled:opacity-50"
-                  >
-                    {deleting ? 'Deleting...' : 'Delete tasks too'}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setDeleteDialogOpen(false)}
-                disabled={deleting}
-                className="px-3 py-1.5 rounded-lg text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              {linkedTaskCount === 0 && (
-                <button
-                  onClick={() => handleDelete(false)}
-                  disabled={deleting}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/20 transition-colors disabled:opacity-50"
-                >
-                  {deleting ? 'Deleting...' : 'Delete'}
-                </button>
-              )}
-            </div>
+            <label className="flex items-center gap-bakin-2 text-bakin-typography-size-body text-bakin-text-primary">
+              <Checkbox
+                checked={deleteLinkedTasks}
+                onCheckedChange={(checked: boolean) => setDeleteLinkedTasks(checked === true)}
+              />
+              Also delete {linkedTaskCount === 1 ? 'the linked board task' : 'the linked board tasks'}
+            </label>
           </div>
-        </div>
-      )}
+        )}
+      </ConfirmDialog>
 
       {/* ── Asset detach confirmation dialog ── */}
-      {assetDetachTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60" onClick={() => !detachingAsset && setAssetDetachTarget(null)} />
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="detach-asset-title"
-            className="relative bg-zinc-900 border border-[rgba(255,255,255,0.08)] rounded-xl shadow-2xl w-[420px] p-6"
-          >
-            <h3 id="detach-asset-title" className="text-sm font-semibold text-foreground mb-2">Detach asset?</h3>
-            <p className="text-[12px] text-zinc-400 mb-4">
-              This removes <span className="text-zinc-200 font-medium">{assetName(assetDetachTarget)}</span> from this project. It will not delete the asset file.
-            </p>
-            {assetDetachTarget.missing && (
-              <p className="mb-4 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] leading-snug text-amber-200/80">
-                Bakin can't find this asset. Detaching it cleans up the broken project reference.
-              </p>
-            )}
-            {assetDetachError && (
-              <p className="mb-4 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-[11px] leading-snug text-red-300">
-                {assetDetachError}
-              </p>
-            )}
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setAssetDetachTarget(null)}
-                disabled={detachingAsset}
-                className="px-3 py-1.5 rounded-lg text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => handleDetachAsset(assetDetachTarget.assetId)}
-                disabled={detachingAsset}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/20 transition-colors disabled:opacity-50"
-              >
-                {detachingAsset ? 'Detaching...' : 'Detach'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={Boolean(assetDetachTarget)}
+        title="Detach asset?"
+        description={assetDetachTarget ? (
+          <>This removes <span className="font-bakin-typography-weight-medium text-bakin-text-primary">{assetName(assetDetachTarget)}</span> from this project. It will not delete the asset file.</>
+        ) : undefined}
+        confirmLabel="Detach"
+        busyLabel="Detaching..."
+        confirmTone="danger"
+        busy={detachingAsset}
+        error={assetDetachError}
+        onConfirm={() => { if (assetDetachTarget) void handleDetachAsset(assetDetachTarget.assetId) }}
+        onCancel={() => {
+          if (detachingAsset) return
+          setAssetDetachTarget(null)
+        }}
+      >
+        {assetDetachTarget?.missing && (
+          <Alert tone="attention">
+            <AlertDescription>
+              Bakin can't find this asset. Detaching it cleans up the broken project reference.
+            </AlertDescription>
+          </Alert>
+        )}
+      </ConfirmDialog>
 
       {/* ── Two-column body ── */}
       <div
@@ -797,24 +762,25 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
           {/* Scrollable content area */}
           <div className="min-w-0 shrink-0 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-bakin-1">
             {/* Title */}
-            <label className="text-[10px] font-medium text-zinc-600 uppercase tracking-wider mb-1.5 block">Title</label>
+            <label className="text-bakin-typography-size-meta font-medium text-bakin-text-muted uppercase tracking-wider mb-1.5 block">Title</label>
             {editing ? (
-              <input
+              <Input
                 type="text"
                 value={editTitle}
                 onChange={(e) => setEditTitle(e.target.value)}
-                className="w-full text-xl font-semibold text-foreground bg-zinc-900/40 border border-[rgba(255,255,255,0.06)] rounded-lg outline-none px-4 py-2.5 placeholder:text-zinc-500 mb-5 tracking-tight focus:border-[#5e6ad2]/40 transition-colors"
+                className="mb-5 !h-auto w-full rounded-lg px-4 py-2.5 text-xl font-semibold tracking-tight md:text-xl"
                 placeholder="Untitled project"
+                aria-label="Project title"
                 autoFocus
               />
             ) : (
-              <h1 className="text-xl font-semibold text-foreground tracking-tight mb-5">
+              <h1 className="text-xl font-semibold text-bakin-text-primary tracking-tight mb-5">
                 {project.title || 'Untitled project'}
               </h1>
             )}
 
             {/* Details (spec) */}
-            <label className="text-[10px] font-medium text-zinc-600 uppercase tracking-wider mb-1.5 block">Details</label>
+            <label className="text-bakin-typography-size-meta font-medium text-bakin-text-muted uppercase tracking-wider mb-1.5 block">Details</label>
             <div className="mb-6">
               <ProjectEditor
                 body={editBody}
@@ -866,20 +832,20 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
           <div
             {...sidebarResizeProps}
             aria-label="Resize progress panel"
-            className="absolute inset-y-0 left-0 z-10 hidden w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-accent/50 active:bg-accent lg:block"
+            className="absolute inset-y-0 left-0 z-10 hidden w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-bakin-signal-accent/50 active:bg-bakin-signal-accent lg:block"
           />
 
           {/* Progress */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Progress</h3>
-              <span className="text-[11px] font-mono text-zinc-400 tabular-nums">{project.progress}%</span>
+              <h3 className="text-xs font-medium text-bakin-text-muted uppercase tracking-wider">Progress</h3>
+              <span className="text-bakin-typography-size-meta font-mono text-bakin-text-muted tabular-nums">{project.progress}%</span>
             </div>
             <Progress value={project.progress} aria-label="Project progress" />
           </div>
 
           {/* Checklist */}
-          <div className="pt-4 border-t border-[rgba(255,255,255,0.06)]">
+          <div className="pt-4 border-t border-bakin-border-subtle/30">
             <ProjectChecklist
               projectId={currentId}
               tasks={project.tasks}
@@ -892,74 +858,80 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
           </div>
 
           {/* Assets */}
-          <div className="pt-4 border-t border-[rgba(255,255,255,0.06)]">
+          <div className="pt-4 border-t border-bakin-border-subtle/30">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Assets</h3>
+              <h3 className="text-xs font-medium text-bakin-text-muted uppercase tracking-wider">Assets</h3>
 
-              <button
+              <Button
+                variant="ghost"
+                size="xs"
                 onClick={() => openAssetPicker({ type: 'attach' })}
-                className="flex items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+                className="gap-1 font-bakin-typography-weight-regular text-bakin-text-muted hover:bg-transparent hover:text-bakin-text-primary"
               >
                 <Paperclip className="size-3" />
                 Attach
-              </button>
+              </Button>
             </div>
 
             {project.resolvedAssets.length === 0 ? (
-              <p className="text-[11px] text-zinc-600">No assets attached.</p>
+              <p className="text-bakin-typography-size-meta text-bakin-text-muted">No assets attached.</p>
             ) : (
               <div className="space-y-1.5">
                 {project.resolvedAssets.some(asset => asset.missing) && (
-                  <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 text-[11px] leading-snug text-amber-200/80">
-                    Some attached assets could not be loaded. Detach broken references to clean up this project.
-                  </div>
+                  <Alert tone="attention">
+                    <AlertDescription>
+                      Some attached assets could not be loaded. Detach broken references to clean up this project.
+                    </AlertDescription>
+                  </Alert>
                 )}
                 {project.resolvedAssets.map((asset) => (
                   <div
                     key={asset.assetId}
-                    className={`group flex items-start gap-2.5 rounded-lg p-1.5 transition-colors hover:bg-zinc-800/40 ${asset.missing ? 'border border-amber-500/15 bg-amber-500/5' : ''}`}
+                    className={`group flex items-start gap-2.5 rounded-lg p-1.5 transition-colors hover:bg-bakin-surface-elevated ${asset.missing ? 'border border-bakin-signal-highlight/20 bg-bakin-signal-highlight/5' : ''}`}
                   >
-                    <button
-                      type="button"
+                    <Button
+                      variant="ghost"
                       disabled={asset.missing}
                       onClick={() => setPreviewAsset(asset)}
                       aria-label={`Open ${assetName(asset)}`}
-                      className="flex min-w-0 flex-1 items-start gap-2.5 text-left disabled:cursor-default"
+                      className="!h-auto min-w-0 flex-1 items-start justify-start gap-2.5 whitespace-normal p-0 text-left font-bakin-typography-weight-regular hover:bg-transparent"
                     >
                       <AssetThumb asset={asset} />
                       <div className="min-w-0 flex-1 pt-0.5">
-                        <p className="truncate text-[11px] leading-tight text-zinc-300">{assetName(asset)}</p>
+                        <p className="truncate text-bakin-typography-size-meta leading-tight text-bakin-text-primary">{assetName(asset)}</p>
                         {asset.description && (
-                          <p className="mt-0.5 truncate text-[10px] text-zinc-600">{asset.description}</p>
+                          <p className="mt-0.5 truncate text-bakin-typography-size-meta text-bakin-text-muted">{asset.description}</p>
                         )}
                         {asset.tags && asset.tags.length > 0 && (
                           <div className="mt-1 flex flex-wrap gap-1">
                             {asset.tags.slice(0, 3).map(tag => (
-                              <span key={tag} className="rounded bg-zinc-800/60 px-1 py-0.5 text-[9px] text-zinc-500">{tag}</span>
+                              <span key={tag} className="rounded bg-bakin-surface-elevated px-1 py-0.5 text-bakin-typography-size-meta text-bakin-text-muted">{tag}</span>
                             ))}
                           </div>
                         )}
-                        {asset.missing && <span className="text-[10px] text-amber-500/70">can't find asset</span>}
+                        {asset.missing && <span className="text-bakin-typography-size-meta text-bakin-signal-highlight">can't find asset</span>}
                       </div>
-                    </button>
+                    </Button>
                     <div className={`${asset.missing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} mt-0.5 flex shrink-0 items-center gap-1 transition-opacity`}>
-                      <button
-                        type="button"
+                      <Button
+                        variant="ghost"
+                        size="xs"
                         onClick={(e) => { e.stopPropagation(); openAssetPicker({ type: 'relink', target: asset }) }}
-                        className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-200"
+                        className="gap-1 font-bakin-typography-weight-regular text-bakin-text-muted hover:text-bakin-text-primary"
                         aria-label={`Relink ${assetName(asset)}`}
                       >
                         <Link2 className="size-3" />
                         Relink
-                      </button>
-                      <button
-                        type="button"
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
                         onClick={(e) => { e.stopPropagation(); setAssetDetachError(null); setAssetDetachTarget(asset) }}
-                        className={`${asset.missing ? 'text-amber-400/80' : 'text-zinc-600'} p-1 hover:text-red-400 transition-colors`}
+                        className={`${asset.missing ? 'text-bakin-signal-highlight' : 'text-bakin-text-muted'} hover:text-bakin-signal-danger`}
                         aria-label={`Detach ${assetName(asset)}`}
                       >
                         <X className="size-3" />
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 ))}
@@ -969,20 +941,20 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
           </div>
 
           {/* Meta */}
-          <div className="pt-4 border-t border-[rgba(255,255,255,0.06)]">
-            <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-2">Details</h3>
-            <div className="space-y-1.5 text-[11px]">
+          <div className="pt-4 border-t border-bakin-border-subtle/30">
+            <h3 className="text-xs font-medium text-bakin-text-muted uppercase tracking-wider mb-2">Details</h3>
+            <div className="space-y-1.5 text-bakin-typography-size-meta">
               <div className="flex justify-between">
-                <span className="text-zinc-600">Created</span>
-                <span className="text-zinc-400">{new Date(project.updated).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                <span className="text-bakin-text-muted/70">Created</span>
+                <span className="text-bakin-text-muted">{new Date(project.updated).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-zinc-600">Updated</span>
-                <span className="text-zinc-400">{new Date(project.updated).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                <span className="text-bakin-text-muted/70">Updated</span>
+                <span className="text-bakin-text-muted">{new Date(project.updated).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-zinc-600">ID</span>
-                <span className="text-zinc-500 font-mono">{project.id.slice(0, 8)}</span>
+                <span className="text-bakin-text-muted/70">ID</span>
+                <span className="text-bakin-text-muted font-mono">{project.id.slice(0, 8)}</span>
               </div>
             </div>
           </div>

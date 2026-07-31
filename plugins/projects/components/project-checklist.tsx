@@ -2,16 +2,20 @@
 
 import { useState } from 'react'
 import { Plus, ExternalLink, Unlink, Trash2, Link2, ChevronRight } from 'lucide-react'
+import { Button, Checkbox, Input, Textarea } from '@makinbakin/sdk/ui'
+import { StatusBadge } from '@makinbakin/sdk/patterns'
 import type { ProjectTask } from '../types'
 
-const COLUMN_COLORS: Record<string, string> = {
-  backlog: 'bg-zinc-500/20 text-zinc-400',
-  todo: 'bg-zinc-500/20 text-zinc-300',
-  inProgress: 'bg-blue-500/20 text-blue-400',
-  review: 'bg-amber-500/20 text-amber-400',
-  done: 'bg-emerald-500/20 text-emerald-400',
-  archived: 'bg-purple-500/20 text-purple-400',
-  blocked: 'bg-red-500/20 text-red-400',
+type StatusTone = 'neutral' | 'success' | 'attention' | 'danger' | 'accent'
+
+const COLUMN_TONES: Record<string, StatusTone> = {
+  backlog: 'neutral',
+  todo: 'neutral',
+  inProgress: 'accent',
+  review: 'attention',
+  done: 'success',
+  archived: 'neutral',
+  blocked: 'danger',
 }
 
 interface ResolvedTasks {
@@ -55,101 +59,114 @@ function TaskItem({
   }
 
   return (
-    <div className="rounded-lg hover:bg-[rgba(255,255,255,0.02)] transition-colors">
+    <div className="rounded-lg transition-colors hover:bg-bakin-surface-elevated">
       {/* Main row */}
-      <div className="flex items-start gap-2 group py-1.5 px-1">
-        <button
+      <div className="group flex items-start gap-2 px-1 py-1.5">
+        <Button
+          variant="ghost"
+          size="icon-xs"
           onClick={() => setExpanded(!expanded)}
-          className="text-zinc-600 hover:text-zinc-400 transition-colors shrink-0 mt-0.5"
+          aria-label={expanded ? `Collapse ${item.title}` : `Expand ${item.title}`}
+          className="mt-0.5 shrink-0 text-bakin-text-muted hover:text-bakin-text-primary"
         >
           <ChevronRight className={`size-3 transition-transform ${expanded ? 'rotate-90' : ''}`} />
-        </button>
+        </Button>
 
-        <input
-          type="checkbox"
+        <Checkbox
           checked={item.checked}
-          onChange={(e) => onToggle(e.target.checked)}
-          className="rounded border-zinc-600 bg-zinc-800 text-blue-500 focus:ring-blue-500/30 shrink-0 mt-0.5"
+          onCheckedChange={(checked: boolean) => onToggle(checked === true)}
+          aria-label={item.title}
+          className="mt-0.5 shrink-0"
         />
 
         <span
           onClick={() => setExpanded(!expanded)}
-          className={`text-[11px] flex-1 cursor-pointer leading-snug ${item.checked ? 'line-through text-zinc-600' : 'text-foreground'}`}
+          className={`flex-1 cursor-pointer text-bakin-typography-size-meta leading-snug ${item.checked ? 'line-through text-bakin-text-muted' : 'text-bakin-text-primary'}`}
         >
           {item.title}
         </span>
 
         {/* Linked task badge */}
         {item.taskId && resolved && (
-          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono ${COLUMN_COLORS[resolved.column] || 'bg-zinc-500/20 text-zinc-400'}`}>
-            <ExternalLink className="size-2.5" />
+          <StatusBadge
+            tone={COLUMN_TONES[resolved.column] ?? 'neutral'}
+            variant="soft"
+            size="xs"
+            icon={ExternalLink}
+            className="font-mono"
+          >
             {item.taskId.slice(0, 6)}
-          </span>
+          </StatusBadge>
         )}
 
         {isStale && (
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-red-500/10 text-red-400">
-            <Unlink className="size-2.5" />
+          <StatusBadge tone="danger" variant="soft" size="xs" icon={Unlink}>
             missing
-          </span>
+          </StatusBadge>
         )}
 
         {/* Actions */}
-        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
           {!item.taskId && !item.checked && (
-            <button
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={onPromote}
-              className="p-1 rounded hover:bg-zinc-700 text-zinc-600 hover:text-foreground"
+              aria-label="Create board task"
               title="Create board task"
+              className="text-bakin-text-muted hover:text-bakin-text-primary"
             >
               <Link2 className="size-3" />
-            </button>
+            </Button>
           )}
-          <button
+          <Button
+            variant="ghost"
+            size="icon-xs"
             onClick={onRemove}
-            className="p-1 rounded hover:bg-zinc-700 text-zinc-600 hover:text-red-400"
+            aria-label="Remove"
             title="Remove"
+            className="text-bakin-text-muted hover:text-bakin-signal-danger"
           >
             <Trash2 className="size-3" />
-          </button>
+          </Button>
         </div>
       </div>
 
       {/* Expanded detail */}
       {expanded && (
-        <div className="pl-[42px] pr-1 pb-2">
+        <div className="pb-2 pl-10 pr-1">
           {editingDesc ? (
             <div className="space-y-1.5">
-              <textarea
+              <Textarea
                 value={descDraft}
                 onChange={(e) => setDescDraft(e.target.value)}
                 placeholder="Add details..."
                 rows={2}
-                className="w-full text-[11px] leading-relaxed bg-zinc-900/40 border border-[rgba(255,255,255,0.06)] rounded px-2.5 py-1.5 text-foreground placeholder:text-zinc-500 focus:outline-none focus:border-[#5e6ad2]/40 resize-y"
+                className="w-full resize-y text-bakin-typography-size-meta leading-relaxed"
                 autoFocus
               />
               <div className="flex gap-1.5">
-                <button
-                  onClick={saveDesc}
-                  className="px-2 py-0.5 rounded text-[10px] font-medium bg-zinc-800 text-zinc-300 hover:text-foreground border border-[rgba(255,255,255,0.06)] transition-colors"
-                >
+                <Button variant="secondary" size="xs" onClick={saveDesc}>
                   Save
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="xs"
                   onClick={() => { setDescDraft(item.description || ''); setEditingDesc(false) }}
-                  className="px-2 py-0.5 rounded text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors"
                 >
                   Cancel
-                </button>
+                </Button>
               </div>
             </div>
           ) : (
-            <button
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={() => { setDescDraft(item.description || ''); setEditingDesc(true) }}
-              className="text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors w-full text-left"
+              className="!h-auto w-full justify-start whitespace-normal p-0 text-left text-bakin-typography-size-meta font-bakin-typography-weight-regular text-bakin-text-muted hover:bg-transparent hover:text-bakin-text-primary"
             >
               {item.description || 'Add details...'}
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -185,12 +202,12 @@ export function ProjectChecklist({
 
   return (
     <div>
-      <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-3">Tasks</h3>
+      <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-bakin-text-muted">Tasks</h3>
 
       {tasks.length === 0 ? (
-        <p className="text-[11px] text-zinc-600 mb-3">No tasks yet.</p>
+        <p className="mb-3 text-bakin-typography-size-meta text-bakin-text-muted">No tasks yet.</p>
       ) : (
-        <div className="space-y-0.5 mb-3">
+        <div className="mb-3 space-y-0.5">
           {tasks.map((item) => {
             const resolved = item.taskId ? resolvedTasks[item.taskId] : null
             const stale = !!(item.taskId && resolvedTasks[item.taskId] === null)
@@ -213,21 +230,24 @@ export function ProjectChecklist({
 
       {/* Add new item */}
       <div className="flex gap-2">
-        <input
+        <Input
           type="text"
           value={newItemTitle}
           onChange={(e) => setNewItemTitle(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
           placeholder="Add task..."
-          className="flex-1 text-[11px] bg-zinc-900/40 border border-[rgba(255,255,255,0.06)] rounded px-2.5 py-1.5 text-foreground placeholder:text-zinc-500 focus:outline-none focus:border-[#5e6ad2]/40 transition-colors"
+          aria-label="Add task"
+          className="flex-1 text-bakin-typography-size-meta"
         />
-        <button
+        <Button
+          variant="outline"
+          size="icon-sm"
           onClick={handleAdd}
           disabled={!newItemTitle.trim()}
-          className="px-2 py-1.5 rounded bg-zinc-800 text-zinc-400 hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition-colors border border-[rgba(255,255,255,0.06)]"
+          aria-label="Add task to checklist"
         >
           <Plus className="size-3.5" />
-        </button>
+        </Button>
       </div>
     </div>
   )

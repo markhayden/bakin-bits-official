@@ -660,9 +660,8 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
             <div
               id="messaging-plan-panel-plan"
               aria-labelledby="messaging-plan-tab-plan"
-              className="min-h-0 flex-none overflow-visible @3xl/page-shell:flex-1 @3xl/page-shell:overflow-y-auto @3xl/page-shell:pr-bakin-2"
+              className="min-h-0 flex-none overflow-visible [scrollbar-gutter:stable] @3xl/page-shell:flex-1 @3xl/page-shell:overflow-y-auto @3xl/page-shell:pr-bakin-2"
               role="tabpanel"
-              style={{ scrollbarGutter: 'stable' }}
             >
               <section className="pb-bakin-5">
                 {plan.status === 'needs_review' && (
@@ -748,21 +747,22 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                         {channelOptions.map(channel => {
                           const selected = selectedChannels.includes(channel.id)
                           return (
-                            <button
+                            <Button
                               key={channel.id}
-                              type="button"
+                              variant={selected ? 'accent' : 'secondary'}
+                              size="sm"
                               aria-pressed={selected}
                               disabled={savingChannels}
                               onClick={() => togglePlanChannel(channel.id)}
-                              className={`inline-flex h-bakin-8 items-center gap-bakin-2 rounded-bakin-control border px-bakin-3 text-bakin-typography-size-body transition-colors focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-bakin-focus-ring disabled:cursor-not-allowed disabled:opacity-60 ${
+                              className={`gap-bakin-2 font-bakin-typography-weight-regular ${
                                 selected
-                                  ? 'border-bakin-signal-accent bg-bakin-signal-accent/10 text-bakin-text-primary'
-                                  : 'border-bakin-border-subtle bg-bakin-surface-default text-bakin-text-muted hover:bg-bakin-surface-elevated'
+                                  ? 'bg-bakin-signal-accent/10 hover:bg-bakin-signal-accent/15'
+                                  : 'text-bakin-text-muted hover:bg-bakin-surface-elevated hover:text-bakin-text-muted'
                               }`}
                             >
                               <DistributionChannelIcon channelId={channel.id} className="size-3.5" />
                               {channel.label}
-                            </button>
+                            </Button>
                           )
                         })}
                       </div>
@@ -793,10 +793,10 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                   <ListRows variant="bordered" aria-label="Content pieces">
                     {nonProposedDeliverables.map((deliverable) => (
                       <ListRow key={deliverable.id} className="overflow-hidden p-0">
-                        <button
-                          type="button"
+                        <Button
+                          variant="ghost"
                           onClick={() => setSelectedDeliverable(deliverable)}
-                          className="w-full p-bakin-3 text-left transition-colors hover:bg-bakin-surface-elevated"
+                          className="block !h-auto w-full whitespace-normal rounded-none p-bakin-3 text-left font-bakin-typography-weight-regular hover:bg-bakin-surface-elevated"
                         >
                           <div className="flex items-start justify-between gap-bakin-3">
                             <div className="min-w-0">
@@ -813,7 +813,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                             <span>{deliverable.tone}</span>
                             <span>{formatDateTime(deliverable.publishAt)}</span>
                           </div>
-                        </button>
+                        </Button>
                       </ListRow>
                     ))}
                   </ListRows>
@@ -824,7 +824,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
             <div
               id="messaging-plan-panel-brainstorm"
               aria-labelledby="messaging-plan-tab-brainstorm"
-              className="flex min-h-[36rem] flex-1 flex-col @3xl/page-shell:min-h-0"
+              className="flex min-h-144 flex-1 flex-col @3xl/page-shell:min-h-0"
               role="tabpanel"
             >
               {plan.sourceSessionId ? (
