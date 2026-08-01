@@ -96,6 +96,14 @@ jobs:
         working-directory: .bakin-source
         run: bun install --frozen-lockfile
 
+      # bakin's stylesheet build scans ../bakin-bits-official relative to its
+      # repo root, and the SDK assembly asserts the compiled candidate is
+      # byte-identical to bakin's committed canonical (built WITH these plugin
+      # sources). The bakin checkout lives at .bakin-source inside THIS repo,
+      # so expose the Bits checkout at the sibling path the glob expects.
+      - name: Expose Bits at bakin's sibling path
+        run: ln -sfn "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/bakin-bits-official"
+
       - name: Assemble the compatible SDK
         working-directory: .bakin-source
         run: bun run scripts/publish-sdk.ts --dry-run --version 0.1.1-rc.1 --package-dir "$RUNNER_TEMP/sdk-package" --keep-package-dir
