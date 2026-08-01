@@ -82,6 +82,11 @@ jobs:
           ref: main
           path: .bakin-source
 
+      # The playwright container image ships without unzip, which setup-bun
+      # needs to extract the bun archive.
+      - name: Install unzip for setup-bun
+        run: apt-get update && apt-get install -y unzip
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
