@@ -404,7 +404,7 @@ function ProposalDrawer({
     >
       <div className="flex h-full min-h-0 flex-col">
         <div className="min-h-0 flex-1 overflow-y-auto pr-bakin-1">
-          <div className="space-y-bakin-5 pb-bakin-5">
+          <div className="space-y-5 pb-5">
             <section className="rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default p-bakin-4">
               <ProposalStatusBadge proposal={proposal} />
               <p className="mt-bakin-3 text-bakin-typography-size-body text-bakin-text-muted">{proposal.brief}</p>
@@ -432,14 +432,14 @@ function ProposalDrawer({
               <label className="grid gap-bakin-1 text-bakin-typography-size-body font-bakin-typography-weight-medium">
                 Suggested channels
                 <div
-                  className={`flex min-h-bakin-10 flex-wrap items-center gap-bakin-2 rounded-bakin-control border border-bakin-border-subtle bg-bakin-canvas-default px-bakin-2 py-bakin-1 text-bakin-typography-size-body outline-none transition-colors focus-within:outline-2 focus-within:outline-solid focus-within:-outline-offset-1 focus-within:outline-bakin-focus-ring ${
+                  className={`flex min-h-10 flex-wrap items-center gap-bakin-2 rounded-bakin-control border border-bakin-border-subtle bg-bakin-canvas-default px-bakin-2 py-bakin-1 text-bakin-typography-size-body outline-none transition-colors focus-within:outline-2 focus-within:outline-solid focus-within:-outline-offset-1 focus-within:outline-bakin-focus-ring ${
                     disabled ? 'cursor-not-allowed opacity-50' : ''
                   }`}
                 >
                   {channels.map(channel => (
                     <span
                       key={channel}
-                      className="inline-flex h-bakin-7 max-w-full items-center gap-bakin-1 rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default px-bakin-2 text-bakin-typography-size-meta font-bakin-typography-weight-medium"
+                      className="inline-flex h-7 max-w-full items-center gap-bakin-1 rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default px-bakin-2 text-bakin-typography-size-meta font-bakin-typography-weight-medium"
                     >
                       <span className="truncate">{channel}</span>
                       {!disabled && (
@@ -463,7 +463,7 @@ function ProposalDrawer({
                     onPaste={handleChannelPaste}
                     placeholder={channels.length === 0 ? 'instagram, blog, youtube' : ''}
                     aria-label="Suggested channels"
-                    className="min-h-bakin-7 min-w-24 flex-1 bg-transparent px-bakin-1 text-bakin-typography-size-body outline-none placeholder:text-bakin-text-muted disabled:cursor-not-allowed"
+                    className="min-h-7 min-w-24 flex-1 bg-transparent px-bakin-1 text-bakin-typography-size-body outline-none placeholder:text-bakin-text-muted disabled:cursor-not-allowed"
                   />
                 </div>
               </label>

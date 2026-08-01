@@ -663,7 +663,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
               className="min-h-0 flex-none overflow-visible [scrollbar-gutter:stable] @3xl/page-shell:flex-1 @3xl/page-shell:overflow-y-auto @3xl/page-shell:pr-bakin-2"
               role="tabpanel"
             >
-              <section className="pb-bakin-5">
+              <section className="pb-5">
                 {plan.status === 'needs_review' && (
                   <Alert tone="accent">
                     <div className="flex flex-wrap items-start justify-between gap-bakin-3">
@@ -686,7 +686,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                   </Alert>
                 )}
 
-                <div className={plan.status === 'needs_review' ? 'mt-bakin-5' : ''}>
+                <div className={plan.status === 'needs_review' ? 'mt-5' : ''}>
                   <div className="mb-bakin-2 flex items-center justify-between gap-bakin-3">
                     <div className="flex min-w-0 flex-wrap items-baseline gap-x-bakin-2 gap-y-bakin-1">
                       <h2 className="text-bakin-typography-size-body font-bakin-typography-weight-semibold">Channels</h2>
@@ -907,7 +907,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
             </div>
           </div>
 
-          <div className="mt-bakin-5 border-t border-bakin-border-subtle pt-bakin-5">
+          <div className="mt-5 border-t border-bakin-border-subtle pt-5">
             <div className="mb-bakin-2 flex items-center justify-between">
               <h3 className="text-bakin-typography-size-meta font-bakin-typography-weight-medium uppercase tracking-wider text-bakin-text-muted">Progress</h3>
               <span className="font-bakin-typography-family-mono text-bakin-typography-size-meta tabular-nums text-bakin-text-muted">{progress}%</span>
@@ -916,7 +916,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
           </div>
 
           {canKickoffContentPrep && plan.status !== 'needs_review' && (
-            <div className="mt-bakin-5 rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default p-bakin-3">
+            <div className="mt-5 rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default p-bakin-3">
               <h3 className="text-bakin-typography-size-body font-bakin-typography-weight-semibold">Ready for content prep?</h3>
               <p className="mt-bakin-1 text-bakin-typography-size-meta text-bakin-text-muted">
                 Kickoff creates one scheduled board task per configured channel.
@@ -929,7 +929,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
             </div>
           )}
 
-          <div className="mt-bakin-5 border-t border-bakin-border-subtle pt-bakin-5">
+          <div className="mt-5 border-t border-bakin-border-subtle pt-5">
             <h3 className="mb-bakin-3 text-bakin-typography-size-meta font-bakin-typography-weight-medium uppercase tracking-wider text-bakin-text-muted">Tasks</h3>
             <div className="space-y-bakin-3">
               {planningTasks.map((task) => (
@@ -950,7 +950,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
             </div>
           </div>
 
-          <div className="mt-bakin-5 border-t border-bakin-border-subtle pt-bakin-5">
+          <div className="mt-5 border-t border-bakin-border-subtle pt-5">
             <h3 className="mb-bakin-3 text-bakin-typography-size-meta font-bakin-typography-weight-medium uppercase tracking-wider text-bakin-text-muted">Plan Links</h3>
             <div className="space-y-bakin-2 text-bakin-typography-size-meta text-bakin-text-muted">
               {plan.sourceSessionId && (

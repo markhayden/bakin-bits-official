@@ -587,7 +587,7 @@ export function ContentCalendar() {
         )}
 
         {calendarView === 'list' && (
-          <div className="space-y-bakin-5" data-testid="calendar-view-list">
+          <div className="space-y-5" data-testid="calendar-view-list">
             {listGroups.map(([key, items]) => (
               <ListRowGroup key={key} label={compactDayLabel(key)}>
                 <ListRows variant="bordered">
