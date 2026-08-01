@@ -164,6 +164,7 @@ export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
             onValueChange={setSearch}
             placeholder="Search plans…"
             mobileFullWidth
+            className="@3xl/page-header:w-[22rem] @3xl/page-header:shrink-0"
           />
         )}
       />

@@ -140,6 +140,7 @@ export function ProjectGrid() {
             onValueChange={setSearch}
             placeholder="Search projects…"
             mobileFullWidth
+            className="@3xl/page-header:w-[22rem] @3xl/page-header:shrink-0"
           />
         )}
         actions={(
