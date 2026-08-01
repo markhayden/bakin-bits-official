@@ -41,11 +41,37 @@ export const InputGroup = createElement('div')
 export const Label = createElement('label')
 export const Popover = createElement('div')
 export const Progress = createElement('progress')
-export const Select = ({ children }) => React.createElement('div', null, children)
-export const SelectContent = createElement('div')
-export const SelectItem = createElement('button')
-export const SelectTrigger = createElement('button')
-export const SelectValue = ({ children }) => React.createElement('span', null, children)
+// Functional minimum of the kit Select — a native <select> facade so tests
+// drive real change events; options harvested from SelectItem descendants.
+function collectSelectItems(node, out) {
+  if (node == null || typeof node !== 'object') return out
+  if (Array.isArray(node)) {
+    node.forEach(child => collectSelectItems(child, out))
+    return out
+  }
+  if (node.type === SelectItem) {
+    out.push({ value: node.props.value, label: node.props.children })
+    return out
+  }
+  collectSelectItems(node.props?.children, out)
+  return out
+}
+export const Select = ({ children, value, defaultValue, onValueChange, ...props }) => {
+  const items = collectSelectItems(children, [])
+  return React.createElement(
+    'select',
+    {
+      ...props,
+      value: value ?? defaultValue ?? '',
+      onChange: event => onValueChange?.(event.target.value),
+    },
+    items.map(item => React.createElement('option', { key: String(item.value), value: item.value }, item.label)),
+  )
+}
+export const SelectContent = ({ children }) => React.createElement(React.Fragment, null, children)
+export const SelectItem = () => null
+export const SelectTrigger = () => null
+export const SelectValue = () => null
 export const Separator = createElement('hr')
 export const Sheet = createElement('div')
 export const Skeleton = createElement('div')

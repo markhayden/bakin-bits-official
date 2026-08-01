@@ -11,9 +11,17 @@ import { useRouter } from '@makinbakin/sdk/navigation'
 import { Suspense, useEffect } from 'react'
 import { ProjectGrid } from './components/project-grid'
 import { ProjectDetail } from './components/project-detail'
+import { BrainstormBadgeProvider } from './components/brainstorm-badge-provider'
 
 const navItems: NavItem[] = [
-  { id: 'projects', label: 'Projects', icon: 'Compass', href: '/projects', order: 30 },
+  {
+    id: 'projects',
+    label: 'Projects',
+    icon: 'FolderKanban',
+    href: '/projects',
+    order: 10,
+    section: 'plan-and-automate',
+  },
 ]
 
 interface PluginRouteProps {
@@ -86,5 +94,8 @@ registerPlugin({
     '/projects/new': ProjectsNewRoute,
     '/projects/[id]': ProjectDetailRoute,
     '/projects/[id]/edit': ProjectEditRoute,
+  },
+  slots: {
+    'nav-badge-providers': BrainstormBadgeProvider,
   },
 })

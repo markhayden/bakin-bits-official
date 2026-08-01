@@ -1,0 +1,37 @@
+{
+  "id": "github",
+  "kind": "skill-pack",
+  "name": "GitHub",
+  "version": "1.0.0",
+  "description": "Lets your agents work GitHub the way you do — read issues and pull requests, watch CI runs, inspect diffs, and open PRs — through the official `gh` command line tool.",
+  "author": "Bakin",
+  "bakin": "^1.0.0",
+  "capability": "github",
+  "runtimes": [
+    "*"
+  ],
+  "contributions": {
+    "skills": [
+      "skills/github"
+    ]
+  },
+  "requires": {
+    "prereqs": [
+      {
+        "name": "GitHub CLI (gh)",
+        "kind": "binary",
+        "probe": "gh",
+        "help": "https://cli.github.com/"
+      }
+    ]
+  },
+  "secrets": [
+    {
+      "name": "GH_TOKEN",
+      "description": "GitHub personal access token. Optional — leave it empty if you have already run `gh auth login` on this machine, which is the better path for your own account. Set it to give agents a separate, narrower identity.",
+      "required": false,
+      "secretSlot": "skills.github.GH_TOKEN",
+      "help": "https://github.com/settings/tokens"
+    }
+  ]
+}

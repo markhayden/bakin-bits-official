@@ -21,7 +21,14 @@ export function ProjectCard({ project, onClick }: { project: ProjectSummary; onC
         <h3 className="line-clamp-2 text-sm font-medium text-bakin-text-primary">
           {project.title || 'Untitled project'}
         </h3>
-        <ProjectStatusBadge status={project.status} />
+        <div className="flex shrink-0 items-center gap-bakin-2">
+          {project.brainstormStreaming ? (
+            <span data-testid="card-brainstorm-streaming" title="Brainstorm reply in progress" className="size-bakin-2 animate-pulse rounded-bakin-pill bg-bakin-signal-info" />
+          ) : project.brainstormUnread ? (
+            <span data-testid="card-brainstorm-unread" title="Unseen brainstorm reply" className="size-bakin-2 rounded-bakin-pill bg-bakin-signal-attention" />
+          ) : null}
+          <ProjectStatusBadge status={project.status} />
+        </div>
       </div>
 
       <Progress value={project.progress} aria-label={`${project.title || 'Untitled project'} progress`} />

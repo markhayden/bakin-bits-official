@@ -3,6 +3,6 @@
   "private": true,
   "description": "Build-only install of the real @makinbakin/sdk (published npm package, exact-pinned) so scripts/build-plugins.ts can bundle the SDK into server bundles. Tests still resolve @makinbakin/sdk to the file:./test-sdk stub at the repo root.",
   "dependencies": {
-    "@makinbakin/sdk": "0.1.0"
+    "@makinbakin/sdk": "0.0.1-rc.21"
   }
 }

@@ -72,6 +72,34 @@ bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging@me
 | `rolo` | active | Video producer package — video/audio craft lessons and declared Runway/ElevenLabs runtime secrets. |
 | `jessica` | active | Research package — source-hierarchy lessons and evidence-gathering workspace templates. |
 
+### Capability packs
+
+Skill-packs that give agents a new power. Each one ships the skill that
+teaches the agent to use it plus whatever the capability needs — a pinned
+binary, npm dependencies, a required key, or a prerequisite Bakin checks for
+but does not install. Readiness for every leg surfaces in Bakin's Health and
+Explore surfaces, so a half-configured pack says so instead of failing at
+turn time.
+
+| Pack | Needs | Description |
+| ---- | ----- | ----------- |
+| `web-search-brave` | pinned `bx` binary + Brave API key | Web search, answers, and page extraction. |
+| `browser-tools` | npm deps + Google Chrome | Drives real Chrome — render, screenshot, extract article text. |
+| `ocr` | pinned `ocrit` binary (macOS) | Reads text out of images and scanned PDFs via Apple Vision. |
+| `transcribe` | pinned binary + model (macOS arm64) | Local speech-to-text for audio and video. |
+| `youtube-transcript` | npm deps | Pulls the caption transcript of a YouTube video. |
+| `office-docs` | npm deps | Reads and writes real Word (`.docx`) and Excel (`.xlsx`) files. |
+| `github` | `gh` on PATH, optional token | Issues, pull requests, CI runs, and diffs through the `gh` CLI. |
+| `google-workspace` | `gog` on PATH (OAuth) | Gmail, Calendar, Drive, Contacts, Sheets, and Docs. |
+| `notion` | Notion integration token | Search, read, and write a Notion workspace over its REST API. |
+| `skill-porter` | nothing | Sharpens `bakin skills map` when auditing an installed skill's requirements. |
+
+A pack that declares a secret binds it to its own
+`skills.<pack-id>.<ENV_VAR>` slot — Bakin refuses to bind anything outside
+that namespace, so a pack can never siphon a credential stored for another
+integration. `packs/pack-contract.test.ts` enforces this along with the rest
+of the pack contract.
+
 ## Publishing a release (Whiskit)
 
 Plugin `dist/` is **not committed** — it is build output. To ship a plugin
@@ -153,6 +181,7 @@ bakin-bits-official/
 ├── catalog.json  # storefront index consumed by Bakin's Explore plugin
 ├── plugins/      # installable plugin packages (one dir per plugin)
 ├── agents/       # installable agent packages
+├── packs/        # capability / skill packs (one dir per pack)
 ├── assets/       # shared brand assets (logo, etc.)
 ├── test/         # shared test setup (DOM globals)
 ├── test-sdk/     # mock @makinbakin/sdk used during local tests

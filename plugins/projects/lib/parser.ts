@@ -6,7 +6,7 @@
  */
 import type { StorageAdapter } from '@makinbakin/sdk/types'
 import yaml from 'js-yaml'
-import type { Project, ProjectFrontmatter, ProjectTask, ProjectAsset, ProjectBrainstormMessage, ProjectSummary } from '../types'
+import type { PlanSnapshot, Project, ProjectFrontmatter, ProjectTask, ProjectAsset, ProjectBrainstormMessage, ProjectSummary } from '../types'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -49,6 +49,21 @@ function projectPath(id: string): string {
 function projectBrainstormPath(id: string): string {
   return `projects/${id}.brainstorm.json`
 }
+
+function projectBrainstormSeenPath(id: string): string {
+  return `projects/${id}.brainstorm-seen.json`
+}
+
+function projectHistoryPath(id: string): string {
+  return `projects/${id}.history.json`
+}
+
+/** Bounded plan history — the last N prior bodies (bakin#703). */
+export const PLAN_HISTORY_CAP = 20
+
+/** Brainstorm transcripts are working conversations, not archives —
+ *  bounded so the per-row full-file rewrite stays cheap (bakin#706). */
+export const BRAINSTORM_ROW_CAP = 300
 
 // ---------------------------------------------------------------------------
 // Parse / Serialize
@@ -137,6 +152,11 @@ export interface ProjectRepository {
   writeProject(project: Project): void
   readBrainstormMessages(id: string): ProjectBrainstormMessage[]
   writeBrainstormMessages(id: string, messages: ProjectBrainstormMessage[]): void
+  readBrainstormSeen(id: string): string | null
+  writeBrainstormSeen(id: string, lastSeenAt: string): void
+  readLastAgentActivityTs(id: string): string | null
+  readPlanHistory(id: string): PlanSnapshot[]
+  appendPlanSnapshot(id: string, snapshot: PlanSnapshot): void
   deleteProjectFile(id: string): boolean
   projectStoragePath(id: string): string
   projectBrainstormStoragePath(id: string): string
@@ -144,6 +164,37 @@ export interface ProjectRepository {
 }
 
 export function createProjectRepository(storage: StorageAdapter): ProjectRepository {
+  // The attention endpoint polls every project's transcript for its last
+  // agent-activity timestamp — cache it against the sidecar's mtime+size so
+  // steady-state polls never re-read/re-parse full transcripts (bakin#706).
+  const lastAgentTsCache = new Map<string, { mtimeMs: number; size: number; ts: string | null }>()
+
+  // Local so sibling methods can call them after destructuring (no `this`).
+  function readBrainstormMessages(id: string): ProjectBrainstormMessage[] {
+    const content = storage.read(projectBrainstormPath(id))
+    if (!content) return []
+    try {
+      const parsed = JSON.parse(content)
+      if (!Array.isArray(parsed)) return []
+      return parsed
+        .map(normalizeConversationRow)
+        .filter((message): message is ProjectBrainstormMessage => message !== null)
+    } catch {
+      return []
+    }
+  }
+
+  function readPlanHistory(id: string): PlanSnapshot[] {
+    const content = storage.read(projectHistoryPath(id))
+    if (!content) return []
+    try {
+      const parsed = JSON.parse(content)
+      return Array.isArray(parsed) ? (parsed as PlanSnapshot[]) : []
+    } catch {
+      return []
+    }
+  }
+
   return {
     readProject(id: string): Project | null {
       const content = storage.read(projectPath(id))
@@ -168,22 +219,50 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
       storage.write(projectPath(project.id), serializeProject(project))
     },
 
-    readBrainstormMessages(id: string): ProjectBrainstormMessage[] {
-      const content = storage.read(projectBrainstormPath(id))
-      if (!content) return []
+    readBrainstormMessages,
+
+    writeBrainstormMessages(id: string, messages: ProjectBrainstormMessage[]): void {
+      storage.write(projectBrainstormPath(id), JSON.stringify(messages.slice(-BRAINSTORM_ROW_CAP), null, 2))
+    },
+
+    /** When the user last viewed this project's brainstorm (null = never). */
+    readBrainstormSeen(id: string): string | null {
+      const content = storage.read(projectBrainstormSeenPath(id))
+      if (!content) return null
       try {
-        const parsed = JSON.parse(content)
-        if (!Array.isArray(parsed)) return []
-        return parsed
-          .map(normalizeConversationRow)
-          .filter((message): message is ProjectBrainstormMessage => message !== null)
+        const parsed = JSON.parse(content) as { lastSeenAt?: unknown }
+        return typeof parsed.lastSeenAt === 'string' ? parsed.lastSeenAt : null
       } catch {
-        return []
+        return null
       }
     },
 
-    writeBrainstormMessages(id: string, messages: ProjectBrainstormMessage[]): void {
-      storage.write(projectBrainstormPath(id), JSON.stringify(messages, null, 2))
+    writeBrainstormSeen(id: string, lastSeenAt: string): void {
+      storage.write(projectBrainstormSeenPath(id), JSON.stringify({ lastSeenAt }))
+    },
+
+    /** Timestamp of the last assistant/error row, mtime-cached. */
+    readLastAgentActivityTs(id: string): string | null {
+      const path = projectBrainstormPath(id)
+      const stat = storage.stat?.(path)
+      if (!stat) {
+        lastAgentTsCache.delete(id)
+        return null
+      }
+      const cached = lastAgentTsCache.get(id)
+      if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.ts
+      const rows = readBrainstormMessages(id)
+      const ts = [...rows].reverse().find(r => r.kind === 'assistant' || r.kind === 'error')?.ts ?? null
+      lastAgentTsCache.set(id, { mtimeMs: stat.mtimeMs, size: stat.size, ts })
+      return ts
+    },
+
+    readPlanHistory,
+
+    /** Append one snapshot (oldest first), dropping past the cap. */
+    appendPlanSnapshot(id: string, snapshot: PlanSnapshot): void {
+      const history = [...readPlanHistory(id), snapshot].slice(-PLAN_HISTORY_CAP)
+      storage.write(projectHistoryPath(id), JSON.stringify(history, null, 2))
     },
 
     deleteProjectFile(id: string): boolean {
@@ -192,6 +271,10 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
       storage.remove?.(path)
       const brainstormPath = projectBrainstormPath(id)
       if (storage.exists(brainstormPath)) storage.remove?.(brainstormPath)
+      const seenPath = projectBrainstormSeenPath(id)
+      if (storage.exists(seenPath)) storage.remove?.(seenPath)
+      const historyPath = projectHistoryPath(id)
+      if (storage.exists(historyPath)) storage.remove?.(historyPath)
       return true
     },
 

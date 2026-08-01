@@ -93,6 +93,15 @@ function makeCtx(): CapturedCtx {
       has: mock(() => false),
       invoke: mock(async () => undefined),
     },
+    conversations: {
+      createTurnService: mock(() => ({
+        start: mock(async () => 'accepted' as const),
+        abort: mock(() => false),
+        isInFlight: mock(() => false),
+        waitFor: mock(async () => {}),
+        listInFlight: mock(() => []),
+      })),
+    },
   }
 
   return {

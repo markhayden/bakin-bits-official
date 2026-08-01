@@ -9,6 +9,27 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Added
+- Four capability packs, the official lane for markhayden/bakin#687: `github`
+  (issues/PRs/CI runs through the `gh` CLI, optional token), `google-workspace`
+  (Gmail/Calendar/Drive/Sheets/Docs through the open-source `gog` CLI),
+  `notion` (search, read, and write a workspace over the REST API), and
+  `office-docs` (read and write real `.docx`/`.xlsx` locally via `mammoth`,
+  `docx`, and `exceljs`). Chosen after surveying ClawHub's top 40 skills, which
+  are overwhelmingly unlicensed prose that assumes a CLI already exists — so
+  these are Bakin-authored and supply the install leg the hub skills lack.
+  Binaries the packs cannot pin reproducibly are declared as PATH prerequisites
+  with a help link rather than mirrored, keeping readiness honest without
+  taking on the re-cut treadmill of hosting third-party releases.
+- `skill-porter` pack: supersedes the floor prompt core ships for
+  `bakin skills map`, teaching the mapping agent where bundles actually hide
+  credentials and binaries, which env vars are configuration rather than
+  secrets, and why it must never propose a secret slot itself.
+- `packs/pack-contract.test.ts`: packs were the one published package kind with
+  no contract coverage. Validates manifest shape, that every declared skill
+  exists with Agent-Skills frontmatter, that pinned binaries carry an https URL
+  and a real sha256, that npm deps are pinned exactly, and that declared
+  secrets bind to a slot Bakin's injection layer will actually honour — the
+  last rule caught `notion` shipping an unbindable `notion.token`.
 - CI guardrails for three recurring failure modes: a `test-sdk` stub drift test
   (every `@makinbakin/sdk` import in `plugins/` must exist in the stub), a PR
   version-bump check (changed package ⇒ bumped manifest version), and avatar

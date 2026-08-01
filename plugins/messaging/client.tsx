@@ -10,18 +10,30 @@ import { BrainstormView } from './components/brainstorm-view'
 import { PlanList } from './components/plan-list'
 import { PlanWorkspace } from './components/plan-workspace'
 import { PlansBadgeProvider } from './components/plans-badge-provider'
+import { BrainstormBadgeProvider } from './components/brainstorm-badge-provider'
+
+/** One slot, two providers: Plans review counts + brainstorm attention (#703). */
+function MessagingBadgeProviders() {
+  return (
+    <>
+      <PlansBadgeProvider />
+      <BrainstormBadgeProvider />
+    </>
+  )
+}
 
 const navItems: NavItem[] = [
   {
     id: 'messaging',
     label: 'Messaging',
-    icon: 'MessageSquare',
+    icon: 'Megaphone',
     href: '/messaging',
-    order: 25,
+    order: 30,
+    section: 'create',
     children: [
       { id: 'messaging-calendar', label: 'Calendar', icon: 'CalendarDays', href: '/messaging/calendar' },
       { id: 'messaging-plans', label: 'Plans', icon: 'ClipboardList', href: '/messaging/plans' },
-      { id: 'messaging-brainstorm', label: 'Brainstorm', icon: 'Sparkles', href: '/messaging/brainstorm' },
+      { id: 'messaging-brainstorm', label: 'Brainstorm', icon: 'Lightbulb', href: '/messaging/brainstorm' },
     ],
   },
 ]
@@ -110,6 +122,6 @@ registerPlugin({
   // Background runner that keeps the Plans nav badge in sync with the
   // needs_review count. Stays mounted while the plugin is registered.
   slots: {
-    'nav-badge-providers': PlansBadgeProvider,
+    'nav-badge-providers': MessagingBadgeProviders,
   },
 })

@@ -101,6 +101,8 @@ export interface BrainstormSession {
   updatedAt: string
   messages: SessionMessage[]
   proposals: PlanProposal[]
+  /** When the user last viewed this session's brainstorm (bakin#703 attention). */
+  lastSeenAt?: string
 }
 
 export interface Plan {
@@ -249,6 +251,7 @@ export const BrainstormSessionSchema = z.object({
   updatedAt: z.string().min(1),
   messages: z.array(SessionMessageSchema),
   proposals: z.array(PlanProposalSchema),
+  lastSeenAt: z.string().optional(),
 })
 
 export const PlanSchema = z.object({
