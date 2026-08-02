@@ -11,6 +11,7 @@ dist/
 
 # test coverage
 coverage/
+test-results/
 
 # bun
 .bun/

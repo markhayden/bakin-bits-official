@@ -234,6 +234,17 @@ async function createMaterializedPlan(sessionId: string): Promise<string> {
 // ===========================================================================
 
 describe('Brainstorm turns (engine-backed)', () => {
+  it('completes the brainstorm session when accepted proposals are materialized', async () => {
+    const sessionId = await createTestSession()
+    await createMaterializedPlan(sessionId)
+
+    const getSession = findRoute(plugin.routes, 'GET', '/sessions/:id')!
+    const result = await callRoute(getSession, plugin.ctx, { searchParams: { id: sessionId } })
+    const session = result.body.session as Record<string, unknown>
+
+    expect(session.status).toBe('archived')
+  })
+
   it('202s immediately with the streaming flag', async () => {
     streamRuntimeResponse('Hello world')
     const sessionId = await createTestSession()

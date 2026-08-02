@@ -10,6 +10,25 @@ export function formatSize(bytes) {
   return `${bytes} B`
 }
 
+export function pluginFetch(pluginId, path, init = {}) {
+  const clean = path.startsWith('/') ? path.slice(1) : path
+  const headers = new Headers(init.headers)
+  let body = init.body
+  if (body && typeof body === 'object') {
+    body = JSON.stringify(body)
+    headers.set('Content-Type', 'application/json')
+  }
+  return fetch(`/api/plugins/${pluginId}/${clean}`, { ...init, headers, body })
+}
+
+export function healthHealthy(input) {
+  return { ...input, status: 'healthy' }
+}
+
+export function healthObserved(observations) {
+  return { outcome: 'observed', observations }
+}
+
 // ── Conversation kit server helpers (functional ports of the real SDK —
 // server routes under test run against these for real) ────────────────────
 

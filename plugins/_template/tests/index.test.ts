@@ -1,10 +1,8 @@
 /**
  * Smoke test for the _template plugin.
  *
- * Activates the plugin against a hand-rolled minimal PluginContext,
- * then asserts the route + health check land on the registered state.
- * This is the shape every plugin's tests should follow — exercise
- * activate/onShutdown without spinning up a real Bakin server.
+ * Exercises declarative routes directly, then activates the plugin against a
+ * hand-rolled minimal PluginContext to verify its lifecycle-owned health check.
  *
  * Defensive isolation: mirrors the bakin core test convention so this
  * file can never accidentally touch `~/.bakin/` or `~/.openclaw/` if a
@@ -40,26 +38,17 @@ mock.module('@bakin/core/openclaw-home', () => ({
 
 import plugin from '../index'
 
-interface RegisteredRoute {
-  method: string
-  path: string
-  handler: (req: Request) => Promise<Response>
-}
-
 interface RegisteredHealthCheck {
   id: string
   run: () => Promise<unknown>
 }
 
 function buildMockCtx() {
-  const routes: RegisteredRoute[] = []
   const healthChecks: RegisteredHealthCheck[] = []
   return {
-    routes,
     healthChecks,
     ctx: {
       pluginId: '_template',
-      registerRoute: (route: RegisteredRoute) => { routes.push(route) },
       registerHealthCheck: (def: RegisteredHealthCheck) => {
         healthChecks.push(def)
         return `_template.${def.id}`
@@ -84,20 +73,26 @@ function buildMockCtx() {
 }
 
 describe('_template plugin', () => {
-  it('registers a GET / route returning ok=true', async () => {
-    const { ctx, routes } = buildMockCtx()
-    await plugin.activate(ctx as Parameters<typeof plugin.activate>[0])
-
-    const root = routes.find((r) => r.method === 'GET' && r.path === '/')
+  it('declares GET / and POST /greet routes', async () => {
+    const routes = plugin.routes ?? []
+    const root = routes.find((route) => route.method === 'GET' && route.path === '/')
+    const greet = routes.find((route) => route.method === 'POST' && route.path === '/greet')
     expect(root).toBeDefined()
+    expect(greet).toBeDefined()
 
-    const res = await root!.handler(new Request('http://localhost/'))
+    const res = await root!.handler(new Request('http://localhost/'), {} as never, {} as never)
     const body = await res.json()
     expect(body.ok).toBe(true)
     expect(body.plugin).toBe('_template')
 
-    // Clean up the heartbeat timer so the test doesn't leak.
-    await plugin.onShutdown?.()
+    const greeting = await greet!.handler(
+      new Request('http://localhost/greet', { method: 'POST' }),
+      {} as never,
+      { body: { name: 'Builder' } } as never,
+    )
+    expect(await greeting.json()).toEqual({
+      message: 'Hello, Builder. Your plugin route is working.',
+    })
   })
 
   it('registers a reachability health check', async () => {
@@ -107,8 +102,12 @@ describe('_template plugin', () => {
     const check = healthChecks.find((c) => c.id === 'reachability')
     expect(check).toBeDefined()
 
-    const result = await check!.run() as Array<{ status: string }>
-    expect(result[0].status).toBe('ok')
+    const result = await check!.run() as {
+      outcome: string
+      observations: Array<{ status: string }>
+    }
+    expect(result.outcome).toBe('observed')
+    expect(result.observations[0].status).toBe('healthy')
 
     await plugin.onShutdown?.()
   })

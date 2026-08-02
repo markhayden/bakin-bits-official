@@ -9,7 +9,7 @@
  * arrives while the user is elsewhere (viewing the project stays silent —
  * the detail page marks it seen).
  */
-import { useConversationAttention, visibleIdFromLocation, ConversationReplyToast } from '@makinbakin/sdk/components'
+import { ConversationReplyToast, useConversationAttention, visibleIdFromLocation } from '@makinbakin/sdk/conversation'
 
 export function BrainstormBadgeProvider() {
   useConversationAttention({

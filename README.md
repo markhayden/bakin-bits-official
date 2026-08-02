@@ -148,8 +148,9 @@ bun run typecheck && bun run test && bun run lint
 ## Plugin architecture notes
 
 Official plugins should stay on the public SDK surface: `@makinbakin/sdk`,
-`@makinbakin/sdk/types`, `@makinbakin/sdk/components`, `@makinbakin/sdk/hooks`,
-`@makinbakin/sdk/ui`, and `@makinbakin/sdk/utils`. Do not import Bakin host internals
+`@makinbakin/sdk/types`, `@makinbakin/sdk/hooks`, `@makinbakin/sdk/ui`,
+`@makinbakin/sdk/patterns`, and `@makinbakin/sdk/utils`. (The legacy
+`@makinbakin/sdk/components` barrel was removed in the storybook refit.) Do not import Bakin host internals
 or a specific runtime adapter from plugin source. Runtime work goes through
 `ctx.runtime`; UI primitives and brainstorm helpers come from the SDK. The
 runtime provides these SDK modules when plugins are installed from git subpaths,

@@ -1,105 +1,12 @@
 import React from 'react'
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { usePluginEvent, useNavBadge as hookUseNavBadge, toast as hookToast, useAgent, useRouter } from './hooks.js'
+import { usePluginEvent, useNavBadge, toast, useAgent, useRouter } from './hooks.js'
 
-export function AgentAvatar({ agentId }) {
-  return React.createElement('span', { 'data-testid': agentId ? `avatar-${agentId}` : 'avatar' }, agentId)
-}
-
-export function AgentFilter() {
-  return null
-}
-
-export function AgentSelect({ value, onChange }) {
-  return React.createElement('input', {
-    'data-testid': 'agent-select',
-    value: value ?? '',
-    onChange: event => onChange?.(event.target.value),
-  })
-}
-
-export function BakinDrawer({ children, open = true }) {
-  return open ? React.createElement('div', null, children) : null
-}
-
-export function ChannelIcon({ channelId }) {
-  return React.createElement('span', { 'data-testid': `channel-icon-${channelId ?? 'unknown'}` })
-}
-
-export function EmptyState({ title, children }) {
-  return React.createElement('div', { 'data-testid': 'empty-state' }, title ?? children)
-}
-
-export function FacetFilter() {
-  return null
-}
-
-// Functional minimum of the real SegmentedControl — real tablist semantics
-// and onValueChange wiring so tab-switching tests exercise genuine clicks.
-export function SegmentedControl({ options, value, onValueChange, ariaLabel }) {
-  return React.createElement(
-    'div',
-    { role: 'tablist', 'aria-label': ariaLabel, 'data-segmented-control': true },
-    options.map(o =>
-      React.createElement(
-        'button',
-        {
-          key: o.value,
-          role: 'tab',
-          'aria-selected': value === o.value,
-          'data-segment': o.value,
-          onClick: () => onValueChange?.(o.value),
-        },
-        o.hideLabel ? null : o.label,
-      ),
-    ),
-  )
-}
-
-// Functional minimum of the kit reply toast — avatar + "<agent> title" +
-// preview, click dismisses then router-pushes, test marker attr preserved.
-export function ConversationReplyToast({ agentId, title, preview, to, onNavigate, testId }) {
-  const agent = useAgent(agentId)
-  const router = useRouter()
-  return React.createElement(
-    'button',
-    {
-      type: 'button',
-      ...(testId ? { [testId.attr]: testId.value } : {}),
-      onClick: () => {
-        onNavigate?.()
-        router.push(to)
-      },
-    },
-    React.createElement(AgentAvatar, { agentId }),
-    React.createElement('span', null, `${agent?.name ?? agentId} ${title}`),
-    preview ? React.createElement('span', null, preview) : null,
-  )
-}
-
-// ── Conversation kit stubs (successors to IntegratedBrainstorm) ──────────
-// Functional minimums matching the real semantics so consumer components
-// exercise real flows: the SSE reader parses real frames, the stream hook
-// drives fetcher → chunks → done, and the panel renders messages + input.
-
-
-function parseSseFrame(frame) {
-  let event = 'message'
-  const dataLines = []
-  for (const rawLine of frame.split(/\r?\n/)) {
-    const line = rawLine.trimEnd()
-    if (line.startsWith('event:')) event = line.slice(6).trim()
-    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
-  }
-  if (dataLines.length === 0) return null
-  const rawData = dataLines.join('\n')
-  let data = rawData
-  try {
-    data = JSON.parse(rawData)
-  } catch {}
-  return { event, data }
-}
-
+// Focused conversation-kit stubs mirroring `@makinbakin/sdk/conversation`.
+// Functional minimums matching the real semantics: the panel renders the
+// persisted rows + live text and drives onSend/onAbort through a composer,
+// while identity comes from consumer-supplied `agent`/`resolveAgent` — the
+// focused kit never reads host stores.
 
 function messageText(message, transformText) {
   if (message.kind === 'user') return message.content
@@ -113,11 +20,15 @@ function messageText(message, transformText) {
 }
 
 export function ConversationPanel({
+  chrome,
+  autoFocus,
+  className,
   messages = [],
   liveChunks,
   streaming,
-  agentId,
-  onAgentChange,
+  agent,
+  resolveAgent,
+  agentControl,
   onSend,
   onAbort,
   readOnly,
@@ -139,10 +50,17 @@ export function ConversationPanel({
           return result.extras ? React.createElement('span', { key: `extras-${index}` }, result.extras) : null
         })
     : []
+  const identity = agent ?? resolveAgent?.(undefined)
 
   return React.createElement(
     'div',
-    { 'data-testid': 'conversation-panel' },
+    {
+      'data-testid': 'conversation-panel',
+      'data-chrome': chrome,
+      'data-agent': identity?.id ?? identity?.name,
+      'data-auto-focus': autoFocus == null ? undefined : String(autoFocus),
+      className,
+    },
     readOnly && readOnlyNotice ? readOnlyNotice : null,
     messages.length === 0 && !liveText ? emptyState : null,
     ...messages.map((message, index) =>
@@ -151,13 +69,7 @@ export function ConversationPanel({
     ...extras,
     liveText ? React.createElement('div', { 'data-testid': 'live-text' }, liveText) : null,
     streaming ? React.createElement('div', { 'data-testid': 'thinking' }, 'thinking…') : null,
-    onAgentChange && agentId
-      ? React.createElement('input', {
-        'data-testid': 'agent-select',
-        value: agentId,
-        onChange: event => onAgentChange(event.target.value),
-      })
-      : null,
+    agentControl ?? null,
     !readOnly && onSend
       ? React.createElement('textarea', {
         'aria-label': placeholder,
@@ -214,38 +126,36 @@ export function ThinkingIndicator({ label = 'thinking' }) {
 }
 
 export function foldConversation(messages = [], opts = {}) {
-  const turns = messages.map((message, index) => ({ kind: message.kind === 'user' ? 'user' : 'agent', key: String(index), items: [], status: 'complete' }))
+  const turns = messages.map((message, index) => ({
+    kind: message.kind === 'user' ? 'user' : 'agent',
+    key: String(index),
+    items: [],
+    status: 'complete',
+  }))
   if (opts.liveChunks) turns.push({ kind: 'agent', key: 'live', items: [], status: 'streaming' })
   return turns
 }
 
-export function MarkdownEditor({ value = '', content, editing, onChange }) {
-  if (editing === false) {
-    return React.createElement('div', { 'data-testid': 'markdown-rendered' }, content ?? value)
-  }
-  return React.createElement('textarea', { value: content ?? value, onChange: event => onChange?.(event.target.value) })
-}
+// ── Reply toast (#703) — avatar + "<agent> title" + preview; click dismisses
+// then router-pushes, test marker attr preserved. ──
 
-export function PluginHeader({ title, search, actions, children }) {
+export function ConversationReplyToast({ agentId, title, preview, to, onNavigate, testId }) {
+  const agent = useAgent(agentId)
+  const router = useRouter()
   return React.createElement(
-    'header',
-    null,
-    React.createElement('h1', null, title),
-    search
-      ? React.createElement('input', {
-        'data-testid': 'plugin-search-input',
-        value: search.value ?? '',
-        placeholder: search.placeholder,
-        onChange: event => search.onChange?.(event.target.value),
-      })
-      : null,
-    actions,
-    children,
+    'button',
+    {
+      type: 'button',
+      ...(testId ? { [testId.attr]: testId.value } : {}),
+      onClick: () => {
+        onNavigate?.()
+        router.push(to)
+      },
+    },
+    React.createElement('span', { 'data-testid': agentId ? `avatar-${agentId}` : 'avatar' }, agentId),
+    React.createElement('span', null, `${agent?.name ?? agentId} ${title}`),
+    preview ? React.createElement('span', null, preview) : null,
   )
-}
-
-export function SortableHead({ children, onSort, field }) {
-  return React.createElement('th', { onClick: () => onSort?.(field) }, children)
 }
 
 // ── useConversationThread (#703) — functional minimum mirroring the real
@@ -395,7 +305,7 @@ export function useConversationAttention(config) {
         { key, agentId: String(payload.agentId ?? ''), preview: payload.preview, aborted: payload.aborted },
         () => {},
       )
-      hookToast(node, 'info')
+      toast(node, 'info')
     }
     if (!payload.aborted && !viewing && settings.sound) cfg.chime?.()
     void refreshTotals()
@@ -408,7 +318,7 @@ export function useConversationAttention(config) {
     const settings = cfg.settings?.() ?? { sound: true, toasts: true }
     if (cfg.visibleKey() !== key && settings.toasts) {
       const message = cfg.errorToast?.(payload)
-      if (message) hookToast(message, 'error')
+      if (message) toast(message, 'error')
     }
     void refreshTotals()
   })
@@ -417,5 +327,5 @@ export function useConversationAttention(config) {
   usePluginEvent(refreshEvents[0] ?? `${config.pluginId}.__attention_noop_0`, () => { void refreshTotals() })
   usePluginEvent(refreshEvents[1] ?? `${config.pluginId}.__attention_noop_1`, () => { void refreshTotals() })
 
-  hookUseNavBadge(config.pluginId, config.navItemId, badgeFor(unreadTotal, inflight.size))
+  useNavBadge(config.pluginId, config.navItemId, badgeFor(unreadTotal, inflight.size))
 }

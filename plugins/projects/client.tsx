@@ -1,10 +1,14 @@
 /**
  * Projects plugin — client entry point.
+ *
+ * Routes render bare components inside Suspense; each page composes the
+ * SDK `Page` archetype itself (ProjectGrid and ProjectDetail own their
+ * page canvas), so there is no local page frame.
  */
 import { registerPlugin } from '@makinbakin/sdk'
 import type { NavItem } from '@makinbakin/sdk'
-import { useRouter } from '@makinbakin/sdk/hooks'
-import { Suspense, useEffect, type ReactNode } from 'react'
+import { useRouter } from '@makinbakin/sdk/navigation'
+import { Suspense, useEffect } from 'react'
 import { ProjectGrid } from './components/project-grid'
 import { ProjectDetail } from './components/project-detail'
 import { BrainstormBadgeProvider } from './components/brainstorm-badge-provider'
@@ -25,19 +29,11 @@ interface PluginRouteProps {
   id?: string
 }
 
-function ProjectsPageFrame({ children, edge = false }: { children: ReactNode; edge?: boolean }) {
-  return (
-    <div className={`${edge ? 'p-[5px]' : 'p-6'} flex flex-col h-full min-h-0 min-w-0 overflow-hidden`}>
-      <Suspense>{children}</Suspense>
-    </div>
-  )
-}
-
 function ProjectsIndexRoute() {
   return (
-    <ProjectsPageFrame edge>
+    <Suspense>
       <ProjectGrid />
-    </ProjectsPageFrame>
+    </Suspense>
   )
 }
 
@@ -58,7 +54,7 @@ function ProjectDetailRoute({ params, id }: PluginRouteProps) {
   if (!projectId) return <ProjectsNewRoute />
 
   return (
-    <ProjectsPageFrame>
+    <Suspense>
       <ProjectDetail
         projectId={projectId}
         onBack={() => router.push('/projects')}
@@ -66,7 +62,7 @@ function ProjectDetailRoute({ params, id }: PluginRouteProps) {
           if (editing) router.replace(`/projects/${projectId}/edit`)
         }}
       />
-    </ProjectsPageFrame>
+    </Suspense>
   )
 }
 
@@ -77,7 +73,7 @@ function ProjectEditRoute({ params, id }: PluginRouteProps) {
   if (!projectId) return <ProjectsNewRoute />
 
   return (
-    <ProjectsPageFrame>
+    <Suspense>
       <ProjectDetail
         projectId={projectId}
         onBack={() => router.push('/projects')}
@@ -86,7 +82,7 @@ function ProjectEditRoute({ params, id }: PluginRouteProps) {
           if (!editing) router.replace(`/projects/${projectId}`)
         }}
       />
-    </ProjectsPageFrame>
+    </Suspense>
   )
 }
 

@@ -41,7 +41,7 @@ export function NewProjectDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v && !creating) onCancel() }}>
-      <DialogContent className="bg-card border-border max-w-sm">
+      <DialogContent className="max-w-sm">
         <DialogHeader>
           <DialogTitle>New project</DialogTitle>
         </DialogHeader>
@@ -53,7 +53,7 @@ export function NewProjectDialog({
             autoFocus
             disabled={creating}
           />
-          {error && <p className="text-xs text-red-400">{error}</p>}
+          {error && <p className="text-xs text-bakin-signal-danger">{error}</p>}
           <div className="flex justify-end gap-2 mt-1">
             <Button type="button" variant="outline" onClick={onCancel} disabled={creating}>
               Cancel

@@ -40,7 +40,7 @@ export interface Project extends ProjectFrontmatter {
  * them. Old role-based rows are dropped on read (accepted: degraded replay
  * for pre-kit brainstorms; no compat shims).
  */
-export type ProjectBrainstormMessage = import('@makinbakin/sdk/components').ConversationMessage
+export type ProjectBrainstormMessage = import('@makinbakin/sdk/conversation').ConversationMessage
 
 /** One plan-body snapshot (bakin#703): captured BEFORE every body write. */
 export interface PlanSnapshot {

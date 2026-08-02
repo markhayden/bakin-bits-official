@@ -1,26 +1,57 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { AgentFilter } from "@makinbakin/sdk/components"
-import { EmptyState } from "@makinbakin/sdk/components"
-import { FacetFilter } from "@makinbakin/sdk/components"
-import { PluginHeader } from "@makinbakin/sdk/components"
-import { AgentAvatar } from "@makinbakin/sdk/components"
-import { ChannelIcon } from "@makinbakin/sdk/components"
-import { Badge } from "@makinbakin/sdk/ui"
-import { Button } from "@makinbakin/sdk/ui"
-import { Input } from "@makinbakin/sdk/ui"
-import { Skeleton } from "@makinbakin/sdk/ui"
-import { CalendarDays, ChevronLeft, ChevronRight, Circle, Search } from 'lucide-react'
-import { useAgentIds } from "@makinbakin/sdk/hooks"
-import { useNotificationChannels } from "@makinbakin/sdk/hooks"
-import { useQueryArrayState, useQueryState } from "@makinbakin/sdk/hooks"
+import {
+  AgentAvatar,
+  AgentFilter,
+  CalendarGrid,
+  ChannelIcon,
+  FacetFilter,
+  ListRow,
+  ListRowGroup,
+  ListRows,
+  Page,
+  PageBody,
+  PageControls,
+  PageHeader,
+  SearchInput,
+  SegmentedControl,
+  StatusMarker,
+} from '@makinbakin/sdk/patterns'
+import { Badge, Button, SystemState } from '@makinbakin/sdk/ui'
+import {
+  CalendarDays,
+  CalendarRange,
+  ChevronLeft,
+  ChevronRight,
+  Circle,
+  Clock,
+  List,
+} from 'lucide-react'
+import { useAgentList, useNotificationChannels } from '@makinbakin/sdk/hooks'
+import { useQueryArrayState, useQueryState } from '@makinbakin/sdk/navigation'
 import type { Deliverable, DeliverableStatus } from '../types'
+import { DELIVERABLE_STATUS_TONE } from '../constants'
 import { getContentTypeLabel, useContentTypes } from '../hooks/use-content-types'
 import { useDeliverables } from '../hooks/use-deliverables'
 import { DeliverableDrawer } from './deliverable-drawer'
 import { DeliverableStatusBadge } from './deliverable-status-badge'
 import { QuickPostButton } from './quick-post-button'
+
+type CalendarView = 'list' | 'today' | 'week' | 'month'
+type CalendarViewOption = {
+  value: CalendarView
+  icon: typeof List
+  label: string
+  hideLabel: boolean
+}
+
+/** Deliverable flattened into the shared CalendarGrid item shape. */
+interface CalendarDeliverableItem {
+  key: string
+  date: string
+  deliverable: Deliverable
+}
 
 const STATUS_OPTIONS: Array<{ value: DeliverableStatus; label: string; icon: React.ReactNode }> = [
   { value: 'proposed', label: 'Proposed', icon: <Circle className="size-3" /> },
@@ -34,10 +65,23 @@ const STATUS_OPTIONS: Array<{ value: DeliverableStatus; label: string; icon: Rea
   { value: 'cancelled', label: 'Cancelled', icon: <Circle className="size-3" /> },
   { value: 'failed', label: 'Failed', icon: <Circle className="size-3" /> },
 ]
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
+const VIEW_OPTIONS: ReadonlyArray<CalendarViewOption> = [
+  { value: 'list', icon: List, label: 'List', hideLabel: true },
+  { value: 'today', icon: Clock, label: 'Today', hideLabel: true },
+  { value: 'week', icon: CalendarRange, label: 'Week', hideLabel: true },
+  { value: 'month', icon: CalendarDays, label: 'Month', hideLabel: true },
+]
+
+/**
+ * Local-day key for an instant — matches the shared CalendarGrid's LOCAL
+ * placement so the plugin's own counts and lists never disagree with the
+ * grid. (Slicing the ISO prefix would read the UTC day instead.)
+ */
 function dateKey(value: string): string {
-  return value.slice(0, 10)
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value.slice(0, 10)
+  return localDateKey(date)
 }
 
 function localDateKey(date: Date): string {
@@ -45,6 +89,24 @@ function localDateKey(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+function dateFromKey(value: string): Date {
+  return new Date(`${value}T00:00:00`)
+}
+
+function addDays(value: string, delta: number): string {
+  const date = dateFromKey(value)
+  if (Number.isNaN(date.getTime())) return localDateKey(new Date())
+  date.setDate(date.getDate() + delta)
+  return localDateKey(date)
+}
+
+function startOfWeek(value: string): string {
+  const date = dateFromKey(value)
+  if (Number.isNaN(date.getTime())) return localDateKey(new Date())
+  date.setDate(date.getDate() - date.getDay())
+  return localDateKey(date)
 }
 
 function monthKey(date: Date): string {
@@ -59,10 +121,50 @@ function monthLabel(value: string): string {
   return date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
 }
 
+function dayLabel(value: string): string {
+  const date = dateFromKey(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
+
+function compactDayLabel(value: string): string {
+  const date = dateFromKey(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function weekLabel(value: string): string {
+  const start = startOfWeek(value)
+  const end = addDays(start, 6)
+  const startDate = dateFromKey(start)
+  const endDate = dateFromKey(end)
+  const sameMonth = startDate.getMonth() === endDate.getMonth()
+  const startText = startDate.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    ...(sameMonth ? {} : { year: 'numeric' }),
+  })
+  const endText = endDate.toLocaleDateString('en-US', {
+    month: sameMonth ? undefined : 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+  return `${startText} – ${endText}`
+}
+
 function formatTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+}
+
+function statusLabel(status: DeliverableStatus): string {
+  return status.replaceAll('_', ' ')
 }
 
 function matchesSearch(deliverable: Deliverable, query: string): boolean {
@@ -77,17 +179,17 @@ function matchesSearch(deliverable: Deliverable, query: string): boolean {
 }
 
 function addMonths(value: string, delta: number): string {
-  const date = new Date(`${value}-01T00:00:00`)
-  if (Number.isNaN(date.getTime())) return monthKey(new Date())
+  const date = dateFromKey(value)
+  if (Number.isNaN(date.getTime())) return localDateKey(new Date())
   date.setMonth(date.getMonth() + delta)
-  return monthKey(date)
+  return localDateKey(date)
 }
 
-function defaultCalendarMonth(deliverables: Deliverable[]): string {
-  const current = monthKey(new Date())
-  if (deliverables.some(deliverable => monthKey(new Date(deliverable.publishAt)) === current)) return current
+function defaultCalendarDate(deliverables: Deliverable[]): string {
+  const today = localDateKey(new Date())
+  if (deliverables.some(deliverable => dateKey(deliverable.publishAt) === today)) return today
   const first = [...deliverables].sort((a, b) => Date.parse(a.publishAt) - Date.parse(b.publishAt))[0]
-  return first ? monthKey(new Date(first.publishAt)) : current
+  return first ? dateKey(first.publishAt) : today
 }
 
 function appendMissingIds(baseIds: string[], referencedIds: string[]): string[] {
@@ -107,17 +209,98 @@ function isCalendarVisibleDeliverable(deliverable: Deliverable): boolean {
   return true
 }
 
+interface CalendarDeliverableProps {
+  deliverable: Deliverable
+  agentById: Map<string, { id: string; name: string; headshot?: string | null }>
+  contentTypes: ReturnType<typeof useContentTypes>
+  onSelect: (deliverable: Deliverable) => void
+  mode?: 'card' | 'row'
+}
+
+function CalendarDeliverable({
+  deliverable,
+  agentById,
+  contentTypes,
+  onSelect,
+  mode = 'card',
+}: CalendarDeliverableProps) {
+  const agent = agentById.get(deliverable.agent)
+  const identity = {
+    id: deliverable.agent,
+    name: agent?.name || deliverable.agent,
+    imageSrc: agent?.headshot || null,
+  }
+
+  if (mode === 'row') {
+    return (
+      <Button
+        variant="ghost"
+        onClick={() => onSelect(deliverable)}
+        className="flex !h-auto w-full min-w-0 items-center justify-start gap-bakin-3 whitespace-normal rounded-none px-bakin-3 py-bakin-3 text-left font-bakin-typography-weight-regular hover:bg-bakin-surface-elevated"
+        data-testid={`calendar-deliverable-${deliverable.id}`}
+      >
+        <AgentAvatar agent={identity} size="sm" decorative />
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 items-center gap-bakin-2">
+            <span className="truncate font-bakin-typography-weight-semibold">{deliverable.title}</span>
+            <DeliverableStatusBadge status={deliverable.status} />
+          </span>
+          <span className="mt-bakin-1 block truncate text-bakin-typography-size-meta text-bakin-text-muted">
+            {formatTime(deliverable.publishAt)} · {deliverable.channel} · {getContentTypeLabel(deliverable.contentType, contentTypes)}
+          </span>
+        </span>
+        <ChevronRight className="size-bakin-4 shrink-0 text-bakin-text-muted" aria-hidden="true" />
+      </Button>
+    )
+  }
+
+  return (
+    <Button
+      variant="outline"
+      onClick={() => onSelect(deliverable)}
+      className="block !h-auto w-full whitespace-normal rounded-bakin-control bg-bakin-surface-default px-bakin-2 py-bakin-2 text-left font-bakin-typography-weight-regular hover:bg-bakin-surface-elevated"
+      data-testid={`calendar-deliverable-${deliverable.id}`}
+    >
+      <div className="flex min-w-0 items-center gap-bakin-2">
+        <span className="shrink-0 font-bakin-typography-family-mono text-bakin-typography-size-meta text-bakin-text-muted">
+          {formatTime(deliverable.publishAt)}
+        </span>
+        <StatusMarker
+          tone={DELIVERABLE_STATUS_TONE[deliverable.status]}
+          label={statusLabel(deliverable.status)}
+        />
+      </div>
+      <div className="mt-bakin-1 truncate text-bakin-typography-size-meta font-bakin-typography-weight-semibold">
+        {deliverable.title}
+      </div>
+      <div className="mt-bakin-1 flex min-w-0 items-center gap-bakin-1 text-bakin-typography-size-meta text-bakin-text-muted">
+        <AgentAvatar agent={identity} size="xs" decorative />
+        <span className="truncate">{deliverable.channel}</span>
+      </div>
+      <div className="mt-bakin-1 flex flex-wrap gap-bakin-1">
+        <Badge variant="outline" size="xs" className="max-w-full truncate">
+          {getContentTypeLabel(deliverable.contentType, contentTypes)}
+        </Badge>
+      </div>
+    </Button>
+  )
+}
+
 export function ContentCalendar() {
   const { deliverables, loading, refresh } = useDeliverables()
   const contentTypes = useContentTypes()
-  const agentIds = useAgentIds()
+  const agents = useAgentList()
   const channels = useNotificationChannels()
   const [agentFilter, setAgentFilter] = useQueryState('agent', 'all')
   const [statusFilter, setStatusFilter] = useQueryArrayState('status')
   const [typeFilter, setTypeFilter] = useQueryArrayState('type')
   const [channelFilter, setChannelFilter] = useQueryArrayState('channel')
   const [search, setSearch] = useQueryState('q', '')
-  const [visibleMonth, setVisibleMonth] = useState<string | null>(null)
+  const [view, setView] = useQueryState('view', 'month')
+  const calendarView: CalendarView = VIEW_OPTIONS.some(option => option.value === view)
+    ? view as CalendarView
+    : 'month'
+  const [visibleDate, setVisibleDate] = useState<string | null>(null)
   const [selectedDeliverable, setSelectedDeliverable] = useState<Deliverable | null>(null)
   const calendarDeliverables = useMemo(
     () => deliverables.filter(isCalendarVisibleDeliverable),
@@ -125,11 +308,28 @@ export function ContentCalendar() {
   )
 
   const calendarAgentIds = useMemo(
-    () => appendMissingIds(agentIds, calendarDeliverables.map((deliverable) => deliverable.agent)),
-    [agentIds, calendarDeliverables],
+    () => appendMissingIds(agents.map(agent => agent.id), calendarDeliverables.map(deliverable => deliverable.agent)),
+    [agents, calendarDeliverables],
+  )
+  const agentById = useMemo(() => new Map(agents.map(agent => [agent.id, agent])), [agents])
+  const agentOptions = useMemo(
+    () => calendarAgentIds.map((agentId) => {
+      const agent = agentById.get(agentId)
+      const identity = {
+        id: agentId,
+        name: agent?.name || agentId,
+        imageSrc: agent?.headshot || null,
+      }
+      return {
+        value: agentId,
+        label: identity.name,
+        visual: <AgentAvatar agent={identity} size="sm" decorative />,
+      }
+    }),
+    [agentById, calendarAgentIds],
   )
   const typeOptions = useMemo(() => {
-    const options = new Map(contentTypes.map((type) => [type.id, { value: type.id, label: type.label }]))
+    const options = new Map(contentTypes.map(type => [type.id, { value: type.id, label: type.label }]))
     for (const deliverable of calendarDeliverables) {
       if (!options.has(deliverable.contentType)) {
         options.set(deliverable.contentType, { value: deliverable.contentType, label: deliverable.contentType })
@@ -138,7 +338,7 @@ export function ContentCalendar() {
     return Array.from(options.values())
   }, [calendarDeliverables, contentTypes])
   const channelOptions = useMemo(() => {
-    const options = new Map(channels.map((channel) => [
+    const options = new Map(channels.map(channel => [
       channel.id,
       { value: channel.id, label: channel.label, icon: <ChannelIcon channelId={channel.id} className="size-3.5" /> },
     ]))
@@ -154,163 +354,255 @@ export function ContentCalendar() {
     return Array.from(options.values())
   }, [calendarDeliverables, channels])
 
-  const filteredDeliverables = useMemo(() => {
-    return calendarDeliverables.filter((deliverable) => {
-      if (agentFilter !== 'all' && deliverable.agent !== agentFilter) return false
-      if (statusFilter.length > 0 && !statusFilter.includes(deliverable.status)) return false
-      if (typeFilter.length > 0 && !typeFilter.includes(deliverable.contentType)) return false
-      if (channelFilter.length > 0 && !channelFilter.includes(deliverable.channel)) return false
-      return matchesSearch(deliverable, search)
-    })
-  }, [agentFilter, calendarDeliverables, channelFilter, search, statusFilter, typeFilter])
+  const filteredDeliverables = useMemo(() => calendarDeliverables.filter((deliverable) => {
+    if (agentFilter !== 'all' && deliverable.agent !== agentFilter) return false
+    if (statusFilter.length > 0 && !statusFilter.includes(deliverable.status)) return false
+    if (typeFilter.length > 0 && !typeFilter.includes(deliverable.contentType)) return false
+    if (channelFilter.length > 0 && !channelFilter.includes(deliverable.channel)) return false
+    return matchesSearch(deliverable, search)
+  }), [agentFilter, calendarDeliverables, channelFilter, search, statusFilter, typeFilter])
 
-  const activeMonth = visibleMonth ?? defaultCalendarMonth(filteredDeliverables)
-  const calendarDays = useMemo(() => {
+  const activeDate = visibleDate ?? defaultCalendarDate(filteredDeliverables)
+  const activeMonth = monthKey(dateFromKey(activeDate))
+  const hasActiveFilters = (
+    agentFilter !== 'all' ||
+    statusFilter.length > 0 ||
+    typeFilter.length > 0 ||
+    channelFilter.length > 0 ||
+    search.length > 0
+  )
+  const clearFilters = () => {
+    setAgentFilter('all')
+    setStatusFilter([])
+    setTypeFilter([])
+    setChannelFilter([])
+    setSearch('')
+  }
+
+  // Chronological item order — the shared CalendarGrid preserves input order
+  // inside every cell, so each day stacks by publish time.
+  const calendarItems = useMemo<CalendarDeliverableItem[]>(
+    () => [...filteredDeliverables]
+      .sort((a, b) => Date.parse(a.publishAt) - Date.parse(b.publishAt))
+      .map((deliverable) => ({
+        key: deliverable.id,
+        // Full ISO instants pass straight through; the kit parses plain
+        // YYYY-MM-DD strings as LOCAL midnight itself.
+        date: deliverable.publishAt,
+        deliverable,
+      })),
+    [filteredDeliverables],
+  )
+
+  const groupedDeliverables = useMemo(() => {
     const groups = new Map<string, Deliverable[]>()
-    for (const deliverable of filteredDeliverables) {
-      const key = dateKey(deliverable.publishAt)
+    for (const item of calendarItems) {
+      const key = dateKey(item.deliverable.publishAt)
       const existing = groups.get(key) ?? []
-      existing.push(deliverable)
+      existing.push(item.deliverable)
       groups.set(key, existing)
     }
-    const first = new Date(`${activeMonth}-01T00:00:00`)
-    const start = new Date(first)
-    start.setDate(1 - first.getDay())
-    return Array.from({ length: 42 }).map((_, index) => {
-      const date = new Date(start)
-      date.setDate(start.getDate() + index)
-      const key = localDateKey(date)
-      return {
-        key,
-        date,
-        inMonth: monthKey(date) === activeMonth,
-        isToday: key === localDateKey(new Date()),
-        deliverables: (groups.get(key) ?? []).sort((a, b) => Date.parse(a.publishAt) - Date.parse(b.publishAt)),
-      }
-    })
-  }, [activeMonth, filteredDeliverables])
+    return groups
+  }, [calendarItems])
+
+  const listGroups = useMemo(
+    () => Array.from(groupedDeliverables.entries()).sort(([a], [b]) => a.localeCompare(b)),
+    [groupedDeliverables],
+  )
+
+  const state = loading ? (
+    <SystemState
+      kind="loading"
+      scope="page"
+      title="Loading the content calendar"
+      description="Scheduled deliverables will appear as soon as the current messaging plan is available."
+    />
+  ) : filteredDeliverables.length === 0 && hasActiveFilters ? (
+    <SystemState
+      kind="no-results"
+      scope="page"
+      title="No deliverables match this view"
+      description="The current search and filters exclude every scheduled deliverable."
+      action={<Button variant="outline" onClick={clearFilters}>Clear search and filters</Button>}
+    />
+  ) : filteredDeliverables.length === 0 ? (
+    <SystemState
+      kind="initial-empty"
+      scope="page"
+      title="No scheduled deliverables yet"
+      description="Create a quick post to add the first item to the messaging calendar."
+      action={<QuickPostButton onCreated={refresh} />}
+    />
+  ) : undefined
+
+  const navigate = (direction: -1 | 1) => {
+    if (calendarView === 'today') setVisibleDate(addDays(activeDate, direction))
+    if (calendarView === 'week') setVisibleDate(addDays(activeDate, direction * 7))
+    if (calendarView === 'month') setVisibleDate(addMonths(activeDate, direction))
+  }
+  const activeRangeLabel = calendarView === 'today'
+    ? dayLabel(activeDate)
+    : calendarView === 'week'
+      ? weekLabel(activeDate)
+      : monthLabel(activeMonth)
+
+  const navigation = calendarView !== 'list' ? (
+    <div className="flex min-w-0 items-center justify-between gap-bakin-3" data-slot="calendar-navigation">
+      <div className="flex items-center gap-bakin-1">
+        <Button size="icon-sm" variant="ghost" aria-label={`Previous ${calendarView}`} onClick={() => navigate(-1)}>
+          <ChevronLeft className="size-bakin-4" aria-hidden="true" />
+        </Button>
+        <Button size="icon-sm" variant="ghost" aria-label={`Next ${calendarView}`} onClick={() => navigate(1)}>
+          <ChevronRight className="size-bakin-4" aria-hidden="true" />
+        </Button>
+      </div>
+      <h2 className="min-w-0 truncate text-bakin-typography-size-section-title font-bakin-typography-weight-semibold">
+        {activeRangeLabel}
+      </h2>
+      <Button size="sm" variant="outline" onClick={() => setVisibleDate(localDateKey(new Date()))}>
+        Today
+      </Button>
+    </div>
+  ) : null
+
+  const renderDeliverable = (deliverable: Deliverable, mode?: 'card' | 'row') => (
+    <CalendarDeliverable
+      key={deliverable.id}
+      deliverable={deliverable}
+      agentById={agentById}
+      contentTypes={contentTypes}
+      onSelect={setSelectedDeliverable}
+      mode={mode}
+    />
+  )
+
+  const renderDayCount = (day: Date) => {
+    const count = (groupedDeliverables.get(localDateKey(day)) ?? []).length
+    if (count === 0) return null
+    return (
+      <span className="text-bakin-typography-size-meta text-bakin-text-muted">
+        {count === 1 ? '1 post' : `${count} posts`}
+      </span>
+    )
+  }
+
+  const todayDeliverables = groupedDeliverables.get(activeDate) ?? []
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <PluginHeader
+    <Page>
+      <PageHeader
         title="Calendar"
-        count={filteredDeliverables.length}
-        actions={
-          <div className="flex items-center gap-2">
-            <div className="relative w-64">
-              <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search calendar..."
-                className="h-8 border-border bg-surface pl-9"
+        description="Plan and review content across channels, then see exactly when each deliverable is scheduled to publish."
+        meta={<Badge size="xs" tone="neutral" variant="outline">{filteredDeliverables.length} shown</Badge>}
+        controlsLabel="Calendar search, view, and actions"
+        controls={(
+          <div className="grid w-full min-w-0 gap-bakin-2 @3xl/page-header:flex @3xl/page-header:items-start">
+            <SearchInput
+              align="end"
+              label="Search calendar"
+              value={search}
+              onValueChange={setSearch}
+              placeholder="Search calendar…"
+              mobileFullWidth
+            className="@3xl/page-header:w-[22rem] @3xl/page-header:shrink-0"
+            />
+            <div className="flex min-w-0 flex-wrap items-center gap-bakin-2 @3xl/page-header:shrink-0 @3xl/page-header:flex-nowrap">
+              <SegmentedControl
+                ariaLabel="Calendar view"
+                options={VIEW_OPTIONS}
+                value={calendarView}
+                onValueChange={(value: CalendarView) => {
+                  setView(value)
+                  setVisibleDate(null)
+                }}
+                className="shrink-0 [&_[role=tab]]:px-bakin-3"
               />
-            </div>
-            <QuickPostButton onCreated={refresh} />
-          </div>
-        }
-      />
-
-      <div className="mt-4 flex flex-wrap items-center gap-3">
-        <AgentFilter agentIds={calendarAgentIds} value={agentFilter} onChange={setAgentFilter} />
-        <FacetFilter label="Status" options={STATUS_OPTIONS} selected={statusFilter} onChange={setStatusFilter} />
-        <FacetFilter label="Type" options={typeOptions} selected={typeFilter} onChange={setTypeFilter} />
-        <FacetFilter label="Channel" options={channelOptions} selected={channelFilter} onChange={setChannelFilter} />
-      </div>
-
-      <div className="mt-4 min-h-0 flex-1 overflow-auto">
-        {loading ? (
-          <div className="grid grid-cols-7 gap-px overflow-hidden rounded-md border border-border bg-border">
-            {Array.from({ length: 35 }).map((_, index) => (
-              <Skeleton key={index} className="h-28 w-full rounded-none" />
-            ))}
-          </div>
-        ) : filteredDeliverables.length === 0 ? (
-          <EmptyState icon={CalendarDays} title="No deliverables match filters" />
-        ) : (
-          <div className="min-w-[860px]">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-1">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-8 w-8 p-0"
-                  aria-label="Previous month"
-                  onClick={() => setVisibleMonth(addMonths(activeMonth, -1))}
-                >
-                  <ChevronLeft className="size-4" aria-hidden="true" />
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-8 w-8 p-0"
-                  aria-label="Next month"
-                  onClick={() => setVisibleMonth(addMonths(activeMonth, 1))}
-                >
-                  <ChevronRight className="size-4" aria-hidden="true" />
-                </Button>
-              </div>
-              <h2 className="text-sm font-semibold">{monthLabel(activeMonth)}</h2>
-              <Button size="sm" variant="outline" onClick={() => setVisibleMonth(monthKey(new Date()))}>
-                Today
-              </Button>
-            </div>
-
-            <div className="grid grid-cols-7 rounded-t-md border border-b-0 border-border bg-surface text-xs font-medium text-muted-foreground">
-              {WEEKDAYS.map(day => (
-                <div key={day} className="border-r border-border px-2 py-2 last:border-r-0">{day}</div>
-              ))}
-            </div>
-            <div className="grid grid-cols-7 overflow-hidden rounded-b-md border border-border bg-border">
-              {calendarDays.map(day => (
-                <div
-                  key={day.key}
-                  className={`min-h-32 border-r border-b border-border p-2 last:border-r-0 ${
-                    day.inMonth ? 'bg-background' : 'bg-surface/60 text-muted-foreground'
-                  }`}
-                >
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className={`flex size-6 items-center justify-center rounded-full text-xs ${
-                      day.isToday ? 'bg-primary text-primary-foreground' : ''
-                    }`}>
-                      {day.date.getDate()}
-                    </span>
-                    {day.deliverables.length > 0 && (
-                      <span className="text-[10px] text-muted-foreground">{day.deliverables.length}</span>
-                    )}
-                  </div>
-                  <div className="space-y-1">
-                    {day.deliverables.map((deliverable) => (
-                      <button
-                        key={deliverable.id}
-                        type="button"
-                        onClick={() => setSelectedDeliverable(deliverable)}
-                        className="w-full rounded border border-border bg-card px-2 py-1.5 text-left transition-colors hover:bg-muted/40"
-                        data-testid={`calendar-deliverable-${deliverable.id}`}
-                      >
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-mono text-[10px] text-muted-foreground">{formatTime(deliverable.publishAt)}</span>
-                          <DeliverableStatusBadge status={deliverable.status} className="h-1.5 w-1.5 shrink-0 rounded-full p-0 text-[0px]" />
-                        </div>
-                        <div className="mt-0.5 truncate text-xs font-medium">{deliverable.title}</div>
-                        <div className="mt-1 flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                          <AgentAvatar agentId={deliverable.agent} size="xs" />
-                          <span className="truncate">{deliverable.channel}</span>
-                        </div>
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          <Badge variant="outline" className="max-w-full truncate text-[10px]">
-                            {getContentTypeLabel(deliverable.contentType, contentTypes)}
-                          </Badge>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
+              <QuickPostButton onCreated={refresh} />
             </div>
           </div>
         )}
-      </div>
+      />
+
+      <PageControls label="Calendar filters">
+        <AgentFilter options={agentOptions} value={agentFilter} onValueChange={setAgentFilter} compact />
+        <FacetFilter label="Status" options={STATUS_OPTIONS} selected={statusFilter} onChange={setStatusFilter} />
+        <FacetFilter label="Type" options={typeOptions} selected={typeFilter} onChange={setTypeFilter} />
+        <FacetFilter label="Channel" options={channelOptions} selected={channelFilter} onChange={setChannelFilter} />
+      </PageControls>
+
+      <PageBody label="Scheduled deliverables" state={state}>
+        {navigation}
+
+        {calendarView === 'month' && (
+          <div data-testid="calendar-view-month">
+            <CalendarGrid
+              view="month"
+              date={dateFromKey(activeDate)}
+              label={`${monthLabel(activeMonth)} content calendar`}
+              items={calendarItems}
+              outsideDays="muted"
+              dimPastDays
+              renderDayHeader={renderDayCount}
+              renderItem={(item) => renderDeliverable(item.deliverable)}
+            />
+          </div>
+        )}
+
+        {calendarView === 'week' && (
+          <div data-testid="calendar-view-week">
+            <CalendarGrid
+              view="week"
+              granularity="day"
+              date={dateFromKey(activeDate)}
+              label={`${weekLabel(activeDate)} content calendar`}
+              items={calendarItems}
+              renderItem={(item) => renderDeliverable(item.deliverable)}
+            />
+          </div>
+        )}
+
+        {calendarView === 'today' && (
+          <div data-testid="calendar-view-today">
+            {todayDeliverables.length > 0 ? (
+              <CalendarGrid
+                view="day"
+                granularity="day"
+                date={dateFromKey(activeDate)}
+                label={`${dayLabel(activeDate)} content calendar`}
+                items={calendarItems}
+                renderItem={(item) => (
+                  <div className="overflow-hidden rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default">
+                    {renderDeliverable(item.deliverable, 'row')}
+                  </div>
+                )}
+              />
+            ) : (
+              <SystemState
+                kind="initial-empty"
+                scope="section"
+                title="Nothing scheduled this day"
+                description="Choose another day or create a quick post."
+              />
+            )}
+          </div>
+        )}
+
+        {calendarView === 'list' && (
+          <div className="space-y-5" data-testid="calendar-view-list">
+            {listGroups.map(([key, items]) => (
+              <ListRowGroup key={key} label={compactDayLabel(key)}>
+                <ListRows variant="bordered">
+                  {items.map(deliverable => (
+                    <ListRow key={deliverable.id} className="overflow-hidden p-0">
+                      {renderDeliverable(deliverable, 'row')}
+                    </ListRow>
+                  ))}
+                </ListRows>
+              </ListRowGroup>
+            ))}
+          </div>
+        )}
+      </PageBody>
 
       <DeliverableDrawer
         deliverable={selectedDeliverable}
@@ -318,6 +610,6 @@ export function ContentCalendar() {
         onClose={() => setSelectedDeliverable(null)}
         onUpdated={refresh}
       />
-    </div>
+    </Page>
   )
 }

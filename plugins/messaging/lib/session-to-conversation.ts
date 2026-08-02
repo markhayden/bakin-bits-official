@@ -6,7 +6,7 @@
  * (they were invisible when only kind === 'error' matched — bakin#703
  * review).
  */
-import type { ConversationMessage } from '@makinbakin/sdk/components'
+import type { ConversationMessage } from '@makinbakin/sdk/conversation'
 import type { SessionMessage } from '../types'
 
 export function sessionMessageToConversation(agentId: string, message: SessionMessage): ConversationMessage | null {

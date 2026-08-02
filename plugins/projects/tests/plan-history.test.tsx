@@ -174,7 +174,7 @@ describe('block-level change hints (rendered view)', () => {
     await waitFor(() => expect(container.querySelectorAll('[data-plan-changed-block]').length).toBe(1))
     const marked = container.querySelector('[data-plan-changed-block]')!
     expect(marked.textContent).toContain('new section')
-    expect(marked.className).toContain('border-emerald-500')
+    expect(marked.className).toContain('border-bakin-signal-success')
     expect(container.querySelectorAll('[data-plan-removed-marker]').length).toBe(0)
     expect(screen.getByText('# Plan')).toBeDefined()
   })
@@ -195,7 +195,7 @@ describe('block-level change hints (rendered view)', () => {
 
     const { container } = render(<RenderedPlan projectId="p1" body={'# Plan\n\nending'} />)
     await waitFor(() => expect(container.querySelectorAll('[data-plan-removed-marker]').length).toBe(1))
-    expect(container.querySelector('[data-plan-removed-marker]')!.className).toContain('bg-red-500')
+    expect(container.querySelector('[data-plan-removed-marker]')!.className).toContain('bg-bakin-signal-danger')
     expect(container.querySelectorAll('[data-plan-changed-block]').length).toBe(0)
   })
 

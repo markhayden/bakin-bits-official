@@ -253,7 +253,7 @@ declare module '@makinbakin/sdk/types' {
     handler: (
       req: Request,
       ctx: PluginContext,
-      parsed: { params?: Record<string, string>; query?: Record<string, unknown>; body?: unknown },
+      parsed: { params?: Record<string, string>; query?: Record<string, unknown>; body?: any },
     ) => Response | Promise<Response>
     summary?: string
     description?: string
@@ -698,17 +698,23 @@ declare module '@makinbakin/sdk/types' {
     icon?: string
   }
 
-  export interface HealthCheckResult {
-    check: string
-    status: 'ok' | 'warn' | 'error' | 'fixed'
-    message: string
-    autoFixable: boolean
+  export interface HealthObservationInput {
+    key: string
+    status: 'healthy' | 'warning' | 'error' | 'unknown'
+    summary: string
+    evidence?: Record<string, unknown>
   }
+
+  export type HealthCheckRunInput =
+    | { outcome: 'observed'; observations: [HealthObservationInput, ...HealthObservationInput[]] }
+    | { outcome: 'not_applicable'; reason: string }
 
   export interface PluginHealthCheckInput {
     id: string
     name: string
-    run: () => Promise<HealthCheckResult[]>
+    description: string
+    group: { key: string; label: string }
+    run: () => Promise<HealthCheckRunInput>
     autoFix?: boolean
   }
 
@@ -889,10 +895,18 @@ declare module '@makinbakin/sdk/ui' {
   type UIComponent = ComponentType<UIProps>
 
   export const Alert: UIComponent
+  export const AlertDescription: UIComponent
+  export const AlertTitle: UIComponent
   export const Avatar: UIComponent
+  export const Drawer: UIComponent
   export const Badge: UIComponent
   export const Button: UIComponent
   export const Card: UIComponent
+  export const CardAction: UIComponent
+  export const CardContent: UIComponent
+  export const CardDescription: UIComponent
+  export const CardHeader: UIComponent
+  export const CardTitle: UIComponent
   export const Checkbox: UIComponent
   export const Collapsible: UIComponent
   export const Command: UIComponent
@@ -906,6 +920,10 @@ declare module '@makinbakin/sdk/ui' {
   export const DropdownMenuItem: UIComponent
   export const DropdownMenuSeparator: UIComponent
   export const Form: UIComponent
+  export const FormActions: UIComponent
+  export const Field: UIComponent
+  export const FieldDescription: UIComponent
+  export const FieldLabel: UIComponent
   export const Input: UIComponent
   export const InputGroup: UIComponent
   export const Label: UIComponent
@@ -927,32 +945,296 @@ declare module '@makinbakin/sdk/ui' {
   export const TableHead: UIComponent
   export const TableCell: UIComponent
   export const Tabs: UIComponent
+  export const TabsList: UIComponent
+  export const TabsTrigger: UIComponent
+  export const TabsContent: UIComponent
   export const Textarea: UIComponent
   export const Tooltip: UIComponent
+  export const SubmitButton: UIComponent
+  export const SystemState: UIComponent
+  export function buttonVariants(options?: Record<string, unknown>): string
 }
 
-declare module '@makinbakin/sdk/components' {
+declare module '@makinbakin/sdk/layout' {
   import type { ComponentType, ReactNode } from 'react'
-  interface SDKProps {
+  interface LayoutProps {
+    as?: keyof JSX.IntrinsicElements
     children?: ReactNode
-    onClick?: (event: any) => void
-    onChange?: (value: any) => void
-    onOpenChange?: (open: any) => void
-    onValueChange?: (value: any) => void
     [key: string]: any
   }
-  type SDKComponent = ComponentType<SDKProps>
+  type LayoutComponent = ComponentType<LayoutProps>
+  export const Stack: LayoutComponent
+  export const Inline: LayoutComponent
+  export const Grid: LayoutComponent
+  export const PageShell: LayoutComponent
+  export const BoundedOverflow: LayoutComponent
+}
 
-  export interface AgentInfo {
+declare module '@makinbakin/sdk/patterns' {
+  import type { ComponentType, ReactNode } from 'react'
+  interface PatternProps {
+    children?: ReactNode
+    [key: string]: any
+  }
+  type PatternComponent = ComponentType<PatternProps>
+
+  // ── Consolidated Page family (storybook-refit T5.1) ────────────────────
+  export type PageWidth = 'standard' | 'full'
+  export type PageScroll = 'page' | 'contained'
+  export type PageDensity = 'default' | 'compact'
+  export const Page: ComponentType<PatternProps & {
+    width?: PageWidth
+    scroll?: PageScroll
+    density?: PageDensity
+  }>
+  export type PageBodyLayout = 'single' | 'aside'
+  export type PageBodyGap = 'content' | 'section' | 'page'
+  export const PageBody: ComponentType<PatternProps & {
+    layout?: PageBodyLayout
+    gap?: PageBodyGap
+    busy?: boolean
+    feedback?: ReactNode
+    state?: ReactNode
+    label?: string
+    labelledBy?: string
+  }>
+  export type PageControlsAs = 'section' | 'toolbar'
+  export const PageControls: ComponentType<PatternProps & {
+    as?: PageControlsAs
+    actions?: ReactNode
+    divider?: boolean
+    label?: string
+    labelledBy?: string
+  }>
+  export const PageAside: ComponentType<PatternProps & {
+    label?: string
+    labelledBy?: string
+  }>
+  export type PageCanvasOrientation = 'vertical' | 'horizontal'
+  export const PageCanvas: ComponentType<PatternProps & {
+    orientation?: PageCanvasOrientation
+  }>
+  export const PageTimeline: ComponentType<PatternProps & {
+    live?: 'off' | 'polite'
+    label?: string
+    labelledBy?: string
+  }>
+  export const PageComposer: PatternComponent
+
+  export const PageHeader: PatternComponent
+  export const PageHeaderOverflowMenu: PatternComponent
+  export const SearchInput: PatternComponent
+  export const AgentAvatar: PatternComponent
+  export const AgentFilter: PatternComponent
+  export const FacetFilter: PatternComponent
+  export const SegmentedControl: PatternComponent
+  export const WorkspacePage: PatternComponent
+  export const WorkspacePageBody: PatternComponent
+  export const WorkspacePageHeader: PatternComponent
+  export const StatusBadge: PatternComponent
+  export const StatusMarker: PatternComponent
+
+  // ── Agent identity + assignment (focused successors to the frozen barrel) ──
+  export interface AgentIdentity {
     id: string
     name: string
+    imageSrc?: string | null
     color?: string
-    avatar?: string
+    initials?: string
+  }
+  export interface AgentSelectOption extends AgentIdentity {
+    disabled?: boolean
+  }
+  export interface AgentTeamOption {
+    id: string
+    label: string
+    color?: string
+    disabled?: boolean
+  }
+  export const AgentSelect: ComponentType<{
+    id?: string
+    name?: string
+    value: string
+    onValueChange: (value: string) => void
+    agents: readonly AgentSelectOption[]
+    teams?: readonly AgentTeamOption[]
+    includeAssigned?: boolean
+    assignedLabel?: string
+    allowNone?: boolean
+    noneLabel?: string
+    placeholder?: string
+    ariaLabel?: string
+    disabled?: boolean
+    required?: boolean
+    className?: string
+  }>
+
+  // ── Notification channel identity (focused successor to the frozen barrel) ──
+  export interface ChannelIconChannel {
+    id: string
+    icon?: string
+  }
+  export type ChannelIconSize = 'sm' | 'md' | 'lg'
+  export const ChannelIcon: ComponentType<{
+    size?: ChannelIconSize
+    channelId: string
+    className?: string
+    channels?: readonly ChannelIconChannel[]
+  }>
+
+  // ── ConfirmDialog (canonical confirm/danger flow) ──────────────────────
+  export interface ConfirmDialogProps {
+    open: boolean
+    title: ReactNode
+    description?: ReactNode
+    confirmLabel?: string
+    busyLabel?: string
+    cancelLabel?: string
+    confirmTone?: 'danger' | 'primary'
+    busy?: boolean
+    error?: ReactNode
+    confirmTestId?: string
+    className?: string
+    confirmValue?: string
+    confirmPrompt?: ReactNode
+    children?: ReactNode
+    onConfirm: () => void
+    onCancel: () => void
+  }
+  export const ConfirmDialog: ComponentType<ConfirmDialogProps>
+
+  // ── Vetted dense-row list (Lists taxonomy type 1) ──────────────────────
+  export type ListRowsVariant = 'bordered' | 'separated' | 'plain'
+  export type ListRowsColumnsAt = 'lg' | 'xl' | '2xl' | '3xl' | '4xl' | '5xl'
+  export type ListRowsColumnsAlign = 'start' | 'center' | 'end'
+  export const ListRows: ComponentType<PatternProps & {
+    variant?: ListRowsVariant
+    columns?: string
+    columnsAt?: ListRowsColumnsAt
+    columnsAlign?: ListRowsColumnsAlign
+  }>
+  export const ListRow: PatternComponent
+  export const ListRowLabels: PatternComponent
+  export const ListRowGroup: ComponentType<PatternProps & { label: ReactNode }>
+
+  // ── CalendarGrid (Lists taxonomy type 7; shared calendar STRUCTURE) ────
+  export type CalendarGridView = 'month' | 'week' | 'day'
+  export interface CalendarGridItem {
+    key: string
+    /** Plain `YYYY-MM-DD` strings parse as LOCAL midnight (kit-owned). */
+    date?: Date | string
+    start?: Date | string
+    end?: Date | string
+    allDay?: boolean
+  }
+  export interface CalendarGridProps<T extends CalendarGridItem> {
+    view: CalendarGridView
+    date: Date
+    items: ReadonlyArray<T>
+    renderItem: (item: T) => ReactNode
+    label: string
+    now?: Date
+    maxVisibleItems?: number
+    renderDayHeader?: (date: Date) => ReactNode
+    outsideDays?: 'hidden' | 'muted'
+    granularity?: 'hour' | 'day'
+    dimPastDays?: boolean
+    className?: string
+  }
+  export function CalendarGrid<T extends CalendarGridItem>(props: CalendarGridProps<T>): ReturnType<ComponentType>
+
+  // ── AssetPicker (presentation-only; consumer owns the collection data) ──
+  export interface AssetPickerAsset {
+    id: string
+    label: string
+    description?: string
+    type?: string
+    thumbnailSrc?: string
+    disabled?: boolean
+  }
+  export type AssetPickerCollection =
+    | { status: 'loading' }
+    | { status: 'error'; message?: string }
+    | { status: 'ready'; assets: readonly AssetPickerAsset[] }
+  export type AssetPickerView = 'grid' | 'list'
+  export type AssetPickerVariant = 'dialog' | 'inline'
+  interface AssetPickerBaseProps {
+    collection: AssetPickerCollection
+    query: string
+    onQueryChange: (query: string) => void
+    onPick: (assetId: string) => void
+    onRetry?: () => void
+    title?: string
+    description?: string
+    view?: AssetPickerView
+    busy?: boolean
+    toolbarAction?: ReactNode
+    dropActive?: boolean
+    dropZoneProps?: Record<string, unknown>
+    notice?: ReactNode
+    searchLabel?: string
+    searchPlaceholder?: string
+    emptyTitle?: string
+    emptyDescription?: string
+    noResultsTitle?: string
+    noResultsDescription?: string
+    className?: string
+  }
+  export type AssetPickerProps =
+    | (AssetPickerBaseProps & { variant?: 'dialog'; open: boolean; onOpenChange: (open: boolean) => void })
+    | (AssetPickerBaseProps & { variant: 'inline'; open?: never; onOpenChange?: never })
+  export const AssetPicker: ComponentType<AssetPickerProps>
+}
+
+declare module '@makinbakin/sdk/navigation' {
+  import type { ComponentType, ReactNode } from 'react'
+  export const PluginLink: ComponentType<{
+    to: string
+    children?: ReactNode
+    className?: string
+  }>
+  export function useRouter(): {
+    push: (to: string) => void
+    replace: (to: string) => void
+    back: () => void
+  }
+  export function usePathname(): string
+  export function useSearchParams(): URLSearchParams
+  export function useQueryState(
+    key: string,
+    defaultValue?: string,
+  ): [string, (value: string) => void, (value: string) => void]
+  export function useQueryArrayState(
+    key: string,
+  ): [string[], (value: string[]) => void, (value: string[]) => void]
+}
+
+declare module '@makinbakin/sdk/conversation' {
+  import type { ComponentType, ReactNode } from 'react'
+
+  // ── Turn model (mirrors the kit's fold contract) ───────────────────────
+  export type ConversationTextFormat = 'markdown' | 'plain' | 'code'
+
+  export interface ConversationToolActivity {
+    phase: 'call' | 'result'
+    callId?: string
+    toolName: string
+    status?: 'running' | 'completed' | 'failed' | string
+    summary?: string
+    inputPreview?: string
+    outputPreview?: string
+    durationMs?: number
+    exitCode?: number
+    metadata?: Record<string, unknown>
   }
 
-  export type SortDir = 'asc' | 'desc'
+  export type ConversationChunk =
+    | { type: 'text'; content: string; format?: ConversationTextFormat; data?: Record<string, unknown> }
+    | { type: 'tool'; content?: string; data: ConversationToolActivity }
+    | { type: 'status'; content?: string; data?: Record<string, unknown> }
+    | { type: 'done'; content?: string; data?: Record<string, unknown> }
+    | { type: 'error'; content?: string; data?: Record<string, unknown> }
 
-  // ── Conversation kit (successor to IntegratedBrainstorm) ──────────────
   export interface DisplayAttachment {
     name: string
     mimeType: string
@@ -978,6 +1260,7 @@ declare module '@makinbakin/sdk/components' {
       }
     | { kind: 'error'; ts: string; turnId?: string; message: string; errorKind?: string }
     | { kind: 'aborted'; ts: string; turnId?: string }
+    | { kind: 'done'; ts: string; turnId?: string }
 
 
   export interface ConversationThreadLoad<Meta = unknown> {
@@ -999,7 +1282,7 @@ declare module '@makinbakin/sdk/components' {
   export interface ConversationThread<Meta = unknown, Attachment = unknown> {
     messages: ConversationMessage[]
     meta: Meta | null
-    liveChunks: import('@makinbakin/sdk/types').RuntimeChatChunk[] | null
+    liveChunks: ConversationChunk[] | null
     streaming: boolean
     sendError: string | null
     send: (content: string, attachments?: Attachment[]) => Promise<void>
@@ -1044,30 +1327,57 @@ declare module '@makinbakin/sdk/components' {
 
   export function foldConversation(
     messages: readonly ConversationMessage[],
-    opts?: { liveChunks?: readonly import('@makinbakin/sdk/types').RuntimeChatChunk[]; liveAgentId?: string },
+    opts?: { liveChunks?: readonly ConversationChunk[]; liveAgentId?: string },
   ): unknown[]
 
-  export const ConversationPanel: SDKComponent
-  export const Conversation: SDKComponent
-  export const Composer: SDKComponent
-  export const ConversationEmptyState: SDKComponent
-  export const ThinkingIndicator: SDKComponent
-
-  export const AgentAvatar: ComponentType<{ agentId?: string; agent?: AgentInfo | null; size?: string | number; className?: string }>
-  export interface SegmentedControlOption<T extends string = string> {
-    value: T
-    label: ReactNode
-    icon?: ComponentType<{ className?: string }>
-    hideLabel?: boolean
+  // ── Presentation (consumer owns transport, identity lookup, routing) ───
+  export interface ConversationAgent {
+    id?: string
+    name: string
+    avatarUrl?: string
   }
-  export function SegmentedControl<T extends string>(props: {
-    options: ReadonlyArray<SegmentedControlOption<T>>
-    value: T
-    onValueChange: (value: T) => void
-    size?: 'sm' | 'md'
-    ariaLabel: string
+  export type ConversationTextTransform = (text: string) => { text: string; extras?: ReactNode }
+
+  export interface ConversationPanelProps {
+    messages: readonly ConversationMessage[]
+    liveChunks?: readonly ConversationChunk[] | null
+    streaming?: boolean
+    /** Presentation-ready fallback identity; host stores stay outside the kit. */
+    agent?: ConversationAgent
+    resolveAgent?: (agentId?: string) => ConversationAgent | undefined
+    /** Consumer-owned selector or other control beside the composer. */
+    agentControl?: ReactNode
+    onSend: (content: string) => void | Promise<void>
+    onAbort?: () => void
+    onRetry?: () => void
+    transformText?: ConversationTextTransform
+    storageKey: string
+    title?: ReactNode
+    showHeader?: boolean
+    fitParent?: boolean
+    chrome?: 'panel' | 'top-divider'
+    readOnly?: boolean
+    readOnlyNotice?: ReactNode
+    placeholder?: string
+    inputLabel?: string
+    autoFocus?: boolean
+    emptyState?: ReactNode
+    maxLength?: number
+    defaultHeight?: number
+    minHeight?: number
+    maxHeight?: number
     className?: string
-  }): ReactNode
+  }
+  export const ConversationPanel: ComponentType<ConversationPanelProps>
+
+  export const Conversation: ComponentType<{
+    turns: readonly unknown[]
+    agent?: ConversationAgent
+    resolveAgent?: (agentId?: string) => ConversationAgent | undefined
+    emptyState?: ReactNode
+    className?: string
+    [key: string]: unknown
+  }>
   export const ConversationReplyToast: ComponentType<{
     agentId: string
     title: string
@@ -1076,23 +1386,62 @@ declare module '@makinbakin/sdk/components' {
     onNavigate?: () => void
     testId?: { attr: string; value: string }
   }>
-  export const AgentFilter: SDKComponent
-  export const AgentSelect: SDKComponent
-  export const BakinDrawer: SDKComponent
-  export const ChannelIcon: SDKComponent
-  export const EmptyState: SDKComponent
-  export const FacetFilter: SDKComponent
-  export const MarkdownEditor: SDKComponent
-  export const PluginHeader: ComponentType<{
-    title: string
-    subtitle?: string
-    count?: number
-    search?: Record<string, unknown>
-    actions?: ReactNode
-    meta?: ReactNode
-    children?: ReactNode
+
+  export const ConversationEmptyState: ComponentType<{
+    title?: ReactNode
+    description?: ReactNode
+    icon?: ReactNode
+    className?: string
   }>
-  export const SortableHead: ComponentType<Record<string, unknown> & { children?: ReactNode }>
+  export const Composer: ComponentType<Record<string, unknown>>
+  export const ThinkingIndicator: ComponentType<{ label?: string }>
+}
+
+declare module '@makinbakin/sdk/content' {
+  import type { ComponentType, ReactNode } from 'react'
+
+  export interface MarkdownInternalLinkProps {
+    href: string
+    children: ReactNode
+    className?: string
+  }
+  export interface MarkdownContentProps {
+    content: string
+    className?: string
+    /** Use the established host/plugin link for internal SPA navigation. */
+    renderInternalLink?: (props: MarkdownInternalLinkProps) => ReactNode
+  }
+  export const MarkdownContent: ComponentType<MarkdownContentProps>
+
+  export type MarkdownEditorFormat = 'markdown' | 'yaml' | 'json' | 'text'
+  export type MarkdownEditorHeight = 'compact' | 'document' | 'viewport' | 'fill'
+  export type MarkdownEditorMode = 'edit' | 'preview'
+  /** Preferred controlled, host-composed editor contract. */
+  interface MarkdownEditorControlledProps {
+    label: string
+    content: string
+    mode: MarkdownEditorMode
+    onChange: (content: string) => void
+    placeholder?: string
+    format?: MarkdownEditorFormat
+    height?: MarkdownEditorHeight
+    className?: string
+    description?: ReactNode
+  }
+  /** Existing editor shape retained for source-compatible official consumers. */
+  interface MarkdownEditorCompatibilityProps {
+    label?: string
+    content: string
+    editing: boolean
+    onChange: (content: string) => void
+    placeholder?: string
+    format?: MarkdownEditorFormat
+    /** @deprecated Use the semantic `height` contract. */
+    minHeight?: string
+    className?: string
+  }
+  export type MarkdownEditorProps = MarkdownEditorControlledProps | MarkdownEditorCompatibilityProps
+  export const MarkdownEditor: ComponentType<MarkdownEditorProps>
 }
 
 declare module '@makinbakin/sdk/hooks' {
@@ -1101,6 +1450,7 @@ declare module '@makinbakin/sdk/hooks' {
     name: string
     color?: string
     avatar?: string
+    headshot?: string
   }
 
   export interface NotificationChannel {
@@ -1137,6 +1487,12 @@ declare module '@makinbakin/sdk/hooks' {
   export function useQueryState(key: string, defaultValue: string): [string, (next: string, opts?: unknown) => void, (next: string, opts?: unknown) => void]
   export function useQueryArrayState(key: string): [string[], (next: string[]) => void]
   export function useSearch(opts?: Record<string, unknown>): UseSearchReturn
+  export function usePluginJsonFetch<T>(pluginId: string, path: string | null): {
+    data: T | null
+    loading: boolean
+    error: string | null
+    refresh(): void
+  }
   export function useAgent(agentId: string): AgentInfo | null
   export function useAgentList(): AgentInfo[]
   export function useAgentIds(): string[]
@@ -1190,11 +1546,25 @@ declare module '@makinbakin/sdk/slots' {
 
 declare module '@makinbakin/sdk/utils' {
   import type { RuntimeChatChunk } from '@makinbakin/sdk/types'
-  import type { ConversationMessage } from '@makinbakin/sdk/components'
+  import type { ConversationMessage } from '@makinbakin/sdk/conversation'
 
   export function cn(...args: Array<string | undefined | null | false>): string
   export function formatAge(date: Date | string): string
   export function formatSize(bytes: number): string
+  export function pluginFetch(
+    pluginId: string,
+    path: string,
+    init?: Omit<RequestInit, 'body'> & { body?: RequestInit['body'] | Record<string, unknown> },
+  ): Promise<Response>
+  export function healthHealthy(input: {
+    key: string
+    summary: string
+    evidence?: Record<string, unknown>
+  }): { key: string; summary: string; status: 'healthy'; evidence?: Record<string, unknown> }
+  export function healthObserved<T>(observations: [T, ...T[]]): {
+    outcome: 'observed'
+    observations: [T, ...T[]]
+  }
 
   // Conversation kit server helpers (successors to the brainstorm utils).
   export function conversationThreadId(scope: string, entityId: string, agentId: string): string
@@ -1206,4 +1576,14 @@ declare module '@makinbakin/sdk/utils' {
   export function createTurnRecorder(options: { turnId: string; agentId?: string; now?: () => string }): TurnRecorder
   export const SUMMARY_MAX_CHARS: number
   export const PREVIEW_MAX_CHARS: number
+}
+
+declare module '@makinbakin/sdk/testing/ui' {
+  import type { ComponentType } from 'react'
+  export const DEFAULT_PLUGIN_UI_FIXTURE: Record<string, unknown>
+  export const PluginUiFixtureHost: ComponentType<Record<string, unknown>>
+}
+
+declare module '@makinbakin/sdk/testing/ui/conformance' {
+  export function definePluginUiConformance<T extends Record<string, unknown>>(config: T): T
 }

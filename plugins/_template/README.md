@@ -1,61 +1,92 @@
 # _template plugin
 
-Starter scaffold for new Bakin plugins. Demonstrates the
-`BakinPlugin` contract end-to-end:
+The official Storybook-first starter for a new Bakin plugin. It demonstrates
+the smallest complete server, plugin-owned page, host slot, and browser
+conformance workflow while importing only `@makinbakin/sdk/*`.
 
-- `index.ts` — server entry. Registers a route, a health check, and a
-  background timer. Tears the timer down in `onShutdown` so hot reload
-  doesn't leak it.
-- `client.tsx` — client entry. Calls `registerPlugin({ ... })` as a
-  side effect so the shell's PluginHost picks up the nav item + page.
-- `components/template-page.tsx` — example page; rendered at
-  `/_template` in the shell.
+| Contract | Copyable source |
+|---|---|
+| Declarative, validated API routes | `index.ts` |
+| Hot-reload-safe lifecycle | `index.ts` `activate()` / `onShutdown()` |
+| Production route and `home-widget` registration | `client-registration.tsx` |
+| Canonical detail, form, state, and card UI | `components/` |
+| Owner-scoped domain CSS | `styles.css` |
+| Deterministic page-and-slot fixture | `tests/ui.fixture.tsx` |
+| One-command browser checks | `bakin.ui-test.ts` / `bun run test:ui` |
 
-## Copying as a starting point
+## Copy this starter
 
 ```sh
-cp -R plugins/_template plugins/<my-plugin>
-cd plugins/<my-plugin>
-
-# Update bakin-plugin.json (id, name, version, permissions)
-# Update package.json (workspace name)
-# Replace template-page.tsx + index.ts logic with your own
+cp -R plugins/_template plugins/my-plugin
+cd plugins/my-plugin
 ```
 
-The plugin id must match `/^[a-z][a-z0-9-]{0,39}$/` — lowercase letters
-and digits, hyphens allowed mid-id, no underscores. Underscores cause
-exec-tool name collisions on the core side (per the manifest validator
-in `bakin/packages/host/src/api/plugins/install.ts`).
+Then replace `_template` everywhere, remove `private: true` if the package will
+be published, update the manifest/package versions and permissions, and replace
+the greeting example with one real domain operation. Plugin IDs must match
+`/^[a-z][a-z0-9-]{0,39}$/`; the leading underscore here exists only to mark
+this directory as a scaffold that Bakin should not install or publish.
 
-The leading underscore in `_template` is intentional: it signals
-"scaffold, not a real plugin" to the install pipeline. New plugins
-must use a regular id.
+The page uses `registerPlugin({ routes })` because `/_template` is owned by the
+plugin. Do not turn it into a `page:/_template` slot: `page:/...` is reserved
+for filling routes already owned by the host. Internal navigation uses the
+shipped `PluginLink` contract instead of rebuilding URL or history behavior.
 
-## Testing locally against a running bakin
+## Storybook-first UI contract
+
+Start with the public catalog before adding CSS:
+
+- `Patterns/List and detail pages` owns the page canvas and replaceable state
+  region.
+- `Forms/Field and form composition` owns labels, descriptions, actions,
+  validation, and busy state.
+- `States/System feedback` owns loading, recoverable error, and retained
+  mutation feedback.
+- `Foundation/Card`, `Foundation/Button`, and the layout primitives own the
+  bounded content and rhythm.
+
+Import primitives from `/ui`, layout from `/layout`, page recipes from
+`/patterns`, and routing from `/navigation`. Never import the frozen
+`/components` barrel for new UI, host Tailwind utilities, or Bakin internals.
+The host supplies `@makinbakin/sdk/styles.css`; only the standalone browser
+fixture imports it, exactly once.
+
+`styles.css` is intentionally tiny and explicitly scoped to
+`[data-bakin-plugin="_template"]`. Add CSS only for domain presentation that
+the public catalog does not already own.
+
+When a genuine domain requirement cannot use a defined Storybook pattern,
+give the maintainer a concrete, human-readable explanation naming the
+requirement, the closest pattern considered, why it does not fit, and the
+smallest accessible exception. An unexplained visual fork fails conformance.
+
+## Install and verify
 
 ```sh
-# In your bakin checkout, with hot reload on:
+bun install
+bun run typecheck
+bun test
+bun run test:ui
+```
+
+Install Chromium once on a new development machine:
+
+```sh
+bunx playwright install chromium
+```
+
+`test:ui` renders the real production page and `home-widget` at 1440×900 and
+320×800. It checks CSS ownership, canonical stylesheet identity, horizontal
+overflow, axe accessibility, keyboard focus, and browser errors, then writes
+HTML, JSON, and screenshots under `test-results/bakin-ui/`.
+
+Against a local Bakin checkout:
+
+```sh
 BAKIN_DEV_HOTRELOAD=1 bakin start
-
-# Back here:
 bakin plugins link ./
-# Save any file → in-process module swap.
 ```
 
-## Hot-reload contract — read this
-
-The `index.ts` here demonstrates the pattern every plugin must follow:
-
-1. **Side effects in `activate(ctx)`, NOT at module top level.** The
-   `setInterval` lives inside activate. A top-level interval would
-   leak across reloads (the OLD module's interval keeps firing
-   alongside the NEW module's).
-2. **Track every side effect in module-scoped state.** The `state`
-   object holds the timer handle so `onShutdown` can find it.
-3. **Tear down in `onShutdown(ctx)`.** Called by the runtime BEFORE
-   the next activate. Errors are logged but never propagate — a
-   buggy onShutdown can't brick the dev loop, but it WILL leak if it
-   throws.
-
-If you need other lifecycle hooks (`onReady`, `onSettingsChange`),
-they're documented in the SDK's `BakinPlugin` type.
+All timers, watchers, and sockets belong inside `activate(ctx)`. Track them in
+module state and release them in `onShutdown()` so a hot reload cannot leave
+the old module running beside the new one.

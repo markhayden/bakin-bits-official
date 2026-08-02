@@ -1,22 +1,28 @@
 'use client'
 
+import { StatusBadge } from '@makinbakin/sdk/patterns'
 import type { ProjectStatus } from '../types'
 
-const STATUS_STYLES: Record<ProjectStatus, { bg: string; text: string; label: string }> = {
-  draft: { bg: 'bg-zinc-500/20', text: 'text-zinc-400', label: 'Draft' },
-  active: { bg: 'bg-blue-500/20', text: 'text-blue-400', label: 'Active' },
-  completed: { bg: 'bg-emerald-500/20', text: 'text-emerald-400', label: 'Completed' },
-  archived: { bg: 'bg-zinc-600/20', text: 'text-zinc-500', label: 'Archived' },
+type StatusTone = 'neutral' | 'success' | 'attention' | 'danger' | 'accent'
+
+const STATUS_META: Record<ProjectStatus, { tone: StatusTone; label: string }> = {
+  draft: { tone: 'neutral', label: 'Draft' },
+  active: { tone: 'accent', label: 'Active' },
+  completed: { tone: 'success', label: 'Completed' },
+  archived: { tone: 'neutral', label: 'Archived' },
 }
 
 export function ProjectStatusBadge({ status, onClick }: { status: ProjectStatus; onClick?: () => void }) {
-  const style = STATUS_STYLES[status] || STATUS_STYLES.draft
+  const meta = STATUS_META[status] || STATUS_META.draft
   return (
-    <span
-      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${style.bg} ${style.text} ${onClick ? 'cursor-pointer hover:opacity-80' : ''}`}
+    <StatusBadge
+      tone={meta.tone}
+      variant="soft"
+      size="xs"
       onClick={onClick}
+      className={onClick ? 'cursor-pointer' : undefined}
     >
-      {style.label}
-    </span>
+      {meta.label}
+    </StatusBadge>
   )
 }

@@ -1,23 +1,32 @@
 'use client'
 
-import { useRef, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { ConversationPanel, useConversationThread } from "@makinbakin/sdk/conversation"
+import type { ConversationAgent, ConversationMessage } from "@makinbakin/sdk/conversation"
 import {
   AgentAvatar,
-  ConversationPanel,
-  EmptyState,
-  PluginHeader,
-  useConversationThread,
-} from "@makinbakin/sdk/components"
-import type { ConversationMessage } from "@makinbakin/sdk/components"
-import { emitPluginEvent, toast, useHorizontalResize, usePluginEvent } from "@makinbakin/sdk/hooks"
-import { Badge } from "@makinbakin/sdk/ui"
+  ConfirmDialog,
+  ListRow,
+  ListRows,
+  Page,
+  PageBody,
+  PageHeader,
+  StatusBadge,
+  StatusMarker,
+} from "@makinbakin/sdk/patterns"
+import { emitPluginEvent, toast, useAgentList, useHorizontalResize, usePluginEvent } from "@makinbakin/sdk/hooks"
+import { Alert, AlertDescription, AlertTitle, Badge } from "@makinbakin/sdk/ui"
+import { Tabs, TabsList, TabsTrigger } from "@makinbakin/sdk/ui"
 import { Button } from "@makinbakin/sdk/ui"
+import { DropdownMenuItem } from "@makinbakin/sdk/ui"
+import { Progress } from "@makinbakin/sdk/ui"
 import { Skeleton } from "@makinbakin/sdk/ui"
-import { ArrowLeft, CalendarDays, CheckCircle2, Circle, ClipboardList, ExternalLink, FileText, Globe2, Info, Instagram, MessageCircle, MessageSquareText, Music2, Rocket, Slack, Trash2, Twitter, type LucideIcon } from 'lucide-react'
+import { SystemState } from "@makinbakin/sdk/ui"
+import { ArrowLeft, CalendarDays, ExternalLink, FileText, Globe2, Info, Instagram, MessageCircle, MessageSquareText, Music2, Rocket, Slack, Trash2, Twitter, type LucideIcon } from 'lucide-react'
 import type { BrainstormSession, ContentTypeOption, Deliverable, Plan, PlanChannel, PlanStatus } from '../types'
+import { PLAN_STATUS_TONE } from '../constants'
 import { sessionMessageToConversation } from '../lib/session-to-conversation'
 import { setVisiblePlanSourceSession } from './brainstorm-badge-provider'
-import { PLAN_STATUS_BADGE } from '../constants'
 import { usePlan } from '../hooks/use-plan'
 import { getContentTypeLabel, useContentTypes } from '../hooks/use-content-types'
 import { getDistributionChannelDefinition, MESSAGING_DISTRIBUTION_CHANNELS } from '../lib/distribution-channels'
@@ -221,9 +230,16 @@ function buildPlanningTasks(plan: Plan, deliverables: Deliverable[]): PlanningTa
 }
 
 function PlanningTaskIcon({ state }: { state: PlanningTaskState }) {
-  if (state === 'done') return <CheckCircle2 className="mt-0.5 size-3.5 text-emerald-400" aria-hidden="true" />
-  if (state === 'needs_attention') return <Circle className="mt-0.5 size-3.5 fill-orange-400 text-orange-400" aria-hidden="true" />
-  return <Circle className="mt-0.5 size-3.5 text-muted-foreground" aria-hidden="true" />
+  const tone = state === 'done'
+    ? 'success'
+    : state === 'needs_attention'
+      ? 'attention'
+      : 'neutral'
+  return (
+    <span className="mt-bakin-1 shrink-0">
+      <StatusMarker tone={tone} />
+    </span>
+  )
 }
 
 function DetailRow({
@@ -238,20 +254,20 @@ function DetailRow({
   children: ReactNode
 }) {
   return (
-    <div className={`flex gap-2 text-xs text-muted-foreground ${align === 'start' ? 'items-start' : 'items-center'}`}>
-      <span className="inline-flex shrink-0 items-center gap-2">
+    <div className={`flex gap-bakin-2 text-bakin-typography-size-meta text-bakin-text-muted ${align === 'start' ? 'items-start' : 'items-center'}`}>
+      <span className="inline-flex shrink-0 items-center gap-bakin-2">
         {icon}
         {label}
       </span>
       <span
         aria-hidden="true"
-        className={`min-w-4 flex-1 overflow-hidden whitespace-nowrap font-mono text-[10px] leading-none text-muted-foreground/40 ${
-          align === 'start' ? 'mt-1.5' : ''
+        className={`min-w-bakin-4 flex-1 overflow-hidden whitespace-nowrap font-bakin-typography-family-mono text-bakin-typography-size-meta leading-none text-bakin-text-muted/40 ${
+          align === 'start' ? 'mt-bakin-1' : ''
         }`}
       >
         ................................................................
       </span>
-      <span className="min-w-0 text-right text-foreground">{children}</span>
+      <span className="min-w-0 text-right text-bakin-text-primary">{children}</span>
     </div>
   )
 }
@@ -266,9 +282,59 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
   return fallback
 }
 
+function PlanBackButton({ onBack }: { onBack: () => void }) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      className="rounded-bakin-pill"
+      aria-label="Back to plans"
+      title="Back to plans"
+      onClick={onBack}
+    >
+      <ArrowLeft aria-hidden="true" />
+    </Button>
+  )
+}
+
+function PlanStateHeader({ planId, onBack }: { planId: string; onBack?: () => void }) {
+  return (
+    <PageHeader
+      measure="wide"
+      navigation={onBack ? <PlanBackButton onBack={onBack} /> : undefined}
+      eyebrow="Messaging / Plan"
+      title="Plan detail"
+      meta={<code className="font-bakin-typography-family-mono">{planId}</code>}
+    />
+  )
+}
+
 export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps) {
   const { plan, deliverables, loading, error, refresh } = usePlan(planId)
   const contentTypes = useContentTypes()
+  // The focused conversation kit never reads host stores — the consumer
+  // resolves agent identity and hands presentation-ready values down.
+  const agents = useAgentList()
+  const planAgent = useMemo(
+    () => agents.find((agent) => agent.id === plan?.agent),
+    [agents, plan?.agent],
+  )
+  const planAgentIdentity = useMemo(
+    () => plan
+      ? { id: plan.agent, name: planAgent?.name || plan.agent, imageSrc: planAgent?.headshot || null }
+      : null,
+    [plan, planAgent],
+  )
+  const conversationAgent = useMemo<ConversationAgent | undefined>(
+    () => plan
+      ? {
+        id: plan.agent,
+        name: planAgent?.name || plan.agent,
+        ...(planAgent?.headshot ? { avatarUrl: planAgent.headshot } : {}),
+      }
+      : undefined,
+    [plan, planAgent],
+  )
   const [selectedDeliverable, setSelectedDeliverable] = useState<Deliverable | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -507,253 +573,280 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
 
   if (loading) {
     return (
-      <div className="flex flex-col gap-3">
-        <Skeleton className="h-10 w-64" />
-        <Skeleton className="h-28 w-full" />
-        <Skeleton className="h-40 w-full" />
-      </div>
+      <Page>
+        <PlanStateHeader planId={planId} onBack={onBack} />
+        <PageBody
+          state={(
+            <SystemState
+              kind="loading"
+              scope="page"
+              title="Loading plan"
+              description="The plan direction, content pieces, and production progress will appear here."
+              preview={(
+                <div className="grid gap-bakin-3">
+                  <Skeleton className="h-bakin-8 w-full max-w-lg" />
+                  <Skeleton className="h-32 w-full rounded-bakin-surface" />
+                </div>
+              )}
+            />
+          )}
+        />
+      </Page>
     )
   }
 
   if (error || !plan) {
-    return <EmptyState icon={ClipboardList} title="Plan not found" />
+    return (
+      <Page>
+        <PlanStateHeader planId={planId} onBack={onBack} />
+        <PageBody
+          state={(
+            <SystemState
+              kind="error"
+              scope="page"
+              recovery="available"
+              title="Plan details couldn't load"
+              description={error || "This plan may have been deleted or the link may be stale."}
+              action={onBack ? <Button variant="outline" onClick={onBack}>Open plans</Button> : <Button variant="outline" onClick={() => void refresh()}>Try again</Button>}
+            />
+          )}
+        />
+      </Page>
+    )
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center justify-between border-b border-border pb-4">
-        {onBack ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-8 w-8 p-0"
-            aria-label="Back to plans"
-            title="Back to plans"
-            onClick={onBack}
-          >
-            <ArrowLeft className="size-4" aria-hidden="true" />
-          </Button>
-        ) : (
-          <span />
+    <Page
+      scroll="contained"
+      data-plan-workspace=""
+    >
+      <PageHeader
+        measure="wide"
+        navigation={onBack ? <PlanBackButton onBack={onBack} /> : undefined}
+        eyebrow="Messaging / Plan"
+        title={plan.title}
+        description={plan.brief}
+        meta={(
+          <>
+            <StatusBadge size="xs" tone={PLAN_STATUS_TONE[plan.status]}>
+              {formatStatus(plan.status)}
+            </StatusBadge>
+            <span className="inline-flex min-w-0 items-center gap-bakin-2">
+              {planAgentIdentity && <AgentAvatar agent={planAgentIdentity} size="xs" decorative />}
+              <span>{planAgentIdentity?.name ?? plan.agent}</span>
+            </span>
+            <span>Target {formatDate(plan.targetDate)}</span>
+          </>
         )}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <AgentAvatar agentId={plan.agent} size="xs" />
-            {plan.agent}
-          </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-muted-foreground hover:text-red-400"
-            aria-label="Delete plan"
-            title="Delete plan"
+        overflowActionsLabel="Plan actions"
+        overflowActions={(
+          <DropdownMenuItem
+            variant="danger"
             onClick={() => {
               setDeleteError(null)
               setDeleteOpen(true)
             }}
           >
-            <Trash2 className="size-4" aria-hidden="true" />
-          </Button>
-        </div>
-      </div>
+            <Trash2 aria-hidden="true" />
+            Delete
+          </DropdownMenuItem>
+        )}
+      />
 
-      <div className="pt-4">
-        <PluginHeader
-          title={plan.title}
-          meta={(
-            <Badge className={`${PLAN_STATUS_BADGE[plan.status]}`}>
-              {formatStatus(plan.status)}
-            </Badge>
-          )}
-        />
-      </div>
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as PlanWorkspaceTab)}>
+        <TabsList variant="underline" activateOnFocus aria-label="Plan workspace sections">
+          {PLAN_WORKSPACE_TABS.map((item) => (
+            <TabsTrigger
+              key={item.id}
+              value={item.id}
+              id={`messaging-plan-tab-${item.id}`}
+              aria-controls={`messaging-plan-panel-${item.id}`}
+            >
+              {item.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
 
-      <div className="flex min-h-0 flex-1 gap-6 pt-4 overflow-hidden">
-        <main className="flex min-w-[360px] flex-1 flex-col">
-          <div className="flex shrink-0 items-center gap-1 border-b border-border" role="tablist" aria-label="Plan workspace sections">
-            {PLAN_WORKSPACE_TABS.map((tab) => {
-              const selected = activeTab === tab.id
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={selected}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
-                    selected
-                      ? 'border-foreground text-foreground'
-                      : 'border-transparent text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              )
-            })}
-          </div>
-
+      <PageBody className="min-h-0 overflow-hidden">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-bakin-6 overflow-hidden">
+          <div className="flex min-h-0 flex-1 flex-col gap-bakin-6 overflow-y-auto @3xl/page-shell:flex-row @3xl/page-shell:overflow-hidden">
+            <main className="flex min-h-0 min-w-0 flex-1 flex-col @3xl/page-shell:min-w-[360px]">
           {activeTab === 'plan' ? (
-            <div className="min-h-0 flex-1 overflow-y-auto pr-2 pt-4" role="tabpanel" style={{ scrollbarGutter: 'stable' }}>
+            <div
+              id="messaging-plan-panel-plan"
+              aria-labelledby="messaging-plan-tab-plan"
+              className="min-h-0 flex-none overflow-visible [scrollbar-gutter:stable] @3xl/page-shell:flex-1 @3xl/page-shell:overflow-y-auto @3xl/page-shell:pr-bakin-2"
+              role="tabpanel"
+            >
               <section className="pb-5">
                 {plan.status === 'needs_review' && (
-                  <div className="rounded-md border border-sky-500/20 bg-sky-500/10 p-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
+                  <Alert tone="accent">
+                    <div className="flex flex-wrap items-start justify-between gap-bakin-3">
                       <div className="min-w-0">
-                        <h2 className="inline-flex items-center gap-2 text-sm font-semibold text-sky-200">
-                          <Info className="size-4" aria-hidden="true" />
+                        <AlertTitle className="inline-flex items-center gap-bakin-2">
+                          <Info className="size-bakin-4" aria-hidden="true" />
                           Review this plan before work starts
-                        </h2>
-                        <p className="mt-1 text-sm leading-6 text-sky-100/80">
+                        </AlertTitle>
+                        <AlertDescription>
                           Confirm the direction, pick channels, and add guidance in the brainstorm before kicking off content prep.
-                        </p>
+                        </AlertDescription>
                       </div>
                       {canKickoffContentPrep && selectedChannels.length > 0 && (
                         <Button onClick={startContentPrep} disabled={startingPrep || selectedChannels.length === 0}>
-                          <Rocket className="size-4" data-icon="inline-start" />
+                          <Rocket className="size-bakin-4" data-icon="inline-start" />
                           {startingPrep ? 'Starting...' : 'Kickoff content prep'}
                         </Button>
                       )}
                     </div>
-                  </div>
+                  </Alert>
                 )}
 
                 <div className={plan.status === 'needs_review' ? 'mt-5' : ''}>
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-                      <h2 className="text-sm font-semibold">Channels</h2>
+                  <div className="mb-bakin-2 flex items-center justify-between gap-bakin-3">
+                    <div className="flex min-w-0 flex-wrap items-baseline gap-x-bakin-2 gap-y-bakin-1">
+                      <h2 className="text-bakin-typography-size-body font-bakin-typography-weight-semibold">Channels</h2>
                       {!channelsLocked && (
-                        <span className="text-xs text-muted-foreground">Select one or more channels</span>
+                        <span className="text-bakin-typography-size-meta text-bakin-text-muted">Select one or more channels</span>
                       )}
                     </div>
-                    {savingChannels && <span className="text-xs text-muted-foreground">Saving...</span>}
+                    {savingChannels && <span className="text-bakin-typography-size-meta text-bakin-text-muted">Saving...</span>}
                   </div>
                   {!channelsLocked && plan.status === 'needs_review' && selectedChannels.length === 0 && (
-                    <div className="mb-3 rounded-md border border-amber-500/20 bg-amber-500/10 p-3">
-                      <p className="text-xs leading-5 text-amber-100/70">
+                    <Alert tone="attention" className="mb-bakin-3">
+                      <AlertDescription>
                         Select one or more channels below. You can also use Brainstorm to ask your agent to suggest channels and update the plan.
-                      </p>
-                    </div>
+                      </AlertDescription>
+                    </Alert>
                   )}
                   {channelsLocked && (
-                    <div className="mt-3 grid gap-2">
+                    <div className="mt-bakin-3">
                       {planChannels.length === 0 ? (
-                        <div className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">
+                        <div className="rounded-bakin-control border border-dashed border-bakin-border-subtle p-bakin-3 text-bakin-typography-size-body text-bakin-text-muted">
                           No channels are linked.
                         </div>
                       ) : (
-                        planChannels.map((channel) => (
-                          <div key={channel.id} className="flex items-center gap-2 rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground">
-                            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-                              <DistributionChannelIcon channelId={channel.channel} className="size-3.5" />
-                              <span className="font-medium text-foreground">{getDistributionChannelOption(channel.channel).label}</span>
-                              <span>{getContentTypeLabel(channel.contentType, contentTypes)}</span>
-                              <span>{formatDateTime(channel.publishAt)}</span>
-                            </div>
-                            <button
-                              type="button"
-                              className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-400"
-                              aria-label={`Delete ${channel.channel} channel`}
-                              title={`Delete ${channel.channel} channel`}
-                              onClick={() => {
-                                setChannelDeleteError(null)
-                                setChannelPendingDelete(channel)
-                              }}
-                            >
-                              <Trash2 className="size-3.5" aria-hidden="true" />
-                            </button>
-                          </div>
-                        ))
+                        <ListRows variant="bordered" aria-label="Plan channels">
+                          {planChannels.map((channel) => (
+                            <ListRow key={channel.id} className="flex items-center gap-bakin-2 px-bakin-3 py-bakin-2 text-bakin-typography-size-meta text-bakin-text-muted">
+                              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-bakin-2">
+                                <DistributionChannelIcon channelId={channel.channel} className="size-3.5" />
+                                <span className="font-bakin-typography-weight-medium text-bakin-text-primary">{getDistributionChannelOption(channel.channel).label}</span>
+                                <span>{getContentTypeLabel(channel.contentType, contentTypes)}</span>
+                                <span>{formatDateTime(channel.publishAt)}</span>
+                              </div>
+                              <Button
+                                size="icon-sm"
+                                variant="ghost"
+                                aria-label={`Delete ${channel.channel} channel`}
+                                title={`Delete ${channel.channel} channel`}
+                                onClick={() => {
+                                  setChannelDeleteError(null)
+                                  setChannelPendingDelete(channel)
+                                }}
+                              >
+                                <Trash2 className="size-3.5" aria-hidden="true" />
+                              </Button>
+                            </ListRow>
+                          ))}
+                        </ListRows>
                       )}
                     </div>
                   )}
                   {!channelsLocked && (
                     channelOptions.length === 0 ? (
-                      <div className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">
+                      <div className="rounded-bakin-control border border-dashed border-bakin-border-subtle p-bakin-3 text-bakin-typography-size-body text-bakin-text-muted">
                         No channels are configured yet.
                       </div>
                     ) : (
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex flex-wrap gap-bakin-2">
                         {channelOptions.map(channel => {
                           const selected = selectedChannels.includes(channel.id)
                           return (
-                            <button
+                            <Button
                               key={channel.id}
-                              type="button"
+                              variant={selected ? 'accent' : 'secondary'}
+                              size="sm"
+                              aria-pressed={selected}
                               disabled={savingChannels}
                               onClick={() => togglePlanChannel(channel.id)}
-                              className={`inline-flex h-8 items-center gap-2 rounded-md border px-3 text-sm transition-colors focus-visible:border-ring focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60 ${
-                                selected ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-200' : 'border-border bg-surface text-muted-foreground hover:bg-muted/40'
+                              className={`gap-bakin-2 font-bakin-typography-weight-regular ${
+                                selected
+                                  ? 'bg-bakin-signal-accent/10 hover:bg-bakin-signal-accent/15'
+                                  : 'text-bakin-text-muted hover:bg-bakin-surface-elevated hover:text-bakin-text-muted'
                               }`}
                             >
                               <DistributionChannelIcon channelId={channel.id} className="size-3.5" />
                               {channel.label}
-                            </button>
+                            </Button>
                           )
                         })}
                       </div>
                     )
                   )}
                   {kickoffError && (
-                    <div className="mt-3 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
-                      {kickoffError}
-                    </div>
+                    <Alert tone="danger" className="mt-bakin-3">
+                      <AlertDescription>{kickoffError}</AlertDescription>
+                    </Alert>
                   )}
                 </div>
 
-                <div className="mt-5">
-                  <h2 className="text-sm font-semibold">Brief</h2>
-                  <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">{plan.brief}</p>
-                </div>
               </section>
 
-              <section className="flex flex-col gap-3">
-                <div className="flex items-center justify-between gap-3">
-                  <h3 className="text-sm font-semibold">Content Pieces</h3>
-                  <Badge variant="outline" className="text-[11px]">
+              <section className="flex flex-col gap-bakin-3">
+                <div className="flex items-center justify-between gap-bakin-3">
+                  <h3 className="text-bakin-typography-size-body font-bakin-typography-weight-semibold">Content Pieces</h3>
+                  <Badge size="xs" variant="outline">
                     {contentPiecesLabel(nonProposedDeliverables.length)}
                   </Badge>
                 </div>
 
                 {nonProposedDeliverables.length === 0 ? (
-                  <div className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
+                  <div className="rounded-bakin-control border border-dashed border-bakin-border-subtle p-bakin-4 text-bakin-typography-size-body text-bakin-text-muted">
                     No content pieces have been planned yet.
                   </div>
                 ) : (
-                  <div className="grid gap-2">
+                  <ListRows variant="bordered" aria-label="Content pieces">
                     {nonProposedDeliverables.map((deliverable) => (
-                      <button
-                        key={deliverable.id}
-                        type="button"
-                        onClick={() => setSelectedDeliverable(deliverable)}
-                        className="w-full rounded-md border border-border bg-card p-3 text-left transition-colors hover:bg-muted/40"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <h4 className="truncate text-sm font-medium">{deliverable.title}</h4>
-                              <Badge variant="outline" className="text-[10px]">{deliverable.channel}</Badge>
+                      <ListRow key={deliverable.id} className="overflow-hidden p-0">
+                        <Button
+                          variant="ghost"
+                          onClick={() => setSelectedDeliverable(deliverable)}
+                          className="block !h-auto w-full whitespace-normal rounded-none p-bakin-3 text-left font-bakin-typography-weight-regular hover:bg-bakin-surface-elevated"
+                        >
+                          <div className="flex items-start justify-between gap-bakin-3">
+                            <div className="min-w-0">
+                              <div className="flex min-w-0 items-center gap-bakin-2">
+                                <h4 className="truncate text-bakin-typography-size-body font-bakin-typography-weight-medium">{deliverable.title}</h4>
+                                <Badge size="xs" variant="outline">{deliverable.channel}</Badge>
+                              </div>
+                              <p className="mt-bakin-1 line-clamp-2 text-bakin-typography-size-meta text-bakin-text-muted">{deliverable.brief}</p>
                             </div>
-                            <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{deliverable.brief}</p>
+                            <DeliverableStatusBadge status={deliverable.status} className="shrink-0" />
                           </div>
-                          <DeliverableStatusBadge status={deliverable.status} className="shrink-0" />
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-muted-foreground">
-                          <span>{deliverable.contentType}</span>
-                          <span>{deliverable.tone}</span>
-                          <span>{formatDateTime(deliverable.publishAt)}</span>
-                        </div>
-                      </button>
+                          <div className="mt-bakin-2 flex flex-wrap gap-bakin-3 text-bakin-typography-size-meta text-bakin-text-muted">
+                            <span>{deliverable.contentType}</span>
+                            <span>{deliverable.tone}</span>
+                            <span>{formatDateTime(deliverable.publishAt)}</span>
+                          </div>
+                        </Button>
+                      </ListRow>
                     ))}
-                  </div>
+                  </ListRows>
                 )}
               </section>
             </div>
           ) : (
-            <div className="min-h-0 flex-1 pt-4" role="tabpanel">
+            <div
+              id="messaging-plan-panel-brainstorm"
+              aria-labelledby="messaging-plan-tab-brainstorm"
+              className="flex min-h-144 flex-1 flex-col @3xl/page-shell:min-h-0"
+              role="tabpanel"
+            >
               {plan.sourceSessionId ? (
-                <div className="flex h-full min-h-0 flex-col gap-3">
+                <div className="flex h-full min-h-0 flex-col gap-bakin-3">
                   {plan.status === 'needs_review' && (
-                    <div className="shrink-0 rounded-md bg-surface p-3 text-sm leading-6 text-muted-foreground">
+                    <div className="shrink-0 rounded-bakin-control bg-bakin-surface-default p-bakin-3 text-bakin-typography-size-body text-bakin-text-muted">
                       Before content prep starts, refine the angle and channels here. A useful first note is which channels this message should use and anything the prep agents should avoid.
                     </div>
                   )}
@@ -764,42 +857,46 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                     onSend={brainstorm.send}
                     onAbort={abortBrainstorm}
                     onRetry={retryBrainstorm}
-                    agentId={plan.agent}
+                    agent={conversationAgent}
                     storageKey={`messaging-plan:${plan.id}`}
                     placeholder="Refine the angle, channels, timeline, or content pieces..."
                     fitParent
                     showHeader={false}
+                    className="rounded-none border-0"
                     emptyState={
-                      <div className="px-6 text-center text-sm text-muted-foreground">
-                        <p className="font-medium text-foreground">Refine this plan with its agent</p>
-                        <p className="mt-1">Suggested channel, timeline, or angle changes apply to the plan directly — a good first note is which channels to use and what to avoid.</p>
+                      <div className="px-bakin-6 text-center text-bakin-typography-size-body text-bakin-text-muted">
+                        <p className="m-0 font-bakin-typography-weight-medium text-bakin-text-primary">Refine this plan with its agent</p>
+                        <p className="m-0 mt-bakin-1">Suggested channel, timeline, or angle changes apply to the plan directly — a good first note is which channels to use and what to avoid.</p>
                       </div>
                     }
                   />
                 </div>
               ) : (
-                <div className="rounded-md border border-dashed border-border p-4 text-sm text-muted-foreground">
+                <div className="rounded-bakin-control border border-dashed border-bakin-border-subtle p-bakin-4 text-bakin-typography-size-body text-bakin-text-muted">
                   Brainstorm refinements are available for plans prepared from a brainstorm session.
                 </div>
               )}
             </div>
           )}
-        </main>
+            </main>
 
-        <aside
-          className="relative shrink-0 overflow-y-auto border-l border-border pl-6 pr-2"
-          style={{ width: sidebarWidth, scrollbarGutter: 'stable' }}
-        >
+            <aside
+              className="relative w-full shrink-0 border-t border-bakin-border-subtle pt-bakin-6 @3xl/page-shell:w-[var(--plan-sidebar-width)] @3xl/page-shell:overflow-y-auto @3xl/page-shell:border-l @3xl/page-shell:border-t-0 @3xl/page-shell:pl-bakin-6 @3xl/page-shell:pr-bakin-2 @3xl/page-shell:pt-0"
+              style={{
+                '--plan-sidebar-width': `${sidebarWidth}px`,
+                scrollbarGutter: 'stable',
+              } as CSSProperties}
+            >
           {/* Drag handle — sits over the left border to resize the sidebar.
               role / aria-orientation / tabIndex / aria-value* / keyboard all come from handleProps. */}
-          <div
-            {...sidebarResizeProps}
-            aria-label="Resize details panel"
-            className="absolute inset-y-0 left-0 z-10 w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-accent/50 active:bg-accent"
-          />
+              <div
+                {...sidebarResizeProps}
+                aria-label="Resize details panel"
+                className="absolute inset-y-0 left-0 z-10 hidden w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-bakin-surface-elevated active:bg-bakin-border-subtle @3xl/page-shell:block"
+              />
           <div>
-            <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">Details</h3>
-            <div className="space-y-2 text-xs text-muted-foreground">
+            <h3 className="mb-bakin-3 text-bakin-typography-size-meta font-bakin-typography-weight-medium uppercase tracking-wider text-bakin-text-muted">Details</h3>
+            <div className="space-y-bakin-2 text-bakin-typography-size-meta text-bakin-text-muted">
               <DetailRow
                 label="Target"
                 icon={<CalendarDays className="size-3.5" aria-hidden="true" />}
@@ -809,9 +906,9 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
               <DetailRow label="Created">{formatDateTime(plan.createdAt)}</DetailRow>
               <DetailRow label="Updated">{formatDateTime(plan.updatedAt)}</DetailRow>
               <DetailRow label="Agent">
-                <span className="inline-flex min-w-0 items-center gap-1.5">
-                  <AgentAvatar agentId={plan.agent} size="xs" />
-                  <span className="truncate">{plan.agent}</span>
+                <span className="inline-flex min-w-0 items-center gap-bakin-1">
+                  {planAgentIdentity && <AgentAvatar agent={planAgentIdentity} size="xs" decorative />}
+                  <span className="truncate">{planAgentIdentity?.name ?? plan.agent}</span>
                 </span>
               </DetailRow>
               {plan.campaign && (
@@ -819,9 +916,9 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
               )}
               <DetailRow label="Channels" align="start">
                 {planChannels.length > 0 ? (
-                  <div className="flex min-w-0 flex-wrap justify-end gap-1.5">
+                  <div className="flex min-w-0 flex-wrap justify-end gap-bakin-1">
                     {planChannels.map((channel) => (
-                      <Badge key={channel.id} variant="outline" className="max-w-28 truncate text-[10px]">
+                      <Badge key={channel.id} size="xs" variant="outline" className="max-w-28 truncate">
                         {getDistributionChannelOption(channel.channel).label}
                       </Badge>
                     ))}
@@ -833,71 +930,66 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
             </div>
           </div>
 
-          <div className="mt-5 border-t border-border pt-5">
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Progress</h3>
-              <span className="font-mono text-[11px] tabular-nums text-muted-foreground">{progress}%</span>
+          <div className="mt-5 border-t border-bakin-border-subtle pt-5">
+            <div className="mb-bakin-2 flex items-center justify-between">
+              <h3 className="text-bakin-typography-size-meta font-bakin-typography-weight-medium uppercase tracking-wider text-bakin-text-muted">Progress</h3>
+              <span className="font-bakin-typography-family-mono text-bakin-typography-size-meta tabular-nums text-bakin-text-muted">{progress}%</span>
             </div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-              <div
-                className="h-full rounded-full bg-emerald-500 transition-all duration-500"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
+            <Progress value={progress} aria-label="Plan progress" />
           </div>
 
           {canKickoffContentPrep && plan.status !== 'needs_review' && (
-            <div className="mt-5 rounded-md border border-border bg-surface p-3">
-              <h3 className="text-sm font-semibold">Ready for content prep?</h3>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            <div className="mt-5 rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default p-bakin-3">
+              <h3 className="text-bakin-typography-size-body font-bakin-typography-weight-semibold">Ready for content prep?</h3>
+              <p className="mt-bakin-1 text-bakin-typography-size-meta text-bakin-text-muted">
                 Kickoff creates one scheduled board task per configured channel.
               </p>
-              <Button className="mt-3 w-full justify-center" onClick={startContentPrep} disabled={startingPrep || selectedChannels.length === 0}>
-                <Rocket className="size-4" data-icon="inline-start" />
+              <Button className="mt-bakin-3 w-full justify-center" onClick={startContentPrep} disabled={startingPrep || selectedChannels.length === 0}>
+                <Rocket className="size-bakin-4" data-icon="inline-start" />
                 {startingPrep ? 'Starting...' : 'Kickoff content prep'}
               </Button>
-              {selectedChannels.length === 0 && <p className="mt-2 text-xs text-muted-foreground">Choose at least one channel first.</p>}
+              {selectedChannels.length === 0 && <p className="mt-bakin-2 text-bakin-typography-size-meta text-bakin-text-muted">Choose at least one channel first.</p>}
             </div>
           )}
 
-          <div className="mt-5 border-t border-border pt-5">
-            <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">Tasks</h3>
-            <div className="space-y-3">
+          <div className="mt-5 border-t border-bakin-border-subtle pt-5">
+            <h3 className="mb-bakin-3 text-bakin-typography-size-meta font-bakin-typography-weight-medium uppercase tracking-wider text-bakin-text-muted">Tasks</h3>
+            <div className="space-y-bakin-3">
               {planningTasks.map((task) => (
-                <div key={task.title} className="flex gap-2.5">
+                <div key={task.title} className="flex gap-bakin-2">
                   <PlanningTaskIcon state={task.state} />
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-xs font-medium leading-5">{task.title}</p>
-                      <Badge variant="outline" className="shrink-0 text-[10px]">
+                    <div className="flex items-center justify-between gap-bakin-2">
+                      <p className="text-bakin-typography-size-meta font-bakin-typography-weight-medium">{task.title}</p>
+                      <Badge size="xs" variant="outline" className="shrink-0">
                         {TASK_STATE_LABELS[task.state]}
                       </Badge>
                     </div>
-                    <p className="mt-0.5 text-[11px] leading-5 text-muted-foreground">{task.detail}</p>
-                    <p className="mt-1 text-[10px] text-muted-foreground">Target: {task.due}</p>
+                    <p className="mt-bakin-1 text-bakin-typography-size-meta text-bakin-text-muted">{task.detail}</p>
+                    <p className="mt-bakin-1 text-bakin-typography-size-meta text-bakin-text-muted">Target: {task.due}</p>
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
-          <div className="mt-5 border-t border-border pt-5">
-            <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">Plan Links</h3>
-            <div className="space-y-2 text-[11px] text-muted-foreground">
+          <div className="mt-5 border-t border-bakin-border-subtle pt-5">
+            <h3 className="mb-bakin-3 text-bakin-typography-size-meta font-bakin-typography-weight-medium uppercase tracking-wider text-bakin-text-muted">Plan Links</h3>
+            <div className="space-y-bakin-2 text-bakin-typography-size-meta text-bakin-text-muted">
               {plan.sourceSessionId && (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-bakin-2">
                   <MessageSquareText className="size-3.5" aria-hidden="true" />
                   Source brainstorm
-                  <Badge variant="outline" className="ml-auto font-mono text-[10px]">
+                  <Badge size="xs" variant="outline" className="ml-auto font-bakin-typography-family-mono">
                     {plan.sourceSessionId.slice(0, 8)}
                   </Badge>
                 </div>
               )}
               {activeDeliverables.some((deliverable) => deliverable.taskId) && (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-bakin-2">
                   <ExternalLink className="size-3.5" aria-hidden="true" />
                   Board tasks linked
-                  <Badge variant="outline" className="ml-auto text-[10px]">
+                  <Badge size="xs" variant="outline" className="ml-auto">
                     {activeDeliverables.filter((deliverable) => deliverable.taskId).length}
                   </Badge>
                 </div>
@@ -907,8 +999,10 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
               )}
             </div>
           </div>
-        </aside>
-      </div>
+            </aside>
+          </div>
+        </div>
+      </PageBody>
 
       <DeliverableDrawer
         deliverable={selectedDeliverable}
@@ -917,86 +1011,45 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
         onUpdated={refresh}
       />
 
-      {deleteOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div
-            className="absolute inset-0 bg-black/60"
-            onClick={() => {
-              if (deleting) return
-              setDeleteError(null)
-              setDeleteOpen(false)
-            }}
-          />
-          <div className="relative w-[420px] rounded-md border border-border bg-background p-5 shadow-2xl">
-            <h2 className="text-sm font-semibold">Delete this plan?</h2>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              This removes the plan, its content pieces, and any linked board tasks created for this plan.
-            </p>
-            {deleteError && (
-              <div className="mt-3 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
-                {deleteError}
-              </div>
-            )}
-            <div className="mt-5 flex justify-end gap-2">
-              <Button
-                variant="outline"
-                disabled={deleting}
-                onClick={() => {
-                  setDeleteError(null)
-                  setDeleteOpen(false)
-                }}
-              >
-                Cancel
-              </Button>
-              <Button variant="destructive" disabled={deleting} onClick={handleDeletePlan}>
-                {deleting ? 'Deleting...' : 'Delete plan'}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={deleteOpen}
+        title="Delete this plan?"
+        description="This removes the plan, its content pieces, and any linked board tasks created for this plan."
+        confirmLabel="Delete plan"
+        busyLabel="Deleting..."
+        confirmTone="danger"
+        busy={deleting}
+        error={deleteError}
+        onConfirm={handleDeletePlan}
+        onCancel={() => {
+          if (deleting) return
+          setDeleteError(null)
+          setDeleteOpen(false)
+        }}
+      />
 
-      {channelPendingDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div
-            className="absolute inset-0 bg-black/60"
-            onClick={() => {
-              if (deletingChannel) return
-              setChannelDeleteError(null)
-              setChannelPendingDelete(null)
-            }}
-          />
-          <div className="relative w-[420px] rounded-md border border-border bg-background p-5 shadow-2xl">
-            <h2 className="text-sm font-semibold">Delete this channel?</h2>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              This removes the channel from the plan and deletes its content pieces plus linked board tasks.
-            </p>
-            <p className="mt-3 text-xs text-muted-foreground">
-              {channelPendingDelete.channel} · {getContentTypeLabel(channelPendingDelete.contentType, contentTypes)}
-            </p>
-            {channelDeleteError && (
-              <div className="mt-3 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">
-                {channelDeleteError}
-              </div>
-            )}
-            <div className="mt-5 flex justify-end gap-2">
-              <Button
-                variant="outline"
-                disabled={deletingChannel}
-                onClick={() => {
-                  setChannelDeleteError(null)
-                  setChannelPendingDelete(null)
-                }}
-              >
-                Cancel
-              </Button>
-              <Button variant="destructive" disabled={deletingChannel} onClick={handleDeleteChannel}>
-                {deletingChannel ? 'Deleting...' : 'Delete channel'}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      <ConfirmDialog
+        open={Boolean(channelPendingDelete)}
+        title="Delete this channel?"
+        description="This removes the channel from the plan and deletes its content pieces plus linked board tasks."
+        confirmLabel="Delete channel"
+        busyLabel="Deleting..."
+        confirmTone="danger"
+        busy={deletingChannel}
+        error={channelDeleteError}
+        onConfirm={handleDeleteChannel}
+        onCancel={() => {
+          if (deletingChannel) return
+          setChannelDeleteError(null)
+          setChannelPendingDelete(null)
+        }}
+      >
+        {channelPendingDelete && (
+          <p className="text-bakin-typography-size-meta text-bakin-text-muted">
+            {channelPendingDelete.channel} · {getContentTypeLabel(channelPendingDelete.contentType, contentTypes)}
+          </p>
+        )}
+      </ConfirmDialog>
+    </Page>
   )
 }

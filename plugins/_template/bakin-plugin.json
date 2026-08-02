@@ -3,7 +3,45 @@
   "name": "Plugin Template",
   "version": "0.0.0",
   "bakin": ">=0.0.1-rc.1",
-  "description": "Starter scaffold demonstrating the BakinPlugin contract with hot-reload-safe lifecycle hooks.",
+  "description": "Storybook-first starter demonstrating declarative routes, canonical plugin UI, conformance, and hot-reload-safe lifecycle hooks.",
   "permissions": [],
-  "dependencies": []
+  "dependencies": [],
+  "contributes": {
+    "apiRoutes": [
+      {
+        "method": "GET",
+        "path": "/",
+        "summary": "Read template plugin status",
+        "description": "Returns a small payload proving the plugin is installed and responsive."
+      },
+      {
+        "method": "POST",
+        "path": "/greet",
+        "summary": "Create a template greeting",
+        "description": "Demonstrates a validated form mutation through the plugin API."
+      }
+    ],
+    "routes": [
+      {
+        "path": "/_template",
+        "summary": "Plugin template page"
+      }
+    ],
+    "clientRoutes": [
+      {
+        "path": "/_template",
+        "summary": "Plugin template page"
+      }
+    ],
+    "nav": [
+      {
+        "id": "_template",
+        "label": "Template",
+        "icon": "Sparkles",
+        "href": "/_template",
+        "order": 200
+      }
+    ],
+    "slots": ["home-widget"]
+  }
 }

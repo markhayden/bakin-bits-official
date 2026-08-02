@@ -36,8 +36,9 @@ const CLIENT_EXTERNAL = [
   'react', 'react-dom', 'react-dom/client',
   'react/jsx-runtime', 'react/jsx-dev-runtime',
   '@tanstack/react-router',
-  '@makinbakin/sdk', '@makinbakin/sdk/ui', '@makinbakin/sdk/hooks',
-  '@makinbakin/sdk/components', '@makinbakin/sdk/slots',
+  '@makinbakin/sdk', '@makinbakin/sdk/ui', '@makinbakin/sdk/layout',
+  '@makinbakin/sdk/patterns', '@makinbakin/sdk/navigation', '@makinbakin/sdk/hooks',
+  '@makinbakin/sdk/slots',
   '@makinbakin/sdk/types', '@makinbakin/sdk/utils',
   '@makinbakin/sdk/metadata', '@makinbakin/sdk/routing',
 ]
@@ -57,8 +58,10 @@ const SERVER_EXTERNAL = [
 const SDK_ENTRYPOINTS: Record<string, string> = {
   '@makinbakin/sdk': join(BUILD_SDK_ROOT, 'index.js'),
   '@makinbakin/sdk/ui': join(BUILD_SDK_ROOT, 'ui', 'index.js'),
+  '@makinbakin/sdk/layout': join(BUILD_SDK_ROOT, 'layout', 'index.js'),
+  '@makinbakin/sdk/patterns': join(BUILD_SDK_ROOT, 'patterns', 'index.js'),
+  '@makinbakin/sdk/navigation': join(BUILD_SDK_ROOT, 'navigation', 'index.js'),
   '@makinbakin/sdk/hooks': join(BUILD_SDK_ROOT, 'hooks', 'index.js'),
-  '@makinbakin/sdk/components': join(BUILD_SDK_ROOT, 'components', 'index.js'),
   '@makinbakin/sdk/slots': join(BUILD_SDK_ROOT, 'slots', 'index.js'),
   '@makinbakin/sdk/types': join(BUILD_SDK_ROOT, 'types', 'index.js'),
   '@makinbakin/sdk/utils': join(BUILD_SDK_ROOT, 'utils', 'index.js'),

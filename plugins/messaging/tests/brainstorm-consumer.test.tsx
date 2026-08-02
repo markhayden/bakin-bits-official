@@ -15,6 +15,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 
 const testDir = join(tmpdir(), `bakin-test-messaging-consumer-${Date.now()}`)
+const originalMatchMedia = typeof window === 'undefined' ? undefined : window.matchMedia
 
 mock.module('@bakin/core/main-agent', () => ({
   getMainAgentId: () => 'main',
@@ -198,6 +199,33 @@ const ACTIVE_SESSION = {
   planIds: [],
 }
 
+const ACCEPTED_SESSION = {
+  ...ACTIVE_SESSION,
+  id: 'sess-accepted',
+  title: 'Accepted directions',
+  proposals: [
+    {
+      ...ACTIVE_SESSION.proposals[0],
+      id: 'proposal-accepted',
+      status: 'approved' as const,
+    },
+  ],
+}
+
+const LINKED_SESSION = {
+  ...ACCEPTED_SESSION,
+  id: 'sess-linked',
+  title: 'Plans already prepared',
+  proposals: [
+    {
+      ...ACCEPTED_SESSION.proposals[0],
+      id: 'proposal-linked',
+      planId: 'plan-linked',
+    },
+  ],
+  planIds: ['plan-linked'],
+}
+
 let searchParams = new URLSearchParams()
 
 function mockFetchSessions() {
@@ -221,6 +249,27 @@ function mockFetchSessions() {
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve({ session: ACTIVE_SESSION }),
+      })
+    }
+    if (typeof url === 'string' && url.includes('/sessions/sess-accepted/proposals/proposal-accepted') && init?.method === 'PUT') {
+      const patch = JSON.parse(String(init.body)) as Record<string, unknown>
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({
+          proposal: { ...ACCEPTED_SESSION.proposals[0], ...patch },
+        }),
+      })
+    }
+    if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/sessions/sess-accepted')) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ session: ACCEPTED_SESSION }),
+      })
+    }
+    if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/sessions/sess-linked')) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ session: LINKED_SESSION }),
       })
     }
     if (typeof url === 'string' && url === '/api/plugins/messaging/sessions') {
@@ -260,6 +309,10 @@ beforeEach(() => {
 
 afterEach(() => {
   delete (globalThis as unknown as { __bakinTestSdkHooks?: unknown }).__bakinTestSdkHooks
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: originalMatchMedia,
+  })
   cleanup()
 })
 
@@ -297,9 +350,11 @@ describe('BrainstormView (search consumer)', () => {
   it('forwards typed query into searchHook.search()', async () => {
     render(<BrainstormView />)
     await waitFor(() => {
-      expect(screen.getByTestId('plugin-search-input')).toBeDefined()
+      expect(screen.getByRole('searchbox', { name: 'Search brainstorm sessions' })).toBeDefined()
     })
-    fireEvent.change(screen.getByTestId('plugin-search-input'), { target: { value: 'recipes' } })
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search brainstorm sessions' }), {
+      target: { value: 'recipes' },
+    })
     await waitFor(() => {
       expect(hookState.search).toHaveBeenCalledWith('recipes')
     })
@@ -315,7 +370,9 @@ describe('BrainstormView (search consumer)', () => {
     })
 
     // Trigger a query so the substring/empty branch is bypassed
-    fireEvent.change(screen.getByTestId('plugin-search-input'), { target: { value: 'recipes' } })
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search brainstorm sessions' }), {
+      target: { value: 'recipes' },
+    })
 
     await waitFor(() => {
       // The matched session is still visible; the unmatched one is filtered out
@@ -330,7 +387,9 @@ describe('BrainstormView (search consumer)', () => {
     await waitFor(() => {
       expect(screen.getByText('Outdoor sprint')).toBeDefined()
     })
-    fireEvent.change(screen.getByTestId('plugin-search-input'), { target: { value: 'outdoor' } })
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search brainstorm sessions' }), {
+      target: { value: 'outdoor' },
+    })
     await waitFor(() => {
       expect(screen.queryByText('Week 16 recipes')).toBeNull()
     })
@@ -343,12 +402,12 @@ describe('BrainstormView (search consumer)', () => {
       expect(screen.getByText('Week 16 recipes')).toBeDefined()
     })
 
-    fireEvent.click(screen.getByText('New'))
+    fireEvent.click(screen.getByRole('button', { name: 'New brainstorm' }))
 
-    expect(screen.getByText('New brainstorm')).toBeDefined()
+    expect(screen.getByRole('heading', { name: 'New brainstorm' })).toBeDefined()
     const agentGroup = screen.getByRole('radiogroup', { name: 'Brainstorm agent' })
     expect(within(agentGroup).getByTestId('avatar-scout')).toBeDefined()
-    fireEvent.click(within(agentGroup).getByText('Scout').closest('button')!)
+    fireEvent.click(within(agentGroup).getByRole('radio', { name: /Scout/ }))
     fireEvent.change(screen.getByPlaceholderText('Session title...'), {
       target: { value: 'May survival ideas' },
     })
@@ -371,10 +430,10 @@ describe('BrainstormView (search consumer)', () => {
     render(<BrainstormView />)
 
     await waitFor(() => {
-      expect(screen.getByText('Launch Week')).toBeDefined()
+      expect(screen.getByText('Week 16 recipes')).toBeDefined()
     })
 
-    expect(screen.getByRole('button', { name: 'Columns layout' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('tab', { name: 'Columns' }).getAttribute('aria-selected')).toBe('true')
     expect(screen.getByTestId('brainstorm-workspace-columns')).toBeDefined()
     expect(screen.getByTestId('conversation-panel')).toBeDefined()
     expect(screen.getByRole('separator', { name: 'Resize proposal panel' })).toBeDefined()
@@ -389,17 +448,87 @@ describe('BrainstormView (search consumer)', () => {
       expect(screen.getByText('Launch Week')).toBeDefined()
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Tabs layout' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Tabs' }))
 
-    expect(screen.getByRole('button', { name: 'Tabs layout' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('tab', { name: 'Tabs' }).getAttribute('aria-selected')).toBe('true')
     expect(window.localStorage.getItem('messaging-brainstorm-layout')).toBe('tabs')
     expect(screen.getByRole('tablist', { name: 'Brainstorm layout sections' })).toBeDefined()
     expect(screen.getByRole('tabpanel', { name: 'Brainstorm' })).toBeDefined()
 
-    fireEvent.click(screen.getByRole('tab', { name: /Plan proposals 1/ }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Plan proposals (1)' }))
 
-    expect(screen.getByRole('tabpanel', { name: 'Plan proposals' })).toBeDefined()
+    expect(screen.getByRole('tabpanel', { name: 'Plan proposals (1)' })).toBeDefined()
     expect(screen.queryByRole('heading', { name: 'Plan proposals' })).toBeNull()
     expect(screen.getByText('Launch Week')).toBeDefined()
+  })
+
+  it('forces the tabbed proposal review pattern on compact screens without overwriting the desktop preference', async () => {
+    searchParams = new URLSearchParams('session=sess-recipes')
+    window.localStorage.setItem('messaging-brainstorm-layout', 'columns')
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: () => ({
+        matches: true,
+        media: '(max-width: 767px)',
+        onchange: null,
+        addEventListener: mock(),
+        removeEventListener: mock(),
+        addListener: mock(),
+        removeListener: mock(),
+        dispatchEvent: mock(() => true),
+      }),
+    })
+
+    render(<BrainstormView />)
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Week 16 recipes' })).toBeDefined()
+    })
+
+    expect(document.querySelector('[data-slot="brainstorm-tabbed-workspace"]')).toBeDefined()
+    expect(screen.getByRole('tablist', { name: 'Brainstorm layout sections' })).toBeDefined()
+    expect(screen.queryByTestId('brainstorm-workspace-columns')).toBeNull()
+    expect(window.localStorage.getItem('messaging-brainstorm-layout')).toBe('columns')
+    expect(screen.getByTestId('conversation-panel').parentElement?.className).toContain('overflow-hidden')
+    const pageHeader = screen.getByRole('banner')
+    expect(pageHeader.className).not.toContain('[&_[data-slot=page-header-trailing]]:absolute')
+    expect(screen.getByRole('button', { name: 'Brainstorm actions' })).toBeDefined()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Plan proposals (1)' }))
+    const proposalPanel = document.querySelector('[data-slot="brainstorm-proposal-panel"]')
+    expect(proposalPanel?.className).toContain('max-w-full')
+  })
+
+  it('lets an accepted direction return to review before it has produced a plan', async () => {
+    searchParams = new URLSearchParams('session=sess-accepted')
+
+    render(<BrainstormView />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Launch Week')).toBeDefined()
+    })
+    fireEvent.click(screen.getByText('Launch Week'))
+
+    const cancelAcceptance = await screen.findByRole('button', { name: 'Cancel acceptance' })
+    fireEvent.click(cancelAcceptance)
+
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/sessions/sess-accepted/proposals/proposal-accepted'),
+        expect.objectContaining({
+          method: 'PUT',
+          body: expect.stringContaining('"status":"proposed"'),
+        }),
+      )
+    })
+  })
+
+  it('allows an active session with already prepared plans to complete', async () => {
+    searchParams = new URLSearchParams('session=sess-linked')
+
+    render(<BrainstormView />)
+
+    const complete = await screen.findByRole('button', { name: 'Complete session' })
+    expect(complete.hasAttribute('disabled')).toBe(false)
   })
 })

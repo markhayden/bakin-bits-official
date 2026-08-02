@@ -10,6 +10,8 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from '@makinbakin/sdk/hooks'
+import { ConfirmDialog } from '@makinbakin/sdk/patterns'
+import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@makinbakin/sdk/ui'
 import type { PlanSnapshot } from '../types'
 import { diffLines } from '../lib/line-diff'
 
@@ -91,45 +93,49 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored }: {
   const changed = diff.filter((l) => l.type !== 'same').length
 
   if (history === null) {
-    return <p className="text-[12px] text-zinc-500">Loading history…</p>
+    return <p className="m-0 text-bakin-typography-size-meta text-bakin-text-muted">Loading history…</p>
   }
   if (history.length === 0) {
-    return <p className="text-[12px] text-zinc-500">No plan versions yet — edits (yours or the agent's) snapshot the previous version here.</p>
+    return <p className="m-0 text-bakin-typography-size-meta text-bakin-text-muted">No plan versions yet — edits (yours or the agent's) snapshot the previous version here.</p>
   }
 
 
   return (
-    <div data-testid="plan-history" className="space-y-3">
-      <div className="flex items-center gap-2 flex-wrap">
-        <label className="text-[11px] text-zinc-500">Compare current with</label>
-        <select
+    <div data-testid="plan-history" className="grid gap-bakin-3">
+      <div className="flex flex-wrap items-center gap-bakin-2">
+        <label className="text-bakin-typography-size-meta text-bakin-text-muted">Compare current with</label>
+        <Select
           data-testid="plan-history-picker"
-          className="bg-zinc-900 border border-[rgba(255,255,255,0.08)] rounded-md px-2 py-1 text-[12px] text-zinc-200"
-          value={selected ?? ''}
-          onChange={(e) => setSelected(Number(e.target.value))}
+          value={String(selected ?? '')}
+          onValueChange={(value: string) => setSelected(Number(value))}
         >
-          {[...history.keys()].reverse().map((index) => (
-            <option key={index} value={index}>
-              {snapshotLabel(history[index])}{index === history.length - 1 ? ' (previous)' : ''}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger size="sm" aria-label="Plan version to compare" data-testid="plan-history-picker">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {[...history.keys()].reverse().map((index) => (
+              <SelectItem key={index} value={String(index)}>
+                {snapshotLabel(history[index])}{index === history.length - 1 ? ' (previous)' : ''}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {snapshot && (
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="xs"
             data-testid="plan-history-restore"
             onClick={() => setConfirmRestore(selected)}
-            className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-zinc-800 text-zinc-300 hover:text-foreground hover:bg-zinc-700 border border-[rgba(255,255,255,0.08)] transition-colors"
           >
             Restore this version
-          </button>
+          </Button>
         )}
-        <span className="text-[11px] text-zinc-500">{changed === 0 ? 'No changes' : `${changed} changed ${changed === 1 ? 'line' : 'lines'}`}</span>
+        <span className="text-bakin-typography-size-meta text-bakin-text-muted">{changed === 0 ? 'No changes' : `${changed} changed ${changed === 1 ? 'line' : 'lines'}`}</span>
       </div>
 
-      <div data-testid="plan-history-diff" className="rounded-lg border border-[rgba(255,255,255,0.06)] bg-zinc-950/60 overflow-auto max-h-[420px] font-mono text-[12px] leading-5">
+      <div data-testid="plan-history-diff" className="max-h-96 overflow-auto rounded-bakin-surface border border-bakin-border-subtle bg-bakin-surface-default/60 font-bakin-typography-family-mono text-bakin-typography-size-meta leading-5">
         {diffResult.tooLarge && (
-          <p className="px-3 py-2 text-zinc-500">Diff too large to render inline (over {DIFF_LINE_LIMIT.toLocaleString()} lines) — restore still works.</p>
+          <p className="m-0 px-bakin-3 py-bakin-2 text-bakin-text-muted">Diff too large to render inline (over {DIFF_LINE_LIMIT.toLocaleString()} lines) — restore still works.</p>
         )}
         {diff.map((line, i) => (
           <div
@@ -137,47 +143,31 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored }: {
             data-diff-type={line.type}
             className={
               line.type === 'added'
-                ? 'px-3 bg-emerald-500/10 text-emerald-300'
+                ? 'bg-bakin-signal-success/10 px-bakin-3 text-bakin-signal-success'
                 : line.type === 'removed'
-                  ? 'px-3 bg-red-500/10 text-red-400 line-through decoration-red-500/40'
-                  : 'px-3 text-zinc-500'
+                  ? 'bg-bakin-signal-danger/10 px-bakin-3 text-bakin-signal-danger line-through decoration-bakin-signal-danger/40'
+                  : 'px-bakin-3 text-bakin-text-muted'
             }
           >
-            <span className="select-none mr-2 opacity-60">{line.type === 'added' ? '+' : line.type === 'removed' ? '−' : ' '}</span>
-            {line.text || ' '}
+            <span className="mr-bakin-2 select-none opacity-60">{line.type === 'added' ? '+' : line.type === 'removed' ? '−' : ' '}</span>
+            {line.text || ' '}
           </div>
         ))}
       </div>
 
-      {confirmRestore !== null && history[confirmRestore] && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60" onClick={() => !restoring && setConfirmRestore(null)} />
-          <div className="relative bg-zinc-900 border border-[rgba(255,255,255,0.08)] rounded-xl shadow-2xl w-[420px] p-6">
-            <h3 className="text-sm font-semibold text-foreground mb-2">Restore this plan version?</h3>
-            <p className="text-[12px] text-zinc-400 mb-4">
-              The plan body returns to <span className="text-zinc-200 font-medium">{snapshotLabel(history[confirmRestore])}</span>.
-              Your current version is kept as a new snapshot, so nothing is lost.
-            </p>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setConfirmRestore(null)}
-                disabled={restoring}
-                className="px-3 py-1.5 rounded-lg text-xs text-zinc-400 hover:text-zinc-200 transition-colors disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                data-testid="plan-history-restore-confirm"
-                onClick={() => void restore(confirmRestore)}
-                disabled={restoring}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/20 transition-colors disabled:opacity-50"
-              >
-                {restoring ? 'Restoring…' : 'Restore'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={confirmRestore !== null && !!history[confirmRestore]}
+        title="Restore this plan version?"
+        description={confirmRestore !== null && history[confirmRestore]
+          ? `The plan body returns to ${snapshotLabel(history[confirmRestore])}. Your current version is kept as a new snapshot, so nothing is lost.`
+          : ''}
+        confirmLabel="Restore"
+        busyLabel="Restoring…"
+        busy={restoring}
+        confirmTestId="plan-history-restore-confirm"
+        onConfirm={() => { if (confirmRestore !== null) void restore(confirmRestore) }}
+        onCancel={() => { if (!restoring) setConfirmRestore(null) }}
+      />
     </div>
   )
 }

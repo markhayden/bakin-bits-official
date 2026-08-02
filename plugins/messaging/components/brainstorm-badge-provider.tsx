@@ -9,7 +9,7 @@
  * lands while the user is elsewhere. The brainstorm view marks sessions
  * seen (`?session=` query — the visible key lives in the query string).
  */
-import { useConversationAttention, ConversationReplyToast } from '@makinbakin/sdk/components'
+import { ConversationReplyToast, useConversationAttention } from '@makinbakin/sdk/conversation'
 
 /**
  * The session whose turns are on screen. Two surfaces qualify: the

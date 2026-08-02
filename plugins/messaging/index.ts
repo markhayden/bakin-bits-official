@@ -1256,7 +1256,11 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       payload: (key) => ({ sessionId: key }),
       resolveThread: (key) => {
         const session = contentStore.getBrainstormSession(key)
-        if (!session || session.status === 'archived') return null
+        if (!session) return null
+        // Materializing archives the source session, but plan-scoped
+        // refinement rides that same session (the route stages planId
+        // before start) — only plain brainstorm turns are blocked.
+        if (session.status === 'archived' && !brainstormTurnState.get(key)?.planId) return null
         return { agentId: session.agentId }
       },
       appendRow: (key, row) => {
@@ -1364,10 +1368,13 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
 
         const session = contentStore.getBrainstormSession(id)
         if (!session) return json({ error: 'Session not found' }, 404)
-        if (session.status === 'archived') return json({ error: 'Session is archived' }, 400)
         const plan = body.planId ? contentStore.getPlan(body.planId) : null
         if (body.planId && !plan) return json({ error: 'Plan not found' }, 404)
         if (plan && plan.sourceSessionId !== id) return json({ error: 'Plan is not linked to this session' }, 400)
+        // Materializing a plan archives its source session, but plan-scoped
+        // refinement rides that same session — only plain brainstorm messages
+        // are blocked by the archive.
+        if (!plan && session.status === 'archived') return json({ error: 'Session is archived' }, 400)
 
         // Current-turn prompt from the PRE-turn session (the engine appends
         // the user row); durable history stays with the runtime thread.
@@ -1468,6 +1475,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         if (!session) return json({ error: 'Session not found' }, 404)
         const result = materializeApprovedProposals(session, contentStore)
         contentStore.updateBrainstormSession(session.id, {
+          status: 'archived',
           proposals: session.proposals,
           createdAtPlanIds: session.createdAtPlanIds,
         })
@@ -2341,6 +2349,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         if (!session) return { ok: false, error: 'Session not found' }
         const result = materializeApprovedProposals(session, contentStore)
         contentStore.updateBrainstormSession(session.id, {
+          status: 'archived',
           proposals: session.proposals,
           createdAtPlanIds: session.createdAtPlanIds,
         })
