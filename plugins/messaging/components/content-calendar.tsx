@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import {
   AgentAvatar,
   AgentFilter,
@@ -233,10 +233,9 @@ function CalendarDeliverable({
 
   if (mode === 'row') {
     return (
-      <Button
-        variant="ghost"
-        onClick={() => onSelect(deliverable)}
-        className="flex !h-auto w-full min-w-0 items-center justify-start gap-bakin-3 whitespace-normal rounded-none px-bakin-3 py-bakin-3 text-left font-bakin-typography-weight-regular hover:bg-bakin-surface-elevated"
+      <ListRow
+        interactive={{ label: `Open ${deliverable.title}`, onActivate: () => onSelect(deliverable) }}
+        className="flex items-center gap-bakin-3 px-bakin-3 py-bakin-3"
         data-testid={`calendar-deliverable-${deliverable.id}`}
       >
         <AgentAvatar agent={identity} size="sm" decorative />
@@ -250,7 +249,7 @@ function CalendarDeliverable({
           </span>
         </span>
         <ChevronRight className="size-bakin-4 shrink-0 text-bakin-text-muted" aria-hidden="true" />
-      </Button>
+      </ListRow>
     )
   }
 
@@ -571,9 +570,9 @@ export function ContentCalendar() {
                 label={`${dayLabel(activeDate)} content calendar`}
                 items={calendarItems}
                 renderItem={(item) => (
-                  <div className="overflow-hidden rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default">
+                  <ListRows variant="bordered">
                     {renderDeliverable(item.deliverable, 'row')}
-                  </div>
+                  </ListRows>
                 )}
               />
             ) : (
@@ -593,9 +592,7 @@ export function ContentCalendar() {
               <ListRowGroup key={key} label={compactDayLabel(key)}>
                 <ListRows variant="bordered">
                   {items.map(deliverable => (
-                    <ListRow key={deliverable.id} className="overflow-hidden p-0">
-                      {renderDeliverable(deliverable, 'row')}
-                    </ListRow>
+                    <Fragment key={deliverable.id}>{renderDeliverable(deliverable, 'row')}</Fragment>
                   ))}
                 </ListRows>
               </ListRowGroup>

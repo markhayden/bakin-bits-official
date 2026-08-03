@@ -808,12 +808,11 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                 ) : (
                   <ListRows variant="bordered" aria-label="Content pieces">
                     {nonProposedDeliverables.map((deliverable) => (
-                      <ListRow key={deliverable.id} className="overflow-hidden p-0">
-                        <Button
-                          variant="ghost"
-                          onClick={() => setSelectedDeliverable(deliverable)}
-                          className="block !h-auto w-full whitespace-normal rounded-none p-bakin-3 text-left font-bakin-typography-weight-regular hover:bg-bakin-surface-elevated"
-                        >
+                      <ListRow
+                        key={deliverable.id}
+                        interactive={{ label: `Open ${deliverable.title}`, onActivate: () => setSelectedDeliverable(deliverable) }}
+                        className="p-bakin-3"
+                      >
                           <div className="flex items-start justify-between gap-bakin-3">
                             <div className="min-w-0">
                               <div className="flex min-w-0 items-center gap-bakin-2">
@@ -829,7 +828,6 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                             <span>{deliverable.tone}</span>
                             <span>{formatDateTime(deliverable.publishAt)}</span>
                           </div>
-                        </Button>
                       </ListRow>
                     ))}
                   </ListRows>

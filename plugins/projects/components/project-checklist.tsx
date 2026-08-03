@@ -79,12 +79,17 @@ function TaskItem({
           className="mt-0.5 shrink-0"
         />
 
-        <span
+        {/* Extended hit area for the expand toggle: keyboard and screen-reader
+            access ride the chevron button and the checkbox label. */}
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-hidden="true"
           onClick={() => setExpanded(!expanded)}
-          className={`flex-1 cursor-pointer text-bakin-typography-size-meta leading-snug ${item.checked ? 'line-through text-bakin-text-muted' : 'text-bakin-text-primary'}`}
+          className={`flex-1 cursor-pointer text-left text-bakin-typography-size-meta leading-snug ${item.checked ? 'line-through text-bakin-text-muted' : 'text-bakin-text-primary'}`}
         >
           {item.title}
-        </span>
+        </button>
 
         {/* Linked task badge */}
         {item.taskId && resolved && (

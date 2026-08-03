@@ -13,10 +13,25 @@ export const Avatar = createElement('span')
 export const Drawer = ({ children, open = true }) => open ? React.createElement('div', null, children) : null
 export const Badge = createElement('span', { 'data-testid': 'badge' })
 export const Button = createElement('button')
-export const Card = createElement('div')
+export const Card = ({ children, interactive, selected, tone, orientation, size, ...props }) =>
+  React.createElement(
+    'div',
+    { ...props, 'data-slot': 'card', 'data-selected': selected ? '' : undefined, 'data-tone': tone },
+    interactive
+      ? React.createElement('button', {
+          type: 'button',
+          'aria-label': interactive.label,
+          onClick: interactive.onActivate,
+        })
+      : null,
+    children,
+  )
+export const CardMedia = createElement('div')
 export const CardAction = createElement('div')
 export const CardContent = createElement('div')
 export const CardDescription = createElement('div')
+export const CardFooter = ({ children, variant, ...props }) =>
+  React.createElement('div', { ...props, 'data-slot': 'card-footer', 'data-variant': variant }, children)
 export const CardHeader = createElement('div')
 export const CardTitle = createElement('div')
 export const Checkbox = createElement('input', { type: 'checkbox' })
