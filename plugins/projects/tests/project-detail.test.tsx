@@ -73,10 +73,9 @@ describe('ProjectDetail', () => {
     })
 
     const detail = document.querySelector('[data-slot="project-detail"]')
-    const toolbar = document.querySelector('[data-slot="project-detail-toolbar"]')
     const body = document.querySelector('[data-slot="project-detail-body"]')
     expect(detail?.className).toContain('min-w-0')
-    expect(toolbar?.className).toContain('flex-wrap')
+    expect(screen.getByRole('button', { name: 'Back to projects' })).toBeDefined()
     expect(screen.getByRole('button', { name: 'Project actions' })).toBeDefined()
     expect(body?.className).toContain('lg:flex-row')
     expect(body?.className).toContain('pt-bakin-6')
