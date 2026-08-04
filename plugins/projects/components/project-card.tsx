@@ -1,6 +1,6 @@
 'use client'
 
-import { Button, Progress } from '@makinbakin/sdk/ui'
+import { Card, CardContent, CardFooter, CardHeader, CardTitle, Progress } from '@makinbakin/sdk/ui'
 import { ProjectStatusBadge } from './project-status-badge'
 import type { ProjectSummary } from '../types'
 
@@ -12,35 +12,38 @@ function formatDate(iso: string): string {
 
 export function ProjectCard({ project, onClick }: { project: ProjectSummary; onClick: () => void }) {
   return (
-    <Button
-      variant="outline"
-      onClick={onClick}
-      className="!h-auto w-full flex-col items-stretch justify-start gap-0 whitespace-normal rounded-lg border-bakin-border-subtle/30 bg-bakin-surface-default p-bakin-4 text-left font-bakin-typography-weight-regular transition-colors hover:border-bakin-border-subtle/30 hover:bg-bakin-surface-elevated"
+    <Card
+      size="sm"
+      interactive={{ label: `Open project: ${project.title || 'Untitled project'}`, onActivate: onClick }}
+      className="h-full border-bakin-border-subtle/30"
     >
-      <div className="mb-3 flex items-start justify-between gap-2">
-        <h3 className="line-clamp-2 text-sm font-medium text-bakin-text-primary">
-          {project.title || 'Untitled project'}
-        </h3>
-        <div className="flex shrink-0 items-center gap-bakin-2">
-          {project.brainstormStreaming ? (
-            <span data-testid="card-brainstorm-streaming" title="Brainstorm reply in progress" className="size-bakin-2 animate-pulse rounded-bakin-pill bg-bakin-signal-info" />
-          ) : project.brainstormUnread ? (
-            <span data-testid="card-brainstorm-unread" title="Unseen brainstorm reply" className="size-bakin-2 rounded-bakin-pill bg-bakin-signal-attention" />
-          ) : null}
-          <ProjectStatusBadge status={project.status} />
+      <CardHeader>
+        <div className="flex items-start justify-between gap-bakin-2">
+          <CardTitle className="line-clamp-2">
+            {project.title || 'Untitled project'}
+          </CardTitle>
+          <div className="flex shrink-0 items-center gap-bakin-2">
+            {project.brainstormStreaming ? (
+              <span data-testid="card-brainstorm-streaming" title="Brainstorm reply in progress" className="size-bakin-2 animate-pulse rounded-bakin-pill bg-bakin-signal-info" />
+            ) : project.brainstormUnread ? (
+              <span data-testid="card-brainstorm-unread" title="Unseen brainstorm reply" className="size-bakin-2 rounded-bakin-pill bg-bakin-signal-highlight" />
+            ) : null}
+            <ProjectStatusBadge status={project.status} />
+          </div>
         </div>
-      </div>
+      </CardHeader>
 
-      <Progress value={project.progress} aria-label={`${project.title || 'Untitled project'} progress`} />
+      <CardContent className="flex-1">
+        <Progress value={project.progress} aria-label={`${project.title || 'Untitled project'} progress`} />
+        <div className="mt-bakin-3 flex items-center justify-between text-bakin-typography-size-meta text-bakin-text-muted">
+          <span>{project.progress}% complete</span>
+          <span>{project.taskCount} items</span>
+        </div>
+      </CardContent>
 
-      <div className="mt-3 flex items-center justify-between text-bakin-typography-size-meta text-bakin-text-muted">
-        <span>{project.progress}% complete</span>
-        <span>{project.taskCount} items</span>
-      </div>
-
-      <div className="mt-1 text-bakin-typography-size-meta text-bakin-text-muted">
+      <CardFooter variant="meta">
         Updated {formatDate(project.updated)}
-      </div>
-    </Button>
+      </CardFooter>
+    </Card>
   )
 }

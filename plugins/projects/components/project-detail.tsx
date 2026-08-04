@@ -7,7 +7,7 @@ import { useAgentList, useMainAgentId } from "@makinbakin/sdk/hooks"
 import { useRouter } from "@makinbakin/sdk/navigation"
 import { ConversationEmptyState, ConversationPanel, useConversationThread } from "@makinbakin/sdk/conversation"
 import type { ConversationAgent, ConversationMessage } from "@makinbakin/sdk/conversation"
-import { AgentSelect, AssetPicker, ConfirmDialog, Page, PageHeaderOverflowMenu, SegmentedControl, StatusMarker } from "@makinbakin/sdk/patterns"
+import { AgentSelect, AssetPicker, ConfirmDialog, Page, PageHeader, SegmentedControl, StatusMarker } from "@makinbakin/sdk/patterns"
 import type { AssetPickerCollection } from "@makinbakin/sdk/patterns"
 import { ProjectChecklist } from './project-checklist'
 import { ProjectEditor } from './project-editor'
@@ -688,23 +688,19 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
     <Page scroll="contained">
     <div data-slot="project-detail" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
 
-      {/* ── Top bar ── */}
-      <div
-        data-slot="project-detail-toolbar"
-        className="flex min-w-0 shrink-0 flex-wrap items-center gap-bakin-3 border-b border-bakin-border-subtle pb-bakin-4"
-      >
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onBack}
-          className="shrink-0 gap-bakin-2 px-0 text-sm font-bakin-typography-weight-regular text-bakin-text-muted hover:bg-transparent hover:text-bakin-text-primary"
-        >
-          <ArrowLeft className="size-4" />
-          Projects
-        </Button>
-
-        <div className="order-last flex w-full min-w-0 flex-col gap-bakin-2 sm:order-none sm:w-auto sm:min-w-0 sm:flex-1 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
-          <div className="flex min-w-0 items-center gap-bakin-2">
+      {/* ── Header ── */}
+      <PageHeader
+        className="shrink-0"
+        measure="wide"
+        navigation={(
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onBack} aria-label="Back to projects">
+            <ArrowLeft aria-hidden="true" />
+          </Button>
+        )}
+        eyebrow="Projects / detail"
+        title={(editing ? editTitle : project.title) || 'Untitled project'}
+        actions={(
+          <div className="flex w-full min-w-0 flex-wrap items-center gap-bakin-2 @3xl/page-header:w-auto">
             {/* Status */}
             <DropdownMenu>
               <DropdownMenuTrigger
@@ -713,7 +709,6 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                     variant="secondary"
                     size="sm"
                     aria-label="Project status"
-                    className="shrink-0 gap-1.5 text-sm"
                   />
                 )}
               >
@@ -740,15 +735,13 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
               onValueChange={(v) => { setEditOwner(v); if (!editing) saveField('owner', v) }}
               agents={selectableAgents}
               ariaLabel="Project owner"
-              className="h-bakin-8 min-w-0 flex-1 bg-bakin-surface-default text-sm sm:w-auto sm:min-w-36 sm:flex-none"
+              className="h-bakin-8 min-w-0 flex-1 bg-bakin-surface-default text-sm @3xl/page-header:min-w-36 @3xl/page-header:flex-none"
             />
-          </div>
 
-          <div className="flex shrink-0 items-center gap-bakin-2">
             {/* Edit / Save / Cancel */}
             {editing ? (
               <>
-                <Button variant="ghost" size="sm" onClick={cancelEdit} className="font-bakin-typography-weight-regular text-bakin-text-muted hover:text-bakin-text-primary">
+                <Button variant="ghost" size="sm" onClick={cancelEdit}>
                   Cancel
                 </Button>
                 <Button size="sm" onClick={handleSave} disabled={!isDirty}>
@@ -756,29 +749,21 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                 </Button>
               </>
             ) : (
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={enterEdit}
-                className="gap-bakin-2 text-sm font-bakin-typography-weight-regular text-bakin-text-muted hover:text-bakin-text-primary"
-              >
-                <Pencil className="size-4" />
+              <Button variant="secondary" size="sm" onClick={enterEdit}>
+                <Pencil aria-hidden="true" />
                 Edit
               </Button>
             )}
-
           </div>
-        </div>
-
-        <div className="ml-auto shrink-0 sm:ml-0">
-          <PageHeaderOverflowMenu label="Project actions">
-            <DropdownMenuItem variant="danger" onClick={() => setDeleteDialogOpen(true)}>
-              <Trash2 aria-hidden="true" />
-              Delete
-            </DropdownMenuItem>
-          </PageHeaderOverflowMenu>
-        </div>
-      </div>
+        )}
+        overflowActionsLabel="Project actions"
+        overflowActions={(
+          <DropdownMenuItem variant="danger" onClick={() => setDeleteDialogOpen(true)}>
+            <Trash2 aria-hidden="true" />
+            Delete
+          </DropdownMenuItem>
+        )}
+      />
 
       {/* ── Delete confirmation dialog ── */}
       <ConfirmDialog
@@ -852,23 +837,21 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
 
           {/* Scrollable content area */}
           <div className="min-w-0 shrink-0 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-bakin-1">
-            {/* Title */}
-            <label className="text-bakin-typography-size-meta font-medium text-bakin-text-muted uppercase tracking-wider mb-1.5 block">Title</label>
+            {/* Title (edit mode only — the page title lives in PageHeader) */}
             {editing ? (
-              <Input
-                type="text"
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
-                className="mb-5 !h-auto w-full rounded-lg px-4 py-2.5 text-xl font-semibold tracking-tight md:text-xl"
-                placeholder="Untitled project"
-                aria-label="Project title"
-                autoFocus
-              />
-            ) : (
-              <h1 className="text-xl font-semibold text-bakin-text-primary tracking-tight mb-5">
-                {project.title || 'Untitled project'}
-              </h1>
-            )}
+              <>
+                <label className="text-bakin-typography-size-meta font-medium text-bakin-text-muted uppercase tracking-wider mb-1.5 block">Title</label>
+                <Input
+                  type="text"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="mb-5 !h-auto w-full rounded-lg px-4 py-2.5 text-xl font-semibold tracking-tight md:text-xl"
+                  placeholder="Untitled project"
+                  aria-label="Project title"
+                  autoFocus
+                />
+              </>
+            ) : null}
 
             {/* Details (spec) — the header row stays pinned while the plan
                 scrolls; Rendered|Diff rides the SDK SegmentedControl. */}

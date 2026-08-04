@@ -173,7 +173,7 @@ describe('Plan client UI', () => {
     await waitFor(() => {
       expect(screen.getByText('Soup Week')).toBeDefined()
     })
-    fireEvent.click(screen.getByText('Soup Week'))
+    fireEvent.click(screen.getByRole('button', { name: 'Open plan: Soup Week' }))
 
     expect(onSelectPlan).toHaveBeenCalledWith(PLAN)
   })

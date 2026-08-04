@@ -197,12 +197,11 @@ export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
                 {dayPlans.map((plan) => {
                   const agent = agentById.get(plan.agent)
                   return (
-                    <ListRow key={plan.id} className="overflow-hidden p-0">
-                      <Button
-                        variant="ghost"
-                        onClick={() => onSelectPlan?.(plan)}
-                        className="block !h-auto w-full whitespace-normal rounded-none px-bakin-4 py-bakin-3 text-left font-bakin-typography-weight-regular hover:bg-bakin-surface-elevated"
-                      >
+                    <ListRow
+                      key={plan.id}
+                      interactive={{ label: `Open plan: ${plan.title}`, onActivate: () => onSelectPlan?.(plan) }}
+                      className="px-bakin-4 py-bakin-3"
+                    >
                         <div className="flex min-w-0 items-start gap-bakin-3">
                           <AgentAvatar
                             agent={{
@@ -235,7 +234,6 @@ export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
                             </div>
                           </div>
                         </div>
-                      </Button>
                     </ListRow>
                   )
                 })}

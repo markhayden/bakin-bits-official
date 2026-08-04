@@ -190,8 +190,19 @@ export function ConfirmDialog({
 // ── Vetted dense-row list (Lists taxonomy type 1) ─────────────────────────
 export const ListRows = ({ children, variant = 'bordered', columns, columnsAt, columnsAlign, ...props }) =>
   React.createElement('ul', { ...props, 'data-list-rows': '', 'data-variant': variant }, children)
-export const ListRow = ({ children, ...props }) =>
-  React.createElement('li', { ...props, 'data-slot': 'list-row' }, children)
+export const ListRow = ({ children, interactive, selected, ...props }) =>
+  React.createElement(
+    'li',
+    { ...props, 'data-slot': 'list-row', 'data-selected': selected ? '' : undefined },
+    interactive
+      ? React.createElement('button', {
+          type: 'button',
+          'aria-label': interactive.label,
+          onClick: interactive.onActivate,
+        })
+      : null,
+    children,
+  )
 export const ListRowLabels = ({ children, ...props }) =>
   React.createElement('li', { ...props, 'aria-hidden': 'true', 'data-slot': 'list-row-labels' }, children)
 export const ListRowGroup = ({ label, children, ...props }) =>

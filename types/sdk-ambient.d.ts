@@ -901,11 +901,25 @@ declare module '@makinbakin/sdk/ui' {
   export const Drawer: UIComponent
   export const Badge: UIComponent
   export const Button: UIComponent
-  export const Card: UIComponent
+  /** Whole-surface activation shared by Card (and ListRow in patterns). */
+  export interface InteractiveAction {
+    label: string
+    onActivate?: (event: any) => void
+    render?: any
+  }
+  export const Card: ComponentType<UIProps & {
+    interactive?: InteractiveAction
+    selected?: boolean
+    tone?: 'neutral' | 'success' | 'attention' | 'danger' | 'accent'
+    orientation?: 'column' | 'row'
+    size?: 'sm' | 'md'
+  }>
   export const CardAction: UIComponent
   export const CardContent: UIComponent
   export const CardDescription: UIComponent
+  export const CardFooter: ComponentType<UIProps & { variant?: 'default' | 'meta' }>
   export const CardHeader: UIComponent
+  export const CardMedia: UIComponent
   export const CardTitle: UIComponent
   export const Checkbox: UIComponent
   export const Collapsible: UIComponent
@@ -1113,7 +1127,10 @@ declare module '@makinbakin/sdk/patterns' {
     columnsAt?: ListRowsColumnsAt
     columnsAlign?: ListRowsColumnsAlign
   }>
-  export const ListRow: PatternComponent
+  export const ListRow: ComponentType<PatternProps & {
+    interactive?: import('@makinbakin/sdk/ui').InteractiveAction
+    selected?: boolean
+  }>
   export const ListRowLabels: PatternComponent
   export const ListRowGroup: ComponentType<PatternProps & { label: ReactNode }>
 
