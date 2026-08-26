@@ -24,16 +24,16 @@ import { PLAN_STATUS_TONE } from '../constants'
 import { usePlans } from '../hooks/use-plans'
 
 const PLAN_STATUS_OPTIONS: Array<{ value: PlanStatus; label: string; icon: React.ReactNode }> = [
-  { value: 'needs_review', label: 'Needs review', icon: <Circle className="size-3" /> },
-  { value: 'planning', label: 'Planning', icon: <Circle className="size-3" /> },
-  { value: 'in_prep', label: 'In production', icon: <Circle className="size-3" /> },
-  { value: 'in_review', label: 'In review', icon: <Circle className="size-3" /> },
-  { value: 'scheduled', label: 'Scheduled', icon: <Circle className="size-3" /> },
-  { value: 'overdue', label: 'Overdue', icon: <Circle className="size-3" /> },
-  { value: 'partially_published', label: 'Partially published', icon: <Circle className="size-3" /> },
-  { value: 'done', label: 'Published', icon: <Circle className="size-3" /> },
-  { value: 'cancelled', label: 'Cancelled', icon: <Circle className="size-3" /> },
-  { value: 'failed', label: 'Failed', icon: <Circle className="size-3" /> },
+  { value: 'needs_review', label: 'Needs review', icon: <Circle className="size-bakin-3" /> },
+  { value: 'planning', label: 'Planning', icon: <Circle className="size-bakin-3" /> },
+  { value: 'in_prep', label: 'In production', icon: <Circle className="size-bakin-3" /> },
+  { value: 'in_review', label: 'In review', icon: <Circle className="size-bakin-3" /> },
+  { value: 'scheduled', label: 'Scheduled', icon: <Circle className="size-bakin-3" /> },
+  { value: 'overdue', label: 'Overdue', icon: <Circle className="size-bakin-3" /> },
+  { value: 'partially_published', label: 'Partially published', icon: <Circle className="size-bakin-3" /> },
+  { value: 'done', label: 'Published', icon: <Circle className="size-bakin-3" /> },
+  { value: 'cancelled', label: 'Cancelled', icon: <Circle className="size-bakin-3" /> },
+  { value: 'failed', label: 'Failed', icon: <Circle className="size-bakin-3" /> },
 ]
 
 interface PlanListProps {
