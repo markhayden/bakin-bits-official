@@ -29,6 +29,7 @@ import {
 import { PlanHistoryPanel } from './plan-history'
 import { RenderedPlan } from './rendered-plan'
 import type { ProjectStatus } from '../types'
+import { cn } from '@makinbakin/sdk/utils'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -97,12 +98,12 @@ function AssetThumb({ asset }: { asset: ResolvedAsset }) {
         src={`/api/assets/${encodeURIComponent(asset.assetId)}`}
         alt={asset.assetId}
         onError={() => setErr(true)}
-        className="size-8 rounded object-cover shrink-0 bg-bakin-surface-elevated"
+        className="size-bakin-8 rounded object-cover shrink-0 bg-bakin-surface-elevated"
       />
     )
   }
   return (
-    <div className="size-8 rounded bg-bakin-surface-elevated flex items-center justify-center shrink-0">
+    <div className="size-bakin-8 rounded bg-bakin-surface-elevated flex items-center justify-center shrink-0">
       <AssetIcon type={asset.type} />
     </div>
   )
@@ -138,11 +139,11 @@ function AssetPreviewModal({ asset, onClose }: { asset: ResolvedAsset; onClose: 
       role="dialog"
       aria-modal="true"
       aria-label={name}
-      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-bakin-canvas-default/90 p-8"
+      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-bakin-3 bg-bakin-canvas-default/90 p-bakin-8"
       onClick={onClose}
     >
       <div
-        className="flex min-h-0 max-h-full w-full max-w-full flex-col items-center gap-3"
+        className="flex min-h-0 max-h-full w-full max-w-full flex-col items-center gap-bakin-3"
         onClick={(e) => e.stopPropagation()}
       >
         {IMAGE_TYPES.has(asset.type) ? (
@@ -158,33 +159,33 @@ function AssetPreviewModal({ asset, onClose }: { asset: ResolvedAsset; onClose: 
             className="min-h-0 max-h-full max-w-full rounded bg-bakin-canvas-default"
           />
         ) : AUDIO_TYPES.has(asset.type) ? (
-          <div className="w-full max-w-lg rounded-lg border border-bakin-border-subtle bg-bakin-canvas-default p-4">
-            <div className="mb-3 flex items-center gap-2 text-sm text-bakin-text-primary">
+          <div className="w-full max-w-lg rounded-bakin-control border border-bakin-border-subtle bg-bakin-canvas-default p-bakin-4">
+            <div className="mb-bakin-3 flex items-center gap-bakin-2 text-sm text-bakin-text-primary">
               <AssetIcon type={asset.type} />
               <span className="truncate">{name}</span>
             </div>
             <audio src={url} controls className="w-full" />
           </div>
         ) : (
-          <div className="flex w-full max-w-md flex-col items-center gap-3 rounded-lg border border-bakin-border-subtle bg-bakin-canvas-default p-6 text-center">
+          <div className="flex w-full max-w-md flex-col items-center gap-bakin-3 rounded-bakin-control border border-bakin-border-subtle bg-bakin-canvas-default p-bakin-6 text-center">
             <div className="flex size-12 items-center justify-center rounded bg-bakin-surface-elevated">
               <AssetIcon type={asset.type} />
             </div>
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-bakin-text-primary">{name}</p>
-              <p className="mt-1 text-xs text-bakin-text-muted">{asset.type}</p>
+              <p className="truncate text-sm font-bakin-typography-weight-medium text-bakin-text-primary">{name}</p>
+              <p className="mt-bakin-1 text-xs text-bakin-text-muted">{asset.type}</p>
             </div>
           </div>
         )}
-        <div className="flex items-center gap-4 text-sm text-bakin-text-muted">
+        <div className="flex items-center gap-bakin-4 text-sm text-bakin-text-muted">
           <a href={href} className="underline hover:text-bakin-text-primary">Open asset</a>
           <Button
             variant="ghost"
             size="sm"
             onClick={onClose}
-            className="gap-1 px-bakin-1 text-sm font-bakin-typography-weight-regular text-bakin-text-muted hover:bg-transparent hover:text-bakin-text-primary"
+            className="gap-bakin-1 px-bakin-1 text-sm font-bakin-typography-weight-regular text-bakin-text-muted hover:bg-transparent hover:text-bakin-text-primary"
           >
-            <X className="size-4" /> Close
+            <X className="size-bakin-4" /> Close
           </Button>
         </div>
       </div>
@@ -659,8 +660,8 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
           description="Project details will appear here."
           preview={(
             <div className="flex flex-col gap-bakin-3">
-              <Skeleton className="h-6 w-60" />
-              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-bakin-6 w-60" />
+              <Skeleton className="h-bakin-4 w-40" />
               <Skeleton className="h-40 w-full" />
             </div>
           )}
@@ -714,7 +715,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
               >
                 <StatusMarker tone={statusCfg.tone} size="sm" />
                 {statusCfg.label}
-                <ChevronDown className="size-3 text-bakin-text-muted" />
+                <ChevronDown className="size-bakin-3 text-bakin-text-muted" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 {(Object.entries(STATUS_CONFIG) as [ProjectStatus, typeof statusCfg][]).map(([val, cfg]) => (
@@ -840,12 +841,12 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
             {/* Title (edit mode only — the page title lives in PageHeader) */}
             {editing ? (
               <>
-                <label className="text-bakin-typography-size-meta font-medium text-bakin-text-muted uppercase tracking-wider mb-1.5 block">Title</label>
+                <label className="text-bakin-typography-size-meta font-bakin-typography-weight-medium text-bakin-text-muted uppercase tracking-wider mb-1.5 block">Title</label>
                 <Input
                   type="text"
                   value={editTitle}
                   onChange={(e) => setEditTitle(e.target.value)}
-                  className="mb-5 !h-auto w-full rounded-lg px-4 py-2.5 text-xl font-semibold tracking-tight md:text-xl"
+                  className="mb-5 !h-auto w-full rounded-bakin-control px-bakin-4 py-2.5 text-xl font-bakin-typography-weight-semibold tracking-tight md:text-xl"
                   placeholder="Untitled project"
                   aria-label="Project title"
                   autoFocus
@@ -874,7 +875,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                 </div>
               )}
             </div>
-            <div className="mb-6">
+            <div className="mb-bakin-6">
               {showChanges && !editing ? (
                 <PlanHistoryPanel
                   projectId={currentId ?? ''}
@@ -941,15 +942,15 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
 
           {/* Progress */}
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs font-medium text-bakin-text-muted uppercase tracking-wider">Progress</h3>
+            <div className="flex items-center justify-between mb-bakin-2">
+              <h3 className="text-xs font-bakin-typography-weight-medium text-bakin-text-muted uppercase tracking-wider">Progress</h3>
               <span className="text-bakin-typography-size-meta font-mono text-bakin-text-muted tabular-nums">{project.progress}%</span>
             </div>
             <Progress value={project.progress} aria-label="Project progress" />
           </div>
 
           {/* Checklist */}
-          <div className="pt-4 border-t border-bakin-border-subtle/30">
+          <div className="pt-bakin-4 border-t border-bakin-border-subtle/30">
             <ProjectChecklist
               projectId={currentId}
               tasks={project.tasks}
@@ -962,17 +963,17 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
           </div>
 
           {/* Assets */}
-          <div className="pt-4 border-t border-bakin-border-subtle/30">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-xs font-medium text-bakin-text-muted uppercase tracking-wider">Assets</h3>
+          <div className="pt-bakin-4 border-t border-bakin-border-subtle/30">
+            <div className="flex items-center justify-between mb-bakin-3">
+              <h3 className="text-xs font-bakin-typography-weight-medium text-bakin-text-muted uppercase tracking-wider">Assets</h3>
 
               <Button
                 variant="ghost"
                 size="xs"
                 onClick={() => openAssetPicker({ type: 'attach' })}
-                className="gap-1 font-bakin-typography-weight-regular text-bakin-text-muted hover:bg-transparent hover:text-bakin-text-primary"
+                className="gap-bakin-1 font-bakin-typography-weight-regular text-bakin-text-muted hover:bg-transparent hover:text-bakin-text-primary"
               >
-                <Paperclip className="size-3" />
+                <Paperclip className="size-bakin-3" />
                 Attach
               </Button>
             </div>
@@ -991,7 +992,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                 {project.resolvedAssets.map((asset) => (
                   <div
                     key={asset.assetId}
-                    className={`group flex items-start gap-2.5 rounded-lg p-1.5 transition-colors hover:bg-bakin-surface-elevated ${asset.missing ? 'border border-bakin-signal-highlight/20 bg-bakin-signal-highlight/5' : ''}`}
+                    className={cn('group flex items-start gap-2.5 rounded-bakin-control p-1.5 transition-colors hover:bg-bakin-surface-elevated', asset.missing ? 'border border-bakin-signal-highlight/20 bg-bakin-signal-highlight/5' : '')}
                   >
                     <Button
                       variant="ghost"
@@ -1007,34 +1008,34 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                           <p className="mt-0.5 truncate text-bakin-typography-size-meta text-bakin-text-muted">{asset.description}</p>
                         )}
                         {asset.tags && asset.tags.length > 0 && (
-                          <div className="mt-1 flex flex-wrap gap-1">
+                          <div className="mt-bakin-1 flex flex-wrap gap-bakin-1">
                             {asset.tags.slice(0, 3).map(tag => (
-                              <span key={tag} className="rounded bg-bakin-surface-elevated px-1 py-0.5 text-bakin-typography-size-meta text-bakin-text-muted">{tag}</span>
+                              <span key={tag} className="rounded bg-bakin-surface-elevated px-bakin-1 py-0.5 text-bakin-typography-size-meta text-bakin-text-muted">{tag}</span>
                             ))}
                           </div>
                         )}
                         {asset.missing && <span className="text-bakin-typography-size-meta text-bakin-signal-highlight">can't find asset</span>}
                       </div>
                     </Button>
-                    <div className={`${asset.missing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} mt-0.5 flex shrink-0 items-center gap-1 transition-opacity`}>
+                    <div className={cn(asset.missing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100', 'mt-0.5 flex shrink-0 items-center gap-bakin-1 transition-opacity')}>
                       <Button
                         variant="ghost"
                         size="xs"
                         onClick={(e) => { e.stopPropagation(); openAssetPicker({ type: 'relink', target: asset }) }}
-                        className="gap-1 font-bakin-typography-weight-regular text-bakin-text-muted hover:text-bakin-text-primary"
+                        className="gap-bakin-1 font-bakin-typography-weight-regular text-bakin-text-muted hover:text-bakin-text-primary"
                         aria-label={`Relink ${assetName(asset)}`}
                       >
-                        <Link2 className="size-3" />
+                        <Link2 className="size-bakin-3" />
                         Relink
                       </Button>
                       <Button
                         variant="ghost"
                         size="icon-xs"
                         onClick={(e) => { e.stopPropagation(); setAssetDetachError(null); setAssetDetachTarget(asset) }}
-                        className={`${asset.missing ? 'text-bakin-signal-highlight' : 'text-bakin-text-muted'} hover:text-bakin-signal-danger`}
+                        className={cn(asset.missing ? 'text-bakin-signal-highlight' : 'text-bakin-text-muted', 'hover:text-bakin-signal-danger')}
                         aria-label={`Detach ${assetName(asset)}`}
                       >
-                        <X className="size-3" />
+                        <X className="size-bakin-3" />
                       </Button>
                     </div>
                   </div>
@@ -1045,8 +1046,8 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
           </div>
 
           {/* Meta */}
-          <div className="pt-4 border-t border-bakin-border-subtle/30">
-            <h3 className="text-xs font-medium text-bakin-text-muted uppercase tracking-wider mb-2">Details</h3>
+          <div className="pt-bakin-4 border-t border-bakin-border-subtle/30">
+            <h3 className="text-xs font-bakin-typography-weight-medium text-bakin-text-muted uppercase tracking-wider mb-bakin-2">Details</h3>
             <div className="space-y-1.5 text-bakin-typography-size-meta">
               <div className="flex justify-between">
                 <span className="text-bakin-text-muted/70">Created</span>

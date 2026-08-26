@@ -45,7 +45,7 @@ export function NewProjectDialog({
         <DialogHeader>
           <DialogTitle>New project</DialogTitle>
         </DialogHeader>
-        <form className="space-y-3" onSubmit={handleSubmit}>
+        <form className="space-y-bakin-3" onSubmit={handleSubmit}>
           <Input
             value={title}
             onChange={(event) => setTitle(event.target.value)}
@@ -54,7 +54,7 @@ export function NewProjectDialog({
             disabled={creating}
           />
           {error && <p className="text-xs text-bakin-signal-danger">{error}</p>}
-          <div className="flex justify-end gap-2 mt-1">
+          <div className="flex justify-end gap-bakin-2 mt-bakin-1">
             <Button type="button" variant="outline" onClick={onCancel} disabled={creating}>
               Cancel
             </Button>

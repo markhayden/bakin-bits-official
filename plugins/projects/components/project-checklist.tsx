@@ -5,6 +5,7 @@ import { Plus, ExternalLink, Unlink, Trash2, Link2, ChevronRight } from 'lucide-
 import { Button, Checkbox, Input, Textarea } from '@makinbakin/sdk/ui'
 import { StatusBadge } from '@makinbakin/sdk/patterns'
 import type { ProjectTask } from '../types'
+import { cn } from '@makinbakin/sdk/utils'
 
 type StatusTone = 'neutral' | 'success' | 'attention' | 'danger' | 'accent'
 
@@ -59,9 +60,9 @@ function TaskItem({
   }
 
   return (
-    <div className="rounded-lg transition-colors hover:bg-bakin-surface-elevated">
+    <div className="rounded-bakin-control transition-colors hover:bg-bakin-surface-elevated">
       {/* Main row */}
-      <div className="group flex items-start gap-2 px-1 py-1.5">
+      <div className="group flex items-start gap-bakin-2 px-bakin-1 py-1.5">
         <Button
           variant="ghost"
           size="icon-xs"
@@ -69,7 +70,7 @@ function TaskItem({
           aria-label={expanded ? `Collapse ${item.title}` : `Expand ${item.title}`}
           className="mt-0.5 shrink-0 text-bakin-text-muted hover:text-bakin-text-primary"
         >
-          <ChevronRight className={`size-3 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+          <ChevronRight className={cn('size-bakin-3 transition-transform', expanded ? 'rotate-90' : '')} />
         </Button>
 
         <Checkbox
@@ -83,7 +84,7 @@ function TaskItem({
             the chevron button and the checkbox label. */}
         <span
           onClick={() => setExpanded(!expanded)}
-          className={`flex-1 cursor-pointer text-bakin-typography-size-meta leading-snug ${item.checked ? 'line-through text-bakin-text-muted' : 'text-bakin-text-primary'}`}
+          className={cn('flex-1 cursor-pointer text-bakin-typography-size-meta leading-snug', item.checked ? 'line-through text-bakin-text-muted' : 'text-bakin-text-primary')}
         >
           {item.title}
         </span>
@@ -115,10 +116,9 @@ function TaskItem({
               size="icon-xs"
               onClick={onPromote}
               aria-label="Create board task"
-              title="Create board task"
               className="text-bakin-text-muted hover:text-bakin-text-primary"
             >
-              <Link2 className="size-3" />
+              <Link2 className="size-bakin-3" />
             </Button>
           )}
           <Button
@@ -126,17 +126,16 @@ function TaskItem({
             size="icon-xs"
             onClick={onRemove}
             aria-label="Remove"
-            title="Remove"
             className="text-bakin-text-muted hover:text-bakin-signal-danger"
           >
-            <Trash2 className="size-3" />
+            <Trash2 className="size-bakin-3" />
           </Button>
         </div>
       </div>
 
       {/* Expanded detail */}
       {expanded && (
-        <div className="pb-2 pl-10 pr-1">
+        <div className="pb-bakin-2 pl-10 pr-bakin-1">
           {editingDesc ? (
             <div className="space-y-1.5">
               <Textarea
@@ -204,12 +203,12 @@ export function ProjectChecklist({
 
   return (
     <div>
-      <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-bakin-text-muted">Tasks</h3>
+      <h3 className="mb-bakin-3 text-xs font-bakin-typography-weight-medium uppercase tracking-wider text-bakin-text-muted">Tasks</h3>
 
       {tasks.length === 0 ? (
-        <p className="mb-3 text-bakin-typography-size-meta text-bakin-text-muted">No tasks yet.</p>
+        <p className="mb-bakin-3 text-bakin-typography-size-meta text-bakin-text-muted">No tasks yet.</p>
       ) : (
-        <div className="mb-3 space-y-0.5">
+        <div className="mb-bakin-3 space-y-0.5">
           {tasks.map((item) => {
             const resolved = item.taskId ? resolvedTasks[item.taskId] : null
             const stale = !!(item.taskId && resolvedTasks[item.taskId] === null)
@@ -231,7 +230,7 @@ export function ProjectChecklist({
       )}
 
       {/* Add new item */}
-      <div className="flex gap-2">
+      <div className="flex gap-bakin-2">
         <Input
           type="text"
           value={newItemTitle}
