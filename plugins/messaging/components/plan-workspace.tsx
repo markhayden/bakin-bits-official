@@ -32,6 +32,7 @@ import { getContentTypeLabel, useContentTypes } from '../hooks/use-content-types
 import { getDistributionChannelDefinition, MESSAGING_DISTRIBUTION_CHANNELS } from '../lib/distribution-channels'
 import { DeliverableDrawer } from './deliverable-drawer'
 import { DeliverableStatusBadge } from './deliverable-status-badge'
+import { cn } from '@makinbakin/sdk/utils'
 
 interface PlanWorkspaceProps {
   planId: string
@@ -254,16 +255,14 @@ function DetailRow({
   children: ReactNode
 }) {
   return (
-    <div className={`flex gap-bakin-2 text-bakin-typography-size-meta text-bakin-text-muted ${align === 'start' ? 'items-start' : 'items-center'}`}>
+    <div className={cn('flex gap-bakin-2 text-bakin-typography-size-meta text-bakin-text-muted', align === 'start' ? 'items-start' : 'items-center')}>
       <span className="inline-flex shrink-0 items-center gap-bakin-2">
         {icon}
         {label}
       </span>
       <span
         aria-hidden="true"
-        className={`min-w-bakin-4 flex-1 overflow-hidden whitespace-nowrap font-bakin-typography-family-mono text-bakin-typography-size-meta leading-none text-bakin-text-muted/40 ${
-          align === 'start' ? 'mt-bakin-1' : ''
-        }`}
+        className={cn('min-w-bakin-4 flex-1 overflow-hidden whitespace-nowrap font-bakin-typography-family-mono text-bakin-typography-size-meta leading-none text-bakin-text-muted/40', align === 'start' ? 'mt-bakin-1' : '')}
       >
         ................................................................
       </span>
@@ -289,7 +288,6 @@ function PlanBackButton({ onBack }: { onBack: () => void }) {
       size="icon-sm"
       className="rounded-bakin-pill"
       aria-label="Back to plans"
-      title="Back to plans"
       onClick={onBack}
     >
       <ArrowLeft aria-hidden="true" />
@@ -770,11 +768,9 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                               aria-pressed={selected}
                               disabled={savingChannels}
                               onClick={() => togglePlanChannel(channel.id)}
-                              className={`gap-bakin-2 font-bakin-typography-weight-regular ${
-                                selected
+                              className={cn('gap-bakin-2 font-bakin-typography-weight-regular', selected
                                   ? 'bg-bakin-signal-accent/10 hover:bg-bakin-signal-accent/15'
-                                  : 'text-bakin-text-muted hover:bg-bakin-surface-elevated hover:text-bakin-text-muted'
-                              }`}
+                                  : 'text-bakin-text-muted hover:bg-bakin-surface-elevated hover:text-bakin-text-muted')}
                             >
                               <DistributionChannelIcon channelId={channel.id} className="size-3.5" />
                               {channel.label}

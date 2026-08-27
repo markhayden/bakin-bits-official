@@ -161,14 +161,14 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
             <DialogTitle>Quick Post</DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-4">
+          <div className="space-y-bakin-4">
             <div>
-              <label className="mb-1 block text-sm text-bakin-text-muted">Title</label>
+              <label className="mb-bakin-1 block text-sm text-bakin-text-muted">Title</label>
               <Input aria-label="Quick post title" value={title} onChange={(event) => setTitle(event.target.value)} />
             </div>
 
             <div>
-              <label className="mb-1 block text-sm text-bakin-text-muted">Brief</label>
+              <label className="mb-bakin-1 block text-sm text-bakin-text-muted">Brief</label>
               <Textarea
                 aria-label="Quick post brief"
                 value={brief}
@@ -177,9 +177,9 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
               />
             </div>
 
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-bakin-3 md:grid-cols-2">
               <div>
-                <label className="mb-1 block text-sm text-bakin-text-muted">Agent</label>
+                <label className="mb-bakin-1 block text-sm text-bakin-text-muted">Agent</label>
                 <AgentSelect
                   value={agent}
                   onValueChange={(value) => setAgent(value ?? '')}
@@ -188,11 +188,11 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
                 />
               </div>
               <div>
-                <label className="mb-1 block text-sm text-bakin-text-muted">Publish</label>
+                <label className="mb-bakin-1 block text-sm text-bakin-text-muted">Publish</label>
                 <Input aria-label="Quick post publish time" type="datetime-local" value={publishAt} onChange={(event) => setPublishAt(event.target.value)} />
               </div>
               <div>
-                <label className="mb-1 block text-sm text-bakin-text-muted">Content Type</label>
+                <label className="mb-bakin-1 block text-sm text-bakin-text-muted">Content Type</label>
                 <Select
                   items={Object.fromEntries(contentTypes.map((type) => [type.id, type.label]))}
                   value={selectedContentType?.id ?? ''}
@@ -209,7 +209,7 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
                 </Select>
               </div>
               <div>
-                <label className="mb-1 block text-sm text-bakin-text-muted">Tone</label>
+                <label className="mb-bakin-1 block text-sm text-bakin-text-muted">Tone</label>
                 <Select
                   items={Object.fromEntries(Object.entries(TONE_LABELS))}
                   value={tone}
@@ -228,7 +228,7 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
             </div>
 
             <div>
-              <label className="mb-1 block text-sm text-bakin-text-muted">Channel</label>
+              <label className="mb-bakin-1 block text-sm text-bakin-text-muted">Channel</label>
               <div className="flex flex-wrap gap-1.5">
                 {(channels.length > 0 ? channels : [{ id: DEFAULT_CHANNEL, label: DEFAULT_CHANNEL }]).map((item) => (
                   <Button
@@ -250,7 +250,7 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
             </div>
 
             <div>
-              <div className="mb-2 flex items-center justify-between">
+              <div className="mb-bakin-2 flex items-center justify-between">
                 <label className="text-sm text-bakin-text-muted">Existing Asset</label>
                 <Button size="sm" variant="outline" onClick={loadAssets}>
                   <Paperclip className="size-3.5" data-icon="inline-start" />
@@ -258,7 +258,7 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
                 </Button>
               </div>
               {selectedAsset && (
-                <div className="flex items-center justify-between gap-2 rounded-md border border-bakin-border-subtle/30 bg-bakin-canvas-default px-3 py-2 text-sm">
+                <div className="flex items-center justify-between gap-bakin-2 rounded-md border border-bakin-border-subtle/30 bg-bakin-canvas-default px-bakin-3 py-bakin-2 text-sm">
                   <span className="truncate">{selectedAsset.description || selectedAsset.assetId}</span>
                   <Button
                     type="button"
@@ -267,24 +267,24 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
                     onClick={() => setSelectedAsset(null)}
                     aria-label="Remove selected asset"
                   >
-                    <X className="size-4" />
+                    <X className="size-bakin-4" />
                   </Button>
                 </div>
               )}
               {assetPickerOpen && (
-                <div className="mt-2 rounded-md border border-bakin-border-subtle/30 bg-bakin-canvas-default p-2">
-                  <div className="relative mb-2">
+                <div className="mt-bakin-2 rounded-md border border-bakin-border-subtle/30 bg-bakin-canvas-default p-bakin-2">
+                  <div className="relative mb-bakin-2">
                     <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-bakin-text-muted" />
                     <Input
                       value={assetSearch}
                       onChange={(event) => setAssetSearch(event.target.value)}
                       placeholder="Search assets..."
-                      className="h-8 pl-8"
+                      className="h-bakin-8 pl-bakin-8"
                     />
                   </div>
                   <div className="max-h-44 overflow-auto">
                     {filteredAssets.length === 0 ? (
-                      <p className="p-2 text-sm text-bakin-text-muted">No assets available</p>
+                      <p className="p-bakin-2 text-sm text-bakin-text-muted">No assets available</p>
                     ) : (
                       filteredAssets.map((asset) => (
                         <Button
@@ -295,7 +295,7 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
                             setSelectedAsset(asset)
                             setAssetPickerOpen(false)
                           }}
-                          className="block h-auto w-full min-w-0 rounded-md px-2 py-1.5 text-left text-sm font-bakin-typography-weight-regular hover:bg-bakin-surface-default"
+                          className="block h-auto w-full min-w-0 rounded-md px-bakin-2 py-1.5 text-left text-sm font-bakin-typography-weight-regular hover:bg-bakin-surface-default"
                         >
                           <span className="block truncate">{asset.assetId}</span>
                           {asset.description && (
@@ -309,7 +309,7 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
               )}
             </div>
 
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-end gap-bakin-2 pt-bakin-2">
               <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
               <Button onClick={handleCreate} disabled={saving || !title.trim() || !brief.trim()}>
                 Create

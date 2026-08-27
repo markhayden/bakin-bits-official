@@ -41,6 +41,7 @@ import {
 import { ArrowLeft, Check, ClipboardList, Columns2, Plus, SquareStack, Trash2, X } from 'lucide-react'
 import type { BrainstormSession, PlanProposal } from '../types'
 import { sessionMessageToConversation } from '../lib/session-to-conversation'
+import { cn } from '@makinbakin/sdk/utils'
 
 interface SessionSummary {
   id: string
@@ -223,11 +224,9 @@ function NewBrainstormSessionDialog({
                     aria-checked={selected}
                     disabled={creating}
                     onClick={() => setAgentId(agent.id)}
-                    className={`flex min-w-0 items-center gap-bakin-2 rounded-bakin-control border px-bakin-3 py-bakin-2 text-left text-bakin-typography-size-body transition-colors focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-bakin-focus-ring disabled:cursor-not-allowed disabled:opacity-50 ${
-                      selected
+                    className={cn('flex min-w-0 items-center gap-bakin-2 rounded-bakin-control border px-bakin-3 py-bakin-2 text-left text-bakin-typography-size-body transition-colors focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-bakin-focus-ring disabled:cursor-not-allowed disabled:opacity-50', selected
                         ? 'border-bakin-signal-accent bg-bakin-signal-accent/10'
-                        : 'border-bakin-border-subtle bg-bakin-surface-default hover:bg-bakin-surface-elevated'
-                    }`}
+                        : 'border-bakin-border-subtle bg-bakin-surface-default hover:bg-bakin-surface-elevated')}
                   >
                     <AgentAvatar
                       agent={{ id: agent.id, name: agent.name, imageSrc: agent.imageSrc ?? null }}
@@ -405,9 +404,7 @@ function ProposalDrawer({
               <label className="grid gap-bakin-1 text-bakin-typography-size-body font-bakin-typography-weight-medium">
                 Suggested channels
                 <div
-                  className={`flex min-h-10 flex-wrap items-center gap-bakin-2 rounded-bakin-control border border-bakin-border-subtle bg-bakin-canvas-default px-bakin-2 py-bakin-1 text-bakin-typography-size-body outline-none transition-colors focus-within:outline-2 focus-within:outline-solid focus-within:-outline-offset-1 focus-within:outline-bakin-focus-ring ${
-                    disabled ? 'cursor-not-allowed opacity-50' : ''
-                  }`}
+                  className={cn('flex min-h-10 flex-wrap items-center gap-bakin-2 rounded-bakin-control border border-bakin-border-subtle bg-bakin-canvas-default px-bakin-2 py-bakin-1 text-bakin-typography-size-body outline-none transition-colors focus-within:outline-2 focus-within:outline-solid focus-within:-outline-offset-1 focus-within:outline-bakin-focus-ring', disabled ? 'cursor-not-allowed opacity-50' : '')}
                 >
                   {channels.map(channel => (
                     <span
@@ -422,7 +419,7 @@ function ProposalDrawer({
                           onClick={() => removeChannel(channel)}
                           className="rounded-bakin-control text-bakin-text-muted transition-colors hover:text-bakin-text-primary focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-bakin-focus-ring"
                         >
-                          <X className="size-3" />
+                          <X className="size-bakin-3" />
                         </button>
                       )}
                     </span>
@@ -892,7 +889,7 @@ export function BrainstormView() {
     const renderProposalPanel = ({ showHeader, showResizeHandle }: { showHeader: boolean; showResizeHandle: boolean }) => (
       <aside
         data-slot="brainstorm-proposal-panel"
-        className={`relative flex min-h-0 w-full max-w-full min-w-0 flex-col overflow-hidden ${showHeader ? 'border-l border-bakin-border-subtle px-bakin-4 py-bakin-4' : ''}`}
+        className={cn('relative flex min-h-0 w-full max-w-full min-w-0 flex-col overflow-hidden', showHeader ? 'border-l border-bakin-border-subtle px-bakin-4 py-bakin-4' : '')}
       >
         {showResizeHandle && (
           <div
@@ -985,7 +982,7 @@ export function BrainstormView() {
         {activeSession.status === 'active' && (
           <div className="mt-bakin-3 shrink-0 border-t border-bakin-border-subtle pt-bakin-3">
             <Button className="w-full justify-center" disabled={!canCompleteSession || materializing} onClick={materialize}>
-              <ClipboardList className="size-4" />
+              <ClipboardList className="size-bakin-4" />
               {pendingPlanCount > 0 ? 'Complete session and prepare plans' : 'Complete session'}
             </Button>
           </div>
@@ -1068,7 +1065,6 @@ export function BrainstormView() {
                 size="icon-sm"
                 variant="ghost"
                 aria-label="Back to brainstorm sessions"
-                title="Back to brainstorm sessions"
                 onClick={() => pushSessionId('')}
               >
                 <ArrowLeft aria-hidden="true" />
@@ -1241,9 +1237,9 @@ export function BrainstormView() {
                           {session.status}
                         </StatusBadge>
                         {session.streaming ? (
-                          <span data-testid="session-streaming" title="Reply in progress" className="size-bakin-2 shrink-0 animate-pulse rounded-bakin-pill bg-bakin-signal-info" />
+                          <span data-testid="session-streaming" className="size-bakin-2 shrink-0 animate-pulse rounded-bakin-pill bg-bakin-signal-info"><span className="sr-only">Reply in progress</span></span>
                         ) : session.unread ? (
-                          <span data-testid="session-unread" title="Unseen reply" className="size-bakin-2 shrink-0 rounded-bakin-pill bg-bakin-signal-attention" />
+                          <span data-testid="session-unread" className="size-bakin-2 shrink-0 rounded-bakin-pill bg-bakin-signal-attention"><span className="sr-only">Unseen reply</span></span>
                         ) : null}
                       </div>
                       <p className="mt-bakin-1 text-bakin-typography-size-meta text-bakin-text-muted">

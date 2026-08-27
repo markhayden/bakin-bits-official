@@ -54,16 +54,16 @@ interface CalendarDeliverableItem {
 }
 
 const STATUS_OPTIONS: Array<{ value: DeliverableStatus; label: string; icon: React.ReactNode }> = [
-  { value: 'proposed', label: 'Proposed', icon: <Circle className="size-3" /> },
-  { value: 'planned', label: 'Planned', icon: <Circle className="size-3" /> },
-  { value: 'in_prep', label: 'In prep', icon: <Circle className="size-3" /> },
-  { value: 'in_review', label: 'In review', icon: <Circle className="size-3" /> },
-  { value: 'changes_requested', label: 'Changes requested', icon: <Circle className="size-3" /> },
-  { value: 'approved', label: 'Approved', icon: <Circle className="size-3" /> },
-  { value: 'published', label: 'Published', icon: <Circle className="size-3" /> },
-  { value: 'overdue', label: 'Overdue', icon: <Circle className="size-3" /> },
-  { value: 'cancelled', label: 'Cancelled', icon: <Circle className="size-3" /> },
-  { value: 'failed', label: 'Failed', icon: <Circle className="size-3" /> },
+  { value: 'proposed', label: 'Proposed', icon: <Circle className="size-bakin-3" /> },
+  { value: 'planned', label: 'Planned', icon: <Circle className="size-bakin-3" /> },
+  { value: 'in_prep', label: 'In prep', icon: <Circle className="size-bakin-3" /> },
+  { value: 'in_review', label: 'In review', icon: <Circle className="size-bakin-3" /> },
+  { value: 'changes_requested', label: 'Changes requested', icon: <Circle className="size-bakin-3" /> },
+  { value: 'approved', label: 'Approved', icon: <Circle className="size-bakin-3" /> },
+  { value: 'published', label: 'Published', icon: <Circle className="size-bakin-3" /> },
+  { value: 'overdue', label: 'Overdue', icon: <Circle className="size-bakin-3" /> },
+  { value: 'cancelled', label: 'Cancelled', icon: <Circle className="size-bakin-3" /> },
+  { value: 'failed', label: 'Failed', icon: <Circle className="size-bakin-3" /> },
 ]
 
 const VIEW_OPTIONS: ReadonlyArray<CalendarViewOption> = [
