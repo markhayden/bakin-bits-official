@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { MarkdownEditor } from '@makinbakin/sdk/content'
 import type { PlanSnapshot } from '../types'
 import { diffBlocks } from '../lib/block-diff'
+import { cn } from '@makinbakin/sdk/utils'
 
 export function RenderedPlan({ projectId, body, hintsEnabled = true }: { projectId: string; body: string; hintsEnabled?: boolean }) {
   // null = no baseline (no history yet, or still loading) → plain render.
@@ -47,7 +48,7 @@ export function RenderedPlan({ projectId, body, hintsEnabled = true }: { project
   }
 
   return (
-    <div data-testid="rendered-plan" className="space-y-3">
+    <div data-testid="rendered-plan" className="space-y-bakin-3">
       {entries.map((entry, index) =>
         entry.type === 'removed' ? (
           // Deleted content has no block to mark — a solid red tick shows
@@ -55,9 +56,10 @@ export function RenderedPlan({ projectId, body, hintsEnabled = true }: { project
           <div
             key={index}
             data-plan-removed-marker
-            title="Content removed here in the latest edit"
-            className="h-1 w-12 rounded-bakin-pill bg-bakin-signal-danger"
-          />
+            className="h-bakin-1 w-12 rounded-bakin-pill bg-bakin-signal-danger"
+          >
+            <span className="sr-only">Content removed here in the latest edit</span>
+          </div>
         ) : (
           // Every block carries the same gutter so text stays aligned; the
           // bar is in normal flow (a negative margin put it outside the
@@ -67,7 +69,7 @@ export function RenderedPlan({ projectId, body, hintsEnabled = true }: { project
             {...(entry.changed
               ? { 'data-plan-changed-block': true, title: 'Added or edited in the latest edit' }
               : {})}
-            className={`border-l-2 pl-bakin-3 ${entry.changed ? 'rounded-r-bakin-control border-bakin-signal-success bg-bakin-signal-success/10 py-bakin-1' : 'border-transparent'}`}
+            className={cn('border-l-2 pl-bakin-3', entry.changed ? 'rounded-r-bakin-control border-bakin-signal-success bg-bakin-signal-success/10 py-bakin-1' : 'border-transparent')}
           >
             <MarkdownEditor content={entry.text} editing={false} onChange={() => {}} format="markdown" />
           </div>

@@ -24,9 +24,9 @@ export function ProjectCard({ project, onClick }: { project: ProjectSummary; onC
           </CardTitle>
           <div className="flex shrink-0 items-center gap-bakin-2">
             {project.brainstormStreaming ? (
-              <span data-testid="card-brainstorm-streaming" title="Brainstorm reply in progress" className="size-bakin-2 animate-pulse rounded-bakin-pill bg-bakin-signal-info" />
+              <span data-testid="card-brainstorm-streaming" className="size-bakin-2 animate-pulse rounded-bakin-pill bg-bakin-signal-info"><span className="sr-only">Brainstorm reply in progress</span></span>
             ) : project.brainstormUnread ? (
-              <span data-testid="card-brainstorm-unread" title="Unseen brainstorm reply" className="size-bakin-2 rounded-bakin-pill bg-bakin-signal-highlight" />
+              <span data-testid="card-brainstorm-unread" className="size-bakin-2 rounded-bakin-pill bg-bakin-signal-highlight"><span className="sr-only">Unseen brainstorm reply</span></span>
             ) : null}
             <ProjectStatusBadge status={project.status} />
           </div>
