@@ -3,6 +3,7 @@
 import { Card, CardContent, CardFooter, CardHeader, CardTitle, Progress } from '@makinbakin/sdk/ui'
 import { ProjectStatusBadge } from './project-status-badge'
 import type { ProjectSummary } from '../types'
+import { StatusMarker } from '@makinbakin/sdk/patterns'
 
 function formatDate(iso: string): string {
   const d = new Date(iso)
@@ -24,9 +25,9 @@ export function ProjectCard({ project, onClick }: { project: ProjectSummary; onC
           </CardTitle>
           <div className="flex shrink-0 items-center gap-bakin-2">
             {project.brainstormStreaming ? (
-              <span data-testid="card-brainstorm-streaming" className="size-bakin-2 animate-pulse rounded-bakin-pill bg-bakin-signal-info"><span className="sr-only">Brainstorm reply in progress</span></span>
+              <StatusMarker data-testid="card-brainstorm-streaming" tone="accent" label="Brainstorm reply in progress" className="animate-pulse motion-reduce:animate-none" />
             ) : project.brainstormUnread ? (
-              <span data-testid="card-brainstorm-unread" className="size-bakin-2 rounded-bakin-pill bg-bakin-signal-highlight"><span className="sr-only">Unseen brainstorm reply</span></span>
+              <StatusMarker data-testid="card-brainstorm-unread" tone="attention" label="Unseen brainstorm reply" />
             ) : null}
             <ProjectStatusBadge status={project.status} />
           </div>

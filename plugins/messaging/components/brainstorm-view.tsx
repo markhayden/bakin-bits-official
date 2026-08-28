@@ -42,6 +42,7 @@ import { ArrowLeft, Check, ClipboardList, Columns2, Plus, SquareStack, Trash2, X
 import type { BrainstormSession, PlanProposal } from '../types'
 import { sessionMessageToConversation } from '../lib/session-to-conversation'
 import { cn } from '@makinbakin/sdk/utils'
+import { StatusMarker } from '@makinbakin/sdk/patterns'
 
 interface SessionSummary {
   id: string
@@ -1237,9 +1238,9 @@ export function BrainstormView() {
                           {session.status}
                         </StatusBadge>
                         {session.streaming ? (
-                          <span data-testid="session-streaming" className="size-bakin-2 shrink-0 animate-pulse rounded-bakin-pill bg-bakin-signal-info"><span className="sr-only">Reply in progress</span></span>
+                          <StatusMarker data-testid="session-streaming" tone="accent" label="Reply in progress" className="animate-pulse motion-reduce:animate-none" />
                         ) : session.unread ? (
-                          <span data-testid="session-unread" className="size-bakin-2 shrink-0 rounded-bakin-pill bg-bakin-signal-attention"><span className="sr-only">Unseen reply</span></span>
+                          <StatusMarker data-testid="session-unread" tone="attention" label="Unseen reply" />
                         ) : null}
                       </div>
                       <p className="mt-bakin-1 text-bakin-typography-size-meta text-bakin-text-muted">
