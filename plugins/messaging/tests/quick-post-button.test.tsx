@@ -95,11 +95,11 @@ describe('QuickPostButton', () => {
 
     fireEvent.click(screen.getByText('Quick Post'))
     await waitFor(() => {
-      expect(screen.getByLabelText('Quick post title')).toBeDefined()
+      expect(screen.getByLabelText('Title')).toBeDefined()
     })
 
-    fireEvent.change(screen.getByLabelText('Quick post title'), { target: { value: 'Quick image' } })
-    fireEvent.change(screen.getByLabelText('Quick post brief'), { target: { value: 'Publish a quick image.' } })
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Quick image' } })
+    fireEvent.change(screen.getByLabelText('Brief'), { target: { value: 'Publish a quick image.' } })
     fireEvent.click(screen.getByText('Attach'))
 
     await waitFor(() => {

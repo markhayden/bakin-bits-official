@@ -882,7 +882,7 @@ declare module '@makinbakin/sdk' {
 }
 
 declare module '@makinbakin/sdk/ui' {
-  import type { ComponentType, ReactNode } from 'react'
+  import type { ComponentType, ElementType, ReactElement, ReactNode } from 'react'
   interface UIProps {
     children?: ReactNode
     onClick?: (event: any) => void
@@ -967,6 +967,39 @@ declare module '@makinbakin/sdk/ui' {
   export const SubmitButton: UIComponent
   export const SystemState: UIComponent
   export function buttonVariants(options?: Record<string, unknown>): string
+  // ── Pass-four conformance additions ───────────────────────────────────
+  export type TextSize = 'body' | 'meta'
+  export type TextTone = 'default' | 'muted'
+  export type TextWeight = 'regular' | 'medium' | 'semibold'
+  export const Text: ComponentType<UIProps & {
+    size?: TextSize
+    tone?: TextTone
+    weight?: TextWeight
+    mono?: boolean
+    as?: ElementType
+  }>
+  export const Overline: ComponentType<UIProps & { as?: ElementType }>
+  export const RadioGroup: UIComponent
+  export const Radio: UIComponent
+  export const FieldGroup: UIComponent
+  export const Fieldset: UIComponent
+  export const FieldsetLegend: UIComponent
+  export const FieldsetDescription: UIComponent
+  export const FieldError: UIComponent
+  export const FieldControl: ComponentType<UIProps & { render?: ReactElement }>
+  export const DialogFooter: ComponentType<UIProps & { showCloseButton?: boolean }>
+  export const TooltipProvider: UIComponent
+  export const TooltipTrigger: ComponentType<UIProps & { render?: ReactElement }>
+  export const TooltipContent: ComponentType<UIProps & { side?: 'top' | 'right' | 'bottom' | 'left' }>
+  export const DialogDescription: UIComponent
+  export type InputGroupAddonAlign = 'inline-start' | 'inline-end' | 'block-start' | 'block-end'
+  export const InputGroupAddon: ComponentType<UIProps & { align?: InputGroupAddonAlign }>
+  export const InputGroupButton: ComponentType<UIProps & {
+    size?: 'xs' | 'sm' | 'icon-xs' | 'icon-sm'
+    type?: 'button' | 'submit' | 'reset'
+    variant?: string
+  }>
+  export const InputGroupInput: UIComponent
 }
 
 declare module '@makinbakin/sdk/layout' {
@@ -982,6 +1015,17 @@ declare module '@makinbakin/sdk/layout' {
   export const Grid: LayoutComponent
   export const PageShell: LayoutComponent
   export const BoundedOverflow: LayoutComponent
+  export type PanelElement = 'div' | 'section' | 'article' | 'aside'
+  export type PanelTone = 'neutral' | 'success' | 'attention' | 'danger' | 'accent'
+  export type PanelVariant = 'default' | 'code'
+  export type PanelPadding = 'default' | 'compact'
+  export const Panel: ComponentType<LayoutProps & {
+    as?: PanelElement
+    tone?: PanelTone
+    variant?: PanelVariant
+    padding?: PanelPadding
+    scroll?: boolean
+  }>
 }
 
 declare module '@makinbakin/sdk/patterns' {
@@ -1132,6 +1176,7 @@ declare module '@makinbakin/sdk/patterns' {
     selected?: boolean
   }>
   export const ListRowLabels: PatternComponent
+  export const ListRowActions: ComponentType<PatternProps & { reveal?: 'always' | 'hover' }>
   export const ListRowGroup: ComponentType<PatternProps & { label: ReactNode }>
 
   // ── CalendarGrid (Lists taxonomy type 7; shared calendar STRUCTURE) ────
@@ -1201,6 +1246,114 @@ declare module '@makinbakin/sdk/patterns' {
     | (AssetPickerBaseProps & { variant?: 'dialog'; open: boolean; onOpenChange: (open: boolean) => void })
     | (AssetPickerBaseProps & { variant: 'inline'; open?: never; onOpenChange?: never })
   export const AssetPicker: ComponentType<AssetPickerProps>
+
+  // ── Pass-four conformance additions ───────────────────────────────────
+  export type KeyValueLayout = 'inline' | 'rows' | 'columns'
+  export interface KeyValueItem {
+    label: ReactNode
+    value: ReactNode
+    mono?: boolean
+    numeric?: boolean
+    breakValue?: boolean
+  }
+  export const KeyValue: ComponentType<PatternProps & {
+    items: ReadonlyArray<KeyValueItem>
+    layout?: KeyValueLayout
+  }>
+
+  export interface ScoreOverlayInfo {
+    score: number
+    indexScores?: Record<string, number>
+    matchedFields?: string[]
+  }
+  export const ScoreOverlay: ComponentType<{ info: ScoreOverlayInfo; className?: string }>
+  export function computeMatchedFields(query: string, fields: Record<string, unknown>): string[]
+
+  export type StatTileVariant = 'plain' | 'surface'
+  export type StatTileProgressTone = 'success' | 'attention' | 'danger' | 'accent'
+  export interface StatTileProgress {
+    percent: number
+    tone?: StatTileProgressTone
+    label?: string
+  }
+  export interface StatTileProps {
+    icon?: ComponentType<{ className?: string }>
+    label: ReactNode
+    value: ReactNode
+    valueTone?: 'neutral' | 'success' | 'attention' | 'danger' | 'accent'
+    sub?: ReactNode
+    progress?: StatTileProgress
+    variant?: StatTileVariant
+    onClick?: () => void
+    className?: string
+  }
+  export const StatTile: ComponentType<StatTileProps>
+  export const StatGroup: ComponentType<PatternProps & { label: string }>
+
+  export type CalendarItemTone = 'neutral' | 'accent' | 'danger' | 'attention'
+  export type CalendarItemDensity = 'compact' | 'expanded'
+  export interface CalendarItemProps {
+    title: ReactNode
+    time?: ReactNode
+    detail?: ReactNode
+    meta?: ReactNode
+    leading?: ReactNode
+    marker?: ReactNode
+    tone?: CalendarItemTone
+    density?: CalendarItemDensity
+    past?: boolean
+    className?: string
+    onClick?: (event: any) => void
+    [key: string]: any
+  }
+  export const CalendarItem: ComponentType<CalendarItemProps>
+  export interface CalendarNavProps {
+    label: ReactNode
+    navLabel: string
+    onPrevious: () => void
+    onNext: () => void
+    previousLabel: string
+    nextLabel: string
+    onToday?: () => void
+    className?: string
+    [key: string]: any
+  }
+  export const CalendarNav: ComponentType<CalendarNavProps>
+
+  export const InspectorPanel: ComponentType<PatternProps & (
+    | { label: string; labelledBy?: never; side?: boolean }
+    | { label?: never; labelledBy: string; side?: boolean }
+  )>
+  export const InspectorPanelHeader: ComponentType<PatternProps & {
+    title: ReactNode
+    description?: ReactNode
+    eyebrow?: ReactNode
+    actions?: ReactNode
+    actionsLabel?: string
+  }>
+  export const InspectorPanelContent: ComponentType<PatternProps & {
+    busy?: boolean
+    feedback?: ReactNode
+    state?: ReactNode
+  }>
+  export const InspectorPanelFooter: PatternComponent
+
+  export const Timeline: ComponentType<PatternProps & { nested?: boolean }>
+  export const TimelineEntry: ComponentType<PatternProps & {
+    timestamp?: ReactNode
+    dateTime?: string
+    tone?: 'neutral' | 'success' | 'attention' | 'danger' | 'accent'
+    markerLabel?: string
+    marker?: ReactNode
+    title: ReactNode
+    meta?: ReactNode
+    expandable?: boolean
+    defaultExpanded?: boolean
+    expanded?: boolean
+    onExpandedChange?: (expanded: boolean) => void
+    note?: ReactNode
+    noteLabel?: ReactNode
+  }>
 }
 
 declare module '@makinbakin/sdk/navigation' {
@@ -1408,6 +1561,8 @@ declare module '@makinbakin/sdk/conversation' {
     title?: ReactNode
     description?: ReactNode
     icon?: ReactNode
+    suggestions?: readonly string[]
+    onSuggestion?: (suggestion: string) => void
     className?: string
   }>
   export const Composer: ComponentType<Record<string, unknown>>
@@ -1593,6 +1748,7 @@ declare module '@makinbakin/sdk/utils' {
   export function createTurnRecorder(options: { turnId: string; agentId?: string; now?: () => string }): TurnRecorder
   export const SUMMARY_MAX_CHARS: number
   export const PREVIEW_MAX_CHARS: number
+  export function formatDateTime(timestamp: string): string
 }
 
 declare module '@makinbakin/sdk/testing/ui' {

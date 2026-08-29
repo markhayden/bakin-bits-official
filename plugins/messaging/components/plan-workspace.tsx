@@ -1,27 +1,41 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import { ConversationPanel, useConversationThread } from "@makinbakin/sdk/conversation"
+import { ConversationEmptyState, ConversationPanel, useConversationThread } from "@makinbakin/sdk/conversation"
 import type { ConversationAgent, ConversationMessage } from "@makinbakin/sdk/conversation"
+import { Panel } from "@makinbakin/sdk/layout"
 import {
   AgentAvatar,
   ConfirmDialog,
+  KeyValue,
   ListRow,
   ListRows,
   Page,
   PageBody,
   PageHeader,
   StatusBadge,
-  StatusMarker,
+  Timeline,
+  TimelineEntry,
 } from "@makinbakin/sdk/patterns"
+import type { KeyValueItem } from "@makinbakin/sdk/patterns"
 import { emitPluginEvent, toast, useAgentList, useHorizontalResize, usePluginEvent } from "@makinbakin/sdk/hooks"
-import { Alert, AlertDescription, AlertTitle, Badge } from "@makinbakin/sdk/ui"
-import { Tabs, TabsList, TabsTrigger } from "@makinbakin/sdk/ui"
-import { Button } from "@makinbakin/sdk/ui"
-import { DropdownMenuItem } from "@makinbakin/sdk/ui"
-import { Progress } from "@makinbakin/sdk/ui"
-import { Skeleton } from "@makinbakin/sdk/ui"
-import { SystemState } from "@makinbakin/sdk/ui"
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  Badge,
+  Button,
+  DropdownMenuItem,
+  Progress,
+  Separator,
+  Skeleton,
+  SystemState,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  Text,
+} from "@makinbakin/sdk/ui"
 import { ArrowLeft, CalendarDays, ExternalLink, FileText, Globe2, Info, Instagram, MessageCircle, MessageSquareText, Music2, Rocket, Slack, Trash2, Twitter, type LucideIcon } from 'lucide-react'
 import type { BrainstormSession, ContentTypeOption, Deliverable, Plan, PlanChannel, PlanStatus } from '../types'
 import { PLAN_STATUS_TONE } from '../constants'
@@ -32,7 +46,7 @@ import { getContentTypeLabel, useContentTypes } from '../hooks/use-content-types
 import { getDistributionChannelDefinition, MESSAGING_DISTRIBUTION_CHANNELS } from '../lib/distribution-channels'
 import { DeliverableDrawer } from './deliverable-drawer'
 import { DeliverableStatusBadge } from './deliverable-status-badge'
-import { cn } from '@makinbakin/sdk/utils'
+import { formatDateTime } from '@makinbakin/sdk/utils'
 
 interface PlanWorkspaceProps {
   planId: string
@@ -96,20 +110,26 @@ const DISTRIBUTION_CHANNEL_OPTIONS: DistributionChannelOption[] = MESSAGING_DIST
   icon: DISTRIBUTION_CHANNEL_ICONS[channel.id] ?? MessageSquareText,
 }))
 const DELETE_REQUEST_TIMEOUT_MS = 10000
-
-
-function formatDateTime(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return 'Date to set'
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
+const TASK_STATE_TONE: Record<PlanningTaskState, 'neutral' | 'success' | 'attention'> = {
+  done: 'success',
+  current: 'neutral',
+  upcoming: 'neutral',
+  needs_attention: 'attention',
 }
 
+/** Instant (ISO datetime) → the SDK's calendar-aware absolute time; unparseable → "Date to set". */
+function formatInstant(value: string): string {
+  if (Number.isNaN(new Date(value).getTime())) return 'Date to set'
+  return formatDateTime(value)
+}
+
+/**
+ * Plan target dates are date-only (`YYYY-MM-DD`) — a calendar day with no
+ * instant. The SDK `formatDateTime` renders instants (and would read a bare
+ * date as UTC midnight, shifting the day in western zones), so the day-only
+ * formatter stays local. `formatRelativeDate` below adds an offset in days on
+ * the same day-only basis.
+ */
 function formatDate(value: string): string {
   const date = new Date(`${value}T00:00:00`)
   if (Number.isNaN(date.getTime())) return 'Date to set'
@@ -230,44 +250,12 @@ function buildPlanningTasks(plan: Plan, deliverables: Deliverable[]): PlanningTa
   ]
 }
 
-function PlanningTaskIcon({ state }: { state: PlanningTaskState }) {
-  const tone = state === 'done'
-    ? 'success'
-    : state === 'needs_attention'
-      ? 'attention'
-      : 'neutral'
+function DetailLabel({ icon, children }: { icon?: ReactNode; children: ReactNode }) {
   return (
-    <span className="mt-bakin-1 shrink-0">
-      <StatusMarker tone={tone} />
+    <span className="inline-flex items-center gap-bakin-2">
+      {icon}
+      {children}
     </span>
-  )
-}
-
-function DetailRow({
-  label,
-  icon,
-  align = 'center',
-  children,
-}: {
-  label: string
-  icon?: ReactNode
-  align?: 'center' | 'start'
-  children: ReactNode
-}) {
-  return (
-    <div className={cn('flex gap-bakin-2 text-bakin-typography-size-meta text-bakin-text-muted', align === 'start' ? 'items-start' : 'items-center')}>
-      <span className="inline-flex shrink-0 items-center gap-bakin-2">
-        {icon}
-        {label}
-      </span>
-      <span
-        aria-hidden="true"
-        className={cn('min-w-bakin-4 flex-1 overflow-hidden whitespace-nowrap font-bakin-typography-family-mono text-bakin-typography-size-meta leading-none text-bakin-text-muted/40', align === 'start' ? 'mt-bakin-1' : '')}
-      >
-        ................................................................
-      </span>
-      <span className="min-w-0 text-right text-bakin-text-primary">{children}</span>
-    </div>
   )
 }
 
@@ -302,7 +290,7 @@ function PlanStateHeader({ planId, onBack }: { planId: string; onBack?: () => vo
       navigation={onBack ? <PlanBackButton onBack={onBack} /> : undefined}
       eyebrow="Messaging / Plan"
       title="Plan detail"
-      meta={<code className="font-bakin-typography-family-mono">{planId}</code>}
+      meta={<Text as="code" mono>{planId}</Text>}
     />
   )
 }
@@ -613,6 +601,50 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
     )
   }
 
+  const linkedTaskCount = activeDeliverables.filter((deliverable) => deliverable.taskId).length
+  const detailItems: KeyValueItem[] = [
+    {
+      label: <DetailLabel icon={<CalendarDays className="size-3.5" aria-hidden="true" />}>Target</DetailLabel>,
+      value: formatDate(plan.targetDate),
+    },
+    { label: 'Created', value: formatInstant(plan.createdAt) },
+    { label: 'Updated', value: formatInstant(plan.updatedAt) },
+    {
+      label: 'Agent',
+      value: (
+        <span className="inline-flex min-w-0 items-center gap-bakin-1">
+          {planAgentIdentity && <AgentAvatar agent={planAgentIdentity} size="xs" decorative />}
+          <span className="truncate">{planAgentIdentity?.name ?? plan.agent}</span>
+        </span>
+      ),
+    },
+    ...(plan.campaign ? [{ label: 'Campaign', value: plan.campaign }] : []),
+    {
+      label: 'Channels',
+      value: planChannels.length > 0 ? (
+        <span className="flex min-w-0 flex-wrap justify-end gap-bakin-1">
+          {planChannels.map((channel) => (
+            <Badge key={channel.id} size="xs" variant="outline" className="max-w-28 truncate">
+              {getDistributionChannelOption(channel.channel).label}
+            </Badge>
+          ))}
+        </span>
+      ) : 'Not set',
+    },
+  ]
+  const planLinkItems: KeyValueItem[] = [
+    ...(plan.sourceSessionId ? [{
+      label: <DetailLabel icon={<MessageSquareText className="size-3.5" aria-hidden="true" />}>Source brainstorm</DetailLabel>,
+      value: <Badge size="xs" variant="outline">{plan.sourceSessionId.slice(0, 8)}</Badge>,
+      mono: true,
+    }] : []),
+    ...(linkedTaskCount > 0 ? [{
+      label: <DetailLabel icon={<ExternalLink className="size-3.5" aria-hidden="true" />}>Board tasks linked</DetailLabel>,
+      value: <Badge size="xs" variant="outline">{linkedTaskCount}</Badge>,
+      numeric: true,
+    }] : []),
+  ]
+
   return (
     <Page
       scroll="contained"
@@ -651,8 +683,12 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
         )}
       />
 
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as PlanWorkspaceTab)}>
-        <TabsList variant="underline" activateOnFocus aria-label="Plan workspace sections">
+      <Tabs
+        className="flex min-h-0 flex-1 flex-col"
+        value={activeTab}
+        onValueChange={(value) => setActiveTab(value as PlanWorkspaceTab)}
+      >
+        <TabsList variant="underline" activateOnFocus aria-label="Plan workspace sections" className="shrink-0">
           {PLAN_WORKSPACE_TABS.map((item) => (
             <TabsTrigger
               key={item.id}
@@ -664,18 +700,16 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
             </TabsTrigger>
           ))}
         </TabsList>
-      </Tabs>
 
       <PageBody className="min-h-0 overflow-hidden">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-bakin-6 overflow-hidden">
           <div className="flex min-h-0 flex-1 flex-col gap-bakin-6 overflow-y-auto @3xl/page-shell:flex-row @3xl/page-shell:overflow-hidden">
             <main className="flex min-h-0 min-w-0 flex-1 flex-col @3xl/page-shell:min-w-[360px]">
-          {activeTab === 'plan' ? (
-            <div
+            <TabsContent
+              value="plan"
               id="messaging-plan-panel-plan"
               aria-labelledby="messaging-plan-tab-plan"
               className="min-h-0 flex-none overflow-visible [scrollbar-gutter:stable] @3xl/page-shell:flex-1 @3xl/page-shell:overflow-y-auto @3xl/page-shell:pr-bakin-2"
-              role="tabpanel"
             >
               <section className="pb-5">
                 {plan.status === 'needs_review' && (
@@ -703,12 +737,12 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                 <div className={plan.status === 'needs_review' ? 'mt-5' : ''}>
                   <div className="mb-bakin-2 flex items-center justify-between gap-bakin-3">
                     <div className="flex min-w-0 flex-wrap items-baseline gap-x-bakin-2 gap-y-bakin-1">
-                      <h2 className="text-bakin-typography-size-body font-bakin-typography-weight-semibold">Channels</h2>
+                      <h2>Channels</h2>
                       {!channelsLocked && (
-                        <span className="text-bakin-typography-size-meta text-bakin-text-muted">Select one or more channels</span>
+                        <Text as="span" size="meta" tone="muted">Select one or more channels</Text>
                       )}
                     </div>
-                    {savingChannels && <span className="text-bakin-typography-size-meta text-bakin-text-muted">Saving...</span>}
+                    {savingChannels && <Text as="span" size="meta" tone="muted">Saving...</Text>}
                   </div>
                   {!channelsLocked && plan.status === 'needs_review' && selectedChannels.length === 0 && (
                     <Alert tone="attention" className="mb-bakin-3">
@@ -720,24 +754,21 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                   {channelsLocked && (
                     <div className="mt-bakin-3">
                       {planChannels.length === 0 ? (
-                        <div className="rounded-bakin-control border border-dashed border-bakin-border-subtle p-bakin-3 text-bakin-typography-size-body text-bakin-text-muted">
-                          No channels are linked.
-                        </div>
+                        <SystemState kind="initial-empty" scope="inline" title="No channels are linked." />
                       ) : (
                         <ListRows variant="bordered" aria-label="Plan channels">
                           {planChannels.map((channel) => (
-                            <ListRow key={channel.id} className="flex items-center gap-bakin-2 px-bakin-3 py-bakin-2 text-bakin-typography-size-meta text-bakin-text-muted">
-                              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-bakin-2">
+                            <ListRow key={channel.id} className="flex items-center gap-bakin-2 px-bakin-3 py-bakin-2">
+                              <Text as="div" size="meta" tone="muted" className="flex min-w-0 flex-1 flex-wrap items-center gap-bakin-2">
                                 <DistributionChannelIcon channelId={channel.channel} className="size-3.5" />
-                                <span className="font-bakin-typography-weight-medium text-bakin-text-primary">{getDistributionChannelOption(channel.channel).label}</span>
+                                <Text as="span" size="meta" weight="medium">{getDistributionChannelOption(channel.channel).label}</Text>
                                 <span>{getContentTypeLabel(channel.contentType, contentTypes)}</span>
-                                <span>{formatDateTime(channel.publishAt)}</span>
-                              </div>
+                                <span>{formatInstant(channel.publishAt)}</span>
+                              </Text>
                               <Button
                                 size="icon-sm"
                                 variant="ghost"
                                 aria-label={`Delete ${channel.channel} channel`}
-                                title={`Delete ${channel.channel} channel`}
                                 onClick={() => {
                                   setChannelDeleteError(null)
                                   setChannelPendingDelete(channel)
@@ -753,9 +784,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                   )}
                   {!channelsLocked && (
                     channelOptions.length === 0 ? (
-                      <div className="rounded-bakin-control border border-dashed border-bakin-border-subtle p-bakin-3 text-bakin-typography-size-body text-bakin-text-muted">
-                        No channels are configured yet.
-                      </div>
+                      <SystemState kind="initial-empty" scope="inline" title="No channels are configured yet." />
                     ) : (
                       <div className="flex flex-wrap gap-bakin-2">
                         {channelOptions.map(channel => {
@@ -768,11 +797,8 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                               aria-pressed={selected}
                               disabled={savingChannels}
                               onClick={() => togglePlanChannel(channel.id)}
-                              className={cn('gap-bakin-2 font-bakin-typography-weight-regular', selected
-                                  ? 'bg-bakin-signal-accent/10 hover:bg-bakin-signal-accent/15'
-                                  : 'text-bakin-text-muted hover:bg-bakin-surface-elevated hover:text-bakin-text-muted')}
                             >
-                              <DistributionChannelIcon channelId={channel.id} className="size-3.5" />
+                              <DistributionChannelIcon channelId={channel.id} data-icon="inline-start" />
                               {channel.label}
                             </Button>
                           )
@@ -791,16 +817,14 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
 
               <section className="flex flex-col gap-bakin-3">
                 <div className="flex items-center justify-between gap-bakin-3">
-                  <h3 className="text-bakin-typography-size-body font-bakin-typography-weight-semibold">Content Pieces</h3>
+                  <h3>Content Pieces</h3>
                   <Badge size="xs" variant="outline">
                     {contentPiecesLabel(nonProposedDeliverables.length)}
                   </Badge>
                 </div>
 
                 {nonProposedDeliverables.length === 0 ? (
-                  <div className="rounded-bakin-control border border-dashed border-bakin-border-subtle p-bakin-4 text-bakin-typography-size-body text-bakin-text-muted">
-                    No content pieces have been planned yet.
-                  </div>
+                  <SystemState kind="initial-empty" scope="inline" title="No content pieces have been planned yet." />
                 ) : (
                   <ListRows variant="bordered" aria-label="Content pieces">
                     {nonProposedDeliverables.map((deliverable) => (
@@ -812,37 +836,38 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                           <div className="flex items-start justify-between gap-bakin-3">
                             <div className="min-w-0">
                               <div className="flex min-w-0 items-center gap-bakin-2">
-                                <h4 className="truncate text-bakin-typography-size-body font-bakin-typography-weight-medium">{deliverable.title}</h4>
+                                <Text as="h4" weight="medium" className="truncate">{deliverable.title}</Text>
                                 <Badge size="xs" variant="outline">{deliverable.channel}</Badge>
                               </div>
-                              <p className="mt-bakin-1 line-clamp-2 text-bakin-typography-size-meta text-bakin-text-muted">{deliverable.brief}</p>
+                              <Text as="p" size="meta" tone="muted" className="mt-bakin-1 line-clamp-2">{deliverable.brief}</Text>
                             </div>
                             <DeliverableStatusBadge status={deliverable.status} className="shrink-0" />
                           </div>
-                          <div className="mt-bakin-2 flex flex-wrap gap-bakin-3 text-bakin-typography-size-meta text-bakin-text-muted">
+                          <Text as="div" size="meta" tone="muted" className="mt-bakin-2 flex flex-wrap gap-bakin-3">
                             <span>{deliverable.contentType}</span>
                             <span>{deliverable.tone}</span>
-                            <span>{formatDateTime(deliverable.publishAt)}</span>
-                          </div>
+                            <span>{formatInstant(deliverable.publishAt)}</span>
+                          </Text>
                       </ListRow>
                     ))}
                   </ListRows>
                 )}
               </section>
-            </div>
-          ) : (
-            <div
+            </TabsContent>
+            <TabsContent
+              value="brainstorm"
               id="messaging-plan-panel-brainstorm"
               aria-labelledby="messaging-plan-tab-brainstorm"
               className="flex min-h-144 flex-1 flex-col @3xl/page-shell:min-h-0"
-              role="tabpanel"
             >
               {plan.sourceSessionId ? (
                 <div className="flex h-full min-h-0 flex-col gap-bakin-3">
                   {plan.status === 'needs_review' && (
-                    <div className="shrink-0 rounded-bakin-control bg-bakin-surface-default p-bakin-3 text-bakin-typography-size-body text-bakin-text-muted">
-                      Before content prep starts, refine the angle and channels here. A useful first note is which channels this message should use and anything the prep agents should avoid.
-                    </div>
+                    <Alert tone="neutral" className="shrink-0">
+                      <AlertDescription>
+                        Before content prep starts, refine the angle and channels here. A useful first note is which channels this message should use and anything the prep agents should avoid.
+                      </AlertDescription>
+                    </Alert>
                   )}
                   <ConversationPanel
                     messages={brainstorm.messages}
@@ -858,20 +883,21 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                     showHeader={false}
                     className="rounded-none border-0"
                     emptyState={
-                      <div className="px-bakin-6 text-center text-bakin-typography-size-body text-bakin-text-muted">
-                        <p className="m-0 font-bakin-typography-weight-medium text-bakin-text-primary">Refine this plan with its agent</p>
-                        <p className="m-0 mt-bakin-1">Suggested channel, timeline, or angle changes apply to the plan directly — a good first note is which channels to use and what to avoid.</p>
-                      </div>
+                      <ConversationEmptyState
+                        title="Refine this plan with its agent"
+                        description="Suggested channel, timeline, or angle changes apply to the plan directly — a good first note is which channels to use and what to avoid."
+                      />
                     }
                   />
                 </div>
               ) : (
-                <div className="rounded-bakin-control border border-dashed border-bakin-border-subtle p-bakin-4 text-bakin-typography-size-body text-bakin-text-muted">
-                  Brainstorm refinements are available for plans prepared from a brainstorm session.
-                </div>
+                <SystemState
+                  kind="initial-empty"
+                  scope="inline"
+                  title="Brainstorm refinements are available for plans prepared from a brainstorm session."
+                />
               )}
-            </div>
-          )}
+            </TabsContent>
             </main>
 
             <aside
@@ -889,114 +915,72 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                 className="absolute inset-y-0 left-0 z-10 hidden w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-bakin-surface-elevated active:bg-bakin-border-subtle @3xl/page-shell:block"
               />
           <div>
-            <h3 className="mb-bakin-3 text-bakin-typography-size-meta font-bakin-typography-weight-medium uppercase tracking-wider text-bakin-text-muted">Details</h3>
-            <div className="space-y-bakin-2 text-bakin-typography-size-meta text-bakin-text-muted">
-              <DetailRow
-                label="Target"
-                icon={<CalendarDays className="size-3.5" aria-hidden="true" />}
-              >
-                {formatDate(plan.targetDate)}
-              </DetailRow>
-              <DetailRow label="Created">{formatDateTime(plan.createdAt)}</DetailRow>
-              <DetailRow label="Updated">{formatDateTime(plan.updatedAt)}</DetailRow>
-              <DetailRow label="Agent">
-                <span className="inline-flex min-w-0 items-center gap-bakin-1">
-                  {planAgentIdentity && <AgentAvatar agent={planAgentIdentity} size="xs" decorative />}
-                  <span className="truncate">{planAgentIdentity?.name ?? plan.agent}</span>
-                </span>
-              </DetailRow>
-              {plan.campaign && (
-                <DetailRow label="Campaign">{plan.campaign}</DetailRow>
-              )}
-              <DetailRow label="Channels" align="start">
-                {planChannels.length > 0 ? (
-                  <div className="flex min-w-0 flex-wrap justify-end gap-bakin-1">
-                    {planChannels.map((channel) => (
-                      <Badge key={channel.id} size="xs" variant="outline" className="max-w-28 truncate">
-                        {getDistributionChannelOption(channel.channel).label}
-                      </Badge>
-                    ))}
-                  </div>
-                ) : (
-                  <span>Not set</span>
-                )}
-              </DetailRow>
-            </div>
+            <h3 className="mb-bakin-3">Details</h3>
+            <KeyValue layout="rows" items={detailItems} />
           </div>
 
-          <div className="mt-5 border-t border-bakin-border-subtle pt-5">
+          <Separator className="my-5" />
+          <div>
             <div className="mb-bakin-2 flex items-center justify-between">
-              <h3 className="text-bakin-typography-size-meta font-bakin-typography-weight-medium uppercase tracking-wider text-bakin-text-muted">Progress</h3>
-              <span className="font-bakin-typography-family-mono text-bakin-typography-size-meta tabular-nums text-bakin-text-muted">{progress}%</span>
+              <h3>Progress</h3>
+              <Text as="span" size="meta" tone="muted" mono className="tabular-nums">{progress}%</Text>
             </div>
             <Progress value={progress} aria-label="Plan progress" />
           </div>
 
           {canKickoffContentPrep && plan.status !== 'needs_review' && (
-            <div className="mt-5 rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default p-bakin-3">
-              <h3 className="text-bakin-typography-size-body font-bakin-typography-weight-semibold">Ready for content prep?</h3>
-              <p className="mt-bakin-1 text-bakin-typography-size-meta text-bakin-text-muted">
+            <Panel className="mt-5">
+              <h3>Ready for content prep?</h3>
+              <Text as="p" size="meta" tone="muted" className="mt-bakin-1">
                 Kickoff creates one scheduled board task per configured channel.
-              </p>
+              </Text>
               <Button className="mt-bakin-3 w-full justify-center" onClick={startContentPrep} disabled={startingPrep || selectedChannels.length === 0}>
-                <Rocket className="size-bakin-4" data-icon="inline-start" />
+                <Rocket data-icon="inline-start" aria-hidden="true" />
                 {startingPrep ? 'Starting...' : 'Kickoff content prep'}
               </Button>
-              {selectedChannels.length === 0 && <p className="mt-bakin-2 text-bakin-typography-size-meta text-bakin-text-muted">Choose at least one channel first.</p>}
-            </div>
+              {selectedChannels.length === 0 && (
+                <Text as="p" size="meta" tone="muted" className="mt-bakin-2">Choose at least one channel first.</Text>
+              )}
+            </Panel>
           )}
 
-          <div className="mt-5 border-t border-bakin-border-subtle pt-5">
-            <h3 className="mb-bakin-3 text-bakin-typography-size-meta font-bakin-typography-weight-medium uppercase tracking-wider text-bakin-text-muted">Tasks</h3>
-            <div className="space-y-bakin-3">
+          <Separator className="my-5" />
+          <div>
+            <h3 className="mb-bakin-3">Tasks</h3>
+            <Timeline aria-label="Planning tasks">
               {planningTasks.map((task) => (
-                <div key={task.title} className="flex gap-bakin-2">
-                  <PlanningTaskIcon state={task.state} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-bakin-2">
-                      <p className="text-bakin-typography-size-meta font-bakin-typography-weight-medium">{task.title}</p>
-                      <Badge size="xs" variant="outline" className="shrink-0">
-                        {TASK_STATE_LABELS[task.state]}
-                      </Badge>
-                    </div>
-                    <p className="mt-bakin-1 text-bakin-typography-size-meta text-bakin-text-muted">{task.detail}</p>
-                    <p className="mt-bakin-1 text-bakin-typography-size-meta text-bakin-text-muted">Target: {task.due}</p>
-                  </div>
-                </div>
+                <TimelineEntry
+                  key={task.title}
+                  tone={TASK_STATE_TONE[task.state]}
+                  markerLabel={TASK_STATE_LABELS[task.state]}
+                  timestamp={task.due}
+                  title={task.title}
+                  meta={(
+                    <Badge size="xs" variant="outline" className="shrink-0">
+                      {TASK_STATE_LABELS[task.state]}
+                    </Badge>
+                  )}
+                >
+                  {task.detail}
+                </TimelineEntry>
               ))}
-            </div>
+            </Timeline>
           </div>
 
-          <div className="mt-5 border-t border-bakin-border-subtle pt-5">
-            <h3 className="mb-bakin-3 text-bakin-typography-size-meta font-bakin-typography-weight-medium uppercase tracking-wider text-bakin-text-muted">Plan Links</h3>
-            <div className="space-y-bakin-2 text-bakin-typography-size-meta text-bakin-text-muted">
-              {plan.sourceSessionId && (
-                <div className="flex items-center gap-bakin-2">
-                  <MessageSquareText className="size-3.5" aria-hidden="true" />
-                  Source brainstorm
-                  <Badge size="xs" variant="outline" className="ml-auto font-bakin-typography-family-mono">
-                    {plan.sourceSessionId.slice(0, 8)}
-                  </Badge>
-                </div>
-              )}
-              {activeDeliverables.some((deliverable) => deliverable.taskId) && (
-                <div className="flex items-center gap-bakin-2">
-                  <ExternalLink className="size-3.5" aria-hidden="true" />
-                  Board tasks linked
-                  <Badge size="xs" variant="outline" className="ml-auto">
-                    {activeDeliverables.filter((deliverable) => deliverable.taskId).length}
-                  </Badge>
-                </div>
-              )}
-              {!plan.sourceSessionId && !activeDeliverables.some((deliverable) => deliverable.taskId) && (
-                <p>No linked sessions or board tasks yet.</p>
-              )}
-            </div>
+          <Separator className="my-5" />
+          <div>
+            <h3 className="mb-bakin-3">Plan Links</h3>
+            {planLinkItems.length > 0 ? (
+              <KeyValue layout="rows" items={planLinkItems} />
+            ) : (
+              <Text as="p" size="meta" tone="muted">No linked sessions or board tasks yet.</Text>
+            )}
           </div>
             </aside>
           </div>
         </div>
       </PageBody>
+      </Tabs>
 
       <DeliverableDrawer
         deliverable={selectedDeliverable}
@@ -1039,9 +1023,9 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
         }}
       >
         {channelPendingDelete && (
-          <p className="text-bakin-typography-size-meta text-bakin-text-muted">
+          <Text as="p" size="meta" tone="muted">
             {channelPendingDelete.channel} · {getContentTypeLabel(channelPendingDelete.contentType, contentTypes)}
-          </p>
+          </Text>
         )}
       </ConfirmDialog>
     </Page>

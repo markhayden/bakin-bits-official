@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import type { Deliverable } from '../../../plugins/messaging/types'
 
@@ -75,7 +75,6 @@ function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
 
 beforeEach(() => {
   globalThis.fetch = mock(async () => ({ ok: true, json: async () => ({ ok: true }) })) as unknown as typeof fetch
-  globalThis.confirm = mock(() => true) as unknown as typeof confirm
 })
 
 afterEach(() => cleanup())
@@ -209,9 +208,13 @@ describe('DeliverableDrawer', () => {
       />,
     )
 
-    fireEvent.click(screen.getByText('Retry delivery'))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry delivery' }))
 
-    expect(globalThis.confirm).toHaveBeenCalledWith('Retry delivery to general? This may publish or send the content externally.')
+    // The external-side-effect confirmation is a kit ConfirmDialog, not window.confirm.
+    const dialog = screen.getByRole('dialog', { name: 'Retry delivery?' })
+    expect(within(dialog).getByText('Retry delivery to general? This may publish or send the content externally.')).toBeDefined()
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Retry delivery' }))
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(
         '/api/plugins/messaging/deliverables/deliverable-1/retry-delivery?id=deliverable-1',
@@ -232,8 +235,12 @@ describe('DeliverableDrawer', () => {
       />,
     )
 
-    fireEvent.click(screen.getByText('Delete'))
-    fireEvent.click(screen.getByText('Confirm delete'))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    // Delete confirms through the kit ConfirmDialog instead of a click-again button.
+    const dialog = screen.getByRole('dialog', { name: 'Delete this content piece?' })
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete content piece' }))
 
     await waitFor(() => {
       expect(globalThis.fetch).toHaveBeenCalledWith(

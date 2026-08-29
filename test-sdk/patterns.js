@@ -406,3 +406,112 @@ export function AssetPicker(props) {
 export function ChannelIcon({ channelId }) {
   return React.createElement('span', { 'data-testid': `channel-icon-${channelId ?? 'unknown'}` })
 }
+
+// ── Pass-four conformance additions: KeyValue, StatTile/StatGroup, CalendarItem/CalendarNav,
+//    InspectorPanel family, Timeline family ─────────────────────────────────
+export const KeyValue = ({ items = [], layout = 'rows', ...props }) =>
+  React.createElement(
+    'dl',
+    { ...props, 'data-slot': 'key-value', 'data-layout': layout },
+    ...items.map((item, index) => React.createElement(
+      'div',
+      { key: index, 'data-slot': 'key-value-pair' },
+      React.createElement('dt', null, item.label),
+      React.createElement('dd', null, item.value === null || item.value === undefined ? '—' : item.value),
+    )),
+  )
+
+export const StatTile = ({ icon: Icon, label, value, valueTone, sub, progress, variant, onClick, className }) =>
+  React.createElement(
+    onClick ? 'button' : 'div',
+    { ...(onClick ? { type: 'button', onClick } : {}), 'data-stat-tile': '', 'data-variant': variant, className },
+    React.createElement('span', { 'data-slot': 'stat-tile-label' }, Icon ? React.createElement(Icon, { 'aria-hidden': 'true' }) : null, label),
+    React.createElement('span', { 'data-slot': 'stat-tile-value' }, value),
+    sub != null ? React.createElement('span', { 'data-slot': 'stat-tile-description' }, sub) : null,
+  )
+export const StatGroup = ({ label, children, ...props }) =>
+  React.createElement('div', { ...props, role: 'group', 'aria-label': label, 'data-stat-group': '' }, children)
+
+export const CalendarItem = ({ title, time, detail, meta, leading, marker, tone, density, past, type = 'button', ...props }) =>
+  React.createElement(
+    'button',
+    { ...props, type, 'data-slot': 'calendar-item', 'data-tone': tone, 'data-density': density, 'data-past': past ? '' : undefined },
+    leading ? React.createElement('span', { 'data-slot': 'calendar-item-leading' }, leading) : null,
+    React.createElement('span', { 'data-slot': 'calendar-item-title' }, title),
+    time !== undefined ? React.createElement('span', { 'data-slot': 'calendar-item-time' }, time) : null,
+    marker ?? null,
+    detail !== undefined ? React.createElement('span', { 'data-slot': 'calendar-item-detail' }, detail) : null,
+    meta !== undefined ? React.createElement('span', { 'data-slot': 'calendar-item-meta' }, meta) : null,
+  )
+export const CalendarNav = ({ label, navLabel, onPrevious, onNext, previousLabel, nextLabel, onToday, ...props }) =>
+  React.createElement(
+    'div',
+    { ...props, role: 'group', 'aria-label': navLabel, 'data-slot': 'calendar-nav' },
+    React.createElement('button', { type: 'button', 'aria-label': previousLabel, onClick: onPrevious }, '‹'),
+    React.createElement('span', { 'data-slot': 'calendar-nav-label' }, label),
+    React.createElement('button', { type: 'button', 'aria-label': nextLabel, onClick: onNext }, '›'),
+    onToday ? React.createElement('button', { type: 'button', onClick: onToday }, 'Today') : null,
+  )
+
+export const InspectorPanel = ({ label, labelledBy, side, children, ...props }) =>
+  React.createElement(
+    'section',
+    { ...props, 'aria-label': label, 'aria-labelledby': labelledBy, 'data-slot': 'inspector-panel', 'data-side': side ? '' : undefined },
+    children,
+  )
+export const InspectorPanelHeader = ({ title, description, eyebrow, actions, actionsLabel = 'Inspector actions', ...props }) =>
+  React.createElement(
+    'header',
+    { ...props, 'data-slot': 'inspector-panel-header' },
+    eyebrow ? React.createElement('p', null, eyebrow) : null,
+    React.createElement('h2', null, title),
+    description ? React.createElement('p', null, description) : null,
+    actions ? React.createElement('div', { role: 'group', 'aria-label': actionsLabel }, actions) : null,
+  )
+export const InspectorPanelContent = ({ busy, feedback, state, children, ...props }) =>
+  React.createElement(
+    'div',
+    { ...props, 'aria-busy': busy || undefined, 'data-slot': 'inspector-panel-content' },
+    feedback ?? null,
+    state !== undefined && state !== null ? state : children,
+  )
+export const InspectorPanelFooter = ({ children, ...props }) =>
+  React.createElement('footer', { ...props, 'data-slot': 'inspector-panel-footer' }, children)
+
+export const Timeline = ({ nested, children, ...props }) =>
+  React.createElement('ol', { ...props, 'data-slot': 'timeline', 'data-nested': nested ? '' : undefined }, children)
+export const TimelineEntry = ({
+  timestamp, dateTime, tone, markerLabel, marker, title, meta, expandable, defaultExpanded, expanded, onExpandedChange,
+  note, noteLabel, children, ...props
+}) =>
+  React.createElement(
+    'li',
+    { ...props, 'data-slot': 'timeline-entry', 'data-tone': tone },
+    marker ?? React.createElement(StatusMarker, { tone, label: markerLabel }),
+    timestamp !== undefined ? React.createElement('time', { dateTime }, timestamp) : null,
+    React.createElement('span', { 'data-slot': 'timeline-title' }, title),
+    meta ?? null,
+    note ? React.createElement('div', { 'data-slot': 'timeline-entry-note' }, noteLabel ? `${noteLabel}: ` : null, note) : null,
+    children ? React.createElement('div', { 'data-slot': 'timeline-entry-body' }, children) : null,
+  )
+
+// ── Pass-four conformance additions (projects): ListRowActions, ScoreOverlay ──
+export const ListRowActions = ({ reveal = 'always', children, ...props }) =>
+  React.createElement('div', { ...props, 'data-slot': 'list-row-actions', 'data-reveal': reveal }, children)
+export const ScoreOverlay = ({ info, className }) =>
+  React.createElement(
+    'div',
+    { role: 'note', 'aria-label': 'Search relevance details', 'data-testid': 'score-overlay', className },
+    React.createElement('span', null, `RRF ${info.score.toFixed(4)}`),
+    ...Object.entries(info.indexScores ?? {}).map(([leg, value]) =>
+      React.createElement('span', { key: leg }, `${leg} ${value.toFixed(4)}`)),
+  )
+export function computeMatchedFields(query, fields) {
+  const terms = query.toLowerCase().split(/\s+/).filter((term) => term.length > 1)
+  if (!terms.length) return []
+  return Object.entries(fields).flatMap(([name, value]) => {
+    if (value === null || value === undefined) return []
+    const text = (typeof value === 'string' ? value : JSON.stringify(value)).toLowerCase()
+    return terms.some((term) => text.includes(term)) ? [name] : []
+  })
+}

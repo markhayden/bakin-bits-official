@@ -1,14 +1,19 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
-import { ConversationPanel, useConversationThread } from "@makinbakin/sdk/conversation"
+import { ConversationEmptyState, ConversationPanel, useConversationThread } from "@makinbakin/sdk/conversation"
 import type { ConversationAgent, ConversationMessage } from "@makinbakin/sdk/conversation"
 import { emitPluginEvent, toast, useAgentIds, useAgentList, useHorizontalResize, usePluginEvent, useSearch } from "@makinbakin/sdk/hooks"
+import { Panel } from "@makinbakin/sdk/layout"
 import { usePathname, useQueryState, useRouter, useSearchParams } from "@makinbakin/sdk/navigation"
 import {
   AgentAvatar,
   AgentFilter,
   ConfirmDialog,
+  InspectorPanel,
+  InspectorPanelContent,
+  InspectorPanelFooter,
+  InspectorPanelHeader,
   ListRow,
   ListRows,
   Page,
@@ -18,31 +23,51 @@ import {
   SearchInput,
   SegmentedControl,
   StatusBadge,
+  StatusMarker,
   WorkspacePage,
   WorkspacePageBody,
   WorkspacePageHeader,
 } from "@makinbakin/sdk/patterns"
 import {
+  Alert,
+  AlertDescription,
   Badge,
-  Drawer,
   Button,
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  Drawer,
   DropdownMenuItem,
+  Field,
+  FieldControl,
+  FieldLabel,
+  Form,
+  FormActions,
   Input,
+  Overline,
+  Radio,
+  RadioGroup,
+  Separator,
+  SubmitButton,
   SystemState,
   Tabs,
+  TabsContent,
   TabsList,
   TabsTrigger,
+  Text,
   Textarea,
 } from "@makinbakin/sdk/ui"
 import { ArrowLeft, Check, ClipboardList, Columns2, Plus, SquareStack, Trash2, X } from 'lucide-react'
 import type { BrainstormSession, PlanProposal } from '../types'
 import { sessionMessageToConversation } from '../lib/session-to-conversation'
 import { cn } from '@makinbakin/sdk/utils'
-import { StatusMarker } from '@makinbakin/sdk/patterns'
 
 interface SessionSummary {
   id: string
@@ -99,6 +124,11 @@ const BRAINSTORM_LAYOUT_OPTIONS = [
   { value: 'tabs' as const, label: 'Tabs', icon: SquareStack },
 ]
 
+const BRAINSTORM_SUGGESTIONS = [
+  "Plan next week's posts",
+  'Give me five topic ideas for the launch',
+] as const
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
@@ -132,7 +162,13 @@ function transformAssistantReply(raw: string): { text: string; extras?: ReactNod
   }
 }
 
-function formatDate(value: string): string {
+/**
+ * Proposal target dates are date-only (`YYYY-MM-DD`) — a calendar day with
+ * no instant. The SDK `formatDateTime` renders instants (and would read a
+ * bare date as UTC midnight, shifting the day in western zones), so the
+ * day-only formatter stays local.
+ */
+function formatTargetDate(value: string): string {
   const date = new Date(`${value}T00:00:00`)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
@@ -204,52 +240,54 @@ function NewBrainstormSessionDialog({
         <DialogHeader>
           <DialogTitle>New brainstorm</DialogTitle>
         </DialogHeader>
-        <form className="space-y-bakin-4" onSubmit={handleSubmit}>
-          <Input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="Session title..."
-            autoFocus
-            disabled={creating}
-          />
-          <div className="space-y-bakin-2">
-            <div className="text-bakin-typography-size-meta font-bakin-typography-weight-medium uppercase text-bakin-text-muted">Agent</div>
-            <div className="grid max-h-56 gap-bakin-2 overflow-y-auto sm:grid-cols-2" role="radiogroup" aria-label="Brainstorm agent">
-              {agents.map(agent => {
-                const selected = agent.id === selectedAgentId
-                return (
-                  <button
-                    key={agent.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    disabled={creating}
-                    onClick={() => setAgentId(agent.id)}
-                    className={cn('flex min-w-0 items-center gap-bakin-2 rounded-bakin-control border px-bakin-3 py-bakin-2 text-left text-bakin-typography-size-body transition-colors focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-bakin-focus-ring disabled:cursor-not-allowed disabled:opacity-50', selected
-                        ? 'border-bakin-signal-accent bg-bakin-signal-accent/10'
-                        : 'border-bakin-border-subtle bg-bakin-surface-default hover:bg-bakin-surface-elevated')}
-                  >
-                    <AgentAvatar
-                      agent={{ id: agent.id, name: agent.name, imageSrc: agent.imageSrc ?? null }}
-                      size="sm"
-                      decorative
-                    />
-                    <span className="truncate font-bakin-typography-weight-medium">{agent.name}</span>
-                  </button>
-                )
-              })}
-            </div>
+        <Form busy={creating} onSubmit={handleSubmit} aria-label="New brainstorm form">
+          <Field>
+            <FieldLabel htmlFor="brainstorm-session-title" requirement="required">Title</FieldLabel>
+            <Input
+              id="brainstorm-session-title"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="Session title..."
+              autoFocus
+              disabled={creating}
+            />
+          </Field>
+          <div className="grid gap-bakin-2">
+            <Overline>Agent</Overline>
+            <RadioGroup
+              aria-label="Brainstorm agent"
+              value={selectedAgentId}
+              onValueChange={(value: unknown) => setAgentId(String(value))}
+              disabled={creating}
+              className="grid max-h-56 overflow-y-auto sm:grid-cols-2"
+            >
+              {agents.map(agent => (
+                <label key={agent.id} className="flex min-w-0 items-center gap-bakin-2">
+                  <Radio value={agent.id} />
+                  <AgentAvatar
+                    agent={{ id: agent.id, name: agent.name, imageSrc: agent.imageSrc ?? null }}
+                    size="sm"
+                    decorative
+                  />
+                  <Text as="span" weight="medium" className="truncate">{agent.name}</Text>
+                </label>
+              ))}
+            </RadioGroup>
           </div>
-          {error && <p className="text-bakin-typography-size-meta text-bakin-signal-danger">{error}</p>}
-          <div className="flex justify-end gap-bakin-2">
+          {error && (
+            <Alert tone="danger">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+          <FormActions>
             <Button type="button" variant="outline" onClick={onCancel} disabled={creating}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!trimmedTitle || creating}>
-              {creating ? 'Creating...' : 'Create Session'}
-            </Button>
-          </div>
-        </form>
+            <SubmitButton busyLabel="Creating..." disabled={!trimmedTitle || creating}>
+              Create Session
+            </SubmitButton>
+          </FormActions>
+        </Form>
       </DialogContent>
     </Dialog>
   )
@@ -378,66 +416,68 @@ function ProposalDrawer({
       <div className="flex h-full min-h-0 flex-col">
         <div className="min-h-0 flex-1 overflow-y-auto pr-bakin-1">
           <div className="space-y-5 pb-5">
-            <section className="rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default p-bakin-4">
+            <Panel as="section">
               <ProposalStatusBadge proposal={proposal} />
-              <p className="mt-bakin-3 text-bakin-typography-size-body text-bakin-text-muted">{proposal.brief}</p>
-            </section>
+              <Text as="p" tone="muted" className="mt-bakin-3">{proposal.brief}</Text>
+            </Panel>
 
             <section className="grid gap-bakin-4">
-              <label className="grid gap-bakin-1 text-bakin-typography-size-body font-bakin-typography-weight-medium">
-                Title
-                <Input value={title} disabled={disabled} onChange={(event) => setTitle(event.target.value)} />
-              </label>
-              <label className="grid gap-bakin-1 text-bakin-typography-size-body font-bakin-typography-weight-medium">
-                Target date
-                <Input type="date" value={targetDate} disabled={disabled} onChange={(event) => setTargetDate(event.target.value)} />
-              </label>
-              <label className="grid gap-bakin-1 text-bakin-typography-size-body font-bakin-typography-weight-medium">
-                Brief
-                <Textarea
-                  value={brief}
-                  disabled={disabled}
-                  onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setBrief(event.target.value)}
-                  rows={6}
-                  className="min-h-32"
+              <Field>
+                <FieldLabel htmlFor="proposal-title">Title</FieldLabel>
+                <Input id="proposal-title" value={title} disabled={disabled} onChange={(event) => setTitle(event.target.value)} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="proposal-target-date">Target date</FieldLabel>
+                <Input id="proposal-target-date" type="date" value={targetDate} disabled={disabled} onChange={(event) => setTargetDate(event.target.value)} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="proposal-brief">Brief</FieldLabel>
+                <FieldControl
+                  render={(
+                    <Textarea
+                      id="proposal-brief"
+                      value={brief}
+                      disabled={disabled}
+                      onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setBrief(event.target.value)}
+                      rows={6}
+                      className="min-h-32"
+                    />
+                  )}
                 />
-              </label>
-              <label className="grid gap-bakin-1 text-bakin-typography-size-body font-bakin-typography-weight-medium">
-                Suggested channels
-                <div
-                  className={cn('flex min-h-10 flex-wrap items-center gap-bakin-2 rounded-bakin-control border border-bakin-border-subtle bg-bakin-canvas-default px-bakin-2 py-bakin-1 text-bakin-typography-size-body outline-none transition-colors focus-within:outline-2 focus-within:outline-solid focus-within:-outline-offset-1 focus-within:outline-bakin-focus-ring', disabled ? 'cursor-not-allowed opacity-50' : '')}
-                >
-                  {channels.map(channel => (
-                    <span
-                      key={channel}
-                      className="inline-flex h-7 max-w-full items-center gap-bakin-1 rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default px-bakin-2 text-bakin-typography-size-meta font-bakin-typography-weight-medium"
-                    >
-                      <span className="truncate">{channel}</span>
-                      {!disabled && (
-                        <button
-                          type="button"
-                          aria-label={`Remove ${channel}`}
-                          onClick={() => removeChannel(channel)}
-                          className="rounded-bakin-control text-bakin-text-muted transition-colors hover:text-bakin-text-primary focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-bakin-focus-ring"
-                        >
-                          <X className="size-bakin-3" />
-                        </button>
-                      )}
-                    </span>
-                  ))}
-                  <input
-                    value={channelDraft}
-                    disabled={disabled}
-                    onBlur={commitChannelDraft}
-                    onChange={(event) => handleChannelChange(event.target.value)}
-                    onKeyDown={handleChannelKeyDown}
-                    onPaste={handleChannelPaste}
-                    placeholder={channels.length === 0 ? 'instagram, blog, youtube' : ''}
-                    aria-label="Suggested channels"
-                    className="min-h-7 min-w-24 flex-1 bg-transparent px-bakin-1 text-bakin-typography-size-body outline-none placeholder:text-bakin-text-muted disabled:cursor-not-allowed"
-                  />
-                </div>
-              </label>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="proposal-channels">Suggested channels</FieldLabel>
+                {channels.length > 0 && (
+                  <div className="flex flex-wrap gap-bakin-1">
+                    {channels.map(channel => (
+                      <Badge key={channel} size="xs" variant="outline" className="max-w-full gap-bakin-1">
+                        <span className="truncate">{channel}</span>
+                        {!disabled && (
+                          <Button
+                            type="button"
+                            size="icon-xs"
+                            variant="ghost"
+                            aria-label={`Remove ${channel}`}
+                            onClick={() => removeChannel(channel)}
+                          >
+                            <X aria-hidden="true" />
+                          </Button>
+                        )}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                <Input
+                  id="proposal-channels"
+                  value={channelDraft}
+                  disabled={disabled}
+                  onBlur={commitChannelDraft}
+                  onChange={(event) => handleChannelChange(event.target.value)}
+                  onKeyDown={handleChannelKeyDown}
+                  onPaste={handleChannelPaste}
+                  placeholder={channels.length === 0 ? 'instagram, blog, youtube' : ''}
+                />
+              </Field>
               {!proposal.planId && (canReject || canAccept || canCancelAcceptance) && (
                 <div className="flex flex-wrap items-center justify-end gap-bakin-2 pt-bakin-1">
                   {canCancelAcceptance && (
@@ -475,12 +515,11 @@ function ProposalDrawer({
         </div>
 
         {!proposal.planId && (
-          <div className="shrink-0 border-t border-bakin-border-subtle pt-bakin-4">
-            <div>
-              <Button className="w-full justify-center" variant="outline" onClick={() => save()} disabled={saving}>
-                Save changes
-              </Button>
-            </div>
+          <div className="shrink-0">
+            <Separator className="mb-bakin-4" />
+            <Button className="w-full justify-center" variant="outline" onClick={() => save()} disabled={saving}>
+              Save changes
+            </Button>
           </div>
         )}
       </div>
@@ -845,7 +884,7 @@ export function BrainstormView() {
         setDeleteSessionId(null)
       }}
     >
-      <p className="truncate text-bakin-typography-size-meta text-bakin-text-muted">{sessionPendingDelete.title}</p>
+      <Text as="p" size="meta" tone="muted" className="truncate">{sessionPendingDelete.title}</Text>
     </ConfirmDialog>
   ) : null
 
@@ -875,22 +914,22 @@ export function BrainstormView() {
           showHeader={false}
           className="rounded-none border-0"
           emptyState={
-            <div className="px-bakin-6 text-center text-bakin-typography-size-body text-bakin-text-muted">
-              <p className="m-0 font-bakin-typography-weight-medium text-bakin-text-primary">Brainstorm content ideas with this agent</p>
-              <p className="m-0 mt-bakin-1">
-                Proposals the agent suggests land in the side panel for review — approve the good
-                ones and materialize them into Plans. Try "plan next week's posts" or "give me five
-                topic ideas for the launch".
-              </p>
-            </div>
+            <ConversationEmptyState
+              title="Brainstorm content ideas with this agent"
+              description="Proposals the agent suggests land in the side panel for review — approve the good ones and materialize them into Plans."
+              suggestions={BRAINSTORM_SUGGESTIONS}
+              onSuggestion={(suggestion) => { void brainstorm.send(suggestion) }}
+            />
           }
         />
       </div>
     )
+    const proposalCount = activeSession.proposals.length
     const renderProposalPanel = ({ showHeader, showResizeHandle }: { showHeader: boolean; showResizeHandle: boolean }) => (
-      <aside
-        data-slot="brainstorm-proposal-panel"
-        className={cn('relative flex min-h-0 w-full max-w-full min-w-0 flex-col overflow-hidden', showHeader ? 'border-l border-bakin-border-subtle px-bakin-4 py-bakin-4' : '')}
+      <InspectorPanel
+        label="Plan proposals"
+        data-testid="brainstorm-proposal-panel"
+        className={cn('relative w-full max-w-full overflow-hidden', showHeader && 'border-l border-bakin-border-subtle px-bakin-4 py-bakin-4')}
       >
         {showResizeHandle && (
           <div
@@ -900,45 +939,39 @@ export function BrainstormView() {
           />
         )}
         {showHeader && (
-          <div className="mb-bakin-3 flex items-center justify-between">
-            <h2 className="text-bakin-typography-size-body font-bakin-typography-weight-semibold">Plan proposals</h2>
-            <Badge size="xs" tone="neutral" variant="outline">{activeSession.proposals.length}</Badge>
-          </div>
+          <InspectorPanelHeader
+            title="Plan proposals"
+            description={`${proposalCount} ${proposalCount === 1 ? 'proposal' : 'proposals'}`}
+          />
         )}
-        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
-          {activeSession.proposals.length === 0 ? (
+        <InspectorPanelContent
+          className="min-h-0 overflow-y-auto overflow-x-hidden"
+          state={proposalCount === 0 ? (
             <SystemState
               kind="initial-empty"
               scope="section"
               headingLevel={3}
               title="No proposals yet"
               description="Ask the agent to propose campaign ideas, then review them here."
-              className="w-full max-w-full [&_[data-slot=system-state-copy]]:w-full [&_[data-slot=system-state-description]]:max-w-full [&_[data-slot=system-state-description]]:[overflow-wrap:anywhere]"
             />
-          ) : (
-            <div className="grid w-full max-w-full min-w-0 gap-bakin-2">
-              {activeSession.proposals.map(proposal => (
-                <article
-                  key={proposal.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => setSelectedProposalId(proposal.id)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault()
-                      setSelectedProposalId(proposal.id)
-                    }
-                  }}
-                  className="w-full max-w-full min-w-0 overflow-hidden rounded-bakin-control border border-bakin-border-subtle bg-bakin-surface-default p-bakin-3 text-left transition-colors hover:bg-bakin-surface-elevated focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-bakin-focus-ring"
-                >
+          ) : undefined}
+        >
+          <div className="grid w-full max-w-full min-w-0 gap-bakin-2">
+            {activeSession.proposals.map(proposal => (
+              <Card
+                key={proposal.id}
+                size="sm"
+                interactive={{ label: `Open proposal: ${proposal.title}`, onActivate: () => setSelectedProposalId(proposal.id) }}
+              >
+                <CardHeader>
                   <div className="flex items-start justify-between gap-bakin-3">
-                    <div className="min-w-0 flex-1">
-                      <h3 className="line-clamp-2 text-bakin-typography-size-body font-bakin-typography-weight-medium">{proposal.title}</h3>
-                      <p className="mt-bakin-1 text-bakin-typography-size-meta text-bakin-text-muted">{formatDate(proposal.targetDate)}</p>
-                    </div>
+                    <CardTitle className="line-clamp-2">{proposal.title}</CardTitle>
                     <ProposalStatusBadge proposal={proposal} />
                   </div>
-                  <p className="mt-bakin-2 line-clamp-3 text-bakin-typography-size-body text-bakin-text-muted">{proposal.brief}</p>
+                  <CardDescription>{formatTargetDate(proposal.targetDate)}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Text as="p" tone="muted" className="line-clamp-3">{proposal.brief}</Text>
                   {proposal.suggestedChannels && proposal.suggestedChannels.length > 0 && (
                     <div className="mt-bakin-2 flex flex-wrap gap-bakin-1">
                       {proposal.suggestedChannels.map(channel => (
@@ -946,49 +979,41 @@ export function BrainstormView() {
                       ))}
                     </div>
                   )}
-                  {hasInlineProposalActions(proposal) && (
-                    <div className="mt-bakin-3 flex flex-wrap items-center justify-end gap-bakin-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="danger"
-                        className="px-bakin-3"
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          updateProposal(proposal, { status: 'rejected' })
-                        }}
-                      >
-                        <X className="size-3.5" data-icon="inline-start" />
-                        Decline
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        className="px-bakin-3"
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          updateProposal(proposal, { status: 'approved' })
-                        }}
-                      >
-                        <Check className="size-3.5" data-icon="inline-start" />
-                        Accept
-                      </Button>
-                    </div>
-                  )}
-                </article>
-              ))}
-            </div>
-          )}
-        </div>
+                </CardContent>
+                {hasInlineProposalActions(proposal) && (
+                  <CardFooter className="justify-end">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="danger"
+                      onClick={() => updateProposal(proposal, { status: 'rejected' })}
+                    >
+                      <X data-icon="inline-start" aria-hidden="true" />
+                      Decline
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => updateProposal(proposal, { status: 'approved' })}
+                    >
+                      <Check data-icon="inline-start" aria-hidden="true" />
+                      Accept
+                    </Button>
+                  </CardFooter>
+                )}
+              </Card>
+            ))}
+          </div>
+        </InspectorPanelContent>
         {activeSession.status === 'active' && (
-          <div className="mt-bakin-3 shrink-0 border-t border-bakin-border-subtle pt-bakin-3">
+          <InspectorPanelFooter>
             <Button className="w-full justify-center" disabled={!canCompleteSession || materializing} onClick={materialize}>
-              <ClipboardList className="size-bakin-4" />
+              <ClipboardList data-icon="inline-start" aria-hidden="true" />
               {pendingPlanCount > 0 ? 'Complete session and prepare plans' : 'Complete session'}
             </Button>
-          </div>
+          </InspectorPanelFooter>
         )}
-      </aside>
+      </InspectorPanel>
     )
     const tabbedWorkspace = (
       <div
@@ -996,7 +1021,7 @@ export function BrainstormView() {
         className="flex min-h-0 w-full max-w-full min-w-0 flex-1 flex-col overflow-hidden"
       >
         <Tabs
-          className="shrink-0"
+          className="flex min-h-0 flex-1 flex-col gap-0"
           value={workspaceTab}
           onValueChange={(value) => setWorkspaceTab(value as BrainstormWorkspaceTab)}
         >
@@ -1004,11 +1029,11 @@ export function BrainstormView() {
             variant="underline"
             activateOnFocus
             aria-label="Brainstorm layout sections"
-            className="px-bakin-4 pt-bakin-2"
+            className="shrink-0 px-bakin-4 pt-bakin-2"
           >
             {[
               { id: 'brainstorm', label: 'Brainstorm' },
-              { id: 'proposals', label: `Plan proposals (${activeSession.proposals.length})` },
+              { id: 'proposals', label: `Plan proposals (${proposalCount})` },
             ].map((item) => (
               <TabsTrigger
                 key={item.id}
@@ -1020,26 +1045,23 @@ export function BrainstormView() {
               </TabsTrigger>
             ))}
           </TabsList>
-        </Tabs>
-        {workspaceTab === 'brainstorm' ? (
-          <div
+          <TabsContent
+            value="brainstorm"
             id="brainstorm-workspace-panel-brainstorm"
-            className="min-h-0 w-full max-w-full min-w-0 flex-1"
-            role="tabpanel"
             aria-labelledby="brainstorm-workspace-tab-brainstorm"
+            className="min-h-0 w-full max-w-full min-w-0 flex-1"
           >
             {brainstormPane}
-          </div>
-        ) : (
-          <div
+          </TabsContent>
+          <TabsContent
+            value="proposals"
             id="brainstorm-workspace-panel-proposals"
-            className="min-h-0 w-full max-w-full min-w-0 flex-1 overflow-hidden p-bakin-4"
-            role="tabpanel"
             aria-labelledby="brainstorm-workspace-tab-proposals"
+            className="min-h-0 w-full max-w-full min-w-0 flex-1 overflow-hidden p-bakin-4"
           >
             {renderProposalPanel({ showHeader: false, showResizeHandle: false })}
-          </div>
-        )}
+          </TabsContent>
+        </Tabs>
       </div>
     )
     const effectiveLayoutMode: BrainstormLayoutMode = compactWorkspace ? 'tabs' : layoutMode
@@ -1227,9 +1249,9 @@ export function BrainstormView() {
                     />
                     <div className="min-w-0 flex-1">
                       <div className="flex min-w-0 flex-wrap items-center gap-bakin-2">
-                        <h2 className="min-w-0 truncate text-bakin-typography-size-body font-bakin-typography-weight-semibold text-bakin-text-primary">
+                        <Text as="h2" weight="semibold" className="min-w-0 truncate">
                           {session.title}
-                        </h2>
+                        </Text>
                         <StatusBadge
                           size="xs"
                           tone={session.status === 'active' ? 'success' : 'neutral'}
@@ -1243,9 +1265,9 @@ export function BrainstormView() {
                           <StatusMarker data-testid="session-unread" tone="attention" label="Unseen reply" />
                         ) : null}
                       </div>
-                      <p className="mt-bakin-1 text-bakin-typography-size-meta text-bakin-text-muted">
+                      <Text as="p" size="meta" tone="muted" className="mt-bakin-1">
                         {agent?.name ?? session.agentId} · {session.proposalCount} proposals · {session.approvedCount} accepted
-                      </p>
+                      </Text>
                     </div>
                   </div>
               </ListRow>

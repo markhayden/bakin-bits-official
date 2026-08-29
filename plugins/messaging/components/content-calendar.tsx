@@ -5,6 +5,8 @@ import {
   AgentAvatar,
   AgentFilter,
   CalendarGrid,
+  CalendarItem,
+  CalendarNav,
   ChannelIcon,
   FacetFilter,
   ListRow,
@@ -18,11 +20,10 @@ import {
   SegmentedControl,
   StatusMarker,
 } from '@makinbakin/sdk/patterns'
-import { Badge, Button, SystemState } from '@makinbakin/sdk/ui'
+import { Badge, Button, SystemState, Text } from '@makinbakin/sdk/ui'
 import {
   CalendarDays,
   CalendarRange,
-  ChevronLeft,
   ChevronRight,
   Circle,
   Clock,
@@ -241,12 +242,12 @@ function CalendarDeliverable({
         <AgentAvatar agent={identity} size="sm" decorative />
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-bakin-2">
-            <span className="truncate font-bakin-typography-weight-semibold">{deliverable.title}</span>
+            <Text as="span" weight="semibold" className="truncate">{deliverable.title}</Text>
             <DeliverableStatusBadge status={deliverable.status} />
           </span>
-          <span className="mt-bakin-1 block truncate text-bakin-typography-size-meta text-bakin-text-muted">
+          <Text as="span" size="meta" tone="muted" className="mt-bakin-1 block truncate">
             {formatTime(deliverable.publishAt)} · {deliverable.channel} · {getContentTypeLabel(deliverable.contentType, contentTypes)}
-          </span>
+          </Text>
         </span>
         <ChevronRight className="size-bakin-4 shrink-0 text-bakin-text-muted" aria-hidden="true" />
       </ListRow>
@@ -254,34 +255,20 @@ function CalendarDeliverable({
   }
 
   return (
-    <Button
-      variant="outline"
-      onClick={() => onSelect(deliverable)}
-      className="block !h-auto w-full whitespace-normal rounded-bakin-control bg-bakin-surface-default px-bakin-2 py-bakin-2 text-left font-bakin-typography-weight-regular hover:bg-bakin-surface-elevated"
-      data-testid={`calendar-deliverable-${deliverable.id}`}
-    >
-      <div className="flex min-w-0 items-center gap-bakin-2">
-        <span className="shrink-0 font-bakin-typography-family-mono text-bakin-typography-size-meta text-bakin-text-muted">
-          {formatTime(deliverable.publishAt)}
-        </span>
+    <CalendarItem
+      title={deliverable.title}
+      time={formatTime(deliverable.publishAt)}
+      marker={(
         <StatusMarker
           tone={DELIVERABLE_STATUS_TONE[deliverable.status]}
           label={statusLabel(deliverable.status)}
         />
-      </div>
-      <div className="mt-bakin-1 truncate text-bakin-typography-size-meta font-bakin-typography-weight-semibold">
-        {deliverable.title}
-      </div>
-      <div className="mt-bakin-1 flex min-w-0 items-center gap-bakin-1 text-bakin-typography-size-meta text-bakin-text-muted">
-        <AgentAvatar agent={identity} size="xs" decorative />
-        <span className="truncate">{deliverable.channel}</span>
-      </div>
-      <div className="mt-bakin-1 flex flex-wrap gap-bakin-1">
-        <Badge variant="outline" size="xs" className="max-w-full truncate">
-          {getContentTypeLabel(deliverable.contentType, contentTypes)}
-        </Badge>
-      </div>
-    </Button>
+      )}
+      leading={<AgentAvatar agent={identity} size="xs" decorative />}
+      detail={`${deliverable.channel} · ${getContentTypeLabel(deliverable.contentType, contentTypes)}`}
+      onClick={() => onSelect(deliverable)}
+      data-testid={`calendar-deliverable-${deliverable.id}`}
+    />
   )
 }
 
@@ -445,23 +432,17 @@ export function ContentCalendar() {
       ? weekLabel(activeDate)
       : monthLabel(activeMonth)
 
+  const rangeNoun = calendarView === 'today' ? 'day' : calendarView
   const navigation = calendarView !== 'list' ? (
-    <div className="flex min-w-0 items-center justify-between gap-bakin-3" data-slot="calendar-navigation">
-      <div className="flex items-center gap-bakin-1">
-        <Button size="icon-sm" variant="ghost" aria-label={`Previous ${calendarView}`} onClick={() => navigate(-1)}>
-          <ChevronLeft className="size-bakin-4" aria-hidden="true" />
-        </Button>
-        <Button size="icon-sm" variant="ghost" aria-label={`Next ${calendarView}`} onClick={() => navigate(1)}>
-          <ChevronRight className="size-bakin-4" aria-hidden="true" />
-        </Button>
-      </div>
-      <h2 className="min-w-0 truncate text-bakin-typography-size-section-title font-bakin-typography-weight-semibold">
-        {activeRangeLabel}
-      </h2>
-      <Button size="sm" variant="outline" onClick={() => setVisibleDate(localDateKey(new Date()))}>
-        Today
-      </Button>
-    </div>
+    <CalendarNav
+      navLabel={`Calendar ${rangeNoun} navigation`}
+      label={activeRangeLabel}
+      previousLabel={`Previous ${rangeNoun}`}
+      nextLabel={`Next ${rangeNoun}`}
+      onPrevious={() => navigate(-1)}
+      onNext={() => navigate(1)}
+      onToday={() => setVisibleDate(localDateKey(new Date()))}
+    />
   ) : null
 
   const renderDeliverable = (deliverable: Deliverable, mode?: 'card' | 'row') => (
@@ -479,9 +460,9 @@ export function ContentCalendar() {
     const count = (groupedDeliverables.get(localDateKey(day)) ?? []).length
     if (count === 0) return null
     return (
-      <span className="text-bakin-typography-size-meta text-bakin-text-muted">
+      <Text as="span" size="meta" tone="muted">
         {count === 1 ? '1 post' : `${count} posts`}
-      </span>
+      </Text>
     )
   }
 
@@ -514,7 +495,7 @@ export function ContentCalendar() {
                   setView(value)
                   setVisibleDate(null)
                 }}
-                className="shrink-0 [&_[role=tab]]:px-bakin-3"
+                className="shrink-0"
               />
               <QuickPostButton onCreated={refresh} />
             </div>

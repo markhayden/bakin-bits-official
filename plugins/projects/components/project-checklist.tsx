@@ -2,8 +2,19 @@
 
 import { useState } from 'react'
 import { Plus, ExternalLink, Unlink, Trash2, Link2, ChevronRight } from 'lucide-react'
-import { Button, Checkbox, Input, Textarea } from '@makinbakin/sdk/ui'
-import { StatusBadge } from '@makinbakin/sdk/patterns'
+import {
+  Button,
+  Checkbox,
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+  SystemState,
+  Text,
+  Textarea,
+} from '@makinbakin/sdk/ui'
+import { Stack } from '@makinbakin/sdk/layout'
+import { ListRow, ListRowActions, ListRows, StatusBadge } from '@makinbakin/sdk/patterns'
 import type { ProjectTask } from '../types'
 import { cn } from '@makinbakin/sdk/utils'
 
@@ -60,19 +71,9 @@ function TaskItem({
   }
 
   return (
-    <div className="rounded-bakin-control transition-colors hover:bg-bakin-surface-elevated">
+    <ListRow>
       {/* Main row */}
-      <div className="group flex items-start gap-bakin-2 px-bakin-1 py-1.5">
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={() => setExpanded(!expanded)}
-          aria-label={expanded ? `Collapse ${item.title}` : `Expand ${item.title}`}
-          className="mt-0.5 shrink-0 text-bakin-text-muted hover:text-bakin-text-primary"
-        >
-          <ChevronRight className={cn('size-bakin-3 transition-transform', expanded ? 'rotate-90' : '')} />
-        </Button>
-
+      <div className="flex items-start gap-bakin-2">
         <Checkbox
           checked={item.checked}
           onCheckedChange={(checked: boolean) => onToggle(checked === true)}
@@ -80,14 +81,21 @@ function TaskItem({
           className="mt-0.5 shrink-0"
         />
 
-        {/* Mouse-convenience hit area; keyboard and screen-reader access ride
-            the chevron button and the checkbox label. */}
-        <span
+        {/* The title is the real expand/collapse control: keyboard, pointer,
+            and screen readers all reach the same button. */}
+        <Button
+          type="button"
+          variant="ghost"
+          size="inline"
+          aria-expanded={expanded}
           onClick={() => setExpanded(!expanded)}
-          className={cn('flex-1 cursor-pointer text-bakin-typography-size-meta leading-snug', item.checked ? 'line-through text-bakin-text-muted' : 'text-bakin-text-primary')}
+          className="min-w-0 flex-1"
         >
-          {item.title}
-        </span>
+          <ChevronRight aria-hidden="true" className={cn('shrink-0 transition-transform', expanded && 'rotate-90')} />
+          <Text size="meta" tone={item.checked ? 'muted' : 'default'} className={cn('min-w-0 leading-snug', item.checked && 'line-through')}>
+            {item.title}
+          </Text>
+        </Button>
 
         {/* Linked task badge */}
         {item.taskId && resolved && (
@@ -96,7 +104,6 @@ function TaskItem({
             variant="soft"
             size="xs"
             icon={ExternalLink}
-            className="font-mono"
           >
             {item.taskId.slice(0, 6)}
           </StatusBadge>
@@ -108,17 +115,16 @@ function TaskItem({
           </StatusBadge>
         )}
 
-        {/* Actions */}
-        <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+        {/* Actions — revealed on row hover AND keyboard focus-within */}
+        <ListRowActions reveal="hover">
           {!item.taskId && !item.checked && (
             <Button
               variant="ghost"
               size="icon-xs"
               onClick={onPromote}
               aria-label="Create board task"
-              className="text-bakin-text-muted hover:text-bakin-text-primary"
             >
-              <Link2 className="size-bakin-3" />
+              <Link2 aria-hidden="true" />
             </Button>
           )}
           <Button
@@ -126,11 +132,10 @@ function TaskItem({
             size="icon-xs"
             onClick={onRemove}
             aria-label="Remove"
-            className="text-bakin-text-muted hover:text-bakin-signal-danger"
           >
-            <Trash2 className="size-bakin-3" />
+            <Trash2 aria-hidden="true" />
           </Button>
-        </div>
+        </ListRowActions>
       </div>
 
       {/* Expanded detail */}
@@ -161,17 +166,20 @@ function TaskItem({
             </div>
           ) : (
             <Button
+              type="button"
               variant="ghost"
-              size="xs"
+              size="inline"
               onClick={() => { setDescDraft(item.description || ''); setEditingDesc(true) }}
-              className="!h-auto w-full justify-start whitespace-normal p-0 text-left text-bakin-typography-size-meta font-bakin-typography-weight-regular text-bakin-text-muted hover:bg-transparent hover:text-bakin-text-primary"
+              className="w-full"
             >
-              {item.description || 'Add details...'}
+              <Text size="meta" tone="muted" className="min-w-0 leading-relaxed">
+                {item.description || 'Add details...'}
+              </Text>
             </Button>
           )}
         </div>
       )}
-    </div>
+    </ListRow>
   )
 }
 
@@ -202,13 +210,13 @@ export function ProjectChecklist({
   }
 
   return (
-    <div>
-      <h3 className="mb-bakin-3 text-xs font-bakin-typography-weight-medium uppercase tracking-wider text-bakin-text-muted">Tasks</h3>
+    <Stack gap="item">
+      <h3>Tasks</h3>
 
       {tasks.length === 0 ? (
-        <p className="mb-bakin-3 text-bakin-typography-size-meta text-bakin-text-muted">No tasks yet.</p>
+        <SystemState kind="initial-empty" scope="inline" headingLevel={4} title="No tasks yet." />
       ) : (
-        <div className="mb-bakin-3 space-y-0.5">
+        <ListRows variant="separated" size="sm" aria-label="Project tasks">
           {tasks.map((item) => {
             const resolved = item.taskId ? resolvedTasks[item.taskId] : null
             const stale = !!(item.taskId && resolvedTasks[item.taskId] === null)
@@ -226,30 +234,30 @@ export function ProjectChecklist({
               />
             )
           })}
-        </div>
+        </ListRows>
       )}
 
       {/* Add new item */}
-      <div className="flex gap-bakin-2">
-        <Input
+      <InputGroup>
+        <InputGroupInput
           type="text"
           value={newItemTitle}
           onChange={(e) => setNewItemTitle(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
           placeholder="Add task..."
           aria-label="Add task"
-          className="flex-1 text-bakin-typography-size-meta"
         />
-        <Button
-          variant="outline"
-          size="icon-sm"
-          onClick={handleAdd}
-          disabled={!newItemTitle.trim()}
-          aria-label="Add task to checklist"
-        >
-          <Plus className="size-3.5" />
-        </Button>
-      </div>
-    </div>
+        <InputGroupAddon align="inline-end">
+          <InputGroupButton
+            size="icon-xs"
+            onClick={handleAdd}
+            disabled={!newItemTitle.trim()}
+            aria-label="Add task to checklist"
+          >
+            <Plus aria-hidden="true" />
+          </InputGroupButton>
+        </InputGroupAddon>
+      </InputGroup>
+    </Stack>
   )
 }

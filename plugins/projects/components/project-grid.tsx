@@ -3,11 +3,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Plus } from 'lucide-react'
 import { Badge, Button, Skeleton, SystemState } from "@makinbakin/sdk/ui"
+import { Grid } from "@makinbakin/sdk/layout"
 import {
   Page,
   PageBody,
   PageControls,
   PageHeader,
+  ScoreOverlay,
   SearchInput,
   SegmentedControl,
 } from "@makinbakin/sdk/patterns"
@@ -84,7 +86,7 @@ export function ProjectGrid() {
   // Build a score map keyed by project id. Projects index with the raw
   // project.id (no search key prefix — see plugins/projects/index.ts reindex), so
   // no prefix-strip is needed. Used for both the relevance reorder AND the
-  // debug-mode RRF/BM25/SEM overlay.
+  // debug-mode relevance overlay.
   const scoreMap = useMemo(() => {
     const map = new Map<string, ScoreInfo>()
     for (const r of searchHook.results) {
@@ -175,11 +177,18 @@ export function ProjectGrid() {
       {/* Grid */}
       <PageBody label="Projects">
         {loading ? (
-          <div className="grid grid-cols-1 gap-bakin-4 sm:grid-cols-2 lg:grid-cols-3">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <Skeleton key={i} className="h-40 w-full" />
-            ))}
-          </div>
+          <SystemState
+            kind="loading"
+            scope="section"
+            title="Loading projects"
+            preview={(
+              <Grid layout="cards">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <Skeleton key={i} className="h-40 w-full" />
+                ))}
+              </Grid>
+            )}
+          />
         ) : filtered.length === 0 ? (
           search ? (
             <SystemState
@@ -204,14 +213,10 @@ export function ProjectGrid() {
             />
           )
         ) : (
-          <div className="grid grid-cols-1 gap-bakin-4 sm:grid-cols-2 lg:grid-cols-3">
+          <Grid layout="cards">
             {filtered.map((p) => {
               const scoreInfo = scoreMap.get(p.id)
               const showScores = debug && scoreInfo && search.trim()
-              const semKey = 'embeddings'
-              const bm25Key = scoreInfo?.indexScores
-                ? Object.keys(scoreInfo.indexScores).find(k => k !== semKey)
-                : undefined
               return (
                 <div key={p.id} className="relative">
                   <ProjectCard
@@ -219,20 +224,12 @@ export function ProjectGrid() {
                     onClick={() => router.push(`/projects/${p.id}`)}
                   />
                   {showScores && scoreInfo && (
-                    <div className="absolute top-1.5 left-1.5 flex flex-col gap-0.5 font-mono text-bakin-typography-size-meta bg-bakin-canvas-default/90 px-1.5 py-bakin-1 rounded pointer-events-none">
-                      <span className="text-bakin-signal-highlight">RRF {scoreInfo.score.toFixed(3)}</span>
-                      <span className="text-bakin-signal-info">
-                        BM25 {(bm25Key ? scoreInfo.indexScores?.[bm25Key] ?? 0 : 0).toFixed(3)}
-                      </span>
-                      <span className="text-bakin-signal-accent">
-                        SEM {(scoreInfo.indexScores?.[semKey] ?? 0).toFixed(3)}
-                      </span>
-                    </div>
+                    <ScoreOverlay info={scoreInfo} className="absolute left-bakin-1 top-bakin-1 z-10" />
                   )}
                 </div>
               )
             })}
-          </div>
+          </Grid>
         )}
       </PageBody>
 

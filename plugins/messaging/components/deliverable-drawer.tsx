@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
-import { AgentAvatar } from "@makinbakin/sdk/patterns"
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { AgentAvatar, ConfirmDialog, StatGroup, StatTile } from "@makinbakin/sdk/patterns"
 import { useAgentList } from "@makinbakin/sdk/hooks"
+import { Panel } from "@makinbakin/sdk/layout"
 import {
   Alert,
   AlertDescription,
@@ -10,9 +11,21 @@ import {
   Badge,
   Button,
   Drawer,
+  Field,
+  FieldControl,
+  FieldLabel,
+  Form,
+  FormActions,
+  Overline,
   Separator,
+  SubmitButton,
+  Text,
   Textarea,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
 } from "@makinbakin/sdk/ui"
+import { formatDateTime } from "@makinbakin/sdk/utils"
 import { AlertCircle, CalendarDays, Check, Clock, ImageIcon, RefreshCcw, RotateCcw, Trash2, Video, X } from 'lucide-react'
 import type { AssetRequirement, ContentTypeOption, Deliverable, DeliverableFailureStage } from '../types'
 import { getContentTypeLabel, useContentTypes } from '../hooks/use-content-types'
@@ -23,18 +36,6 @@ interface DeliverableDrawerProps {
   open: boolean
   onClose: () => void
   onUpdated?: () => void
-}
-
-function formatDateTime(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleDateString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
 }
 
 function requirementMissing(deliverable: Deliverable, requirement: AssetRequirement | undefined): string | null {
@@ -106,6 +107,7 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
   const [rejecting, setRejecting] = useState(false)
   const [rejectionNote, setRejectionNote] = useState('')
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [confirmingRecovery, setConfirmingRecovery] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
 
@@ -113,6 +115,7 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
     setRejecting(false)
     setRejectionNote('')
     setConfirmingDelete(false)
+    setConfirmingRecovery(false)
     setActionError(null)
   }, [deliverable?.id, open])
 
@@ -131,6 +134,10 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
   const canReject = deliverable.status === 'in_review'
   const approveDisabled = actionLoading || Boolean(missingRequirement)
   const recoveryAction = recoveryActionFor(deliverable)
+  const draft = deliverable.draft
+  const hasDraft = Boolean(
+    draft.caption || draft.imagePrompt || draft.videoPrompt || draft.imageAssetId || draft.videoAssetId || draft.agentNotes,
+  )
 
   const handleApprove = async () => {
     setActionLoading(true)
@@ -155,7 +162,8 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
     }
   }
 
-  const handleReject = async () => {
+  const handleReject = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
     setActionLoading(true)
     setActionError(null)
     try {
@@ -179,12 +187,6 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
   }
 
   const handleDelete = async () => {
-    if (!confirmingDelete) {
-      setConfirmingDelete(true)
-      setActionError(null)
-      return
-    }
-
     setActionLoading(true)
     setActionError(null)
     try {
@@ -196,6 +198,7 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
         setActionError(await readErrorMessage(response, 'Could not delete this content piece.'))
         return
       }
+      setConfirmingDelete(false)
       await onUpdated?.()
       onClose()
     } catch (err) {
@@ -205,10 +208,8 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
     }
   }
 
-  const handleRecovery = async () => {
+  const runRecovery = async () => {
     if (!recoveryAction) return
-    if (recoveryAction.confirm && !window.confirm(recoveryAction.confirm)) return
-
     setActionLoading(true)
     setActionError(null)
     try {
@@ -221,6 +222,7 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
         setActionError(await readErrorMessage(response, `Could not ${recoveryAction.label.toLowerCase()}.`))
         return
       }
+      setConfirmingRecovery(false)
       await onUpdated?.()
       onClose()
     } catch (err) {
@@ -229,6 +231,29 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
       setActionLoading(false)
     }
   }
+
+  const handleRecovery = () => {
+    if (!recoveryAction) return
+    if (recoveryAction.confirm) {
+      setActionError(null)
+      setConfirmingRecovery(true)
+      return
+    }
+    void runRecovery()
+  }
+
+  const approveLabel = canApproveAndPublishNow ? 'Approve & publish now' : 'Approve'
+  const approveButton = (
+    <Button
+      size="sm"
+      onClick={handleApprove}
+      disabled={approveDisabled}
+      focusableWhenDisabled={Boolean(missingRequirement)}
+    >
+      <Check data-icon="inline-start" aria-hidden="true" />
+      {approveLabel}
+    </Button>
+  )
 
   return (
     <Drawer
@@ -239,7 +264,7 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
       title={deliverable.title}
     >
       <div className="space-y-5">
-        <section className="flex items-start gap-bakin-4 rounded-md border border-bakin-border-subtle/30 bg-bakin-canvas-default p-bakin-4">
+        <Panel as="section" className="flex items-start gap-bakin-4">
           {agentIdentity && <AgentAvatar agent={agentIdentity} size="lg" />}
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-bakin-2">
@@ -247,77 +272,55 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
               <Badge variant="outline">{deliverable.channel}</Badge>
               <Badge variant="outline">{getContentTypeLabel(deliverable.contentType, contentTypes)}</Badge>
             </div>
-            <p className="mt-bakin-2 text-sm text-bakin-text-muted">{deliverable.brief}</p>
+            <Text as="p" tone="muted" className="mt-bakin-2">{deliverable.brief}</Text>
           </div>
-        </section>
+        </Panel>
 
-        <div className="grid grid-cols-2 gap-bakin-3">
-          <div className="rounded-md bg-bakin-canvas-default p-bakin-3">
-            <div className="flex items-center gap-1.5 text-bakin-typography-size-meta uppercase text-bakin-text-muted">
-              <CalendarDays className="size-bakin-3" />
-              Publish
-            </div>
-            <div className="mt-bakin-1 text-sm font-bakin-typography-weight-medium">{formatDateTime(deliverable.publishAt)}</div>
-          </div>
-          <div className="rounded-md bg-bakin-canvas-default p-bakin-3">
-            <div className="flex items-center gap-1.5 text-bakin-typography-size-meta uppercase text-bakin-text-muted">
-              <Clock className="size-bakin-3" />
-              Prep
-            </div>
-            <div className="mt-bakin-1 text-sm font-bakin-typography-weight-medium">
-              {formatDateTime(deliverable.prepStartAtOverride ?? deliverable.prepStartAt)}
-            </div>
-          </div>
-        </div>
+        <StatGroup label="Schedule" className="grid grid-cols-2">
+          <StatTile icon={CalendarDays} label="Publish" value={formatDateTime(deliverable.publishAt)} variant="surface" />
+          <StatTile
+            icon={Clock}
+            label="Prep"
+            value={formatDateTime(deliverable.prepStartAtOverride ?? deliverable.prepStartAt)}
+            variant="surface"
+          />
+        </StatGroup>
 
         <div className="flex flex-wrap gap-bakin-2">
           {recoveryAction && (
             <Button size="sm" onClick={handleRecovery} disabled={actionLoading}>
               {recoveryAction.icon === 'retry'
-                ? <RefreshCcw className="size-3.5" data-icon="inline-start" />
-                : <RotateCcw className="size-3.5" data-icon="inline-start" />}
+                ? <RefreshCcw data-icon="inline-start" aria-hidden="true" />
+                : <RotateCcw data-icon="inline-start" aria-hidden="true" />}
               {recoveryAction.label}
             </Button>
           )}
           {(canApprove || canApproveAndPublishNow) && (
-            <Button
-              size="sm"
-              onClick={handleApprove}
-              disabled={approveDisabled}
-              title={missingRequirement ?? undefined}
-            >
-              <Check className="size-3.5" data-icon="inline-start" />
-              {canApproveAndPublishNow ? 'Approve & publish now' : 'Approve'}
-            </Button>
+            missingRequirement ? (
+              <Tooltip>
+                <TooltipTrigger render={approveButton} />
+                <TooltipContent>{missingRequirement}</TooltipContent>
+              </Tooltip>
+            ) : approveButton
           )}
           {canReject && (
-            <Button size="sm" variant="outline" onClick={() => setRejecting((value) => !value)}>
-              <X className="size-3.5" data-icon="inline-start" />
+            <Button size="sm" variant="outline" aria-expanded={rejecting} onClick={() => setRejecting((value) => !value)}>
+              <X data-icon="inline-start" aria-hidden="true" />
               Request changes
             </Button>
           )}
           <Button
             size="sm"
-            variant={confirmingDelete ? 'danger' : 'outline'}
+            variant="outline"
             disabled={actionLoading}
-            onClick={handleDelete}
+            onClick={() => {
+              setActionError(null)
+              setConfirmingDelete(true)
+            }}
           >
-            <Trash2 className="size-3.5" data-icon="inline-start" />
-            {confirmingDelete ? 'Confirm delete' : 'Delete'}
+            <Trash2 data-icon="inline-start" aria-hidden="true" />
+            Delete
           </Button>
-          {confirmingDelete && (
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={actionLoading}
-              onClick={() => {
-                setConfirmingDelete(false)
-                setActionError(null)
-              }}
-            >
-              Cancel
-            </Button>
-          )}
         </div>
 
         {deliverable.failureReason && (
@@ -342,79 +345,82 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
         )}
 
         {rejecting && (
-          <div className="space-y-bakin-2">
-            <Textarea
-              value={rejectionNote}
-              onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setRejectionNote(event.target.value)}
-              placeholder="Change request note"
-              className="min-h-21 bg-bakin-canvas-default"
-            />
-            <div className="flex justify-end gap-bakin-2">
-              <Button variant="outline" onClick={() => setRejecting(false)}>Cancel</Button>
-              <Button variant="danger" disabled={actionLoading} onClick={handleReject}>Send changes</Button>
-            </div>
-          </div>
+          <Form busy={actionLoading} onSubmit={handleReject} aria-label="Request changes form">
+            <Field>
+              <FieldLabel htmlFor="deliverable-rejection-note">Change request note</FieldLabel>
+              <FieldControl
+                render={(
+                  <Textarea
+                    id="deliverable-rejection-note"
+                    value={rejectionNote}
+                    onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setRejectionNote(event.target.value)}
+                    placeholder="What should change before this piece is approved?"
+                    className="min-h-21"
+                  />
+                )}
+              />
+            </Field>
+            <FormActions>
+              <Button type="button" variant="outline" onClick={() => setRejecting(false)}>Cancel</Button>
+              <SubmitButton variant="danger" busyLabel="Sending...">Send changes</SubmitButton>
+            </FormActions>
+          </Form>
         )}
 
         <Separator />
 
         <section className="space-y-bakin-3">
-          <h3 className="text-sm font-bakin-typography-weight-medium">Draft</h3>
-          {deliverable.draft.caption && (
-            <p className="whitespace-pre-wrap rounded-md bg-bakin-canvas-default p-bakin-3 text-sm">{deliverable.draft.caption}</p>
+          <h3>Draft</h3>
+          {draft.caption && (
+            <Panel padding="compact">
+              <Text as="p" className="whitespace-pre-wrap">{draft.caption}</Text>
+            </Panel>
           )}
-          {deliverable.draft.imagePrompt && (
-            <div className="rounded-md bg-bakin-canvas-default p-bakin-3">
-              <div className="text-bakin-typography-size-meta uppercase text-bakin-text-muted">Image prompt</div>
-              <p className="mt-bakin-1 text-sm">{deliverable.draft.imagePrompt}</p>
-            </div>
+          {draft.imagePrompt && (
+            <Panel padding="compact">
+              <Overline as="div">Image prompt</Overline>
+              <Text as="p" className="mt-bakin-1">{draft.imagePrompt}</Text>
+            </Panel>
           )}
-          {deliverable.draft.videoPrompt && (
-            <div className="rounded-md bg-bakin-canvas-default p-bakin-3">
-              <div className="text-bakin-typography-size-meta uppercase text-bakin-text-muted">Video prompt</div>
-              <p className="mt-bakin-1 text-sm">{deliverable.draft.videoPrompt}</p>
-            </div>
+          {draft.videoPrompt && (
+            <Panel padding="compact">
+              <Overline as="div">Video prompt</Overline>
+              <Text as="p" className="mt-bakin-1">{draft.videoPrompt}</Text>
+            </Panel>
           )}
-          {deliverable.draft.imageAssetId && (
+          {draft.imageAssetId && (
             <div>
-              <div className="mb-bakin-1 flex items-center gap-1.5 text-xs text-bakin-text-muted">
-                <ImageIcon className="size-3.5" />
-                {deliverable.draft.imageAssetId}
-              </div>
+              <Text as="div" size="meta" tone="muted" className="mb-bakin-1 flex items-center gap-bakin-2">
+                <ImageIcon className="size-3.5" aria-hidden="true" />
+                {draft.imageAssetId}
+              </Text>
               <img
-                src={assetUrl(deliverable.draft.imageAssetId)}
-                alt={deliverable.draft.imageAssetId}
-                className="max-h-72 rounded-md object-cover"
+                src={assetUrl(draft.imageAssetId)}
+                alt={draft.imageAssetId}
+                className="max-h-72 rounded-bakin-surface object-cover"
               />
             </div>
           )}
-          {deliverable.draft.videoAssetId && (
+          {draft.videoAssetId && (
             <div>
-              <div className="mb-bakin-1 flex items-center gap-1.5 text-xs text-bakin-text-muted">
-                <Video className="size-3.5" />
-                {deliverable.draft.videoAssetId}
-              </div>
+              <Text as="div" size="meta" tone="muted" className="mb-bakin-1 flex items-center gap-bakin-2">
+                <Video className="size-3.5" aria-hidden="true" />
+                {draft.videoAssetId}
+              </Text>
               <video
-                src={assetUrl(deliverable.draft.videoAssetId)}
+                src={assetUrl(draft.videoAssetId)}
                 controls
-                className="max-h-72 rounded-md"
+                className="max-h-72 rounded-bakin-surface"
               />
             </div>
           )}
-          {deliverable.draft.agentNotes && (
-            <div className="rounded-md bg-bakin-canvas-default p-bakin-3">
-              <div className="text-bakin-typography-size-meta uppercase text-bakin-text-muted">Agent notes</div>
-              <p className="mt-bakin-1 text-sm text-bakin-text-muted">{deliverable.draft.agentNotes}</p>
-            </div>
+          {draft.agentNotes && (
+            <Panel padding="compact">
+              <Overline as="div">Agent notes</Overline>
+              <Text as="p" tone="muted" className="mt-bakin-1">{draft.agentNotes}</Text>
+            </Panel>
           )}
-          {!deliverable.draft.caption &&
-            !deliverable.draft.imagePrompt &&
-            !deliverable.draft.videoPrompt &&
-            !deliverable.draft.imageAssetId &&
-            !deliverable.draft.videoAssetId &&
-            !deliverable.draft.agentNotes && (
-              <p className="text-sm text-bakin-text-muted">No draft yet</p>
-            )}
+          {!hasDraft && <Text as="p" tone="muted">No draft yet</Text>}
         </section>
 
         {deliverable.rejectionNote && (
@@ -423,8 +429,45 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
             <AlertDescription>{deliverable.rejectionNote}</AlertDescription>
           </Alert>
         )}
-
       </div>
+
+      <ConfirmDialog
+        open={confirmingDelete}
+        title="Delete this content piece?"
+        description="This removes the content piece and any linked board task created for it."
+        confirmLabel="Delete content piece"
+        busyLabel="Deleting..."
+        confirmTone="danger"
+        busy={actionLoading}
+        error={actionError}
+        onConfirm={handleDelete}
+        onCancel={() => {
+          if (actionLoading) return
+          setActionError(null)
+          setConfirmingDelete(false)
+        }}
+      >
+        <Text as="p" size="meta" tone="muted" className="truncate">{deliverable.title}</Text>
+      </ConfirmDialog>
+
+      {recoveryAction?.confirm && (
+        <ConfirmDialog
+          open={confirmingRecovery}
+          title={`${recoveryAction.label}?`}
+          description={recoveryAction.confirm}
+          confirmLabel={recoveryAction.label}
+          busyLabel="Retrying..."
+          confirmTone="primary"
+          busy={actionLoading}
+          error={actionError}
+          onConfirm={() => { void runRecovery() }}
+          onCancel={() => {
+            if (actionLoading) return
+            setActionError(null)
+            setConfirmingRecovery(false)
+          }}
+        />
+      )}
     </Drawer>
   )
 }

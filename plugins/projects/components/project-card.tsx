@@ -1,27 +1,24 @@
 'use client'
 
-import { Card, CardContent, CardFooter, CardHeader, CardTitle, Progress } from '@makinbakin/sdk/ui'
+import { Card, CardContent, CardFooter, CardHeader, CardTitle, Progress, Text } from '@makinbakin/sdk/ui'
+import { Inline } from '@makinbakin/sdk/layout'
+import { StatusMarker } from '@makinbakin/sdk/patterns'
+import { formatAge } from '@makinbakin/sdk/utils'
 import { ProjectStatusBadge } from './project-status-badge'
 import type { ProjectSummary } from '../types'
-import { StatusMarker } from '@makinbakin/sdk/patterns'
-
-function formatDate(iso: string): string {
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return iso
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-}
 
 export function ProjectCard({ project, onClick }: { project: ProjectSummary; onClick: () => void }) {
+  const title = project.title || 'Untitled project'
   return (
     <Card
       size="sm"
-      interactive={{ label: `Open project: ${project.title || 'Untitled project'}`, onActivate: onClick }}
+      interactive={{ label: `Open project: ${title}`, onActivate: onClick }}
       className="h-full border-bakin-border-subtle/30"
     >
       <CardHeader>
         <div className="flex items-start justify-between gap-bakin-2">
           <CardTitle className="line-clamp-2">
-            {project.title || 'Untitled project'}
+            {title}
           </CardTitle>
           <div className="flex shrink-0 items-center gap-bakin-2">
             {project.brainstormStreaming ? (
@@ -35,15 +32,15 @@ export function ProjectCard({ project, onClick }: { project: ProjectSummary; onC
       </CardHeader>
 
       <CardContent className="flex-1">
-        <Progress value={project.progress} aria-label={`${project.title || 'Untitled project'} progress`} />
-        <div className="mt-bakin-3 flex items-center justify-between text-bakin-typography-size-meta text-bakin-text-muted">
-          <span>{project.progress}% complete</span>
-          <span>{project.taskCount} items</span>
-        </div>
+        <Progress value={project.progress} aria-label={`${title} progress`} />
+        <Inline justify="between" className="mt-bakin-3">
+          <Text size="meta" tone="muted">{project.progress}% complete</Text>
+          <Text size="meta" tone="muted">{project.taskCount} items</Text>
+        </Inline>
       </CardContent>
 
       <CardFooter variant="meta">
-        Updated {formatDate(project.updated)}
+        Updated {formatAge(project.updated)}
       </CardFooter>
     </Card>
   )

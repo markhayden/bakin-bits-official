@@ -495,7 +495,7 @@ describe('BrainstormView (search consumer)', () => {
     expect(screen.getByRole('button', { name: 'Brainstorm actions' })).toBeDefined()
 
     fireEvent.click(screen.getByRole('tab', { name: 'Plan proposals (1)' }))
-    const proposalPanel = document.querySelector('[data-slot="brainstorm-proposal-panel"]')
+    const proposalPanel = screen.getByTestId('brainstorm-proposal-panel')
     expect(proposalPanel?.className).toContain('max-w-full')
   })
 
@@ -507,7 +507,8 @@ describe('BrainstormView (search consumer)', () => {
     await waitFor(() => {
       expect(screen.getByText('Launch Week')).toBeDefined()
     })
-    fireEvent.click(screen.getByText('Launch Week'))
+    // The proposal is a kit Card whose whole-surface overlay carries the name.
+    fireEvent.click(screen.getByRole('button', { name: 'Open proposal: Launch Week' }))
 
     const cancelAcceptance = await screen.findByRole('button', { name: 'Cancel acceptance' })
     fireEvent.click(cancelAcceptance)

@@ -4,32 +4,57 @@ import { useState, useCallback, useMemo, useEffect, useRef, type CSSProperties }
 import { emitPluginEvent, toast, useHorizontalResize, usePluginEvent } from '@makinbakin/sdk/hooks'
 import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, ChevronDown, Pencil, Trash2, Link2 } from 'lucide-react'
 import { useAgentList, useMainAgentId } from "@makinbakin/sdk/hooks"
-import { useRouter } from "@makinbakin/sdk/navigation"
+import { PluginLink, useRouter } from "@makinbakin/sdk/navigation"
 import { ConversationEmptyState, ConversationPanel, useConversationThread } from "@makinbakin/sdk/conversation"
 import type { ConversationAgent, ConversationMessage } from "@makinbakin/sdk/conversation"
-import { AgentSelect, AssetPicker, ConfirmDialog, Page, PageHeader, SegmentedControl, StatusMarker } from "@makinbakin/sdk/patterns"
+import {
+  AgentSelect,
+  AssetPicker,
+  ConfirmDialog,
+  KeyValue,
+  ListRow,
+  ListRowActions,
+  ListRows,
+  Page,
+  PageHeader,
+  SegmentedControl,
+  StatusBadge,
+  StatusMarker,
+} from "@makinbakin/sdk/patterns"
 import type { AssetPickerCollection } from "@makinbakin/sdk/patterns"
 import { ProjectChecklist } from './project-checklist'
 import { ProjectEditor } from './project-editor'
 import {
   Alert,
   AlertDescription,
+  Badge,
   Button,
   Checkbox,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  Field,
+  FieldLabel,
   Input,
   Progress,
+  Separator,
   Skeleton,
   Switch,
   SystemState,
+  Text,
+  buttonVariants,
 } from "@makinbakin/sdk/ui"
 import { PlanHistoryPanel } from './plan-history'
 import { RenderedPlan } from './rendered-plan'
 import type { ProjectStatus } from '../types'
-import { cn } from '@makinbakin/sdk/utils'
+import { formatAge, formatDateTime } from '@makinbakin/sdk/utils'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -53,6 +78,7 @@ interface ProjectData {
   tasks: Array<{ id: string; title: string; taskId?: string; checked: boolean }>
   assets: Array<{ assetId: string; label?: string }>
   body: string
+  created: string
   updated: string
   resolvedTasks: Record<string, { column: string; title: string } | null>
   resolvedAssets: ResolvedAsset[]
@@ -126,70 +152,42 @@ function AssetPreviewModal({ asset, onClose }: { asset: ResolvedAsset; onClose: 
   const url = assetUrl(asset.assetId)
   const href = assetHref(asset.assetId)
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [onClose])
-
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={name}
-      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-bakin-3 bg-bakin-canvas-default/90 p-bakin-8"
-      onClick={onClose}
-    >
-      <div
-        className="flex min-h-0 max-h-full w-full max-w-full flex-col items-center gap-bakin-3"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {IMAGE_TYPES.has(asset.type) ? (
-          <img
-            src={url}
-            alt={name}
-            className="min-h-0 max-h-full max-w-full rounded object-contain"
-          />
-        ) : VIDEO_TYPES.has(asset.type) ? (
-          <video
-            src={url}
-            controls
-            className="min-h-0 max-h-full max-w-full rounded bg-bakin-canvas-default"
-          />
-        ) : AUDIO_TYPES.has(asset.type) ? (
-          <div className="w-full max-w-lg rounded-bakin-control border border-bakin-border-subtle bg-bakin-canvas-default p-bakin-4">
-            <div className="mb-bakin-3 flex items-center gap-bakin-2 text-sm text-bakin-text-primary">
-              <AssetIcon type={asset.type} />
-              <span className="truncate">{name}</span>
-            </div>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="max-w-4xl" closeLabel="Close preview" data-testid="asset-preview">
+        <DialogHeader>
+          <DialogTitle className="truncate">{name}</DialogTitle>
+          <DialogDescription>{asset.type}</DialogDescription>
+        </DialogHeader>
+        <div className="flex min-w-0 justify-center">
+          {IMAGE_TYPES.has(asset.type) ? (
+            <img
+              src={url}
+              alt={name}
+              className="max-w-full rounded object-contain"
+            />
+          ) : VIDEO_TYPES.has(asset.type) ? (
+            <video
+              src={url}
+              controls
+              className="max-w-full rounded bg-bakin-canvas-default"
+            />
+          ) : AUDIO_TYPES.has(asset.type) ? (
             <audio src={url} controls className="w-full" />
-          </div>
-        ) : (
-          <div className="flex w-full max-w-md flex-col items-center gap-bakin-3 rounded-bakin-control border border-bakin-border-subtle bg-bakin-canvas-default p-bakin-6 text-center">
-            <div className="flex size-12 items-center justify-center rounded bg-bakin-surface-elevated">
-              <AssetIcon type={asset.type} />
+          ) : (
+            <div className="flex flex-col items-center gap-bakin-3 text-center">
+              <div className="flex size-12 items-center justify-center rounded bg-bakin-surface-elevated">
+                <AssetIcon type={asset.type} />
+              </div>
+              <Text size="meta" tone="muted">No inline preview for this asset type.</Text>
             </div>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-bakin-typography-weight-medium text-bakin-text-primary">{name}</p>
-              <p className="mt-bakin-1 text-xs text-bakin-text-muted">{asset.type}</p>
-            </div>
-          </div>
-        )}
-        <div className="flex items-center gap-bakin-4 text-sm text-bakin-text-muted">
-          <a href={href} className="underline hover:text-bakin-text-primary">Open asset</a>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onClose}
-            className="gap-bakin-1 px-bakin-1 text-sm font-bakin-typography-weight-regular text-bakin-text-muted hover:bg-transparent hover:text-bakin-text-primary"
-          >
-            <X className="size-bakin-4" /> Close
-          </Button>
+          )}
         </div>
-      </div>
-    </div>
+        <DialogFooter showCloseButton>
+          <PluginLink to={href} className={buttonVariants({ variant: 'outline', size: 'sm' })}>Open asset</PluginLink>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -771,7 +769,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
         open={deleteDialogOpen}
         title="Delete project?"
         description={(
-          <>This will permanently delete <span className="font-bakin-typography-weight-medium text-bakin-text-primary">{project.title}</span> and all its checklist items.</>
+          <>This will permanently delete <Text weight="medium">{project.title}</Text> and all its checklist items.</>
         )}
         confirmLabel="Delete"
         busyLabel="Deleting..."
@@ -786,16 +784,16 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
       >
         {linkedTaskCount > 0 && (
           <div className="flex flex-col gap-bakin-2">
-            <p className="text-bakin-typography-size-meta text-bakin-text-muted">
-              This project has <span className="font-bakin-typography-weight-medium text-bakin-text-primary">{linkedTaskCount}</span> linked board {linkedTaskCount === 1 ? 'task' : 'tasks'}. Unchecked, {linkedTaskCount === 1 ? 'it stays' : 'they stay'} on the board.
-            </p>
-            <label className="flex items-center gap-bakin-2 text-bakin-typography-size-body text-bakin-text-primary">
+            <Text as="p" size="meta" tone="muted">
+              This project has <Text size="meta" weight="medium">{linkedTaskCount}</Text> linked board {linkedTaskCount === 1 ? 'task' : 'tasks'}. Unchecked, {linkedTaskCount === 1 ? 'it stays' : 'they stay'} on the board.
+            </Text>
+            <Field orientation="horizontal" name="deleteLinkedTasks">
               <Checkbox
                 checked={deleteLinkedTasks}
                 onCheckedChange={(checked: boolean) => setDeleteLinkedTasks(checked === true)}
               />
-              Also delete {linkedTaskCount === 1 ? 'the linked board task' : 'the linked board tasks'}
-            </label>
+              <FieldLabel>Also delete {linkedTaskCount === 1 ? 'the linked board task' : 'the linked board tasks'}</FieldLabel>
+            </Field>
           </div>
         )}
       </ConfirmDialog>
@@ -805,7 +803,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
         open={Boolean(assetDetachTarget)}
         title="Detach asset?"
         description={assetDetachTarget ? (
-          <>This removes <span className="font-bakin-typography-weight-medium text-bakin-text-primary">{assetName(assetDetachTarget)}</span> from this project. It will not delete the asset file.</>
+          <>This removes <Text weight="medium">{assetName(assetDetachTarget)}</Text> from this project. It will not delete the asset file.</>
         ) : undefined}
         confirmLabel="Detach"
         busyLabel="Detaching..."
@@ -840,31 +838,31 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
           <div className="min-w-0 shrink-0 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-bakin-1">
             {/* Title (edit mode only — the page title lives in PageHeader) */}
             {editing ? (
-              <>
-                <label className="text-bakin-typography-size-meta font-bakin-typography-weight-medium text-bakin-text-muted uppercase tracking-wider mb-1.5 block">Title</label>
+              <Field name="title" className="mb-bakin-6">
+                <FieldLabel>Title</FieldLabel>
                 <Input
                   type="text"
                   value={editTitle}
                   onChange={(e) => setEditTitle(e.target.value)}
-                  className="mb-5 !h-auto w-full rounded-bakin-control px-bakin-4 py-2.5 text-xl font-bakin-typography-weight-semibold tracking-tight md:text-xl"
+                  className="!h-auto w-full rounded-bakin-control px-bakin-4 py-2.5 text-xl font-bakin-typography-weight-semibold tracking-tight md:text-xl"
                   placeholder="Untitled project"
                   aria-label="Project title"
                   autoFocus
                 />
-              </>
+              </Field>
             ) : null}
 
             {/* Details (spec) — the header row stays pinned while the plan
                 scrolls; Rendered|Diff rides the SDK SegmentedControl. */}
             <div className="sticky top-0 z-10 -mx-bakin-1 flex items-center justify-between bg-bakin-surface-default px-bakin-1 pt-bakin-1 pb-bakin-2">
-              <label className="block text-bakin-typography-size-meta font-bakin-typography-weight-medium uppercase tracking-wider text-bakin-text-muted">Details</label>
+              <h3>Details</h3>
               {!editing && (
                 <div className="flex items-center gap-bakin-3">
                   {!showChanges && (
-                    <label className="flex cursor-pointer select-none items-center gap-bakin-2 text-bakin-typography-size-meta text-bakin-text-muted" data-testid="show-changes-switch">
-                      Show changes
+                    <Field orientation="horizontal" name="showChangeHints" data-testid="show-changes-switch">
                       <Switch size="sm" checked={showChangeHints} onCheckedChange={toggleChangeHints} />
-                    </label>
+                      <FieldLabel>Show changes</FieldLabel>
+                    </Field>
                   )}
                   <SegmentedControl
                     options={[{ value: 'details', label: 'Rendered' }, { value: 'changes', label: 'Diff' }]}
@@ -942,30 +940,32 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
 
           {/* Progress */}
           <div>
-            <div className="flex items-center justify-between mb-bakin-2">
-              <h3 className="text-xs font-bakin-typography-weight-medium text-bakin-text-muted uppercase tracking-wider">Progress</h3>
-              <span className="text-bakin-typography-size-meta font-mono text-bakin-text-muted tabular-nums">{project.progress}%</span>
+            <div className="mb-bakin-2 flex items-center justify-between">
+              <h3>Progress</h3>
+              <Text size="meta" tone="muted" mono className="tabular-nums">{project.progress}%</Text>
             </div>
             <Progress value={project.progress} aria-label="Project progress" />
           </div>
 
+          <Separator />
+
           {/* Checklist */}
-          <div className="pt-bakin-4 border-t border-bakin-border-subtle/30">
-            <ProjectChecklist
-              projectId={currentId}
-              tasks={project.tasks}
-              resolvedTasks={project.resolvedTasks}
-              onToggle={toggleItem}
-              onAdd={addItem}
-              onRemove={removeItem}
-              onPromote={promoteItem}
-            />
-          </div>
+          <ProjectChecklist
+            projectId={currentId}
+            tasks={project.tasks}
+            resolvedTasks={project.resolvedTasks}
+            onToggle={toggleItem}
+            onAdd={addItem}
+            onRemove={removeItem}
+            onPromote={promoteItem}
+          />
+
+          <Separator />
 
           {/* Assets */}
-          <div className="pt-bakin-4 border-t border-bakin-border-subtle/30">
-            <div className="flex items-center justify-between mb-bakin-3">
-              <h3 className="text-xs font-bakin-typography-weight-medium text-bakin-text-muted uppercase tracking-wider">Assets</h3>
+          <div>
+            <div className="mb-bakin-3 flex items-center justify-between">
+              <h3>Assets</h3>
 
               <Button
                 variant="ghost"
@@ -979,9 +979,9 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
             </div>
 
             {project.resolvedAssets.length === 0 ? (
-              <p className="text-bakin-typography-size-meta text-bakin-text-muted">No assets attached.</p>
+              <SystemState kind="initial-empty" scope="inline" headingLevel={4} title="No assets attached." />
             ) : (
-              <div className="space-y-1.5">
+              <div className="flex flex-col gap-bakin-2">
                 {project.resolvedAssets.some(asset => asset.missing) && (
                   <Alert tone="attention">
                     <AlertDescription>
@@ -989,79 +989,71 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                     </AlertDescription>
                   </Alert>
                 )}
-                {project.resolvedAssets.map((asset) => (
-                  <div
-                    key={asset.assetId}
-                    className={cn('group flex items-start gap-2.5 rounded-bakin-control p-1.5 transition-colors hover:bg-bakin-surface-elevated', asset.missing ? 'border border-bakin-signal-highlight/20 bg-bakin-signal-highlight/5' : '')}
-                  >
-                    <Button
-                      variant="ghost"
-                      disabled={asset.missing}
-                      onClick={() => setPreviewAsset(asset)}
-                      aria-label={`Open ${assetName(asset)}`}
-                      className="!h-auto min-w-0 flex-1 items-start justify-start gap-2.5 whitespace-normal p-0 text-left font-bakin-typography-weight-regular hover:bg-transparent"
+                <ListRows variant="separated" size="sm" aria-label="Attached assets">
+                  {project.resolvedAssets.map((asset) => (
+                    <ListRow
+                      key={asset.assetId}
+                      className="flex items-start gap-bakin-2"
+                      interactive={asset.missing ? undefined : { label: `Open ${assetName(asset)}`, onActivate: () => setPreviewAsset(asset) }}
                     >
                       <AssetThumb asset={asset} />
-                      <div className="min-w-0 flex-1 pt-0.5">
-                        <p className="truncate text-bakin-typography-size-meta leading-tight text-bakin-text-primary">{assetName(asset)}</p>
+                      <div className="min-w-0 flex-1">
+                        <Text as="p" size="meta" className="truncate leading-tight">{assetName(asset)}</Text>
                         {asset.description && (
-                          <p className="mt-0.5 truncate text-bakin-typography-size-meta text-bakin-text-muted">{asset.description}</p>
+                          <Text as="p" size="meta" tone="muted" className="truncate">{asset.description}</Text>
                         )}
                         {asset.tags && asset.tags.length > 0 && (
                           <div className="mt-bakin-1 flex flex-wrap gap-bakin-1">
                             {asset.tags.slice(0, 3).map(tag => (
-                              <span key={tag} className="rounded bg-bakin-surface-elevated px-bakin-1 py-0.5 text-bakin-typography-size-meta text-bakin-text-muted">{tag}</span>
+                              <Badge key={tag} size="xs" tone="neutral" variant="soft">{tag}</Badge>
                             ))}
                           </div>
                         )}
-                        {asset.missing && <span className="text-bakin-typography-size-meta text-bakin-signal-highlight">can't find asset</span>}
+                        {asset.missing && (
+                          <StatusBadge tone="attention" variant="soft" size="xs" className="mt-bakin-1">can't find asset</StatusBadge>
+                        )}
                       </div>
-                    </Button>
-                    <div className={cn(asset.missing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100', 'mt-0.5 flex shrink-0 items-center gap-bakin-1 transition-opacity')}>
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        onClick={(e) => { e.stopPropagation(); openAssetPicker({ type: 'relink', target: asset }) }}
-                        className="gap-bakin-1 font-bakin-typography-weight-regular text-bakin-text-muted hover:text-bakin-text-primary"
-                        aria-label={`Relink ${assetName(asset)}`}
-                      >
-                        <Link2 className="size-bakin-3" />
-                        Relink
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={(e) => { e.stopPropagation(); setAssetDetachError(null); setAssetDetachTarget(asset) }}
-                        className={cn(asset.missing ? 'text-bakin-signal-highlight' : 'text-bakin-text-muted', 'hover:text-bakin-signal-danger')}
-                        aria-label={`Detach ${assetName(asset)}`}
-                      >
-                        <X className="size-bakin-3" />
-                      </Button>
-                    </div>
-                  </div>
-                ))}
+                      {/* Missing assets keep their repair actions visible; healthy rows reveal on hover / focus-within. */}
+                      <ListRowActions reveal={asset.missing ? 'always' : 'hover'}>
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => openAssetPicker({ type: 'relink', target: asset })}
+                          aria-label={`Relink ${assetName(asset)}`}
+                        >
+                          <Link2 aria-hidden="true" />
+                          Relink
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={() => { setAssetDetachError(null); setAssetDetachTarget(asset) }}
+                          aria-label={`Detach ${assetName(asset)}`}
+                        >
+                          <X aria-hidden="true" />
+                        </Button>
+                      </ListRowActions>
+                    </ListRow>
+                  ))}
+                </ListRows>
               </div>
             )}
 
           </div>
 
+          <Separator />
+
           {/* Meta */}
-          <div className="pt-bakin-4 border-t border-bakin-border-subtle/30">
-            <h3 className="text-xs font-bakin-typography-weight-medium text-bakin-text-muted uppercase tracking-wider mb-bakin-2">Details</h3>
-            <div className="space-y-1.5 text-bakin-typography-size-meta">
-              <div className="flex justify-between">
-                <span className="text-bakin-text-muted/70">Created</span>
-                <span className="text-bakin-text-muted">{new Date(project.updated).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-bakin-text-muted/70">Updated</span>
-                <span className="text-bakin-text-muted">{new Date(project.updated).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-bakin-text-muted/70">ID</span>
-                <span className="text-bakin-text-muted font-mono">{project.id.slice(0, 8)}</span>
-              </div>
-            </div>
+          <div>
+            <h3 className="mb-bakin-2">Details</h3>
+            <KeyValue
+              layout="rows"
+              items={[
+                { label: 'Created', value: formatDateTime(project.created) },
+                { label: 'Updated', value: formatAge(project.updated) },
+                { label: 'ID', value: project.id.slice(0, 8), mono: true },
+              ]}
+            />
           </div>
         </div>
 
