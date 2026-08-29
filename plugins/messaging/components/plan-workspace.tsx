@@ -919,7 +919,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
             <KeyValue layout="rows" items={detailItems} />
           </div>
 
-          <Separator className="my-5" />
+          <Separator className="my-bakin-4" />
           <div>
             <div className="mb-bakin-2 flex items-center justify-between">
               <h3>Progress</h3>
@@ -944,7 +944,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
             </Panel>
           )}
 
-          <Separator className="my-5" />
+          <Separator className="my-bakin-4" />
           <div>
             <h3 className="mb-bakin-3">Tasks</h3>
             <Timeline aria-label="Planning tasks">
@@ -967,7 +967,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
             </Timeline>
           </div>
 
-          <Separator className="my-5" />
+          <Separator className="my-bakin-4" />
           <div>
             <h3 className="mb-bakin-3">Plan Links</h3>
             {planLinkItems.length > 0 ? (
