@@ -101,13 +101,13 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored }: {
   const changed = diff.filter((l) => l.type !== 'same').length
 
   if (history === null) {
-    return <SystemState kind="loading" scope="inline" headingLevel={3} title="Loading history" />
+    return <SystemState kind="loading" scope="page" headingLevel={3} title="Loading history" />
   }
   if (history.length === 0) {
     return (
       <SystemState
         kind="initial-empty"
-        scope="inline"
+        scope="page"
         headingLevel={3}
         title="No plan versions yet"
         description="Edits (yours or the agent's) snapshot the previous version here."
