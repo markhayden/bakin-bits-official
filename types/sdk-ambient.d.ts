@@ -1029,7 +1029,7 @@ declare module '@makinbakin/sdk/layout' {
 }
 
 declare module '@makinbakin/sdk/patterns' {
-  import type { ComponentType, ReactNode } from 'react'
+  import type { ComponentType, ReactElement, ReactNode } from 'react'
   interface PatternProps {
     children?: ReactNode
     [key: string]: any
@@ -1178,6 +1178,36 @@ declare module '@makinbakin/sdk/patterns' {
   export const ListRowLabels: PatternComponent
   export const ListRowActions: ComponentType<PatternProps & { reveal?: 'always' | 'hover' }>
   export const ListRowGroup: ComponentType<PatternProps & { label: ReactNode }>
+  export interface DataTableColumn<Row> {
+    key: string
+    header: ReactNode
+    hideLabel?: boolean
+    align?: 'start' | 'center' | 'end'
+    narrow?: 'primary' | 'leading' | 'trailing' | 'meta' | 'label' | 'hidden'
+    headClassName?: string
+    cellClassName?: string
+    cell?: (row: Row) => ReactNode
+    narrowCell?: (row: Row) => ReactNode
+    sortable?: boolean
+    sortValue?: (row: Row) => string | number | boolean | Date | null | undefined
+  }
+  export const DataTable: <Row>(props: PatternProps & {
+    columns: ReadonlyArray<DataTableColumn<Row>>
+    rows: readonly Row[]
+    rowKey: (row: Row) => string
+    label: string
+    collapseBelow?: 'xl' | '2xl' | '3xl' | 'none'
+    defaultSort?: { field: string; dir: 'asc' | 'desc' }
+    sort?: { field: string; dir: 'asc' | 'desc' }
+    onSortChange?: (field: string) => void
+    listVariant?: 'bordered' | 'separated' | 'plain'
+    tableProps?: Record<string, unknown>
+    rowProps?: (row: Row) => Record<string, unknown>
+    onRowActivate?: (row: Row) => void
+    rowActivateLabel?: (row: Row) => string
+    renderRow?: (row: Row) => ReactNode
+    renderTableRow?: (row: Row) => ReactNode
+  }) => ReactElement | null
 
   // ── CalendarGrid (Lists taxonomy type 7; shared calendar STRUCTURE) ────
   export type CalendarGridView = 'month' | 'week' | 'day'

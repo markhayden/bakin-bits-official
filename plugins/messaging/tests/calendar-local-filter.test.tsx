@@ -59,6 +59,16 @@ mock.module('@makinbakin/sdk/patterns', () => ({
   ),
   ListRows: ({ children }: { children: React.ReactNode }) => <ul data-list-rows="">{children}</ul>,
   ListRow: ({ children }: { children: React.ReactNode }) => <li data-slot="list-row">{children}</li>,
+  DataTable: ({ rows, renderRow, tableProps, label }: {
+    rows: unknown[]
+    renderRow: (row: unknown) => React.ReactNode
+    tableProps?: Record<string, unknown>
+    label: string
+  }) => (
+    <div aria-label={label} {...(tableProps ?? {})}>
+      <ul data-list-rows="">{rows.map((row, index) => <li key={index} data-slot="list-row">{renderRow(row)}</li>)}</ul>
+    </div>
+  ),
   ListRowGroup: ({ label, children }: { label: React.ReactNode; children: React.ReactNode }) => (
     <div data-slot="list-row-group">
       <div data-slot="list-row-group-label">{label}</div>
