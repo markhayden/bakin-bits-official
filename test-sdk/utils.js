@@ -134,3 +134,18 @@ export function createTurnRecorder({ turnId, agentId, now }) {
     },
   }
 }
+
+// Functional port of @bakin/core/format formatDateTime (calendar-aware absolute time).
+export function formatDateTime(timestamp) {
+  const d = new Date(timestamp)
+  if (Number.isNaN(d.getTime())) return timestamp
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const diffDays = Math.round((today.getTime() - target.getTime()) / 86400000)
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  if (diffDays === 0) return `Today ${time}`
+  if (diffDays === 1) return `Yesterday ${time}`
+  const sameYear = d.getFullYear() === now.getFullYear()
+  return `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) })} ${time}`
+}

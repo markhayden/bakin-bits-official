@@ -10,7 +10,6 @@ conformance workflow while importing only `@makinbakin/sdk/*`.
 | Hot-reload-safe lifecycle | `index.ts` `activate()` / `onShutdown()` |
 | Production route and `home-widget` registration | `client-registration.tsx` |
 | Canonical detail, form, state, and card UI | `components/` |
-| Owner-scoped domain CSS | `styles.css` |
 | Deterministic page-and-slot fixture | `tests/ui.fixture.tsx` |
 | One-command browser checks | `bakin.ui-test.ts` / `bun run test:ui` |
 
@@ -51,9 +50,12 @@ Import primitives from `/ui`, layout from `/layout`, page recipes from
 The host supplies `@makinbakin/sdk/styles.css`; only the standalone browser
 fixture imports it, exactly once.
 
-`styles.css` is intentionally tiny and explicitly scoped to
-`[data-bakin-plugin="_template"]`. Add CSS only for domain presentation that
-the public catalog does not already own.
+The starter ships no plugin-owned stylesheet: everything it renders is owned
+by the public catalog (`Text mono` covers the identifiers the first draft
+styled by hand). Add CSS only for domain presentation that the public catalog
+does not already own — if that day comes, add a `styles.css`, import it from
+`client-registration.tsx`, and scope every rule to
+`:where([data-bakin-plugin="_template"])`.
 
 When a genuine domain requirement cannot use a defined Storybook pattern,
 give the maintainer a concrete, human-readable explanation naming the

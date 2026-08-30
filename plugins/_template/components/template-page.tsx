@@ -24,6 +24,7 @@ import {
   Input,
   SubmitButton,
   SystemState,
+  Text,
 } from '@makinbakin/sdk/ui'
 import { pluginFetch } from '@makinbakin/sdk/utils'
 import { TEMPLATE_PLUGIN_ID, useTemplateStatus } from './use-template-status'
@@ -107,8 +108,8 @@ export function TemplatePage() {
           </CardHeader>
           <CardContent>
             <Stack gap="dense">
-              <p>Server plugin: <code className="template-ui__code">{data?.plugin}</code></p>
-              <p>Endpoint: <code className="template-ui__code">GET /api/plugins/_template/</code></p>
+              <p>Server plugin: <Text mono>{data?.plugin}</Text></p>
+              <p>Endpoint: <Text mono>GET /api/plugins/_template/</Text></p>
             </Stack>
           </CardContent>
         </Card>

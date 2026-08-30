@@ -11,16 +11,24 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from '@makinbakin/sdk/hooks'
 import { ConfirmDialog } from '@makinbakin/sdk/patterns'
-import { Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@makinbakin/sdk/ui'
+import {
+  Button,
+  Field,
+  FieldLabel,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  SystemState,
+  Text,
+} from '@makinbakin/sdk/ui'
+import { formatDateTime } from '@makinbakin/sdk/utils'
 import type { PlanSnapshot } from '../types'
 import { diffLines } from '../lib/line-diff'
 
 function snapshotLabel(snapshot: PlanSnapshot): string {
-  const when = new Date(snapshot.ts)
-  const stamp = Number.isNaN(when.getTime())
-    ? snapshot.ts
-    : when.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-  return `${stamp} · ${snapshot.author === 'agent' ? 'agent edit' : 'your edit'}`
+  return `${formatDateTime(snapshot.ts)} · ${snapshot.author === 'agent' ? 'agent edit' : 'your edit'}`
 }
 
 export function PlanHistoryPanel({ projectId, currentBody, onRestored }: {
@@ -93,33 +101,42 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored }: {
   const changed = diff.filter((l) => l.type !== 'same').length
 
   if (history === null) {
-    return <p className="m-0 text-bakin-typography-size-meta text-bakin-text-muted">Loading history…</p>
+    return <SystemState kind="loading" scope="inline" headingLevel={3} title="Loading history" />
   }
   if (history.length === 0) {
-    return <p className="m-0 text-bakin-typography-size-meta text-bakin-text-muted">No plan versions yet — edits (yours or the agent's) snapshot the previous version here.</p>
+    return (
+      <SystemState
+        kind="initial-empty"
+        scope="inline"
+        headingLevel={3}
+        title="No plan versions yet"
+        description="Edits (yours or the agent's) snapshot the previous version here."
+      />
+    )
   }
-
 
   return (
     <div data-testid="plan-history" className="grid gap-bakin-3">
-      <div className="flex flex-wrap items-center gap-bakin-2">
-        <label className="text-bakin-typography-size-meta text-bakin-text-muted">Compare current with</label>
-        <Select
-          data-testid="plan-history-picker"
-          value={String(selected ?? '')}
-          onValueChange={(value: string) => setSelected(Number(value))}
-        >
-          <SelectTrigger size="sm" aria-label="Plan version to compare" data-testid="plan-history-picker">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {[...history.keys()].reverse().map((index) => (
-              <SelectItem key={index} value={String(index)}>
-                {snapshotLabel(history[index])}{index === history.length - 1 ? ' (previous)' : ''}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div className="flex flex-wrap items-end gap-bakin-3">
+        <Field name="compareWith">
+          <FieldLabel htmlFor="plan-history-picker">Compare current with</FieldLabel>
+          <Select
+            data-testid="plan-history-picker"
+            value={String(selected ?? '')}
+            onValueChange={(value: string) => setSelected(Number(value))}
+          >
+            <SelectTrigger id="plan-history-picker" size="sm" data-testid="plan-history-picker">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {[...history.keys()].reverse().map((index) => (
+                <SelectItem key={index} value={String(index)}>
+                  {snapshotLabel(history[index])}{index === history.length - 1 ? ' (previous)' : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
         {snapshot && (
           <Button
             variant="outline"
@@ -130,12 +147,12 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored }: {
             Restore this version
           </Button>
         )}
-        <span className="text-bakin-typography-size-meta text-bakin-text-muted">{changed === 0 ? 'No changes' : `${changed} changed ${changed === 1 ? 'line' : 'lines'}`}</span>
+        <Text size="meta" tone="muted">{changed === 0 ? 'No changes' : `${changed} changed ${changed === 1 ? 'line' : 'lines'}`}</Text>
       </div>
 
       <div data-testid="plan-history-diff" className="max-h-96 overflow-auto rounded-bakin-surface border border-bakin-border-subtle bg-bakin-surface-default/60 font-bakin-typography-family-mono text-bakin-typography-size-meta leading-5">
         {diffResult.tooLarge && (
-          <p className="m-0 px-bakin-3 py-bakin-2 text-bakin-text-muted">Diff too large to render inline (over {DIFF_LINE_LIMIT.toLocaleString()} lines) — restore still works.</p>
+          <Text as="p" size="meta" tone="muted" className="px-bakin-3 py-bakin-2">Diff too large to render inline (over {DIFF_LINE_LIMIT.toLocaleString()} lines) — restore still works.</Text>
         )}
         {diff.map((line, i) => (
           <div
@@ -149,7 +166,7 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored }: {
                   : 'px-bakin-3 text-bakin-text-muted'
             }
           >
-            <span className="mr-bakin-2 select-none opacity-60">{line.type === 'added' ? '+' : line.type === 'removed' ? '−' : ' '}</span>
+            <Text size="meta" tone="muted" className="mr-bakin-2 select-none">{line.type === 'added' ? '+' : line.type === 'removed' ? '−' : ' '}</Text>
             {line.text || ' '}
           </div>
         ))}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 
 const TEMPLATE_ROOT = resolve(import.meta.dir, '..')
@@ -61,9 +61,14 @@ describe('official plugin UI template contract', () => {
     })
 
     expect(violations).toEqual([])
-    expect(read('styles.css')).toMatch(
-      /:where\(\[data-bakin-plugin=["']_template["']\]\)/,
-    )
+    // The starter ships no plugin-owned stylesheet: every surface it renders
+    // is owned by the public kit. If a domain need ever adds one, it must
+    // stay scoped to the plugin root.
+    if (existsSync(resolve(TEMPLATE_ROOT, 'styles.css'))) {
+      expect(read('styles.css')).toMatch(
+        /:where\(\[data-bakin-plugin=["']_template["']\]\)/,
+      )
+    }
   })
 
   it('ships the copyable conformance and explicit deviation workflow', () => {

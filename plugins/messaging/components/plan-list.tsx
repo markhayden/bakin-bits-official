@@ -15,7 +15,7 @@ import {
   SearchInput,
   StatusBadge,
 } from "@makinbakin/sdk/patterns"
-import { Badge, Button, SystemState } from "@makinbakin/sdk/ui"
+import { Badge, Button, SystemState, Text } from "@makinbakin/sdk/ui"
 import { Circle } from 'lucide-react'
 import { useAgentList } from "@makinbakin/sdk/hooks"
 import { useQueryArrayState, useQueryState } from "@makinbakin/sdk/navigation"
@@ -41,6 +41,12 @@ interface PlanListProps {
   onStartBrainstorm?: () => void
 }
 
+/**
+ * Plan target dates are date-only (`YYYY-MM-DD`) — a calendar day with no
+ * instant. The SDK `formatDateTime` renders instants (and would read a bare
+ * date as UTC midnight, shifting the day in western zones), so the day-only
+ * formatter stays local.
+ */
 function formatTargetDate(value: string): string {
   const date = new Date(`${value}T00:00:00`)
   if (Number.isNaN(date.getTime())) return value
@@ -187,7 +193,7 @@ export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
               label={(
                 <span className="flex items-center justify-between gap-bakin-3">
                   <span>{formatTargetDate(targetDate)}</span>
-                  <span className="normal-case tracking-normal">
+                  <span>
                     {dayPlans.length} {dayPlans.length === 1 ? 'plan' : 'plans'}
                   </span>
                 </span>
@@ -214,24 +220,24 @@ export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
                           />
                           <div className="min-w-0 flex-1">
                             <div className="flex min-w-0 flex-wrap items-center gap-bakin-2">
-                              <h3 className="min-w-0 truncate text-bakin-typography-size-body font-bakin-typography-weight-semibold text-bakin-text-primary">
+                              <Text as="h3" weight="semibold" className="min-w-0 truncate">
                                 {plan.title}
-                              </h3>
+                              </Text>
                               <StatusBadge size="xs" tone={PLAN_STATUS_TONE[plan.status]}>
                                 {formatStatus(plan.status)}
                               </StatusBadge>
                             </div>
-                            <p className="mt-bakin-1 line-clamp-2 text-bakin-typography-size-body text-bakin-text-muted">
+                            <Text as="p" tone="muted" className="mt-bakin-1 line-clamp-2">
                               {plan.brief}
-                            </p>
-                            <div className="mt-bakin-2 flex flex-wrap items-center gap-x-bakin-3 gap-y-bakin-1 text-bakin-typography-size-meta text-bakin-text-muted">
+                            </Text>
+                            <Text as="div" size="meta" tone="muted" className="mt-bakin-2 flex flex-wrap items-center gap-x-bakin-3 gap-y-bakin-1">
                               <span>{agent?.name || plan.agent}</span>
                               {plan.channels && plan.channels.length > 0 && (
                                 <span>{plan.channels.map((channel) => channel.channel).join(', ')}</span>
                               )}
                               {plan.campaign && <span>{plan.campaign}</span>}
                               {plan.sourceSessionId && <span>From brainstorm</span>}
-                            </div>
+                            </Text>
                           </div>
                         </div>
                     </ListRow>

@@ -1,22 +1,33 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
-import { AgentSelect, ChannelIcon } from "@makinbakin/sdk/patterns"
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { AgentSelect, AssetPicker, ChannelIcon } from "@makinbakin/sdk/patterns"
+import type { AssetPickerCollection } from "@makinbakin/sdk/patterns"
 import {
+  Badge,
   Button,
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  Field,
+  FieldControl,
+  FieldGroup,
+  FieldLabel,
+  Fieldset,
+  FieldsetLegend,
+  Form,
+  FormActions,
   Input,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
+  SubmitButton,
   Textarea,
 } from "@makinbakin/sdk/ui"
-import { Paperclip, Plus, Search, X } from 'lucide-react'
+import { Paperclip, Plus, X } from 'lucide-react'
 import type { ContentTone, DeliverableDraft } from '../types'
 import { DEFAULT_CHANNEL } from '../types'
 import { TONE_LABELS } from '../constants'
@@ -70,6 +81,9 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
   const [saving, setSaving] = useState(false)
   const [assetPickerOpen, setAssetPickerOpen] = useState(false)
   const [assetSearch, setAssetSearch] = useState('')
+  // The plugin owns the library data (assets-plugin REST fetch); the kit
+  // AssetPicker owns the presentation, so loading/error land as honest states.
+  const [assetCollection, setAssetCollection] = useState<AssetPickerCollection>({ status: 'loading' })
   const [assets, setAssets] = useState<AssetOption[]>([])
   const [selectedAsset, setSelectedAsset] = useState<AssetOption | null>(null)
 
@@ -96,25 +110,33 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
   }
 
   const loadAssets = async () => {
+    setAssetCollection({ status: 'loading' })
+    setAssetPickerOpen(true)
     try {
       const response = await fetch('/api/plugins/assets/versioned')
-      if (!response.ok) return
+      if (!response.ok) throw new Error(`Asset library returned ${response.status}`)
       const data = await response.json() as { assets?: Array<{ assetId: string; type?: string; description?: string }> }
-      setAssets(Array.isArray(data.assets) ? data.assets.map((a) => ({ assetId: a.assetId, type: a.type, description: a.description })) : [])
-      setAssetPickerOpen(true)
-    } catch {
+      const options = Array.isArray(data.assets)
+        ? data.assets.map((a) => ({ assetId: a.assetId, type: a.type, description: a.description }))
+        : []
+      setAssets(options)
+      setAssetCollection({
+        status: 'ready',
+        assets: options.map((asset) => ({
+          id: asset.assetId,
+          label: asset.assetId,
+          description: asset.description,
+          type: asset.type,
+        })),
+      })
+    } catch (err) {
       setAssets([])
-      setAssetPickerOpen(true)
+      setAssetCollection({ status: 'error', message: err instanceof Error ? err.message : String(err) })
     }
   }
 
-  const filteredAssets = assets.filter((asset) => {
-    if (!assetSearch.trim()) return true
-    const query = assetSearch.toLowerCase()
-    return asset.assetId.toLowerCase().includes(query) || (asset.description ?? '').toLowerCase().includes(query)
-  })
-
-  const handleCreate = async () => {
+  const handleCreate = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
     if (!title.trim() || !brief.trim() || !agent || !channel || !selectedContentType) return
     setSaving(true)
     try {
@@ -148,7 +170,7 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
   return (
     <>
       <Button onClick={() => setOpen(true)}>
-        <Plus className="size-3.5" data-icon="inline-start" />
+        <Plus data-icon="inline-start" aria-hidden="true" />
         Quick Post
       </Button>
 
@@ -161,163 +183,150 @@ export function QuickPostButton({ onCreated }: QuickPostButtonProps) {
             <DialogTitle>Quick Post</DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-bakin-4">
-            <div>
-              <label className="mb-bakin-1 block text-sm text-bakin-text-muted">Title</label>
-              <Input aria-label="Quick post title" value={title} onChange={(event) => setTitle(event.target.value)} />
-            </div>
+          <Form busy={saving} onSubmit={handleCreate} aria-label="Quick post form">
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="quick-post-title" requirement="required">Title</FieldLabel>
+                <Input id="quick-post-title" value={title} onChange={(event) => setTitle(event.target.value)} />
+              </Field>
 
-            <div>
-              <label className="mb-bakin-1 block text-sm text-bakin-text-muted">Brief</label>
-              <Textarea
-                aria-label="Quick post brief"
-                value={brief}
-                onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setBrief(event.target.value)}
-                className="min-h-24"
-              />
-            </div>
-
-            <div className="grid gap-bakin-3 md:grid-cols-2">
-              <div>
-                <label className="mb-bakin-1 block text-sm text-bakin-text-muted">Agent</label>
-                <AgentSelect
-                  value={agent}
-                  onValueChange={(value) => setAgent(value ?? '')}
-                  agents={agentOptions}
-                  ariaLabel="Quick post agent"
-                />
-              </div>
-              <div>
-                <label className="mb-bakin-1 block text-sm text-bakin-text-muted">Publish</label>
-                <Input aria-label="Quick post publish time" type="datetime-local" value={publishAt} onChange={(event) => setPublishAt(event.target.value)} />
-              </div>
-              <div>
-                <label className="mb-bakin-1 block text-sm text-bakin-text-muted">Content Type</label>
-                <Select
-                  items={Object.fromEntries(contentTypes.map((type) => [type.id, type.label]))}
-                  value={selectedContentType?.id ?? ''}
-                  onValueChange={(value) => setContentType(value ?? '')}
-                >
-                  <SelectTrigger aria-label="Quick post content type" className="w-full">
-                    <SelectValue placeholder="Content type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {contentTypes.map((type) => (
-                      <SelectItem key={type.id} value={type.id}>{type.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <label className="mb-bakin-1 block text-sm text-bakin-text-muted">Tone</label>
-                <Select
-                  items={Object.fromEntries(Object.entries(TONE_LABELS))}
-                  value={tone}
-                  onValueChange={(value) => setTone((value ?? 'conversational') as ContentTone)}
-                >
-                  <SelectTrigger aria-label="Quick post tone" className="w-full">
-                    <SelectValue placeholder="Tone" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(Object.entries(TONE_LABELS) as Array<[ContentTone, string]>).map(([value, label]) => (
-                      <SelectItem key={value} value={value}>{label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div>
-              <label className="mb-bakin-1 block text-sm text-bakin-text-muted">Channel</label>
-              <div className="flex flex-wrap gap-1.5">
-                {(channels.length > 0 ? channels : [{ id: DEFAULT_CHANNEL, label: DEFAULT_CHANNEL }]).map((item) => (
-                  <Button
-                    key={item.id}
-                    type="button"
-                    size="xs"
-                    variant="outline"
-                    aria-pressed={channel === item.id}
-                    onClick={() => setChannel(item.id)}
-                    className={channel === item.id
-                      ? 'border-bakin-signal-accent bg-bakin-signal-accent text-bakin-text-primary hover:bg-bakin-signal-accent'
-                      : 'border-bakin-border-subtle/30 text-bakin-text-muted'}
-                  >
-                    <ChannelIcon channelId={item.id} className="size-3.5" />
-                    {item.label}
-                  </Button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <div className="mb-bakin-2 flex items-center justify-between">
-                <label className="text-sm text-bakin-text-muted">Existing Asset</label>
-                <Button size="sm" variant="outline" onClick={loadAssets}>
-                  <Paperclip className="size-3.5" data-icon="inline-start" />
-                  Attach
-                </Button>
-              </div>
-              {selectedAsset && (
-                <div className="flex items-center justify-between gap-bakin-2 rounded-md border border-bakin-border-subtle/30 bg-bakin-canvas-default px-bakin-3 py-bakin-2 text-sm">
-                  <span className="truncate">{selectedAsset.description || selectedAsset.assetId}</span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    onClick={() => setSelectedAsset(null)}
-                    aria-label="Remove selected asset"
-                  >
-                    <X className="size-bakin-4" />
-                  </Button>
-                </div>
-              )}
-              {assetPickerOpen && (
-                <div className="mt-bakin-2 rounded-md border border-bakin-border-subtle/30 bg-bakin-canvas-default p-bakin-2">
-                  <div className="relative mb-bakin-2">
-                    <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-bakin-text-muted" />
-                    <Input
-                      value={assetSearch}
-                      onChange={(event) => setAssetSearch(event.target.value)}
-                      placeholder="Search assets..."
-                      className="h-bakin-8 pl-bakin-8"
+              <Field>
+                <FieldLabel htmlFor="quick-post-brief" requirement="required">Brief</FieldLabel>
+                <FieldControl
+                  render={(
+                    <Textarea
+                      id="quick-post-brief"
+                      value={brief}
+                      onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => setBrief(event.target.value)}
+                      className="min-h-24"
                     />
-                  </div>
-                  <div className="max-h-44 overflow-auto">
-                    {filteredAssets.length === 0 ? (
-                      <p className="p-bakin-2 text-sm text-bakin-text-muted">No assets available</p>
-                    ) : (
-                      filteredAssets.map((asset) => (
-                        <Button
-                          key={asset.assetId}
-                          type="button"
-                          variant="ghost"
-                          onClick={() => {
-                            setSelectedAsset(asset)
-                            setAssetPickerOpen(false)
-                          }}
-                          className="block h-auto w-full min-w-0 rounded-md px-bakin-2 py-1.5 text-left text-sm font-bakin-typography-weight-regular hover:bg-bakin-surface-default"
-                        >
-                          <span className="block truncate">{asset.assetId}</span>
-                          {asset.description && (
-                            <span className="block truncate text-xs text-bakin-text-muted">{asset.description}</span>
-                          )}
-                        </Button>
-                      ))
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
+                  )}
+                />
+              </Field>
 
-            <div className="flex justify-end gap-bakin-2 pt-bakin-2">
-              <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-              <Button onClick={handleCreate} disabled={saving || !title.trim() || !brief.trim()}>
+              <div className="grid gap-bakin-3 md:grid-cols-2">
+                <Field>
+                  <FieldLabel htmlFor="quick-post-agent">Agent</FieldLabel>
+                  <AgentSelect
+                    id="quick-post-agent"
+                    value={agent}
+                    onValueChange={(value) => setAgent(value ?? '')}
+                    agents={agentOptions}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="quick-post-publish-at">Publish</FieldLabel>
+                  <Input id="quick-post-publish-at" type="datetime-local" value={publishAt} onChange={(event) => setPublishAt(event.target.value)} />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="quick-post-content-type">Content Type</FieldLabel>
+                  <Select
+                    items={Object.fromEntries(contentTypes.map((type) => [type.id, type.label]))}
+                    value={selectedContentType?.id ?? ''}
+                    onValueChange={(value) => setContentType(value ?? '')}
+                  >
+                    <SelectTrigger id="quick-post-content-type" className="w-full">
+                      <SelectValue placeholder="Content type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {contentTypes.map((type) => (
+                        <SelectItem key={type.id} value={type.id}>{type.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="quick-post-tone">Tone</FieldLabel>
+                  <Select
+                    items={Object.fromEntries(Object.entries(TONE_LABELS))}
+                    value={tone}
+                    onValueChange={(value) => setTone((value ?? 'conversational') as ContentTone)}
+                  >
+                    <SelectTrigger id="quick-post-tone" className="w-full">
+                      <SelectValue placeholder="Tone" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(Object.entries(TONE_LABELS) as Array<[ContentTone, string]>).map(([value, label]) => (
+                        <SelectItem key={value} value={value}>{label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+              </div>
+
+              <Fieldset>
+                <FieldsetLegend>Channel</FieldsetLegend>
+                {/* Kit gap: a single-select chip group — aria-pressed toggles until the kit ships one. */}
+                <div className="flex flex-wrap gap-bakin-2">
+                  {(channels.length > 0 ? channels : [{ id: DEFAULT_CHANNEL, label: DEFAULT_CHANNEL }]).map((item) => (
+                    <Button
+                      key={item.id}
+                      type="button"
+                      size="xs"
+                      variant={channel === item.id ? 'accent' : 'outline'}
+                      aria-pressed={channel === item.id}
+                      onClick={() => setChannel(item.id)}
+                    >
+                      <ChannelIcon channelId={item.id} className="size-3.5" />
+                      {item.label}
+                    </Button>
+                  ))}
+                </div>
+              </Fieldset>
+
+              <Fieldset>
+                <div className="flex items-center justify-between gap-bakin-2">
+                  <FieldsetLegend>Existing Asset</FieldsetLegend>
+                  <Button type="button" size="sm" variant="outline" onClick={loadAssets}>
+                    <Paperclip data-icon="inline-start" aria-hidden="true" />
+                    Attach
+                  </Button>
+                </div>
+                {selectedAsset && (
+                  <div className="flex flex-wrap gap-bakin-1">
+                    <Badge variant="outline" className="max-w-full gap-bakin-1">
+                      <span className="truncate">{selectedAsset.description || selectedAsset.assetId}</span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        onClick={() => setSelectedAsset(null)}
+                        aria-label="Remove selected asset"
+                      >
+                        <X aria-hidden="true" />
+                      </Button>
+                    </Badge>
+                  </div>
+                )}
+              </Fieldset>
+            </FieldGroup>
+
+            <FormActions>
+              <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+              <SubmitButton busyLabel="Creating..." disabled={saving || !title.trim() || !brief.trim()}>
                 Create
-              </Button>
-            </div>
-          </div>
+              </SubmitButton>
+            </FormActions>
+          </Form>
         </DialogContent>
       </Dialog>
+
+      <AssetPicker
+        open={assetPickerOpen}
+        onOpenChange={setAssetPickerOpen}
+        collection={assetCollection}
+        query={assetSearch}
+        onQueryChange={setAssetSearch}
+        onPick={(assetId) => {
+          const asset = assets.find((candidate) => candidate.assetId === assetId)
+          if (asset) setSelectedAsset(asset)
+          setAssetPickerOpen(false)
+        }}
+        onRetry={() => { void loadAssets() }}
+        view="list"
+        title="Attach asset"
+        description="Choose an existing asset from the library for this post."
+      />
     </>
   )
 }
