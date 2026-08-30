@@ -835,7 +835,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
         <div className="flex w-full min-w-0 shrink-0 flex-col lg:min-h-0 lg:flex-1">
 
           {/* Scrollable content area */}
-          <div className="min-w-0 shrink-0 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-bakin-1">
+          <div className="flex min-w-0 shrink-0 flex-col lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-bakin-1">
             {/* Title (edit mode only — the page title lives in PageHeader) */}
             {editing ? (
               <Field name="title" className="mb-bakin-6">
@@ -854,7 +854,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
 
             {/* Details (spec) — the header row stays pinned while the plan
                 scrolls; Rendered|Diff rides the SDK SegmentedControl. */}
-            <div className="sticky top-0 z-10 -mx-bakin-1 flex items-center justify-between bg-bakin-surface-default px-bakin-1 pt-bakin-1 pb-bakin-2">
+            <div className="sticky top-0 z-10 -mx-bakin-1 flex items-center justify-between bg-bakin-canvas-default px-bakin-1 pt-bakin-1 pb-bakin-2">
               <h3>Details</h3>
               {!editing && (
                 <div className="flex items-center gap-bakin-3">
@@ -873,7 +873,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                 </div>
               )}
             </div>
-            <div className="mb-bakin-6">
+            <div className="flex min-h-0 flex-1 flex-col pb-bakin-6">
               {showChanges && !editing ? (
                 <PlanHistoryPanel
                   projectId={currentId ?? ''}
