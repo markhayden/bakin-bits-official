@@ -205,6 +205,11 @@ export const ListRow = ({ children, interactive, selected, ...props }) =>
   )
 export const ListRowLabels = ({ children, ...props }) =>
   React.createElement('li', { ...props, 'aria-hidden': 'true', 'data-slot': 'list-row-labels' }, children)
+export const DataTable = ({ rows, renderRow, tableProps, label, rowKey, columns, onRowActivate, rowActivateLabel, collapseBelow, listVariant, rowProps, renderTableRow, ...props }) =>
+  React.createElement('div', { 'aria-label': label, ...(tableProps ?? {}), ...props },
+    React.createElement('ul', { 'data-list-rows': '' }, rows.map((row, index) =>
+      React.createElement('li', { key: rowKey ? rowKey(row) : index, 'data-slot': 'list-row' },
+        renderRow ? renderRow(row) : columns.map((column) => React.createElement('span', { key: column.key }, column.cell ? column.cell(row) : null))))))
 export const ListRowGroup = ({ label, children, ...props }) =>
   React.createElement(
     'div',

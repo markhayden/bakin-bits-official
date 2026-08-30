@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   AgentAvatar,
   AgentFilter,
@@ -8,9 +8,10 @@ import {
   CalendarItem,
   CalendarNav,
   ChannelIcon,
+  DataTable,
+  type DataTableColumn,
   FacetFilter,
   ListRow,
-  ListRowGroup,
   ListRows,
   Page,
   PageBody,
@@ -391,10 +392,76 @@ export function ContentCalendar() {
     return groups
   }, [calendarItems])
 
-  const listGroups = useMemo(
-    () => Array.from(groupedDeliverables.entries()).sort(([a], [b]) => a.localeCompare(b)),
+  // Flat chronological rows for the list view — the same pattern schedule's
+  // job list uses (DataTable, collapsing to the row render when narrow).
+  const listRows = useMemo(
+    () => Array.from(groupedDeliverables.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .flatMap(([, items]) => items),
     [groupedDeliverables],
   )
+
+  const listColumns = useMemo<ReadonlyArray<DataTableColumn<Deliverable>>>(() => [
+    {
+      key: 'title',
+      header: 'Title',
+      sortable: true,
+      sortValue: deliverable => deliverable.title,
+      cell: deliverable => <Text as="span" weight="semibold" className="block truncate">{deliverable.title}</Text>,
+    },
+    {
+      key: 'publishAt',
+      header: 'Publishes',
+      sortable: true,
+      sortValue: deliverable => new Date(deliverable.publishAt),
+      cell: deliverable => (
+        <Text as="span" tone="muted" className="block whitespace-nowrap">
+          {compactDayLabel(localDateKey(new Date(deliverable.publishAt)))} · {formatTime(deliverable.publishAt)}
+        </Text>
+      ),
+    },
+    {
+      key: 'channel',
+      header: 'Channel',
+      sortable: true,
+      sortValue: deliverable => deliverable.channel,
+      cell: deliverable => (
+        <span className="inline-flex min-w-0 items-center gap-bakin-2">
+          <ChannelIcon channelId={deliverable.channel} className="size-bakin-4 shrink-0" />
+          <Text as="span" className="truncate">{deliverable.channel}</Text>
+        </span>
+      ),
+    },
+    {
+      key: 'type',
+      header: 'Type',
+      sortable: true,
+      sortValue: deliverable => getContentTypeLabel(deliverable.contentType, contentTypes),
+      cell: deliverable => <Text as="span" tone="muted">{getContentTypeLabel(deliverable.contentType, contentTypes)}</Text>,
+    },
+    {
+      key: 'agent',
+      header: 'Agent',
+      sortable: true,
+      sortValue: deliverable => agentById.get(deliverable.agent)?.name || deliverable.agent,
+      cell: deliverable => {
+        const agent = agentById.get(deliverable.agent)
+        return (
+          <span className="inline-flex min-w-0 items-center gap-bakin-2">
+            <AgentAvatar agent={{ id: deliverable.agent, name: agent?.name || deliverable.agent, imageSrc: agent?.headshot || null }} size="sm" decorative />
+            <Text as="span" className="truncate">{agent?.name || deliverable.agent}</Text>
+          </span>
+        )
+      },
+    },
+    {
+      key: 'status',
+      header: 'Status',
+      sortable: true,
+      sortValue: deliverable => deliverable.status,
+      cell: deliverable => <DeliverableStatusBadge status={deliverable.status} />,
+    },
+  ], [agentById, contentTypes])
 
   const state = loading ? (
     <SystemState
@@ -568,17 +635,19 @@ export function ContentCalendar() {
         )}
 
         {calendarView === 'list' && (
-          <div className="space-y-5" data-testid="calendar-view-list">
-            {listGroups.map(([key, items]) => (
-              <ListRowGroup key={key} label={compactDayLabel(key)}>
-                <ListRows variant="bordered">
-                  {items.map(deliverable => (
-                    <Fragment key={deliverable.id}>{renderDeliverable(deliverable, 'row')}</Fragment>
-                  ))}
-                </ListRows>
-              </ListRowGroup>
-            ))}
-          </div>
+          <DataTable
+            label="Content calendar list"
+            collapseBelow="2xl"
+            columns={listColumns}
+            rows={listRows}
+            rowKey={deliverable => deliverable.id}
+            defaultSort={{ field: 'publishAt', dir: 'asc' }}
+            listVariant="bordered"
+            tableProps={{ 'data-testid': 'calendar-view-list', className: 'min-w-max' }}
+            onRowActivate={setSelectedDeliverable}
+            rowActivateLabel={deliverable => `Open ${deliverable.title}`}
+            renderRow={deliverable => renderDeliverable(deliverable, 'row')}
+          />
         )}
       </PageBody>
 
