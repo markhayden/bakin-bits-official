@@ -113,12 +113,6 @@ jobs:
           BAKIN_SDK_PACKAGE_DIR: ${{ runner.temp }}/sdk-package
         run: bun run ui:conformance
 
-      - name: DEBUG template fixture identity (temporary)
-        if: failure()
-        env:
-          BAKIN_SDK_PACKAGE_DIR: ${{ runner.temp }}/sdk-package
-        run: ./scripts/debug-template-fixture.sh
-
       - name: Upload plugin UI failure artifacts
         if: failure()
         uses: actions/upload-artifact@v5
