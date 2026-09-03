@@ -1,0 +1,21 @@
+{
+  "id": "terminal", "name": "Terminal", "version": "0.1.0", "bakin": ">=0.0.1-rc.1",
+  "description": "Persistent shared terminals with per-agent access and retained coding worktrees.",
+  "dependencies": ["git"],
+  "uninstallPreflightRequired": true,
+  "permissions": ["storage.read", "storage.write", "runtime.read", "tasks.read"],
+  "contributes": {
+    "apiRoutes": [
+      { "method": "GET", "path": "/sessions", "summary": "List terminal sessions" },
+      { "method": "POST", "path": "/sessions", "summary": "Create a terminal session" },
+      { "method": "POST", "path": "/session", "summary": "Operate a terminal session" },
+      { "method": "GET", "path": "/stream", "summary": "Stream private terminal output" },
+      { "method": "GET", "path": "/history", "summary": "Read bounded terminal history" },
+      { "method": "POST", "path": "/service", "summary": "Set up the terminal service" }
+    ],
+    "routes": [{ "path": "/terminal", "summary": "Terminal workspace" }, { "path": "/terminal/[sessionId]", "summary": "Terminal session" }],
+    "clientRoutes": [{ "path": "/terminal", "summary": "Terminal workspace" }, { "path": "/terminal/[sessionId]", "summary": "Terminal session" }],
+    "nav": [{ "id": "terminal", "label": "Terminal", "icon": "Terminal", "href": "/terminal", "order": 210, "section": "create" }],
+    "execTools": [{ "name": "bakin_exec_terminal_session", "summary": "Operate assigned terminal sessions" }]
+  }
+}
