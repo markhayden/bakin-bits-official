@@ -6,6 +6,7 @@
   "main": "./index.ts",
   "scripts": {
     "test": "bun test tests --isolate",
+    "typecheck": "tsc --noEmit",
     "test:ui": "bakin-plugin-test-ui"
   },
   "dependencies": {
@@ -27,6 +28,10 @@
     "react-dom": { "optional": true }
   },
   "devDependencies": {
+    "@types/bun": "^1.3.13",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.6.0",
     "playwright": "1.60.0",
     "axe-core": "^4.12.0"
   }

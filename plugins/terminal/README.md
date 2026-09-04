@@ -109,6 +109,8 @@ test SDK; use the repository's `ui:conformance` workflow. From this plugin, run
 
 Opt-in real process test:
 `TERMINAL_PROCESS_TEST=1 bun test tests/processes.integration.test.ts --isolate`.
+Add `TERMINAL_CLI_TEST=1` to check installed Claude Code and Codex interactive
+startup without submitting prompts.
 The launchd restart probe is `bun probes/session-survival.ts` from the Bits root.
 Both use disposable services/data and clean up their owned processes.
 

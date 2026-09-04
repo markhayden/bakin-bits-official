@@ -27,8 +27,8 @@ test('plugin activation registers protected tools and honest health without star
     expect(health.outcome).toBe('observed')
     if (health.outcome === 'observed') expect(health.observations[0].status).toBe('warning')
     const route = plugin.routes!.find((entry) => entry.path === '/sessions' && entry.method === 'GET')!
-    const response = await route.handler(new Request('http://localhost/sessions', { headers: { 'x-bakin-terminal-client': 'isolated-browser-client' } }), context, {} as never)
+    const response = await route.handler(new Request('http://localhost/sessions', { headers: { 'x-bakin-terminal-client': 'isolated-browser-client' } }), context as unknown as Parameters<typeof route.handler>[1], {} as never)
     expect(await response.json()).toEqual({ sessions: [], serviceReady: false })
-    await plugin.beforeUninstall?.(context)
+    await plugin.beforeUninstall?.()
   } finally { await plugin.onShutdown?.(); rmSync(root, { recursive: true, force: true }) }
 })
