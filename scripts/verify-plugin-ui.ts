@@ -26,6 +26,7 @@ export type OfficialBitsPluginUiEnrollment =
 /** Every official package is named before any migration can silently skip it. */
 export const OFFICIAL_BITS_PLUGIN_UI_ENROLLMENT: readonly OfficialBitsPluginUiEnrollment[] = [
   { id: '_template', root: 'plugins/_template', status: 'conformant', migrationTask: 'T42b' },
+  { id: 'terminal', root: 'plugins/terminal', status: 'conformant', migrationTask: 'terminal-plugin' },
   { id: 'messaging', root: 'plugins/messaging', status: 'migration-pending', migrationTask: 'T67-T68' },
   { id: 'projects', root: 'plugins/projects', status: 'migration-pending', migrationTask: 'T69-T70' },
 ] as const
