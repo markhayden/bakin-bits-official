@@ -1,0 +1,24 @@
+[data-bakin-plugin="terminal"] {
+.terminal-workspace { display: grid; grid-template-columns: 15rem minmax(0, 1fr); }
+.terminal-rail { overflow: auto; border-right: 1px solid var(--bakin-color-border-subtle); }
+.terminal-session-link { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.75rem 1rem; border-bottom: 1px solid var(--bakin-color-border-subtle); overflow-wrap: anywhere; }
+.terminal-session-link[aria-current="page"] { background: var(--bakin-color-surface-elevated); }
+.terminal-session-link span, .terminal-session-link small, .terminal-identity span { font-size: 0.75rem; color: var(--bakin-color-text-muted); }
+.terminal-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.terminal-toolbar, .terminal-assignment, .terminal-display-status { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--bakin-color-border-subtle); }
+.terminal-identity { display: flex; flex: 1 1 12rem; min-width: 0; flex-direction: column; overflow-wrap: anywhere; }
+.terminal-identity strong { font-size: 0.875rem; }
+.terminal-assignment input { width: 12rem; max-width: 70%; }
+.terminal-display { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.terminal-display-status { font-size: 0.75rem; }
+.terminal-display-status [role="status"] { flex: 1; overflow-wrap: anywhere; }
+.terminal-tab-toggle { display: inline-flex; align-items: center; gap: 0.5rem; }
+.terminal-scroll { flex: 1; min-height: 0; overflow: auto; background: #000; padding: 0.5rem; }
+.terminal-xterm { min-width: 0; height: 100%; }
+.terminal-xterm .xterm:focus-within { outline: 2px solid var(--bakin-color-focus-ring); outline-offset: -2px; }
+@media (max-width: 640px) {
+  .terminal-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .terminal-rail { display: flex; max-height: 6rem; border-right: 0; border-bottom: 1px solid var(--bakin-color-border-subtle); }
+  .terminal-session-link { flex: 0 0 12rem; }
+}
+}
