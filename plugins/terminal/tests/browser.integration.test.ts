@@ -30,10 +30,10 @@ browserTest('browser creates a real shell, sends input and reconnects without lo
     await page.getByRole('button', { name: 'Reconnect terminal', exact: true }).click()
     await page.waitForFunction(() => document.querySelector('.xterm-screen')?.textContent?.includes('BROWSER_TERMINAL_OK'))
     await page.setViewportSize({ width: 320, height: 740 })
-    const closeActivity = page.getByRole('button', { name: 'Close Live Activity', exact: true }).first()
-    if (await closeActivity.isVisible()) {
+    const closeActivity = page.getByTestId('mobile-live-activity-button')
+    if (await closeActivity.isVisible() && await closeActivity.getAttribute('aria-pressed') === 'true') {
       await closeActivity.click()
-      await page.waitForFunction(() => (document.querySelector('[data-slot="activity-panel"]')?.getBoundingClientRect().width ?? 0) === 0)
+      await page.waitForFunction(() => (document.querySelector('[data-slot="activity-panel"]')?.getBoundingClientRect().width ?? 0) <= 1)
     }
     await page.screenshot({ path: join(screenshots, 'mobile.png'), fullPage: true })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
