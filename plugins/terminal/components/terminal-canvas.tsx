@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { Button, Checkbox } from '@makinbakin/sdk/ui'
+import { Button, Checkbox, Text } from '@makinbakin/sdk/ui'
+import { BoundedOverflow, Inline, Stack } from '@makinbakin/sdk/layout'
 import { RotateCw, Maximize } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import { terminalFetch } from './api'
@@ -69,15 +70,15 @@ export function TerminalCanvas({ session, writable, onInput, onSession, onResize
     return () => { abort.abort(); term.dispose(); terminal.current = null }
   }, [session.id, attempt])
   useEffect(() => { terminal.current?.resize(session.cols, session.rows) }, [session.cols, session.rows])
-  return <div className="terminal-display">
-    <div className="terminal-display-status">
-      <span role="status">{status}{truncated ? ' / Earlier output truncated' : ''}</span>
-      <label className="terminal-tab-toggle"><Checkbox checked={captureTab} onCheckedChange={(checked: boolean) => setCaptureTab(checked)} />Capture Tab</label>
+  return <Stack gap="none" className="min-h-0 flex-1">
+    <Inline gap="dense" className="shrink-0 px-bakin-4 py-bakin-2">
+      <Text size="meta" tone="muted" role="status" className="flex-1">{status}{truncated ? ' / Earlier output truncated' : ''}</Text>
+      <Inline gap="dense"><Checkbox aria-label="Capture Tab" checked={captureTab} onCheckedChange={(checked: boolean) => setCaptureTab(checked)} /><Text size="meta">Capture Tab</Text></Inline>
       <Button size="icon-sm" variant="ghost" aria-label="Fit terminal to viewport" title="Fit terminal to viewport" disabled={!writable} onClick={resizeToViewport}><Maximize size={16} /></Button>
       <Button size="icon-sm" variant="ghost" aria-label="Reconnect terminal" title="Reconnect terminal" onClick={() => setAttempt((value) => value + 1)}><RotateCw size={16} /></Button>
-    </div>
-    <div className="terminal-scroll" aria-label="Terminal output">
-      <div ref={element} className="terminal-xterm" />
-    </div>
-  </div>
+    </Inline>
+    <BoundedOverflow label="Terminal output" className="min-h-40 flex-1 bg-bakin-canvas-default p-bakin-2">
+      <div ref={element} className="terminal-xterm h-full min-w-0" />
+    </BoundedOverflow>
+  </Stack>
 }

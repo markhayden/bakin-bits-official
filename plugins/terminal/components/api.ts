@@ -1,6 +1,9 @@
 import { pluginFetch } from '@makinbakin/sdk/utils'
 let tabId: string | undefined
-export function clientId(): string { return tabId ??= crypto.randomUUID() }
+export function clientId(): string {
+  // getRandomValues remains available on HTTP LAN/Tailscale origins.
+  return tabId ??= Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
 export function terminalFetch(path: string, init: Parameters<typeof pluginFetch>[2] = {}): Promise<Response> {
   return pluginFetch('terminal', path, { ...init, headers: { ...init.headers, 'X-Bakin-Terminal-Client': clientId() } })
 }
