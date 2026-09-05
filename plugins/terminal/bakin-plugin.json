@@ -3,9 +3,10 @@
   "description": "Persistent shared terminals with per-agent access and retained coding worktrees.",
   "dependencies": ["git"],
   "uninstallPreflightRequired": true,
-  "permissions": ["storage.read", "storage.write", "runtime.read", "tasks.read"],
+  "permissions": ["storage.read", "storage.write", "runtime.read", "runtime.agents", "tasks.read"],
   "contributes": {
     "apiRoutes": [
+      { "method": "GET", "path": "/options", "summary": "Terminal form defaults and agent and task choices" },
       { "method": "GET", "path": "/sessions", "summary": "List terminal sessions" },
       { "method": "POST", "path": "/sessions", "summary": "Create a terminal session" },
       { "method": "POST", "path": "/session", "summary": "Operate a terminal session" },

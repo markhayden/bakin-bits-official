@@ -41,9 +41,11 @@ const server = Bun.serve({
   async fetch(request) {
     const url = new URL(request.url)
     try {
+      if (url.pathname === '/api/plugins/projects/') return Response.json({ projects: [{ id: 'project-1', title: 'Bakin' }] })
       if (url.pathname.startsWith('/api/plugins/terminal/')) {
         const principal = human(request)
         const path = url.pathname.slice('/api/plugins/terminal'.length)
+        if (path === '/options') return Response.json({ agents: [{ id: 'patch', name: 'Patch', enabled: true, workspace: '/tmp' }, { id: 'chef', name: 'Chef', enabled: false }], tasks: [{ id: 'task-1', title: 'Terminal development', agentId: 'patch', projectId: 'project-1' }], defaults: { cwd: process.cwd(), agentId: 'patch' } })
         if (path === '/sessions' && request.method === 'GET') {
           await manager.refreshStates()
           return Response.json({ sessions: manager.list(principal), serviceReady: true })

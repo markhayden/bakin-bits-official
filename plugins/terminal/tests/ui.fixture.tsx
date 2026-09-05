@@ -11,6 +11,8 @@ const session = {
 const fixture = {
   ...DEFAULT_PLUGIN_UI_FIXTURE, route: '/terminal/demo', randomSeed: 'terminal-ui',
   network: [
+    { path: '/api/plugins/terminal/options', status: 200, json: { agents: [{ id: 'patch', name: 'Patch', enabled: true }, { id: 'chef', name: 'Chef', enabled: false }], tasks: [{ id: 'task-1', title: 'Terminal development', agentId: 'patch', projectId: 'project-1' }], defaults: { cwd: '/workspace/bakin', agentId: 'patch' } } },
+    { path: '/api/plugins/projects/', status: 200, json: { projects: [{ id: 'project-1', title: 'Bakin' }] } },
     { path: '/api/plugins/terminal/sessions', status: 200, json: { serviceReady: true, sessions: [session] } },
     { path: '/api/plugins/terminal/stream?id=demo', status: 200, headers: { 'Content-Type': 'text/event-stream' }, body: `data: ${JSON.stringify({ type: 'snapshot', session, cursor: 0, data: btoa('$ git status\r\nOn branch feat/terminal-plugin\r\n\r\nWorking tree clean\r\n$ ') })}\n\n` },
   ],

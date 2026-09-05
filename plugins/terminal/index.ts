@@ -9,11 +9,13 @@ import { TmuxProcesses } from './lib/processes'
 import { Sessions } from './lib/sessions'
 import { TerminalError, terminalSettings, type Principal, type TerminalSettings } from './lib/contracts'
 import { command, failure, human, stream } from './lib/http'
+import { sessionOptions } from './lib/session-options'
 
 let manager: Sessions | undefined
 let service: TerminalService | undefined
 let maintenance: ReturnType<typeof setInterval> | undefined
 let maintenanceFailed = false
+let context: PluginContext | undefined
 function sessions(): Sessions {
   if (!manager) throw new TerminalError('Terminal is unavailable', 503)
   return manager
@@ -30,6 +32,11 @@ const route = (path: string, method: 'GET' | 'POST', summary: string, handler: (
 export default definePlugin({
   id: 'terminal', name: 'Terminal', version: '0.1.0',
   routes: [
+    route('/options', 'GET', 'Get terminal form defaults and available agents and tasks', async (request) => {
+      const principal = human(request)
+      if (!context) throw new TerminalError('Terminal is unavailable', 503)
+      return Response.json(await sessionOptions(context, sessions().list(principal)))
+    }),
     route('/sessions', 'GET', 'List terminal sessions', async (request) => {
       const principal = human(request)
       const serviceReady = await service?.ready()
@@ -54,6 +61,7 @@ export default definePlugin({
     { key: 'idleDays', label: 'Idle worktree review age (days)', type: 'number', default: 30 },
   ] },
   async activate(ctx: PluginContext) {
+    context = ctx
     const root = ctx.storage.localRoot
     if (!root) throw new Error('Terminal requires Bakin with local plugin storage and verified invocation support')
     mkdirSync(root, { recursive: true, mode: 0o700 }); chmodSync(root, 0o700)
@@ -127,5 +135,5 @@ export default definePlugin({
     })
   },
   async beforeUninstall() { await sessions().beforeUninstall(() => service!.uninstall()) },
-  async onShutdown() { clearInterval(maintenance); await manager?.shutdown(); manager = undefined; service = undefined },
+  async onShutdown() { clearInterval(maintenance); await manager?.shutdown(); manager = undefined; service = undefined; context = undefined },
 })

@@ -21,7 +21,10 @@ or API billing.
 
 ## Setup and Access
 
-1. Build/install the matching core and plugin in a development Bakin home.
+1. Run the matching core in your development Bakin instance and install this
+   plugin, or use `bakin plugins link <checkout>/plugins/terminal` for hot reload.
+   An existing dev instance can use its normal Bakin home; a disposable home is
+   only needed for isolated testing.
 2. Open Terminal and choose **Set up service**. This explicitly installs a
    plugin-private launchd LaunchAgent. No service starts merely by importing the
    plugin. Linux service installation is not implemented.
@@ -29,6 +32,13 @@ or API billing.
    `{ "id": "patch" }` entries). The default is no agent access.
 4. Create a session. Coding CLIs default to an isolated Git worktree; **Existing
    checkout** is explicit. Shell sessions use the supplied working directory.
+
+New Terminal loads the runtime agent roster and active tasks, plus named project
+choices when Projects is installed. Disabled agents remain visible but cannot
+be assigned. It defaults to the most recent valid non-worktree directory or the
+host working directory, and the recent enabled agent or sole enabled agent.
+Selecting an agent suggests its workspace; selecting a task fills available
+agent/project links. Manually edited titles and directories are preserved.
 
 Task/project links are optional. Task IDs are checked against the task service;
 project IDs are navigation metadata, not ownership or cleanup authority. A
