@@ -30,6 +30,10 @@ browserTest('browser creates a real shell, sends input and reconnects without lo
     await page.screenshot({ path: join(screenshots, 'desktop.png'), fullPage: true })
     await page.getByRole('button', { name: 'Reconnect terminal', exact: true }).click()
     await page.waitForFunction(() => document.querySelector('.xterm-screen')?.textContent?.includes('BROWSER_TERMINAL_OK'))
+    await page.getByText('Capture Tab', { exact: true }).click()
+    expect(await page.getByRole('checkbox', { name: 'Capture Tab', exact: true }).isChecked()).toBe(true)
+    await page.getByText('Capture Tab', { exact: true }).click()
+    expect(await page.getByRole('checkbox', { name: 'Capture Tab', exact: true }).isChecked()).toBe(false)
     await page.setViewportSize({ width: 320, height: 740 })
     const closeActivity = page.getByTestId('mobile-live-activity-button')
     if (await closeActivity.isVisible() && await closeActivity.getAttribute('aria-pressed') === 'true') {

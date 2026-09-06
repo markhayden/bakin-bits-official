@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { Button, Checkbox, Text } from '@makinbakin/sdk/ui'
+import { Button, Checkbox, Label, Text } from '@makinbakin/sdk/ui'
 import { BoundedOverflow, Inline, Stack } from '@makinbakin/sdk/layout'
 import { RotateCw, Maximize } from 'lucide-react'
 import type { Session } from '../lib/contracts'
@@ -14,6 +14,7 @@ export function TerminalCanvas({ session, writable, onInput, onSession, onResize
   const element = useRef<HTMLDivElement>(null)
   const callbacks = useRef({ onInput, onSession, onResize, writable, captureTab: false })
   const [captureTab, setCaptureTab] = useState(false)
+  const captureTabId = useId()
   callbacks.current = { onInput, onSession, onResize, writable, captureTab }
   const [status, setStatus] = useState('Connecting')
   const [attempt, setAttempt] = useState(0)
@@ -73,7 +74,7 @@ export function TerminalCanvas({ session, writable, onInput, onSession, onResize
   return <Stack gap="none" className="min-h-0 flex-1">
     <Inline gap="dense" className="shrink-0 px-bakin-4 py-bakin-2">
       <Text size="meta" tone="muted" role="status" className="flex-1">{status}{truncated ? ' / Earlier output truncated' : ''}</Text>
-      <Inline gap="dense"><Checkbox aria-label="Capture Tab" checked={captureTab} onCheckedChange={(checked: boolean) => setCaptureTab(checked)} /><Text size="meta">Capture Tab</Text></Inline>
+      <Inline gap="dense"><Checkbox id={captureTabId} checked={captureTab} onCheckedChange={(checked: boolean) => setCaptureTab(checked)} /><Label htmlFor={captureTabId}><Text size="meta">Capture Tab</Text></Label></Inline>
       <Button size="icon-sm" variant="ghost" aria-label="Fit terminal to viewport" title="Fit terminal to viewport" disabled={!writable} onClick={resizeToViewport}><Maximize size={16} /></Button>
       <Button size="icon-sm" variant="ghost" aria-label="Reconnect terminal" title="Reconnect terminal" onClick={() => setAttempt((value) => value + 1)}><RotateCw size={16} /></Button>
     </Inline>

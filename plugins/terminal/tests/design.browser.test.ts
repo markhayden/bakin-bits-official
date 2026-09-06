@@ -48,3 +48,29 @@ browserTest('HTTP browsers load terminals and empty and error states own the ful
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   } finally { await browser.close() }
 }, 30000)
+
+browserTest('kit session rail collapses and narrow navigation keeps long titles usable', async () => {
+  const browser = await chromium.launch({ headless: true })
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } })
+  page.setDefaultTimeout(5000)
+  const session = { id: 'design-session', title: 'Review the terminal plugin implementation and retained development work', program: 'shell', state: 'completed', cwd: '/workspace/bakin', createdAt: 1, generation: 1, revision: 1, inputSequence: 0, cols: 80, rows: 24, owner: { kind: 'human', id: 'design-fixture-client' } }
+  try {
+    await page.route('**/api/plugins/terminal/sessions', (route) => route.fulfill({ json: { serviceReady: true, sessions: [session] } }))
+    await page.route('**/api/plugins/terminal/stream?*', (route) => route.fulfill({ contentType: 'text/event-stream', body: `data: ${JSON.stringify({ type: 'output', session, cursor: 0, data: btoa('$ git status\r\nWorking tree clean\r\n') })}\n\n` }))
+    await page.goto(process.env.TERMINAL_PREVIEW_URL!)
+    await page.getByRole('link', { name: `Open terminal: ${session.title}` }).click()
+    await page.getByRole('region', { name: 'Selected terminal' }).getByText(session.title, { exact: true }).waitFor()
+    expect(await page.getByRole('link', { name: `Open terminal: ${session.title}` }).getAttribute('aria-current')).toBe('page')
+    await page.getByRole('button', { name: 'Collapse terminal sessions', exact: true }).click()
+    await page.getByRole('button', { name: 'Expand terminal sessions', exact: true }).click()
+    await page.getByRole('link', { name: `Open terminal: ${session.title}` }).waitFor()
+    await page.setViewportSize({ width: 320, height: 740 })
+    const activity = page.getByTestId('mobile-live-activity-button')
+    if (await activity.isVisible() && await activity.getAttribute('aria-pressed') === 'true') await activity.click()
+    const picker = page.getByRole('combobox', { name: 'Terminal session', exact: true })
+    await picker.click()
+    await page.getByRole('option', { name: session.title, exact: true }).click()
+    expect(await page.getByRole('complementary', { name: 'Terminal sessions' }).isVisible()).toBe(false)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  } finally { await browser.close() }
+}, 30000)

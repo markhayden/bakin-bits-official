@@ -132,6 +132,14 @@ Run `TERMINAL_PREVIEW_URL=<printed URL> bun test tests/browser.integration.test.
 --isolate` from this plugin for live desktop/mobile browser verification.
 
 UI uses `storybook/public/pages/workspace-page.stories.tsx` / `FullBleedWorkspace`
-through SDK `/patterns`, `/ui`, and `/navigation`. xterm content/styles are scoped
-to the plugin. Tab exits the terminal by default; Capture Tab is explicit.
+with `pages/collapsible-aside.stories.tsx` / `CollapseRoundtrip`,
+`lists/list-rows.stories.tsx` / `DenseRows`, and
+`feedback/system-state.stories.tsx` / `ScopeAndRecovery`.
+SDK `/patterns`, `/layout`, `/ui`, and `/navigation` own the rail, selection,
+spacing, typography, tool controls, and empty/error states. Narrow workspaces
+use the public Select instead of reserving an empty or undersized rail.
+xterm content/styles remain scoped to the plugin. Tab exits the terminal by
+default; Capture Tab is explicit. Client markers use cryptographic random bytes
+available on HTTP LAN/Tailscale origins, not secure-context-only `randomUUID`.
+Request failures never imply that the terminal service needs installation.
 No design-system exception or public UI extension is used.
