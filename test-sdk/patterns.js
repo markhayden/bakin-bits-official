@@ -41,6 +41,7 @@ export const PageComposer = component('div')
 export const WorkspacePage = component('div')
 export const WorkspacePageBody = component('div')
 export const WorkspacePageHeader = component('div')
+export const WorkspacePageCompactHeader = component('div')
 export const StatusBadge = ({ children, tone = 'neutral', ...props }) => React.createElement(
   'span',
   { ...props, 'data-tone': tone },

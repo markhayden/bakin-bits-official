@@ -8,8 +8,8 @@ import type { Session } from '../lib/contracts'
 import { terminalFetch } from './api'
 import '@xterm/xterm/css/xterm.css'
 
-export function TerminalCanvas({ session, writable, onInput, onSession, onResize }: {
-  session: Session; writable: boolean; onInput(data: string): void; onSession(session: Session): void; onResize(cols: number, rows: number): void
+export function TerminalCanvas({ session, writable, controlStatus, onInput, onSession, onResize }: {
+  session: Session; writable: boolean; controlStatus: string; onInput(data: string): void; onSession(session: Session): void; onResize(cols: number, rows: number): void
 }) {
   const element = useRef<HTMLDivElement>(null)
   const callbacks = useRef({ onInput, onSession, onResize, writable, captureTab: false })
@@ -73,7 +73,7 @@ export function TerminalCanvas({ session, writable, onInput, onSession, onResize
   useEffect(() => { terminal.current?.resize(session.cols, session.rows) }, [session.cols, session.rows])
   return <Stack gap="none" className="min-h-0 flex-1">
     <Inline gap="dense" className="shrink-0 px-bakin-4 py-bakin-2">
-      <Text size="meta" tone="muted" role="status" className="flex-1">{status}{truncated ? ' / Earlier output truncated' : ''}</Text>
+      <Text size="meta" tone="muted" role="status" className="flex-1">{status === controlStatus ? status : `${status} / ${controlStatus}`}{truncated ? ' / Earlier output truncated' : ''}</Text>
       <Inline gap="dense"><Checkbox id={captureTabId} checked={captureTab} onCheckedChange={(checked: boolean) => setCaptureTab(checked)} /><Label htmlFor={captureTabId}><Text size="meta">Capture Tab</Text></Label></Inline>
       <Button size="icon-sm" variant="ghost" aria-label="Fit terminal to viewport" title="Fit terminal to viewport" disabled={!writable} onClick={resizeToViewport}><Maximize size={16} /></Button>
       <Button size="icon-sm" variant="ghost" aria-label="Reconnect terminal" title="Reconnect terminal" onClick={() => setAttempt((value) => value + 1)}><RotateCw size={16} /></Button>

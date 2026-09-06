@@ -955,6 +955,9 @@ declare module '@makinbakin/sdk/ui' {
   export const InputGroup: UIComponent
   export const Label: UIComponent
   export const Popover: UIComponent
+  export const PopoverTrigger: UIComponent
+  export const PopoverContent: UIComponent
+  export const PopoverTitle: UIComponent
   export const Progress: UIComponent
   export const Select: UIComponent
   export const SelectContent: UIComponent
@@ -1104,6 +1107,7 @@ declare module '@makinbakin/sdk/patterns' {
   export const WorkspacePage: PatternComponent
   export const WorkspacePageBody: PatternComponent
   export const WorkspacePageHeader: PatternComponent
+  export const WorkspacePageCompactHeader: PatternComponent
   export const StatusBadge: PatternComponent
   export const StatusMarker: PatternComponent
 

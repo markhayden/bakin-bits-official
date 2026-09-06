@@ -42,9 +42,10 @@ browserTest('browser creates a real shell, sends input and reconnects without lo
     }
     await page.screenshot({ path: join(screenshots, 'mobile.png'), fullPage: true })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-    await page.getByRole('button', { name: 'Terminate and complete', exact: true }).click()
+    await page.getByRole('button', { name: 'Session actions', exact: true }).click()
+    await page.getByRole('menuitem', { name: 'Terminate and complete', exact: true }).click()
     await page.getByRole('button', { name: 'Terminate', exact: true }).click()
-    await page.getByRole('region', { name: 'Selected terminal' }).getByText('Completed', { exact: true }).first().waitFor()
+    await page.getByRole('region', { name: 'Selected terminal' }).getByRole('status').filter({ hasText: 'Completed' }).waitFor()
     completed = true
     expect(errors).toEqual([])
   } finally {

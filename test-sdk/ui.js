@@ -84,6 +84,9 @@ export const Input = createElement('input')
 export const InputGroup = createElement('div')
 export const Label = createElement('label')
 export const Popover = createElement('div')
+export const PopoverTrigger = createElement('button')
+export const PopoverContent = createElement('div')
+export const PopoverTitle = createElement('h2')
 export const Progress = createElement('progress')
 // Functional minimum of the kit Select — a native <select> facade so tests
 // drive real change events; options harvested from SelectItem descendants.
