@@ -7,6 +7,7 @@ function component(tag) {
 }
 
 export const Stack = component('div')
+export const Section = component('section')
 export const Inline = component('div')
 export const Grid = component('div')
 export const PageShell = component('div')

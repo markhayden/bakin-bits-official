@@ -29,6 +29,7 @@ export const PageAside = ({ children, label, labelledBy, ...props }) => React.cr
   { ...props, 'aria-label': label, 'aria-labelledby': labelledBy },
   children,
 )
+export function useCollapsedAside() { return React.useState(false) }
 export const PageCanvas = ({ children, orientation, ...props }) => React.createElement('div', props, children)
 export const PageTimeline = ({ children, live, label, labelledBy, ...props }) => React.createElement(
   'div',

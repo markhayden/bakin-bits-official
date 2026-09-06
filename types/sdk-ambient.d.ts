@@ -1024,6 +1024,7 @@ declare module '@makinbakin/sdk/layout' {
   }
   type LayoutComponent = ComponentType<LayoutProps>
   export const Stack: LayoutComponent
+  export const Section: LayoutComponent
   export const Inline: LayoutComponent
   export const Grid: LayoutComponent
   export const PageShell: LayoutComponent
@@ -1081,6 +1082,7 @@ declare module '@makinbakin/sdk/patterns' {
     label?: string
     labelledBy?: string
   }>
+  export function useCollapsedAside(storageKey: string): [boolean, (collapsed: boolean) => void]
   export type PageCanvasOrientation = 'vertical' | 'horizontal'
   export const PageCanvas: ComponentType<PatternProps & {
     orientation?: PageCanvasOrientation

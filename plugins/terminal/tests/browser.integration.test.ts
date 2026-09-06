@@ -9,6 +9,7 @@ browserTest('browser creates a real shell, sends input and reconnects without lo
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
   page.setDefaultTimeout(10000)
   let createdId: string | undefined
+  let completed = false
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   const screenshots = join(import.meta.dir, '../test-results/live')
@@ -40,17 +41,17 @@ browserTest('browser creates a real shell, sends input and reconnects without lo
     await page.getByRole('button', { name: 'Terminate and complete', exact: true }).click()
     await page.getByRole('button', { name: 'Terminate', exact: true }).click()
     await page.getByRole('region', { name: 'Selected terminal' }).getByText('Completed', { exact: true }).first().waitFor()
+    completed = true
     expect(errors).toEqual([])
   } finally {
-    if (createdId) {
+    try { if (createdId && !completed) {
       const endpoint = new URL('/api/plugins/terminal/session', process.env.TERMINAL_PREVIEW_URL!).href
       const headers = { 'X-Bakin-Terminal-Client': 'browser-test-cleanup-client' }
-      const taken = await page.request.post(endpoint, { headers, data: { id: createdId, operation: 'take' } })
+      const taken = await page.request.post(endpoint, { headers, timeout: 5000, data: { id: createdId, operation: 'take' } })
       if (taken.ok()) {
         const session = await taken.json()
-        if (session.state !== 'completed') await page.request.post(endpoint, { headers, data: { id: createdId, operation: 'terminate', generation: session.generation } })
+        if (session.state !== 'completed') await page.request.post(endpoint, { headers, timeout: 5000, data: { id: createdId, operation: 'terminate', generation: session.generation } })
       }
-    }
-    await browser.close()
+    } } finally { await browser.close() }
   }
 }, 30000)

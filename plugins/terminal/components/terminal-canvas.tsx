@@ -77,7 +77,7 @@ export function TerminalCanvas({ session, writable, onInput, onSession, onResize
       <Button size="icon-sm" variant="ghost" aria-label="Fit terminal to viewport" title="Fit terminal to viewport" disabled={!writable} onClick={resizeToViewport}><Maximize size={16} /></Button>
       <Button size="icon-sm" variant="ghost" aria-label="Reconnect terminal" title="Reconnect terminal" onClick={() => setAttempt((value) => value + 1)}><RotateCw size={16} /></Button>
     </Inline>
-    <BoundedOverflow label="Terminal output" className="min-h-40 flex-1 bg-bakin-canvas-default p-bakin-2">
+    <BoundedOverflow label="Terminal output" className="min-h-[calc(var(--bakin-layout-space-8)*5)] flex-1 bg-bakin-canvas-default p-bakin-2">
       <div ref={element} className="terminal-xterm h-full min-w-0" />
     </BoundedOverflow>
   </Stack>
