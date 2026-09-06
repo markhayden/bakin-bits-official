@@ -96,7 +96,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
           {error && <Alert tone="danger"><AlertDescription>{error}</AlertDescription></Alert>}
         </Stack>}
         {all.length > 0 && <Inline gap="dense" className="shrink-0 px-bakin-4 py-bakin-2" aria-label="Terminal controls">
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 basis-full @md/page-shell:basis-0">
           <Select items={Object.fromEntries(all.map((item) => [item.id, item.title]))} value={sessionId ?? null} onValueChange={(id: string | null) => { if (id) router.push(`/terminal/${encodeURIComponent(id)}`) }}>
             <SelectTrigger aria-label="Terminal session" className="w-full"><SelectValue placeholder="Select a terminal" /></SelectTrigger>
             <SelectContent>{all.map((item) => <SelectItem key={item.id} value={item.id}>{item.title}</SelectItem>)}</SelectContent>
