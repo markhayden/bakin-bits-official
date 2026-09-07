@@ -81,7 +81,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     finally { setBusy(false) }
   }
   const newTerminal = <Tooltip><TooltipTrigger render={<Button size="sm" onClick={() => setCreating(true)} disabled={!serviceReady || Boolean(loadError) || busy} focusableWhenDisabled />}><Plus size={16} />New terminal</TooltipTrigger><TooltipContent>New terminal. Create a persistent shell or coding CLI session.</TooltipContent></Tooltip>
-  const back = <Tool label="Back to terminals" description="Return to the session list." render={<Button size="icon-sm" variant="ghost" aria-label="Back to terminals" nativeButton={false} render={<PluginLink to="/terminal" />} />}><ArrowLeft size={16} /></Tool>
+  const back = <Tool label="Back to terminals" description="Return to the session list." render={<Button size="icon-sm" variant="ghost" aria-label="Back to terminals" role="link" nativeButton={false} render={<PluginLink to="/terminal" />} />}><ArrowLeft size={16} /></Tool>
   const state = loading ? <SystemState kind="loading" scope="page" title="Loading terminals" description="Checking terminal service and sessions." />
     : loadError && all.length === 0 ? <SystemState kind="error" scope="page" title="Terminals could not be loaded" description={loadError} action={<Button variant="outline" onClick={() => void refresh()}><RotateCw size={16} />Retry</Button>} />
     : !serviceReady && all.length === 0 ? <SystemState kind="initial-empty" scope="page" icon={<Terminal size={32} />} title="Terminal service is not set up" description="The persistent terminal service is unavailable on this Bakin instance." action={<Button disabled={busy} onClick={() => void setup()}><Play size={16} />Set up service</Button>} />

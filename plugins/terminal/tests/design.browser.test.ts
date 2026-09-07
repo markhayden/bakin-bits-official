@@ -68,7 +68,12 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     const width = await workspace.evaluate((element) => element.clientWidth)
     const output = await page.getByRole('region', { name: 'Terminal output', exact: true }).boundingBox()
     expect(output!.width).toBeGreaterThan(width * 0.95)
-    await workspace.evaluate((element) => { element.scrollTop = element.scrollHeight })
+    await page.waitForFunction(() => {
+      const element = document.querySelector<HTMLElement>('[data-archetype="workspace"]')
+      if (!element) return false
+      element.scrollTop = element.scrollHeight
+      return Boolean(element.querySelector('[data-slot="workspace-page-compact-header"][data-stuck]'))
+    })
     await page.locator('[data-slot="workspace-page-compact-header"][data-stuck]').waitFor()
     expect(output!.height).toBeGreaterThan(700)
     for (const name of ['Session details', 'Take control', 'Return control to agent', 'Interrupt process', 'Session actions', 'Fit terminal to viewport', 'Reconnect terminal']) {
