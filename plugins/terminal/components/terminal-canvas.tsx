@@ -1,11 +1,12 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { Button, Checkbox, Label, Text } from '@makinbakin/sdk/ui'
+import { Checkbox, Label, Text } from '@makinbakin/sdk/ui'
 import { BoundedOverflow, Inline, Stack } from '@makinbakin/sdk/layout'
 import { RotateCw, Maximize } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import { terminalFetch } from './api'
+import { TerminalTool as Tool } from './terminal-tool'
 import '@xterm/xterm/css/xterm.css'
 
 export function TerminalCanvas({ session, writable, controlStatus, onInput, onSession, onResize }: {
@@ -75,8 +76,8 @@ export function TerminalCanvas({ session, writable, controlStatus, onInput, onSe
     <Inline gap="dense" className="shrink-0 px-bakin-4 py-bakin-2">
       <Text size="meta" tone="muted" role="status" className="flex-1">{status === controlStatus ? status : `${status} / ${controlStatus}`}{truncated ? ' / Earlier output truncated' : ''}</Text>
       <Inline gap="dense"><Checkbox id={captureTabId} checked={captureTab} onCheckedChange={(checked: boolean) => setCaptureTab(checked)} /><Label htmlFor={captureTabId}><Text size="meta">Capture Tab</Text></Label></Inline>
-      <Button size="icon-sm" variant="ghost" aria-label="Fit terminal to viewport" title="Fit terminal to viewport" disabled={!writable} onClick={resizeToViewport}><Maximize size={16} /></Button>
-      <Button size="icon-sm" variant="ghost" aria-label="Reconnect terminal" title="Reconnect terminal" onClick={() => setAttempt((value) => value + 1)}><RotateCw size={16} /></Button>
+      <Tool label="Fit terminal to viewport" description="Resize the session to the available space. Requires control." disabled={!writable} onClick={resizeToViewport}><Maximize size={16} /></Tool>
+      <Tool label="Reconnect terminal" description="Reconnect to this session without restarting its process." onClick={() => setAttempt((value) => value + 1)}><RotateCw size={16} /></Tool>
     </Inline>
     <BoundedOverflow label="Terminal output" className="min-h-[calc(var(--bakin-layout-space-8)*5)] flex-1 bg-bakin-canvas-default p-bakin-2">
       <div ref={element} className="terminal-xterm h-full min-w-0" />
