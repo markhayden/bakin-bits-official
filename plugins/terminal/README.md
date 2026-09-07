@@ -131,13 +131,18 @@ the preview require Existing checkout. Stop the preview to stop its shells.
 Run `TERMINAL_PREVIEW_URL=<printed URL> bun test tests/browser.integration.test.ts
 --isolate` from this plugin for live desktop/mobile browser verification.
 
-UI uses `storybook/public/pages/workspace-page.stories.tsx` / `FullBleedWorkspace`
-with `pages/collapsible-aside.stories.tsx` / `CollapseRoundtrip`,
-`lists/list-rows.stories.tsx` / `DenseRows`, and
-`feedback/system-state.stories.tsx` / `ScopeAndRecovery`.
-SDK `/patterns`, `/layout`, `/ui`, and `/navigation` own the rail, selection,
-spacing, typography, tool controls, and empty/error states. Narrow workspaces
-use the public Select instead of reserving an empty or undersized rail.
+The `/terminal` index uses `storybook/public/pages/page.stories.tsx` /
+`CanonicalUsage` and `lists/list-rows.stories.tsx` / `InteractiveRows`.
+Session detail uses `pages/workspace-page.stories.tsx` / `ImmersiveCanvas`:
+full-width output, a compact Back link, and no session rail or navigation select.
+`overlays/popover.stories.tsx` / `CanonicalUsage` holds assignment and details;
+`overlays/dropdown-menu.stories.tsx` / `CanonicalUsage` holds completion actions.
+All icon tools use `overlays/tooltip.stories.tsx` / `CanonicalUsage`, with
+explanations on hover and keyboard focus, including disabled controls.
+SDK `/patterns`, `/layout`, `/ui`, and `/navigation` own the page composition,
+spacing, typography, tool controls, and empty/error states. Fit resizes the
+terminal to available space only when this browser owns input; viewing does not
+resize another owner's session. Back navigation never terminates the process.
 xterm content/styles remain scoped to the plugin. Tab exits the terminal by
 default; Capture Tab is explicit. Client markers use cryptographic random bytes
 available on HTTP LAN/Tailscale origins, not secure-context-only `randomUUID`.
