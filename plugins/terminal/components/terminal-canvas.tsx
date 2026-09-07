@@ -10,7 +10,7 @@ import { TerminalTool as Tool } from './terminal-tool'
 import '@xterm/xterm/css/xterm.css'
 
 export function TerminalCanvas({ session, writable, controlStatus, onInput, onSession, onResize }: {
-  session: Session; writable: boolean; controlStatus: string; onInput(data: string): void; onSession(session: Session): void; onResize(cols: number, rows: number): void
+  session: Session; writable: boolean; controlStatus: string; onInput(data: string): void; onSession(session: Session): void; onResize(cols: number, rows: number): Promise<boolean | undefined>
 }) {
   const element = useRef<HTMLDivElement>(null)
   const callbacks = useRef({ onInput, onSession, onResize, writable, captureTab: false })
@@ -22,9 +22,22 @@ export function TerminalCanvas({ session, writable, controlStatus, onInput, onSe
   const [truncated, setTruncated] = useState(false)
   const terminal = useRef<Terminal | null>(null)
   const fit = useRef<FitAddon | null>(null)
-  function resizeToViewport() {
+  const resizing = useRef(false)
+  const resizeAgain = useRef(false)
+  async function resizeToViewport() {
+    if (resizing.current) { resizeAgain.current = true; return }
+    const term = terminal.current
     const size = fit.current?.proposeDimensions()
-    if (size && callbacks.current.writable) callbacks.current.onResize(Math.min(400, Math.max(20, size.cols)), Math.min(150, Math.max(5, size.rows)))
+    if (!size || !term || !callbacks.current.writable) return
+    const cols = Math.min(400, Math.max(20, size.cols))
+    const rows = Math.min(150, Math.max(5, size.rows))
+    if (term.cols === cols && term.rows === rows) return
+    resizing.current = true
+    try { await callbacks.current.onResize(cols, rows) }
+    finally {
+      resizing.current = false
+      if (resizeAgain.current) { resizeAgain.current = false; void resizeToViewport() }
+    }
   }
   useEffect(() => {
     const abort = new AbortController()
@@ -72,11 +85,28 @@ export function TerminalCanvas({ session, writable, controlStatus, onInput, onSe
     return () => { abort.abort(); term.dispose(); terminal.current = null }
   }, [session.id, attempt])
   useEffect(() => { terminal.current?.resize(session.cols, session.rows) }, [session.cols, session.rows])
+  useEffect(() => {
+    if (!writable || !element.current) return
+    let disposed = false
+    let timer: ReturnType<typeof setTimeout>
+    const schedule = () => {
+      if (disposed) return
+      clearTimeout(timer)
+      timer = setTimeout(() => void resizeToViewport(), 100)
+    }
+    // Observe the pane, not the terminal's cell grid: resizing rows must not
+    // create a feedback loop, and read-only viewers must never resize a PTY.
+    const observer = new ResizeObserver(schedule)
+    observer.observe(element.current)
+    void document.fonts.ready.then(schedule)
+    schedule()
+    return () => { disposed = true; clearTimeout(timer); observer.disconnect() }
+  }, [session.id, writable, attempt])
   return <Stack gap="none" className="min-h-0 flex-1">
     <Inline gap="dense" className="shrink-0 px-bakin-4 py-bakin-2">
       <Text size="meta" tone="muted" role="status" className="flex-1">{status === controlStatus ? status : `${status} / ${controlStatus}`}{truncated ? ' / Earlier output truncated' : ''}</Text>
       <Inline gap="dense"><Checkbox id={captureTabId} checked={captureTab} onCheckedChange={(checked: boolean) => setCaptureTab(checked)} /><Label htmlFor={captureTabId}><Text size="meta">Capture Tab</Text></Label></Inline>
-      <Tool label="Fit terminal to viewport" description="Resize the session to the available space. Requires control." disabled={!writable} onClick={resizeToViewport}><Maximize size={16} /></Tool>
+      <Tool label="Fit terminal to viewport" description="Refit the session to the available space. Requires control." disabled={!writable} onClick={() => void resizeToViewport()}><Maximize size={16} /></Tool>
       <Tool label="Reconnect terminal" description="Reconnect to this session without restarting its process." onClick={() => setAttempt((value) => value + 1)}><RotateCw size={16} /></Tool>
     </Inline>
     <BoundedOverflow label="Terminal output" className="min-h-[calc(var(--bakin-layout-space-8)*5)] flex-1 bg-bakin-canvas-default p-bakin-2">

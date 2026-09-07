@@ -1716,6 +1716,7 @@ declare module '@makinbakin/sdk/hooks' {
   }
   export function useAgent(agentId: string): AgentInfo | null
   export function useAgentList(): AgentInfo[]
+  export function useAgentStore<T>(selector: (state: { displaySettings: Record<string, { displayName?: string; accentColor?: string }> }) => T): T
   export function useAgentIds(): string[]
   export function useMainAgentId(): string | null
   export function useDebug(): [boolean]

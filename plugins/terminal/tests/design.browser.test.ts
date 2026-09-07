@@ -49,6 +49,27 @@ browserTest('HTTP browsers load terminals and empty and error states own the ful
   } finally { await browser.close() }
 }, 30000)
 
+browserTest('an agent-controlled terminal fills the pane without resizing the shared session', async () => {
+  const browser = await chromium.launch({ headless: true })
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+  let resizes = 0
+  const session = { id: 'agent-view', title: 'Agent-owned session', program: 'shell', state: 'running', cwd: '/tmp', createdAt: 1, generation: 1, revision: 1, inputSequence: 0, cols: 80, rows: 24, owner: { kind: 'agent', id: 'patch' } }
+  try {
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && request.url().endsWith('/terminal/session') && request.postDataJSON()?.operation === 'resize') resizes++
+    })
+    await page.route('**/api/plugins/terminal/sessions', (route) => route.fulfill({ json: { serviceReady: true, sessions: [session] } }))
+    await page.route('**/api/plugins/terminal/stream?*', (route) => route.fulfill({ contentType: 'text/event-stream', body: `data: ${JSON.stringify({ type: 'snapshot', session, data: btoa('$ agent work\r\n') })}\n\n` }))
+    await page.goto(new URL('/terminal/agent-view', process.env.TERMINAL_PREVIEW_URL!).href)
+    await page.locator('.terminal-xterm .xterm').waitFor()
+    await page.setViewportSize({ width: 1000, height: 740 })
+    await page.waitForTimeout(250)
+    const pane = await page.getByRole('region', { name: 'Terminal output', exact: true }).boundingBox()
+    expect((await page.locator('.terminal-xterm .xterm').boundingBox())!.height).toBeGreaterThan(pane!.height - 20)
+    expect(resizes).toBe(0)
+  } finally { await browser.close() }
+}, 15000)
+
 browserTest('immersive terminals use the full workspace and retain compact navigation and details', async () => {
   const browser = await chromium.launch({ headless: true })
   const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } })
@@ -68,6 +89,8 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     const width = await workspace.evaluate((element) => element.clientWidth)
     const output = await page.getByRole('region', { name: 'Terminal output', exact: true }).boundingBox()
     expect(output!.width).toBeGreaterThan(width * 0.95)
+    const surface = await page.locator('.terminal-xterm .xterm').boundingBox()
+    expect(surface!.height).toBeGreaterThan(output!.height - 20)
     await page.waitForFunction(() => {
       const element = document.querySelector<HTMLElement>('[data-archetype="workspace"]')
       if (!element) return false

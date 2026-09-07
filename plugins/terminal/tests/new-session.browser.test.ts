@@ -22,6 +22,8 @@ browserTest('new terminal populates choices, follows task links and preserves ma
     const directory = dialog.getByRole('textbox', { name: 'Working directory' })
     await page.waitForFunction(() => [...document.querySelectorAll('input')].some((input) => input.value === '/workspace/bakin'))
     expect(await directory.inputValue()).toBe('/workspace/bakin')
+    const agentField = dialog.getByRole('combobox', { name: 'Assigned agent' })
+    expect((await agentField.boundingBox())!.width).toBeGreaterThanOrEqual((await directory.boundingBox())!.width - 1)
     expect(await dialog.getByRole('textbox', { name: 'Title', exact: true }).inputValue()).toBe('Shell - Patch')
     await dialog.getByRole('combobox', { name: 'Assigned agent' }).click()
     expect(await page.getByRole('option', { name: 'Chef (access disabled)', exact: true }).getAttribute('aria-disabled')).toBe('true')

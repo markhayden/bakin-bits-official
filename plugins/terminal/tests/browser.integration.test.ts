@@ -20,14 +20,13 @@ browserTest('browser creates a real shell, sends input and reconnects without lo
     await page.getByRole('textbox', { name: 'Title', exact: true }).fill('Browser integration')
     await page.getByRole('textbox', { name: 'Working directory' }).fill('/tmp')
     const creation = page.waitForResponse((response) => response.url().endsWith('/terminal/sessions') && response.request().method() === 'POST')
+    const resize = page.waitForResponse((response) => response.url().endsWith('/terminal/session') && response.request().postDataJSON()?.operation === 'resize')
     await page.getByRole('button', { name: 'Start terminal', exact: true }).click()
     createdId = (await (await creation).json()).id
     await page.locator('.xterm-helper-textarea').waitFor()
     const workspace = page.locator('[data-archetype="workspace"]')
     await workspace.evaluate((element) => { element.scrollTop = element.scrollHeight })
     await page.locator('[data-slot="workspace-page-compact-header"][data-stuck]').waitFor()
-    const resize = page.waitForResponse((response) => response.url().endsWith('/terminal/session') && response.request().postDataJSON()?.operation === 'resize')
-    await page.getByRole('button', { name: 'Fit terminal to viewport', exact: true }).click()
     const fitted = await (await resize).json()
     expect(fitted.cols).toBeGreaterThan(80)
     expect(fitted.rows).toBeGreaterThan(24)
@@ -46,6 +45,7 @@ browserTest('browser creates a real shell, sends input and reconnects without lo
     expect(await page.getByRole('checkbox', { name: 'Capture Tab', exact: true }).isChecked()).toBe(true)
     await page.getByText('Capture Tab', { exact: true }).click()
     expect(await page.getByRole('checkbox', { name: 'Capture Tab', exact: true }).isChecked()).toBe(false)
+    const mobileResize = page.waitForResponse((response) => response.url().endsWith('/terminal/session') && response.request().postDataJSON()?.operation === 'resize' && response.request().postDataJSON()?.cols < 40)
     await page.setViewportSize({ width: 320, height: 740 })
     const closeActivity = page.getByTestId('mobile-live-activity-button')
     if (await closeActivity.isVisible() && await closeActivity.getAttribute('aria-pressed') === 'true') {
@@ -53,8 +53,6 @@ browserTest('browser creates a real shell, sends input and reconnects without lo
       await page.waitForFunction(() => (document.querySelector('[data-slot="activity-panel"]')?.getBoundingClientRect().width ?? 0) <= 1)
     }
     await workspace.evaluate((element) => { element.scrollTop = element.scrollHeight })
-    const mobileResize = page.waitForResponse((response) => response.url().endsWith('/terminal/session') && response.request().postDataJSON()?.operation === 'resize')
-    await page.getByRole('button', { name: 'Fit terminal to viewport', exact: true }).click()
     expect((await (await mobileResize).json()).cols).toBeLessThan(40)
     await page.screenshot({ path: join(screenshots, 'mobile.png'), fullPage: true })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)

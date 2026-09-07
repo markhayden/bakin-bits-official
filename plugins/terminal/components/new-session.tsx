@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Fo
 import type { Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
 import { api } from './api'
+import { useTerminalAgents } from './use-terminal-agents'
 
 const programs: Record<string, string> = { shell: 'Shell', claude: 'Claude Code', codex: 'Codex' }
 const none = '__none__'
@@ -44,7 +45,8 @@ export function NewSession({ open, onOpenChange, onCreated }: { open: boolean; o
     }).finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [open, attempt])
-  const agent = options?.agents.find((item) => item.id === agentId)
+  const agentChoices = useTerminalAgents(options?.agents)
+  const agent = agentChoices.find((item) => item.id === agentId)
   const task = options?.tasks.find((item) => item.id === taskId)
   const suggestedTitle = task?.title ?? `${programs[program]}${agent ? ` - ${agent.name}` : ''}`
   function assignAgent(id: string) {
@@ -74,7 +76,7 @@ export function NewSession({ open, onOpenChange, onCreated }: { open: boolean; o
         <Field name="program"><FieldLabel>Program</FieldLabel><Select items={{ shell: 'Shell', claude: 'Claude Code', codex: 'Codex' }} value={program} onValueChange={(value: string | null) => { if (value) setProgram(value) }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="shell">Shell</SelectItem><SelectItem value="claude">Claude Code</SelectItem><SelectItem value="codex">Codex</SelectItem></SelectContent></Select></Field>
         <Field name="cwd"><FieldLabel>Working directory</FieldLabel><Input value={cwd} disabled={loading || busy} onChange={(e: React.ChangeEvent<HTMLInputElement>) => { setCwd(e.target.value); setCwdEdited(true) }} required placeholder={loading ? 'Loading...' : '/absolute/path'} /></Field>
         {program !== 'shell' && <Field name="checkout"><FieldLabel>Checkout</FieldLabel><Select items={{ isolated: 'New isolated worktree', existing: 'Existing checkout' }} value={checkout} onValueChange={(value: string | null) => { if (value) setCheckout(value) }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="isolated">New isolated worktree</SelectItem><SelectItem value="existing">Existing checkout</SelectItem></SelectContent></Select></Field>}
-        <Field name="agent"><FieldLabel>Assigned agent</FieldLabel><AgentSelect ariaLabel="Assigned agent" value={agentId} onValueChange={assignAgent} agents={(options?.agents ?? []).map((item) => ({ id: item.id, name: item.enabled ? item.name : `${item.name} (access disabled)`, disabled: !item.enabled }))} allowNone disabled={loading || busy} /></Field>
+        <Field name="agent"><FieldLabel>Assigned agent</FieldLabel><AgentSelect id="terminal-new-agent" name="agent" className="w-full" ariaLabel="Assigned agent" value={agentId} onValueChange={assignAgent} agents={agentChoices} allowNone disabled={loading || busy} /></Field>
         <Field name="task"><FieldLabel>Task</FieldLabel><Select items={{ [none]: 'No task', ...Object.fromEntries((options?.tasks ?? []).map((item) => [item.id, item.title])) }} value={taskId || none} disabled={loading || busy} onValueChange={(value: string | null) => chooseTask(value === none ? '' : value ?? '')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value={none}>No task</SelectItem>{options?.tasks.map((item) => <SelectItem key={item.id} value={item.id}>{item.title}</SelectItem>)}</SelectContent></Select></Field>
         <Field name="project"><FieldLabel>Project</FieldLabel><Select items={{ [none]: 'No project', ...Object.fromEntries(projects.map((item) => [item.id, item.title])) }} value={projectId || none} disabled={loading || busy} onValueChange={(value: string | null) => setProjectId(value === none ? '' : value ?? '')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value={none}>No project</SelectItem>{projects.map((item) => <SelectItem key={item.id} value={item.id}>{item.title}</SelectItem>)}</SelectContent></Select></Field>
         <FormActions><SubmitButton busyLabel="Starting" disabled={loading || !options || !cwd.trim() || !(title ?? suggestedTitle).trim()}>Start terminal</SubmitButton></FormActions>

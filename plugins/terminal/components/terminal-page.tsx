@@ -10,6 +10,7 @@ import { api, clientId } from './api'
 import { TerminalCanvas } from './terminal-canvas'
 import { NewSession } from './new-session'
 import { TerminalTool as Tool } from './terminal-tool'
+import { useTerminalAgents } from './use-terminal-agents'
 import './terminal.css'
 
 function Workspace({ sessionId }: { sessionId?: string }) {
@@ -25,6 +26,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const [assignment, setAssignment] = useState('')
   const [agents, setAgents] = useState<SessionOptionsData['agents']>([])
   const [agentsError, setAgentsError] = useState('')
+  const agentChoices = useTerminalAgents(agents)
   const [confirm, setConfirm] = useState<'terminate' | 'delete-history' | null>(null)
   const queue = useRef(Promise.resolve())
   const epoch = useRef(0)
@@ -54,7 +56,8 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   useEffect(() => { setAssignment(session?.agentId ?? '') }, [session?.id, session?.agentId])
   async function operate(operation: string, extra: Record<string, unknown> = {}) {
     if (!session) return
-    setBusy(true); setError(''); epoch.current++
+    setBusy(true); setError('')
+    if (operation !== 'resize') epoch.current++
     try {
       const result = await api<Session>('/session', { id: session.id, operation, generation: session.generation, ...extra })
       if (result.id) update(result)
@@ -133,7 +136,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
                     {session.worktreePath && <Badge size="xs" variant="outline">Worktree retained</Badge>}
                   </Stack>
                   <Inline gap="dense">
-                    <AgentSelect ariaLabel="Assigned agent" value={assignment} onValueChange={setAssignment} agents={agents.map((agent) => ({ id: agent.id, name: agent.enabled ? agent.name : `${agent.name} (access disabled)`, disabled: !agent.enabled }))} allowNone disabled={busy || Boolean(agentsError)} />
+                    <div className="min-w-0 flex-1"><AgentSelect className="w-full" ariaLabel="Assigned agent" value={assignment} onValueChange={setAssignment} agents={agentChoices} allowNone disabled={busy || Boolean(agentsError)} /></div>
                     <Tool label="Assign agent" description="Apply the selected agent to this session." disabled={busy || Boolean(agentsError) || assignment === (session.agentId ?? '')} onClick={() => void operate('assign', { agentId: assignment || undefined })}><UserRoundCheck size={16} /></Tool>
                   </Inline>
                   {agentsError && <SystemState kind="error" scope="inline" title={agentsError} description="Current assignment is unchanged." action={<Button size="sm" variant="outline" onClick={() => void loadAgents()}>Retry agents</Button>} />}
@@ -160,7 +163,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
           {session.cleanupReason && <Alert tone="attention"><AlertDescription>{session.cleanupReason}</AlertDescription></Alert>}
           </Stack>}
           <Separator />
-          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas session={session} writable={writable} controlStatus={session.state === 'completed' ? 'Completed' : writable ? 'You have control' : session.owner.kind === 'agent' ? `${agents.find((agent) => agent.id === session.owner.id)?.name ?? session.owner.id} has control` : 'Read only'} onInput={input} onSession={update} onResize={(cols, rows) => void operate('resize', { cols, rows })} />}
+          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas session={session} writable={writable} controlStatus={session.state === 'completed' ? 'Completed' : writable ? 'You have control' : session.owner.kind === 'agent' ? `${agents.find((agent) => agent.id === session.owner.id)?.name ?? session.owner.id} has control` : 'Read only'} onInput={input} onSession={update} onResize={(cols, rows) => operate('resize', { cols, rows })} />}
         </>)}
       </Stack>
     </WorkspacePageBody>
