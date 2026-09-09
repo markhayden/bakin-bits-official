@@ -132,9 +132,13 @@ Run `TERMINAL_PREVIEW_URL=<printed URL> bun test tests/browser.integration.test.
 --isolate` from this plugin for live desktop/mobile browser verification.
 
 The `/terminal` index uses `storybook/public/pages/page.stories.tsx` /
-`CanonicalUsage` and `lists/list-rows.stories.tsx` / `InteractiveRows`.
+`CanonicalUsage` and `lists/data-table.stories.tsx` / `ActivatableRows`.
+The index has Session, Program, Agent, Status, and Working directory columns;
+the kit owns narrow-screen horizontal scrolling and keyboard row activation.
 Session detail uses `pages/workspace-page.stories.tsx` / `ImmersiveCanvas`:
 full-width output, a compact Back link, and no session rail or navigation select.
+Session controls occupy the right-hand title-row actions in both full and compact
+headers. New terminal is available on the index, not inside a session.
 `overlays/popover.stories.tsx` / `CanonicalUsage` holds assignment and details;
 `overlays/dropdown-menu.stories.tsx` / `CanonicalUsage` holds completion actions.
 All icon tools use `overlays/tooltip.stories.tsx` / `CanonicalUsage`, with
