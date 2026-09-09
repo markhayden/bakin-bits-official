@@ -99,7 +99,8 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     })
     await page.locator('[data-slot="workspace-page-compact-header"][data-stuck]').waitFor()
     expect(output!.height).toBeGreaterThan(700)
-    for (const name of ['Session details', 'Take control', 'Return control to agent', 'Interrupt process', 'Session actions', 'Fit terminal to viewport', 'Reconnect terminal']) {
+    expect(await page.getByRole('button', { name: 'Fit terminal to viewport', exact: true }).count()).toBe(0)
+    for (const name of ['Session details', 'Take control', 'Return control to agent', 'Interrupt process', 'Session actions', 'Reconnect terminal']) {
       await page.getByRole('button', { name, exact: true }).hover()
       await page.getByRole('tooltip').filter({ hasText: name }).waitFor()
       await page.mouse.move(0, 0)

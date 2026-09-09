@@ -3,7 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Checkbox, Label, Text } from '@makinbakin/sdk/ui'
 import { BoundedOverflow, Inline, Stack } from '@makinbakin/sdk/layout'
-import { RotateCw, Maximize } from 'lucide-react'
+import { RotateCw } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import { terminalFetch } from './api'
 import { TerminalTool as Tool } from './terminal-tool'
@@ -106,7 +106,6 @@ export function TerminalCanvas({ session, writable, controlStatus, onInput, onSe
     <Inline gap="dense" className="shrink-0 px-bakin-4 py-bakin-2">
       <Text size="meta" tone="muted" role="status" className="flex-1">{status === controlStatus ? status : `${status} / ${controlStatus}`}{truncated ? ' / Earlier output truncated' : ''}</Text>
       <Inline gap="dense"><Checkbox id={captureTabId} checked={captureTab} onCheckedChange={(checked: boolean) => setCaptureTab(checked)} /><Label htmlFor={captureTabId}><Text size="meta">Capture Tab</Text></Label></Inline>
-      <Tool label="Fit terminal to viewport" description="Refit the session to the available space. Requires control." disabled={!writable} onClick={() => void resizeToViewport()}><Maximize size={16} /></Tool>
       <Tool label="Reconnect terminal" description="Reconnect to this session without restarting its process." onClick={() => setAttempt((value) => value + 1)}><RotateCw size={16} /></Tool>
     </Inline>
     <BoundedOverflow label="Terminal output" className="min-h-[calc(var(--bakin-layout-space-8)*5)] flex-1 bg-bakin-canvas-default p-bakin-2">

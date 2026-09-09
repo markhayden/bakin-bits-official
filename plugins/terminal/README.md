@@ -140,9 +140,19 @@ full-width output, a compact Back link, and no session rail or navigation select
 All icon tools use `overlays/tooltip.stories.tsx` / `CanonicalUsage`, with
 explanations on hover and keyboard focus, including disabled controls.
 SDK `/patterns`, `/layout`, `/ui`, and `/navigation` own the page composition,
-spacing, typography, tool controls, and empty/error states. Fit resizes the
-terminal to available space only when this browser owns input; viewing does not
-resize another owner's session. Back navigation never terminates the process.
+spacing, typography, tool controls, and empty/error states. The xterm surface
+always fills the available pane. Its cell grid automatically resizes when this
+browser owns input; there is no manual Fit control, and viewing does not resize
+another owner's session. Back navigation never terminates the process.
+Agent assignment uses the same full-width kit field and registered display
+name, portrait, and accent color as Tasks; terminal enablement remains a
+separate permission gate.
+
+Manual shell smoke test:Title `Manual shell test`, Program `Shell`, Working
+directory `/tmp`, Assigned agent `Unassigned`, Task `No task`, Project
+`No project`. Start the terminal and run `pwd` and `printf 'terminal test OK\n'`.
+The prompt should resize automatically as the pane changes. Use Session
+actions / Terminate and complete to finish the test.
 xterm content/styles remain scoped to the plugin. Tab exits the terminal by
 default; Capture Tab is explicit. Client markers use cryptographic random bytes
 available on HTTP LAN/Tailscale origins, not secure-context-only `randomUUID`.
