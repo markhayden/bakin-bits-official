@@ -65,7 +65,7 @@ browserTest('an agent-controlled terminal fills the pane without resizing the sh
     await page.setViewportSize({ width: 1000, height: 740 })
     await page.waitForTimeout(250)
     const pane = await page.getByRole('region', { name: 'Terminal output', exact: true }).boundingBox()
-    expect((await page.locator('.terminal-xterm .xterm').boundingBox())!.height).toBeGreaterThan(pane!.height - 20)
+    expect((await page.locator('.terminal-xterm .xterm').boundingBox())!.height).toBeGreaterThan(pane!.height - 40)
     expect(resizes).toBe(0)
   } finally { await browser.close() }
 }, 15000)
@@ -94,7 +94,10 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     const output = await page.getByRole('region', { name: 'Terminal output', exact: true }).boundingBox()
     expect(output!.width).toBeGreaterThan(width * 0.95)
     const surface = await page.locator('.terminal-xterm .xterm').boundingBox()
-    expect(surface!.height).toBeGreaterThan(output!.height - 20)
+    expect(surface!.height).toBeGreaterThan(output!.height - 40)
+    expect(surface!.x - output!.x).toBeGreaterThanOrEqual(16)
+    expect(surface!.y - output!.y).toBeGreaterThanOrEqual(16)
+    expect(await page.getByRole('region', { name: 'Terminal output', exact: true }).evaluate((region) => getComputedStyle(region).backgroundColor === getComputedStyle(region.querySelector('.xterm-viewport')!).backgroundColor)).toBe(true)
     await page.waitForFunction(() => {
       const element = document.querySelector<HTMLElement>('[data-archetype="workspace"]')
       if (!element) return false
@@ -110,10 +113,13 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     expect(controlsBox!.y).toBeGreaterThanOrEqual(headerBox!.y)
     expect(controlsBox!.y + controlsBox!.height).toBeLessThanOrEqual(headerBox!.y + headerBox!.height)
     expect(controlsBox!.x).toBeGreaterThan(headerBox!.x + headerBox!.width / 2)
+    const fittedOutput = await page.getByRole('region', { name: 'Terminal output', exact: true }).boundingBox()
+    expect(fittedOutput!.y - (headerBox!.y + headerBox!.height)).toBeLessThanOrEqual(2)
+    await header.getByRole('status').waitFor()
     expect(output!.height).toBeGreaterThan(700)
     expect(await page.getByRole('button', { name: 'Fit terminal to viewport', exact: true }).count()).toBe(0)
-    for (const name of ['Session details', 'Take control', 'Return control to agent', 'Interrupt process', 'Session actions', 'Reconnect terminal']) {
-      await (name === 'Reconnect terminal' ? page : controls).getByRole('button', { name, exact: true }).hover()
+    for (const name of ['Session details', 'Take control', 'Return control to agent', 'Interrupt process', 'Session actions']) {
+      await controls.getByRole('button', { name, exact: true }).hover()
       await page.getByRole('tooltip').filter({ hasText: name }).waitFor()
       await page.mouse.move(0, 0)
       await page.getByRole('tooltip').waitFor({ state: 'hidden' })
@@ -126,6 +132,8 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     await page.getByRole('dialog', { name: 'Session details' }).getByText(session.cwd, { exact: true }).waitFor()
     await page.keyboard.press('Escape')
     await controls.getByRole('button', { name: 'Session actions', exact: true }).click()
+    await page.getByRole('menuitem', { name: 'Reconnect terminal', exact: true }).waitFor()
+    await page.getByRole('menuitemcheckbox', { name: 'Send Tab to terminal', exact: true }).waitFor()
     expect(await page.getByRole('menuitem', { name: 'Terminate and complete', exact: true }).isDisabled()).toBe(true)
     await page.keyboard.press('Escape')
     await page.screenshot({ path: join(import.meta.dir, '../test-results/design/immersive-desktop.png') })

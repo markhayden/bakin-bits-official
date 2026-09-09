@@ -1,7 +1,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Page, PageBody, PageHeader, WorkspacePage, WorkspacePageHeader, WorkspacePageCompactHeader, WorkspacePageBody, ConfirmDialog, AgentSelect, DataTable } from '@makinbakin/sdk/patterns'
 import { Inline, Stack } from '@makinbakin/sdk/layout'
-import { Alert, AlertDescription, Badge, Button, SystemState, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, Text, Separator, Popover, PopoverTrigger, PopoverContent, PopoverTitle, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@makinbakin/sdk/ui'
+import { Alert, AlertDescription, Badge, Button, SystemState, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, Text, Separator, Popover, PopoverTrigger, PopoverContent, PopoverTitle, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuCheckboxItem, DropdownMenuSeparator } from '@makinbakin/sdk/ui'
 import { PluginLink, useRouter } from '@makinbakin/sdk/navigation'
 import { Plus, Hand, Play, Square, Check, Trash2, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Ellipsis, Terminal, RotateCw } from 'lucide-react'
 import type { Session } from '../lib/contracts'
@@ -24,6 +24,10 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const [busy, setBusy] = useState(false)
   const [creating, setCreating] = useState(false)
   const [assignment, setAssignment] = useState('')
+  const [captureTab, setCaptureTab] = useState(false)
+  const [attempt, setAttempt] = useState(0)
+  const [streamStatus, setStreamStatus] = useState('Connecting')
+  useEffect(() => { setCaptureTab(false); setAttempt(0); setStreamStatus('Connecting') }, [sessionId])
   const [agents, setAgents] = useState<SessionOptionsData['agents']>([])
   const [agentsError, setAgentsError] = useState('')
   const agentChoices = useTerminalAgents(agents)
@@ -53,6 +57,9 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   useEffect(() => { void loadAgents() }, [sessionId, loadAgents])
   const session = all.find((item) => item.id === sessionId)
   const writable = Boolean(session && session.owner.kind === 'human' && session.owner.id === clientId() && session.state === 'running')
+  const controlStatus = session?.state === 'completed' ? 'Completed' : writable ? 'You have control' : session?.owner.kind === 'agent' ? `${agents.find((agent) => agent.id === session.owner.id)?.name ?? session.owner.id} has control` : 'Read only'
+  const status = session?.historyDeleted ? 'Output history deleted' : streamStatus === controlStatus ? streamStatus : `${streamStatus} / ${controlStatus}`
+  const statusText = session && <Text as="span" size="meta" tone="muted" role="status" className="block truncate" title={status}>{status}</Text>
   useEffect(() => { setAssignment(session?.agentId ?? '') }, [session?.id, session?.agentId])
   async function operate(operation: string, extra: Record<string, unknown> = {}) {
     if (!session) return
@@ -103,6 +110,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
                     <Text weight="semibold">{session.title}</Text>
                     <Text size="meta" tone="muted" mono>{session.cwd}</Text>
                     <Text size="meta" tone="muted">{session.program} / {session.state}</Text>
+                    <Text size="meta" tone="muted">{status}</Text>
                     {session.worktreePath && <Badge size="xs" variant="outline">Worktree retained</Badge>}
                   </Stack>
                   <Inline gap="dense">
@@ -119,8 +127,11 @@ function Workspace({ sessionId }: { sessionId?: string }) {
             <Tool label="Return control to agent" description={!session.agentId ? 'Assign an enabled agent first.' : 'Hand keyboard input back to the assigned agent.'} disabled={busy || !session.agentId || !writable} onClick={() => void operate('return')}><Play size={16} /></Tool>
             <Tool label="Interrupt process" description="Send Ctrl+C to the foreground process. Requires control." disabled={busy || !writable} onClick={() => input('\x03')}><Square size={16} /></Tool>
             <DropdownMenu>
-              <Tool label="Session actions" description="Complete, terminate, or delete retained output." render={<DropdownMenuTrigger render={<Button size="icon-sm" variant="ghost" aria-label="Session actions" />} />}><Ellipsis size={16} /></Tool>
+              <Tool label="Session actions" description="Set Tab capture, reconnect the output stream, or complete this session." render={<DropdownMenuTrigger render={<Button size="icon-sm" variant="ghost" aria-label="Session actions" />} />}><Ellipsis size={16} /></Tool>
               <DropdownMenuContent align="end">
+                <DropdownMenuCheckboxItem checked={captureTab} onCheckedChange={setCaptureTab} disabled={session.historyDeleted}>Send Tab to terminal</DropdownMenuCheckboxItem>
+                <DropdownMenuItem disabled={session.historyDeleted} onClick={() => setAttempt((value) => value + 1)}><RotateCw size={16} />Reconnect terminal</DropdownMenuItem>
+                <DropdownMenuSeparator />
                 <DropdownMenuItem disabled={busy || session.state === 'completed'} onClick={() => void operate('complete')}><Check size={16} />Complete session</DropdownMenuItem>
                 <DropdownMenuItem variant="danger" disabled={busy || session.state === 'completed'} onClick={() => setConfirm('terminate')}><Trash2 size={16} />Terminate and complete</DropdownMenuItem>
                 <DropdownMenuItem variant="danger" disabled={busy || session.state !== 'completed' || session.historyDeleted} onClick={() => setConfirm('delete-history')}><Trash2 size={16} />Delete completed output</DropdownMenuItem>
@@ -148,9 +159,9 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     </PageBody>
   </Page> : <WorkspacePage mode="immersive" className="terminal-page" data-terminal-ui-ready={!loading ? '' : undefined}>
     <WorkspacePageHeader>
-        <PageHeader navigation={back} eyebrow="Terminal" title={session?.title ?? 'Terminal'} actions={controls} />
+        <PageHeader navigation={back} eyebrow="Terminal" title={session?.title ?? 'Terminal'} meta={statusText} actions={controls} />
     </WorkspacePageHeader>
-    <WorkspacePageCompactHeader navigation={back} title={session?.title ?? 'Terminal'} action={controls} />
+    <WorkspacePageCompactHeader navigation={back} title={<><span className="block truncate">{session?.title ?? 'Terminal'}</span>{statusText}</>} action={controls} />
     <WorkspacePageBody>
       <Stack as="section" gap="none" className="min-h-0 flex-1 overflow-y-auto" aria-label="Selected terminal">
         {(loadError && all.length > 0 || error) && <Stack gap="item" className="shrink-0 p-bakin-4">
@@ -162,7 +173,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
           {session.cleanupReason && <Alert tone="attention"><AlertDescription>{session.cleanupReason}</AlertDescription></Alert>}
           </Stack>}
           <Separator />
-          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas session={session} writable={writable} controlStatus={session.state === 'completed' ? 'Completed' : writable ? 'You have control' : session.owner.kind === 'agent' ? `${agents.find((agent) => agent.id === session.owner.id)?.name ?? session.owner.id} has control` : 'Read only'} onInput={input} onSession={update} onResize={(cols, rows) => operate('resize', { cols, rows })} />}
+          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} captureTab={captureTab} attempt={attempt} onStatus={setStreamStatus} onInput={input} onSession={update} onResize={(cols, rows) => operate('resize', { cols, rows })} />}
         </>)}
       </Stack>
     </WorkspacePageBody>

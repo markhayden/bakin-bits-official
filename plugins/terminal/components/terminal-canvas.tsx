@@ -1,25 +1,20 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { Checkbox, Label, Text } from '@makinbakin/sdk/ui'
-import { BoundedOverflow, Inline, Stack } from '@makinbakin/sdk/layout'
-import { RotateCw } from 'lucide-react'
+import { BoundedOverflow } from '@makinbakin/sdk/layout'
 import type { Session } from '../lib/contracts'
 import { terminalFetch } from './api'
-import { TerminalTool as Tool } from './terminal-tool'
 import '@xterm/xterm/css/xterm.css'
 
-export function TerminalCanvas({ session, writable, controlStatus, onInput, onSession, onResize }: {
-  session: Session; writable: boolean; controlStatus: string; onInput(data: string): void; onSession(session: Session): void; onResize(cols: number, rows: number): Promise<boolean | undefined>
+export function TerminalCanvas({ session, writable, captureTab, attempt, onStatus, onInput, onSession, onResize }: {
+  session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string): void; onSession(session: Session): void; onResize(cols: number, rows: number): Promise<boolean | undefined>
 }) {
   const element = useRef<HTMLDivElement>(null)
   const callbacks = useRef({ onInput, onSession, onResize, writable, captureTab: false })
-  const [captureTab, setCaptureTab] = useState(false)
-  const captureTabId = useId()
   callbacks.current = { onInput, onSession, onResize, writable, captureTab }
   const [status, setStatus] = useState('Connecting')
-  const [attempt, setAttempt] = useState(0)
   const [truncated, setTruncated] = useState(false)
+  useEffect(() => { onStatus(`${status}${truncated ? ' / Earlier output truncated' : ''}`) }, [status, truncated, onStatus])
   const terminal = useRef<Terminal | null>(null)
   const fit = useRef<FitAddon | null>(null)
   const resizing = useRef(false)
@@ -41,7 +36,8 @@ export function TerminalCanvas({ session, writable, controlStatus, onInput, onSe
   }
   useEffect(() => {
     const abort = new AbortController()
-    const term = new Terminal({ cols: session.cols, rows: session.rows, scrollback: 2000, fontSize: 13, screenReaderMode: true, convertEol: false })
+    const background = getComputedStyle(element.current!.parentElement!).backgroundColor
+    const term = new Terminal({ cols: session.cols, rows: session.rows, scrollback: 2000, fontSize: 13, screenReaderMode: true, convertEol: false, theme: { background } })
     terminal.current = term
     fit.current = new FitAddon()
     term.loadAddon(fit.current)
@@ -102,14 +98,7 @@ export function TerminalCanvas({ session, writable, controlStatus, onInput, onSe
     schedule()
     return () => { disposed = true; clearTimeout(timer); observer.disconnect() }
   }, [session.id, writable, attempt])
-  return <Stack gap="none" className="min-h-0 flex-1">
-    <Inline gap="dense" className="shrink-0 px-bakin-4 py-bakin-2">
-      <Text size="meta" tone="muted" role="status" className="flex-1">{status === controlStatus ? status : `${status} / ${controlStatus}`}{truncated ? ' / Earlier output truncated' : ''}</Text>
-      <Inline gap="dense"><Checkbox id={captureTabId} checked={captureTab} onCheckedChange={(checked: boolean) => setCaptureTab(checked)} /><Label htmlFor={captureTabId}><Text size="meta">Capture Tab</Text></Label></Inline>
-      <Tool label="Reconnect terminal" description="Reconnect to this session without restarting its process." onClick={() => setAttempt((value) => value + 1)}><RotateCw size={16} /></Tool>
-    </Inline>
-    <BoundedOverflow label="Terminal output" className="min-h-[calc(var(--bakin-layout-space-8)*5)] flex-1 bg-bakin-canvas-default p-bakin-2">
+  return <BoundedOverflow label="Terminal output" className="min-h-[calc(var(--bakin-layout-space-8)*5)] flex-1 bg-bakin-canvas-default p-bakin-4">
       <div ref={element} className="terminal-xterm h-full min-w-0" />
     </BoundedOverflow>
-  </Stack>
 }
