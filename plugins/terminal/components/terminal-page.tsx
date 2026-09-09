@@ -1,5 +1,5 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { Page, PageBody, PageHeader, WorkspacePage, WorkspacePageHeader, WorkspacePageCompactHeader, WorkspacePageBody, ConfirmDialog, AgentSelect, ListRows, ListRow } from '@makinbakin/sdk/patterns'
+import { Page, PageBody, PageHeader, WorkspacePage, WorkspacePageHeader, WorkspacePageCompactHeader, WorkspacePageBody, ConfirmDialog, AgentSelect, DataTable } from '@makinbakin/sdk/patterns'
 import { Inline, Stack } from '@makinbakin/sdk/layout'
 import { Alert, AlertDescription, Badge, Button, SystemState, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, Text, Separator, Popover, PopoverTrigger, PopoverContent, PopoverTitle, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@makinbakin/sdk/ui'
 import { PluginLink, useRouter } from '@makinbakin/sdk/navigation'
@@ -93,37 +93,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     {loadError && all.length > 0 && <SystemState kind="error" scope="inline" title="Terminals could not be refreshed" description={loadError} action={<Button size="sm" variant="outline" onClick={() => void refresh()}><RotateCw size={16} />Retry</Button>} />}
     {error && <Alert tone="danger"><AlertDescription>{error}</AlertDescription></Alert>}
   </>
-  return <TooltipProvider>{!sessionId ? <Page data-terminal-ui-ready={!loading ? '' : undefined}>
-    <PageHeader title="Terminal" meta={!loading && !loadError && serviceReady ? <Badge size="xs" variant="outline">{all.filter((item) => item.state === 'running').length} running</Badge> : undefined} actions={all.length > 0 ? newTerminal : undefined} />
-    <PageBody label="Terminal sessions">
-      {feedback}
-      {state ?? <ListRows aria-label="Terminal sessions">
-        {all.map((item) => <ListRow key={item.id} interactive={{ label: `Open terminal: ${item.title}`, render: <PluginLink to={`/terminal/${encodeURIComponent(item.id)}`} /> }}>
-          <Inline justify="between" align="start">
-            <Stack gap="dense" className="flex-1">
-              <Text weight="semibold">{item.title}</Text>
-              <Text size="meta" tone="muted">{item.program} / {item.agentId ? agents.find((agent) => agent.id === item.agentId)?.name ?? item.agentId : 'Unassigned'}</Text>
-              <Text size="meta" tone="muted" mono>{item.cwd}</Text>
-            </Stack>
-            <Stack gap="dense" align="start">
-              <Badge size="xs" variant="outline">{item.state === 'running' ? 'Running' : item.state === 'exited' ? 'Exited' : 'Completed'}</Badge>
-              {item.worktreePath && <Badge size="xs" variant="outline">Worktree retained</Badge>}
-            </Stack>
-          </Inline>
-        </ListRow>)}
-      </ListRows>}
-    </PageBody>
-  </Page> : <WorkspacePage mode="immersive" className="terminal-page" data-terminal-ui-ready={!loading ? '' : undefined}>
-    <WorkspacePageHeader>
-        <PageHeader navigation={back} eyebrow="Terminal" title={session?.title ?? 'Terminal'} actions={newTerminal} />
-    </WorkspacePageHeader>
-    <WorkspacePageCompactHeader navigation={back} title={session?.title ?? 'Terminal'} action={newTerminal} />
-    <WorkspacePageBody>
-      <Stack as="section" gap="none" className="min-h-0 flex-1 overflow-y-auto" aria-label="Selected terminal">
-        {(loadError && all.length > 0 || error) && <Stack gap="item" className="shrink-0 p-bakin-4">
-          {feedback}
-        </Stack>}
-        {session && <Inline gap="dense" className="shrink-0 px-bakin-4 py-bakin-2" aria-label="Terminal controls">
+  const controls = session && <Inline gap="dense" wrap={false} aria-label="Terminal controls">
             <Popover>
               <Tool label="Session details" description="View the working directory, agent assignment, and linked work." render={<PopoverTrigger render={<Button size="icon-sm" variant="ghost" aria-label="Session details" />} />}><Info size={16} /></Tool>
               <PopoverContent align="end">
@@ -156,7 +126,36 @@ function Workspace({ sessionId }: { sessionId?: string }) {
                 <DropdownMenuItem variant="danger" disabled={busy || session.state !== 'completed' || session.historyDeleted} onClick={() => setConfirm('delete-history')}><Trash2 size={16} />Delete completed output</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-        </Inline>}
+        </Inline>
+  return <TooltipProvider>{!sessionId ? <Page data-terminal-ui-ready={!loading ? '' : undefined}>
+    <PageHeader title="Terminal" meta={!loading && !loadError && serviceReady ? <Badge size="xs" variant="outline">{all.filter((item) => item.state === 'running').length} running</Badge> : undefined} actions={all.length > 0 ? newTerminal : undefined} />
+    <PageBody label="Terminal sessions">
+      {feedback}
+      {state ?? <DataTable
+        label="Terminal sessions"
+        rows={all}
+        rowKey={(item) => item.id}
+        onRowActivate={(item) => router.push(`/terminal/${encodeURIComponent(item.id)}`)}
+        rowActivateLabel={(item) => `Open terminal: ${item.title}`}
+        columns={[
+          { key: 'title', header: 'Session', cellClassName: 'whitespace-normal', cell: (item) => <PluginLink to={`/terminal/${encodeURIComponent(item.id)}`} aria-label={`Open terminal: ${item.title}`}><Text weight="semibold">{item.title}</Text></PluginLink> },
+          { key: 'program', header: 'Program' },
+          { key: 'agentId', header: 'Agent', cell: (item) => item.agentId ? agentChoices.find((agent) => agent.id === item.agentId)?.name ?? item.agentId : 'Unassigned' },
+          { key: 'state', header: 'Status', cell: (item) => <Stack gap="dense" align="start"><Badge size="xs" variant="outline">{item.state === 'running' ? 'Running' : item.state === 'exited' ? 'Exited' : 'Completed'}</Badge>{item.worktreePath && <Badge size="xs" variant="outline">Worktree retained</Badge>}</Stack> },
+          { key: 'cwd', header: 'Working directory', cell: (item) => <Text size="meta" tone="muted" mono>{item.cwd}</Text> },
+        ]}
+      />}
+    </PageBody>
+  </Page> : <WorkspacePage mode="immersive" className="terminal-page" data-terminal-ui-ready={!loading ? '' : undefined}>
+    <WorkspacePageHeader>
+        <PageHeader navigation={back} eyebrow="Terminal" title={session?.title ?? 'Terminal'} actions={controls} />
+    </WorkspacePageHeader>
+    <WorkspacePageCompactHeader navigation={back} title={session?.title ?? 'Terminal'} action={controls} />
+    <WorkspacePageBody>
+      <Stack as="section" gap="none" className="min-h-0 flex-1 overflow-y-auto" aria-label="Selected terminal">
+        {(loadError && all.length > 0 || error) && <Stack gap="item" className="shrink-0 p-bakin-4">
+          {feedback}
+        </Stack>}
         {state ?? (!session ? <SystemState kind="initial-empty" scope="page" icon={<Terminal size={32} />} title="Terminal not found" description="This session is not available." action={<Button variant="outline" nativeButton={false} render={<PluginLink to="/terminal" />}>Back to terminals</Button>} /> : <>
           {(!serviceReady || session.cleanupReason) && <Stack gap="item" className="shrink-0 p-bakin-4">
           {!serviceReady && <SystemState kind="error" scope="inline" title="Terminal service unavailable" description="Existing sessions are retained." action={<Button disabled={busy} onClick={() => void setup()}>Set up service</Button>} />}
