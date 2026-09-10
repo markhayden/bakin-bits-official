@@ -135,6 +135,17 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     await controls.getByRole('button', { name: 'Session actions', exact: true }).click()
     await page.getByRole('menuitem', { name: 'Reconnect terminal', exact: true }).waitFor()
     await page.getByRole('menuitemcheckbox', { name: 'Send Tab to terminal', exact: true }).waitFor()
+    const menu = page.getByRole('menu', { name: 'Session actions', exact: true })
+    expect((await menu.boundingBox())!.width).toBeGreaterThanOrEqual(250)
+    const singleLineLabels = () => menu.evaluate((element) => Array.from(element.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"]')).every((item) => {
+      const text = Array.from(item.childNodes).find((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim())
+      if (!text) return false
+      const range = document.createRange()
+      range.selectNodeContents(text)
+      return range.getClientRects().length === 1
+    }))
+    expect(await singleLineLabels()).toBe(true)
+    await page.screenshot({ path: join(import.meta.dir, '../test-results/design/actions-desktop.png') })
     expect(await page.getByRole('menuitem', { name: 'Terminate and complete', exact: true }).isDisabled()).toBe(true)
     await page.keyboard.press('Escape')
     await page.screenshot({ path: join(import.meta.dir, '../test-results/design/immersive-desktop.png') })
@@ -170,5 +181,13 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     const mobileOutput = await page.getByRole('region', { name: 'Terminal output', exact: true }).boundingBox()
     expect(mobileOutput!.height).toBeGreaterThan(350)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await controls.getByRole('button', { name: 'Session actions', exact: true }).click()
+    await menu.waitFor()
+    expect(await singleLineLabels()).toBe(true)
+    const menuBounds = await menu.boundingBox()
+    expect(menuBounds!.x).toBeGreaterThanOrEqual(0)
+    expect(menuBounds!.x + menuBounds!.width).toBeLessThanOrEqual(320)
+    await page.screenshot({ path: join(import.meta.dir, '../test-results/design/actions-mobile.png'), animations: 'disabled' })
+    await page.keyboard.press('Escape')
   } finally { await browser.close() }
 }, 30000)

@@ -128,7 +128,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
             <Tool label="Interrupt process" description="Send Ctrl+C to the foreground process. Requires control." disabled={busy || !writable} onClick={() => input('\x03')}><Square size={16} /></Tool>
             <DropdownMenu>
               <Tool label="Session actions" description="Set Tab capture, reconnect the output stream, or complete this session." render={<DropdownMenuTrigger render={<Button size="icon-sm" variant="ghost" aria-label="Session actions" />} />}><Ellipsis size={16} /></Tool>
-              <DropdownMenuContent align="end">
+              <DropdownMenuContent align="end" className="w-72">
                 <DropdownMenuCheckboxItem checked={captureTab} onCheckedChange={setCaptureTab} disabled={session.historyDeleted}>Send Tab to terminal</DropdownMenuCheckboxItem>
                 <DropdownMenuItem disabled={session.historyDeleted} onClick={() => setAttempt((value) => value + 1)}><RotateCw size={16} />Reconnect terminal</DropdownMenuItem>
                 <DropdownMenuSeparator />
