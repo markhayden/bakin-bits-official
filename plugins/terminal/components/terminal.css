@@ -2,6 +2,10 @@
   height: 100%;
 }
 
+[data-bakin-plugin="terminal"] .terminal-xterm .xterm-viewport {
+  background-color: var(--bakin-color-canvas-default);
+}
+
 [data-bakin-plugin="terminal"] .terminal-xterm .xterm:focus-within {
   outline: 2px solid var(--bakin-color-focus-ring);
   outline-offset: -2px;

@@ -97,6 +97,7 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     expect(surface!.height).toBeGreaterThan(output!.height - 40)
     expect(surface!.x - output!.x).toBeGreaterThanOrEqual(16)
     expect(surface!.y - output!.y).toBeGreaterThanOrEqual(16)
+    expect(await page.getByRole('region', { name: 'Terminal output', exact: true }).evaluate((region) => getComputedStyle(region).backgroundColor === getComputedStyle(region.querySelector('.xterm-scrollable-element')!).backgroundColor)).toBe(true)
     expect(await page.getByRole('region', { name: 'Terminal output', exact: true }).evaluate((region) => getComputedStyle(region).backgroundColor === getComputedStyle(region.querySelector('.xterm-viewport')!).backgroundColor)).toBe(true)
     await page.waitForFunction(() => {
       const element = document.querySelector<HTMLElement>('[data-archetype="workspace"]')

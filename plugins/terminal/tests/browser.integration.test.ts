@@ -39,6 +39,8 @@ browserTest('browser creates a real shell, sends input and reconnects without lo
     await page.waitForURL('**/terminal')
     await page.locator(`a[href="/terminal/${createdId}"]`).click()
     await page.waitForFunction(() => document.querySelector('.xterm-screen')?.textContent?.includes('BROWSER_TERMINAL_OK'))
+    await workspace.evaluate((element) => { element.scrollTop = element.scrollHeight })
+    await workspace.locator('[data-slot="workspace-page-compact-header"][data-stuck]').waitFor()
     const controls = workspace.locator('[data-slot="workspace-page-compact-header"]')
     await controls.getByRole('button', { name: 'Session actions', exact: true }).click()
     await page.getByRole('menuitem', { name: 'Reconnect terminal', exact: true }).click()
