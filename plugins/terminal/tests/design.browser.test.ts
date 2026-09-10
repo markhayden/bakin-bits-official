@@ -145,7 +145,7 @@ browserTest('immersive terminals use the full workspace and retain compact navig
       return range.getClientRects().length === 1
     }))
     expect(await singleLineLabels()).toBe(true)
-    await page.screenshot({ path: join(import.meta.dir, '../test-results/design/actions-desktop.png') })
+    await page.screenshot({ path: join(import.meta.dir, '../test-results/design/actions-desktop.png'), animations: 'disabled' })
     expect(await page.getByRole('menuitem', { name: 'Terminate and complete', exact: true }).isDisabled()).toBe(true)
     await page.keyboard.press('Escape')
     await page.screenshot({ path: join(import.meta.dir, '../test-results/design/immersive-desktop.png') })
