@@ -157,8 +157,16 @@ directory `/tmp`, Assigned agent `Unassigned`, Task `No task`, Project
 `No project`. Start the terminal and run `pwd` and `printf 'terminal test OK\n'`.
 The prompt should resize automatically as the pane changes. Use Session
 actions / Terminate and complete to finish the test.
-xterm content/styles remain scoped to the plugin. Tab exits the terminal by
-default; Capture Tab is explicit. Client markers use cryptographic random bytes
+xterm content/styles remain scoped to the plugin. The output has a kit `p-bakin-4`
+inset; xterm's theme and unused viewport use the same canvas background as that
+inset. The fit addon measures the inner host, leaving padding outside the grid.
+Connection and ownership status share the title header; there is no separate
+stream toolbar. Session actions contains Reconnect terminal (reattach output,
+not restart the shell) and the kit checkbox item Send Tab to terminal. Tab exits
+the terminal by default; enabling that item sends Tab for shell completion.
+The composition uses `overlays/dropdown-menu.stories.tsx` / `Actions` and
+`layout/bounded-overflow.stories.tsx` / `CanonicalUsage` without a kit extension.
+Client markers use cryptographic random bytes
 available on HTTP LAN/Tailscale origins, not secure-context-only `randomUUID`.
 Request failures never imply that the terminal service needs installation.
 No design-system exception or public UI extension is used.
