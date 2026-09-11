@@ -26,7 +26,7 @@ browserTest('HTTP browsers load terminals and empty and error states own the ful
     expect(marker).toMatch(/^[a-zA-Z0-9-]{16,100}$/)
     expect(await page.getByRole('complementary', { name: 'Terminal sessions' }).count()).toBe(0)
     expect(await page.getByRole('button', { name: 'New terminal', exact: true }).count()).toBe(1)
-    expect(await page.locator('[data-slot="system-state"]').getAttribute('data-scope')).toBe('page')
+    expect(await page.getByRole('region', { name: 'No terminals yet', exact: true }).getAttribute('data-scope')).toBe('page')
     await page.screenshot({ path: join(screenshots, 'empty-desktop.png') })
     unavailable = true
     await page.reload()

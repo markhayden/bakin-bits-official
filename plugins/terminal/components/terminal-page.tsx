@@ -145,11 +145,11 @@ function Workspace({ sessionId }: { sessionId?: string }) {
         onRowActivate={(item) => router.push(`/terminal/${encodeURIComponent(item.id)}`)}
         rowActivateLabel={(item) => `Open terminal: ${item.title}`}
         columns={[
-          { key: 'title', header: 'Session', cell: (item) => <PluginLink to={`/terminal/${encodeURIComponent(item.id)}`} aria-label={`Open terminal: ${item.title}`}><Text weight="semibold">{item.title}</Text></PluginLink> },
+          { key: 'title', header: 'Session', headClassName: 'w-1/4', cell: (item) => <PluginLink to={`/terminal/${encodeURIComponent(item.id)}`} aria-label={`Open terminal: ${item.title}`}><Text weight="semibold">{item.title}</Text></PluginLink> },
           { key: 'program', header: 'Program' },
           { key: 'agentId', header: 'Agent', cell: (item) => item.agentId ? agentChoices.find((agent) => agent.id === item.agentId)?.name ?? item.agentId : 'Unassigned' },
           { key: 'state', header: 'Status', cell: (item) => <Stack gap="dense" align="start"><Badge size="xs" variant="outline">{item.state === 'running' ? 'Running' : item.state === 'exited' ? 'Exited' : 'Completed'}</Badge>{item.worktreePath && <Badge size="xs" variant="outline">Worktree retained</Badge>}</Stack> },
-          { key: 'cwd', header: 'Working directory', cell: (item) => <Text size="meta" tone="muted" mono>{item.cwd}</Text> },
+          { key: 'cwd', header: 'Working directory', headClassName: 'w-1/3', cell: (item) => <Text size="meta" tone="muted" mono>{item.cwd}</Text> },
           { key: 'actions', header: 'Actions', hideLabel: true, align: 'end', headClassName: 'w-(--bakin-layout-size-row)', cell: (item) => <SessionActions session={item} busy={busy} label={`Actions for ${item.title}`} allowTake onOperate={(operation, id) => void operate(operation, {}, id)} onConfirm={setConfirm} /> },
         ]}
       />}
