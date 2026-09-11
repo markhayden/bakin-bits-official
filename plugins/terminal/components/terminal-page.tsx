@@ -1,9 +1,9 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Page, PageBody, PageHeader, WorkspacePage, WorkspacePageHeader, WorkspacePageCompactHeader, WorkspacePageBody, ConfirmDialog, AgentSelect, DataTable } from '@makinbakin/sdk/patterns'
 import { Inline, Stack } from '@makinbakin/sdk/layout'
-import { Alert, AlertDescription, Badge, Button, SystemState, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, Text, Separator, Popover, PopoverTrigger, PopoverContent, PopoverTitle, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuCheckboxItem, DropdownMenuSeparator } from '@makinbakin/sdk/ui'
+import { Alert, AlertDescription, Badge, Button, SystemState, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, Text, Separator, Popover, PopoverTrigger, PopoverContent, PopoverTitle, DropdownMenuItem, DropdownMenuCheckboxItem, DropdownMenuSeparator } from '@makinbakin/sdk/ui'
 import { PluginLink, useRouter } from '@makinbakin/sdk/navigation'
-import { Plus, Hand, Play, Square, Check, Trash2, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Ellipsis, Terminal, RotateCw } from 'lucide-react'
+import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Terminal, RotateCw } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
 import { api, clientId } from './api'
@@ -11,6 +11,7 @@ import { TerminalCanvas } from './terminal-canvas'
 import { NewSession } from './new-session'
 import { TerminalTool as Tool } from './terminal-tool'
 import { useTerminalAgents } from './use-terminal-agents'
+import { SessionActions, type SessionConfirmation } from './session-actions'
 import './terminal.css'
 
 function Workspace({ sessionId }: { sessionId?: string }) {
@@ -31,7 +32,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const [agents, setAgents] = useState<SessionOptionsData['agents']>([])
   const [agentsError, setAgentsError] = useState('')
   const agentChoices = useTerminalAgents(agents)
-  const [confirm, setConfirm] = useState<'terminate' | 'delete-history' | null>(null)
+  const [confirm, setConfirm] = useState<SessionConfirmation | null>(null)
   const queue = useRef(Promise.resolve())
   const epoch = useRef(0)
   const update = useCallback((session: Session) => {
@@ -61,12 +62,13 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const status = session?.historyDeleted ? 'Output history deleted' : streamStatus === controlStatus ? streamStatus : `${streamStatus} / ${controlStatus}`
   const statusText = session && <Text as="span" size="meta" tone="muted" role="status" className="block truncate" title={status}>{status}</Text>
   useEffect(() => { setAssignment(session?.agentId ?? '') }, [session?.id, session?.agentId])
-  async function operate(operation: string, extra: Record<string, unknown> = {}) {
-    if (!session) return
+  async function operate(operation: string, extra: Record<string, unknown> = {}, targetId = sessionId) {
+    const target = current.current.find((item) => item.id === targetId)
+    if (!target) return
     setBusy(true); setError('')
     if (operation !== 'resize') epoch.current++
     try {
-      const result = await api<Session>('/session', { id: session.id, operation, generation: session.generation, ...extra })
+      const result = await api<Session>('/session', { id: target.id, operation, generation: target.generation, ...extra })
       if (result.id) update(result)
       await refresh()
       return true
@@ -126,17 +128,11 @@ function Workspace({ sessionId }: { sessionId?: string }) {
             <Tool label="Take control" description={session.state === 'completed' ? 'This session has completed.' : writable ? 'This browser already has control.' : 'Give this browser exclusive keyboard input.'} disabled={busy || writable || session.state === 'completed'} onClick={() => void operate('take')}><Hand size={16} /></Tool>
             <Tool label="Return control to agent" description={!session.agentId ? 'Assign an enabled agent first.' : 'Hand keyboard input back to the assigned agent.'} disabled={busy || !session.agentId || !writable} onClick={() => void operate('return')}><Play size={16} /></Tool>
             <Tool label="Interrupt process" description="Send Ctrl+C to the foreground process. Requires control." disabled={busy || !writable} onClick={() => input('\x03')}><Square size={16} /></Tool>
-            <DropdownMenu>
-              <Tool label="Session actions" description="Set Tab capture, reconnect the output stream, or complete this session." render={<DropdownMenuTrigger render={<Button size="icon-sm" variant="ghost" aria-label="Session actions" />} />}><Ellipsis size={16} /></Tool>
-              <DropdownMenuContent align="end" className="w-72">
+            <SessionActions session={session} busy={busy} onOperate={(operation, id) => void operate(operation, {}, id)} onConfirm={setConfirm}>
                 <DropdownMenuCheckboxItem checked={captureTab} onCheckedChange={setCaptureTab} disabled={session.historyDeleted}>Send Tab to terminal</DropdownMenuCheckboxItem>
                 <DropdownMenuItem disabled={session.historyDeleted} onClick={() => setAttempt((value) => value + 1)}><RotateCw size={16} />Reconnect terminal</DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem disabled={busy || session.state === 'completed'} onClick={() => void operate('complete')}><Check size={16} />Complete session</DropdownMenuItem>
-                <DropdownMenuItem variant="danger" disabled={busy || session.state === 'completed'} onClick={() => setConfirm('terminate')}><Trash2 size={16} />Terminate and complete</DropdownMenuItem>
-                <DropdownMenuItem variant="danger" disabled={busy || session.state !== 'completed' || session.historyDeleted} onClick={() => setConfirm('delete-history')}><Trash2 size={16} />Delete completed output</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            </SessionActions>
         </Inline>
   return <TooltipProvider>{!sessionId ? <Page data-terminal-ui-ready={!loading ? '' : undefined}>
     <PageHeader title="Terminal" meta={!loading && !loadError && serviceReady ? <Badge size="xs" variant="outline">{all.filter((item) => item.state === 'running').length} running</Badge> : undefined} actions={all.length > 0 ? newTerminal : undefined} />
@@ -149,11 +145,12 @@ function Workspace({ sessionId }: { sessionId?: string }) {
         onRowActivate={(item) => router.push(`/terminal/${encodeURIComponent(item.id)}`)}
         rowActivateLabel={(item) => `Open terminal: ${item.title}`}
         columns={[
-          { key: 'title', header: 'Session', cellClassName: 'whitespace-normal', cell: (item) => <PluginLink to={`/terminal/${encodeURIComponent(item.id)}`} aria-label={`Open terminal: ${item.title}`}><Text weight="semibold">{item.title}</Text></PluginLink> },
+          { key: 'title', header: 'Session', cell: (item) => <PluginLink to={`/terminal/${encodeURIComponent(item.id)}`} aria-label={`Open terminal: ${item.title}`}><Text weight="semibold">{item.title}</Text></PluginLink> },
           { key: 'program', header: 'Program' },
           { key: 'agentId', header: 'Agent', cell: (item) => item.agentId ? agentChoices.find((agent) => agent.id === item.agentId)?.name ?? item.agentId : 'Unassigned' },
           { key: 'state', header: 'Status', cell: (item) => <Stack gap="dense" align="start"><Badge size="xs" variant="outline">{item.state === 'running' ? 'Running' : item.state === 'exited' ? 'Exited' : 'Completed'}</Badge>{item.worktreePath && <Badge size="xs" variant="outline">Worktree retained</Badge>}</Stack> },
           { key: 'cwd', header: 'Working directory', cell: (item) => <Text size="meta" tone="muted" mono>{item.cwd}</Text> },
+          { key: 'actions', header: 'Actions', hideLabel: true, align: 'end', headClassName: 'w-(--bakin-layout-size-row)', cell: (item) => <SessionActions session={item} busy={busy} label={`Actions for ${item.title}`} allowTake onOperate={(operation, id) => void operate(operation, {}, id)} onConfirm={setConfirm} /> },
         ]}
       />}
     </PageBody>
@@ -179,7 +176,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     </WorkspacePageBody>
   </WorkspacePage>}
     <NewSession open={creating} onOpenChange={setCreating} onCreated={(created) => { update(created); router.push(`/terminal/${encodeURIComponent(created.id)}`) }} />
-    <ConfirmDialog open={confirm !== null} onCancel={() => setConfirm(null)} title={confirm === 'terminate' ? 'Terminate this session?' : 'Delete output history?'} description={confirm === 'terminate' ? 'This stops the running process. Unfinished worktrees will be retained.' : 'The retained terminal output will be permanently deleted.'} confirmLabel={confirm === 'terminate' ? 'Terminate' : 'Delete output'} onConfirm={async () => { if (confirm && await operate(confirm)) setConfirm(null) }} />
+    <ConfirmDialog open={confirm !== null} busy={busy} error={error || undefined} onCancel={() => setConfirm(null)} title={confirm?.operation === 'terminate' ? 'Terminate this session?' : 'Delete output history?'} description={`${all.find((item) => item.id === confirm?.id)?.title ?? 'Terminal'}. ${confirm?.operation === 'terminate' ? 'This stops the running process. Unfinished worktrees will be retained.' : 'The retained terminal output will be permanently deleted. Session metadata is retained.'}`} confirmLabel={confirm?.operation === 'terminate' ? 'Terminate' : 'Delete output'} onConfirm={async () => { if (confirm && await operate(confirm.operation, {}, confirm.id)) setConfirm(null) }} />
   </TooltipProvider>
 }
 export function TerminalPage(props: { sessionId?: string }) { return <Suspense><Workspace {...props} /></Suspense> }

@@ -80,7 +80,7 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     await page.route('**/api/plugins/terminal/stream?*', (route) => route.fulfill({ contentType: 'text/event-stream', body: `data: ${JSON.stringify({ type: 'output', session, cursor: 0, data: btoa('$ git status\r\nWorking tree clean\r\n') })}\n\n` }))
     await page.goto(process.env.TERMINAL_PREVIEW_URL!)
     await page.getByRole('table', { name: 'Terminal sessions', exact: true }).waitFor()
-    expect(await page.getByRole('columnheader').allTextContents()).toEqual(['Session', 'Program', 'Agent', 'Status', 'Working directory'])
+    expect(await page.getByRole('columnheader').allTextContents()).toEqual(['Session', 'Program', 'Agent', 'Status', 'Working directory', 'Actions'])
     await page.screenshot({ path: join(import.meta.dir, '../test-results/design/index-desktop.png') })
     await page.getByRole('link', { name: `Open terminal: ${session.title}`, exact: true }).click()
     await page.waitForURL(`**/terminal/${session.id}`)
