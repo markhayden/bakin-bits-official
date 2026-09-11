@@ -1,11 +1,10 @@
-import { expect, test } from 'bun:test'
-import { chromium } from 'playwright'
+import { expect } from 'bun:test'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { browserTest, launchChromium } from './browser'
 
-const browserTest = process.env.TERMINAL_PREVIEW_URL ? test : test.skip
 browserTest('browser creates a real shell, sends input and reconnects without losing output', async () => {
-  const browser = await chromium.launch({ headless: true })
+  const browser = await launchChromium()
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
   page.setDefaultTimeout(10000)
   let createdId: string | undefined

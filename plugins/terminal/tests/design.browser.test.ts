@@ -1,11 +1,10 @@
-import { expect, test } from 'bun:test'
-import { chromium } from 'playwright'
+import { expect } from 'bun:test'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { browserTest, launchChromium } from './browser'
 
-const browserTest = process.env.TERMINAL_PREVIEW_URL ? test : test.skip
 browserTest('HTTP browsers load terminals and empty and error states own the full workspace', async () => {
-  const browser = await chromium.launch({ headless: true })
+  const browser = await launchChromium()
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
   page.setDefaultTimeout(5000)
   const screenshots = join(import.meta.dir, '../test-results/design')
@@ -50,7 +49,7 @@ browserTest('HTTP browsers load terminals and empty and error states own the ful
 }, 30000)
 
 browserTest('an agent-controlled terminal fills the pane without resizing the shared session', async () => {
-  const browser = await chromium.launch({ headless: true })
+  const browser = await launchChromium()
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
   let resizes = 0
   const session = { id: 'agent-view', title: 'Agent-owned session', program: 'shell', state: 'running', cwd: '/tmp', createdAt: 1, generation: 1, revision: 1, inputSequence: 0, cols: 80, rows: 24, owner: { kind: 'agent', id: 'patch' } }
@@ -71,7 +70,7 @@ browserTest('an agent-controlled terminal fills the pane without resizing the sh
 }, 15000)
 
 browserTest('immersive terminals use the full workspace and retain compact navigation and details', async () => {
-  const browser = await chromium.launch({ headless: true })
+  const browser = await launchChromium()
   const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } })
   page.setDefaultTimeout(5000)
   const session = { id: 'design-session', title: 'Review the terminal plugin implementation and retained development work', program: 'shell', state: 'completed', cwd: '/workspace/bakin', createdAt: 1, generation: 1, revision: 1, inputSequence: 0, cols: 80, rows: 24, owner: { kind: 'human', id: 'design-fixture-client' } }

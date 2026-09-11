@@ -1,11 +1,10 @@
-import { expect, test } from 'bun:test'
-import { chromium } from 'playwright'
+import { expect } from 'bun:test'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { browserTest, launchChromium } from './browser'
 
-const browserTest = process.env.TERMINAL_PREVIEW_URL ? test : test.skip
 browserTest('table fits long paths and row actions preserve navigation, target identity, and confirmation', async () => {
-  const browser = await chromium.launch({ headless: true })
+  const browser = await launchChromium()
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
   page.setDefaultTimeout(5000)
   const screenshots = join(import.meta.dir, '../test-results/design')
