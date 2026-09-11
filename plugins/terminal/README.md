@@ -134,7 +134,13 @@ Run `TERMINAL_PREVIEW_URL=<printed URL> bun test tests/browser.integration.test.
 The `/terminal` index uses `storybook/public/pages/page.stories.tsx` /
 `CanonicalUsage` and `lists/data-table.stories.tsx` / `ActivatableRows`.
 The index has Session, Program, Agent, Status, and Working directory columns;
-the kit owns narrow-screen horizontal scrolling and keyboard row activation.
+flexible cells wrap to fill the available width instead of forcing horizontal
+scrolling. Explicit widths and intrinsic controls may still require local
+scrolling on narrow screens. The kit owns keyboard row activation and excludes
+nested menu, link, and portalled events from it. Each row has a tooltip-labelled
+actions menu for taking control, completing an exited session, terminating, or
+deleting completed output. Destructive confirmations name and retain the target
+session ID; deletion retains session metadata. Ownership checks still apply.
 Session detail uses `pages/workspace-page.stories.tsx` / `ImmersiveCanvas`:
 full-width output, a compact Back link, and no session rail or navigation select.
 Session controls occupy the right-hand title-row actions in both full and compact
