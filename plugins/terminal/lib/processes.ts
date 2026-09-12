@@ -48,7 +48,10 @@ export class TmuxProcesses implements ProcessDriver {
   }
   async alive(id: string): Promise<boolean> {
     if (!await this.service.ready()) throw new TerminalError('Terminal service unavailable; process state is unknown', 503)
-    const output = await this.service.command(['list-panes', '-a', '-F', '#{session_name} #{pane_dead}'])
+    // tmux `list-panes -a` exits non-zero with "no current target" when the
+    // persistent server is running but has no sessions. Treat that as an empty
+    // pane list so activation/recovery can mark stale running rows as exited.
+    const output = await this.service.command(['list-panes', '-a', '-F', '#{session_name} #{pane_dead}'], true)
     return output.split('\n').includes(`${id} 0`)
   }
   async screen(id: string): Promise<string> {

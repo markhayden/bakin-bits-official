@@ -8,6 +8,35 @@ import { TerminalService, terminalEnvironment } from '../lib/service'
 import { TmuxProcesses } from '../lib/processes'
 
 const processTest = process.env.TERMINAL_PROCESS_TEST === '1' ? test : test.skip
+
+processTest('boot marks stored running sessions exited when the tmux server is empty', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-empty-'))
+  const service = new TerminalService(root)
+  const server = Bun.spawn([service.tmux!, '-D', '-S', service.socket, '-f', '/dev/null'], { env: terminalEnvironment(), stdout: 'ignore', stderr: 'ignore' })
+  const human = { kind: 'human', id: 'integration-browser' } as const
+  let manager: Sessions | undefined
+  try {
+    for (let attempt = 0; attempt < 100 && !await service.ready(); attempt++) await Bun.sleep(50)
+    await service.command(['set-option', '-g', 'exit-empty', 'off'])
+    const store = new Store(join(root, 'terminal.db'))
+    store.save({
+      id: 'terminal-ghost', title: 'Ghost', cwd: root, program: 'shell', owner: human,
+      generation: 1, inputSequence: 0, cols: 100, rows: 30, state: 'running',
+      createdAt: Date.now(), lastActivityAt: Date.now(),
+    })
+    manager = new Sessions(store, new TmuxProcesses(service), { settings: () => ({}), prepare: async () => undefined, release: async () => undefined })
+    // Regression: list-panes -a on a running but empty server exits with
+    // "no current target"; activation must recover the session as exited.
+    await manager.start()
+    expect(manager.get('terminal-ghost', human).state).toBe('exited')
+  } finally {
+    await manager?.shutdown()
+    await service.command(['kill-server'], true)
+    server.kill(); await server.exited
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 20000)
+
 processTest('real shell survives manager restart, accepts input, resizes and terminates', async () => {
   const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-process-'))
   const service = new TerminalService(root)
