@@ -73,13 +73,15 @@ browserTest('immersive terminals use the full workspace and retain compact navig
   const browser = await launchChromium()
   const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } })
   page.setDefaultTimeout(5000)
-  const session = { id: 'design-session', title: 'Review the terminal plugin implementation and retained development work', program: 'shell', state: 'completed', cwd: '/workspace/bakin', createdAt: 1, generation: 1, revision: 1, inputSequence: 0, cols: 80, rows: 24, owner: { kind: 'human', id: 'design-fixture-client' } }
+  // Running so the default Active view lists it on every navigation back.
+  const session = { id: 'design-session', title: 'Review the terminal plugin implementation and retained development work', program: 'shell', state: 'running', cwd: '/workspace/bakin', createdAt: 1, lastActivityAt: 1, generation: 1, revision: 1, inputSequence: 0, cols: 80, rows: 24, owner: { kind: 'human', id: 'design-fixture-client' } }
   try {
     await page.route('**/api/plugins/terminal/sessions', (route) => route.fulfill({ json: { serviceReady: true, sessions: [session] } }))
     await page.route('**/api/plugins/terminal/stream?*', (route) => route.fulfill({ contentType: 'text/event-stream', body: `data: ${JSON.stringify({ type: 'output', session, cursor: 0, data: btoa('$ git status\r\nWorking tree clean\r\n') })}\n\n` }))
     await page.goto(process.env.TERMINAL_PREVIEW_URL!)
     await page.getByRole('table', { name: 'Terminal sessions', exact: true }).waitFor()
-    expect(await page.getByRole('columnheader').allTextContents()).toEqual(['Session', 'Program', 'Agent', 'Status', 'Working directory', 'Actions'])
+    expect(await page.getByRole('columnheader').allTextContents()).toEqual(['Session', 'Program', 'Agent', 'Status', 'Last activity', 'Working directory', 'Actions'])
+    await page.getByRole('tablist', { name: 'Session view', exact: true }).getByRole('tab', { name: 'Active', exact: true }).waitFor()
     await page.screenshot({ path: join(import.meta.dir, '../test-results/design/index-desktop.png') })
     await page.getByRole('link', { name: `Open terminal: ${session.title}`, exact: true }).click()
     await page.waitForURL(`**/terminal/${session.id}`)

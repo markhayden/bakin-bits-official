@@ -5,7 +5,7 @@ import type { Session } from '../lib/contracts'
 import { clientId } from './api'
 import { TerminalTool } from './terminal-tool'
 
-export type SessionConfirmation = { id: string; operation: 'terminate' | 'delete-history' }
+export type SessionConfirmation = { id: string; operation: 'terminate' | 'delete-history' | 'delete' }
 
 export function SessionActions({ session, busy, label = 'Session actions', onOperate, onConfirm, children, allowTake = false }: {
   session: Session
@@ -25,6 +25,7 @@ export function SessionActions({ session, busy, label = 'Session actions', onOpe
       <DropdownMenuItem disabled={busy || !owned || session.state !== 'exited'} onClick={() => onOperate('complete', session.id)}><Check size={16} />Complete session</DropdownMenuItem>
       <DropdownMenuItem variant="danger" disabled={busy || !owned || session.state === 'completed'} onClick={() => onConfirm({ id: session.id, operation: 'terminate' })}><Trash2 size={16} />Terminate and complete</DropdownMenuItem>
       <DropdownMenuItem variant="danger" disabled={busy || session.state !== 'completed' || session.historyDeleted} onClick={() => onConfirm({ id: session.id, operation: 'delete-history' })}><Trash2 size={16} />Delete completed output</DropdownMenuItem>
+      <DropdownMenuItem variant="danger" disabled={busy || session.state !== 'completed' || Boolean(session.worktreePath)} onClick={() => onConfirm({ id: session.id, operation: 'delete' })}><Trash2 size={16} />Delete session</DropdownMenuItem>
     </DropdownMenuContent>
   </DropdownMenu>
 }

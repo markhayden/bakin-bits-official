@@ -9,7 +9,7 @@ browserTest('table fits long paths and row actions preserve navigation, target i
   page.setDefaultTimeout(5000)
   const screenshots = join(import.meta.dir, '../test-results/design')
   mkdirSync(screenshots, { recursive: true })
-  const base = { program: 'shell', cwd: `/workspace/${'long-directory-'.repeat(20)}`, createdAt: 1, generation: 3, revision: 1, inputSequence: 0, cols: 80, rows: 24 }
+  const base = { program: 'shell', cwd: `/workspace/${'long-directory-'.repeat(20)}`, createdAt: 1, lastActivityAt: 1, generation: 3, revision: 1, inputSequence: 0, cols: 80, rows: 24 }
   const sessions = [
     { ...base, id: 'alpha', title: 'Alpha completed', state: 'completed', owner: { kind: 'human', id: 'another-browser' }, historyDeleted: false },
     { ...base, id: 'beta', title: 'Beta exited', state: 'exited', owner: { kind: 'human', id: '' }, historyDeleted: false },
@@ -26,6 +26,10 @@ browserTest('table fits long paths and row actions preserve navigation, target i
       const request = route.request().postDataJSON()
       operations.push(request)
       if (failDelete && request.operation === 'delete-history') return route.fulfill({ status: 503, json: { error: 'Output cleanup unavailable' } })
+      if (request.operation === 'delete') {
+        sessions.splice(sessions.findIndex((item) => item.id === request.id), 1)
+        return route.fulfill({ json: { deleted: true } })
+      }
       const session = sessions.find((item) => item.id === request.id)!
       session.revision++
       if (request.operation === 'complete' || request.operation === 'terminate') session.state = 'completed'
@@ -33,7 +37,8 @@ browserTest('table fits long paths and row actions preserve navigation, target i
       if (request.operation === 'delete-history') session.historyDeleted = true
       return route.fulfill({ json: session })
     })
-    await page.goto(process.env.TERMINAL_PREVIEW_URL!)
+    // Alpha is completed, so the mixed-state fixture needs the All view.
+    await page.goto(`${process.env.TERMINAL_PREVIEW_URL!}?view=all`)
     const table = page.getByRole('table', { name: 'Terminal sessions', exact: true })
     await table.waitFor()
     expect(await table.evaluate((element) => element.parentElement!.scrollWidth <= element.parentElement!.clientWidth + 1)).toBe(true)
@@ -84,5 +89,11 @@ browserTest('table fits long paths and row actions preserve navigation, target i
     await page.waitForFunction(() => Boolean(document.querySelector('[role="menu"]:not([data-starting-style])')))
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await page.screenshot({ path: join(screenshots, 'index-actions-mobile.png'), animations: 'disabled' })
+    await page.getByRole('menuitem', { name: 'Delete session', exact: true }).click()
+    await page.getByRole('dialog', { name: 'Delete this session?' }).getByText(/Alpha completed/).waitFor()
+    await page.getByRole('button', { name: 'Delete session', exact: true }).click()
+    await page.getByRole('dialog', { name: 'Delete this session?' }).waitFor({ state: 'hidden' })
+    expect(operations.at(-1)).toMatchObject({ id: 'alpha', operation: 'delete' })
+    await page.waitForFunction(() => !document.querySelector('table')?.textContent?.includes('Alpha completed'))
   } finally { await browser.close() }
 }, 30000)

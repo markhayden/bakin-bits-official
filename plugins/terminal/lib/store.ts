@@ -51,5 +51,12 @@ export class Store {
     return row.size
   }
   deleteOutput(session: string): void { this.db.query('DELETE FROM output WHERE session=?').run(session) }
+  deleteSession(session: string): void {
+    this.db.transaction(() => {
+      this.db.query('DELETE FROM output WHERE session=?').run(session)
+      this.db.query('DELETE FROM cursors WHERE session=?').run(session)
+      this.db.query('DELETE FROM sessions WHERE id=?').run(session)
+    })()
+  }
   close(): void { this.db.close() }
 }

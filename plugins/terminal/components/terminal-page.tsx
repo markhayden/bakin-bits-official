@@ -1,8 +1,9 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { Page, PageBody, PageHeader, WorkspacePage, WorkspacePageHeader, WorkspacePageCompactHeader, WorkspacePageBody, ConfirmDialog, AgentSelect, DataTable } from '@makinbakin/sdk/patterns'
+import { Page, PageBody, PageHeader, WorkspacePage, WorkspacePageHeader, WorkspacePageCompactHeader, WorkspacePageBody, ConfirmDialog, AgentAvatar, AgentSelect, DataTable, SegmentedControl } from '@makinbakin/sdk/patterns'
 import { Inline, Stack } from '@makinbakin/sdk/layout'
 import { Alert, AlertDescription, Badge, Button, SystemState, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, Text, Separator, Popover, PopoverTrigger, PopoverContent, PopoverTitle, DropdownMenuItem, DropdownMenuCheckboxItem, DropdownMenuSeparator } from '@makinbakin/sdk/ui'
-import { PluginLink, useRouter } from '@makinbakin/sdk/navigation'
+import { PluginLink, useQueryState, useRouter } from '@makinbakin/sdk/navigation'
+import { formatAge } from '@makinbakin/sdk/utils'
 import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Terminal, RotateCw } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
@@ -13,6 +14,14 @@ import { TerminalTool as Tool } from './terminal-tool'
 import { useTerminalAgents } from './use-terminal-agents'
 import { SessionActions, type SessionConfirmation } from './session-actions'
 import './terminal.css'
+
+const VIEWS = ['active', 'review', 'completed', 'all'] as const
+type SessionView = (typeof VIEWS)[number]
+function matchesView(item: Session, target: SessionView): boolean {
+  if (target === 'all') return true
+  if (target === 'review') return Boolean(item.cleanupReason)
+  return target === 'completed' ? item.state === 'completed' : item.state !== 'completed'
+}
 
 function Workspace({ sessionId }: { sessionId?: string }) {
   const router = useRouter()
@@ -35,27 +44,47 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const [confirm, setConfirm] = useState<SessionConfirmation | null>(null)
   const queue = useRef(Promise.resolve())
   const epoch = useRef(0)
+  const listEpoch = useRef(0)
   const update = useCallback((session: Session) => {
     const previous = current.current.find((item) => item.id === session.id)
     if (previous && (previous.revision ?? 0) >= (session.revision ?? 0)) return
+    if (!previous) listEpoch.current++
     current.current = [...current.current.filter((item) => item.id !== session.id), session].sort((a, b) => b.createdAt - a.createdAt)
+    setAll(current.current)
+  }, [])
+  const remove = useCallback((ids: (id: string) => boolean) => {
+    if (!current.current.some((item) => ids(item.id))) return
+    current.current = current.current.filter((item) => !ids(item.id))
     setAll(current.current)
   }, [])
   const refresh = useCallback(async () => {
     try {
+      const known = listEpoch.current
       const result = await api<{ sessions: Session[]; serviceReady: boolean }>('/sessions')
       for (const session of result.sessions) update(session)
+      // Deleted sessions vanish from the server list. Drop them locally, but
+      // never against a response older than a session added while in flight.
+      if (listEpoch.current === known) {
+        const listed = new Set(result.sessions.map((session) => session.id))
+        remove((id) => !listed.has(id))
+      }
       setServiceReady(result.serviceReady)
       setLoadError('')
     } catch (error) { setLoadError(error instanceof Error ? error.message : 'Terminal unavailable') }
     finally { setLoading(false) }
-  }, [update])
+  }, [update, remove])
   useEffect(() => { void refresh(); const timer = setInterval(() => void refresh(), 3000); return () => clearInterval(timer) }, [refresh])
   const loadAgents = useCallback(async () => {
     try { setAgents((await api<SessionOptionsData>('/options')).agents); setAgentsError('') }
     catch { setAgentsError('Agent choices could not be loaded') }
   }, [])
   useEffect(() => { void loadAgents() }, [sessionId, loadAgents])
+  const [viewParam, setViewParam] = useQueryState('view', 'active')
+  const viewCount = (target: SessionView) => all.filter((item) => matchesView(item, target)).length
+  const requestedView = (VIEWS as readonly string[]).includes(viewParam) ? viewParam as SessionView : 'active'
+  // The attention segment only exists while something needs review.
+  const view: SessionView = requestedView === 'review' && viewCount('review') === 0 ? 'active' : requestedView
+  const visible = all.filter((item) => matchesView(item, view))
   const session = all.find((item) => item.id === sessionId)
   const writable = Boolean(session && session.owner.kind === 'human' && session.owner.id === clientId() && session.state === 'running')
   const controlStatus = session?.state === 'completed' ? 'Completed' : writable ? 'You have control' : session?.owner.kind === 'agent' ? `${agents.find((agent) => agent.id === session.owner.id)?.name ?? session.owner.id} has control` : 'Read only'
@@ -138,21 +167,43 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     <PageHeader title="Terminal" meta={!loading && !loadError && serviceReady ? <Badge size="xs" variant="outline">{all.filter((item) => item.state === 'running').length} running</Badge> : undefined} actions={all.length > 0 ? newTerminal : undefined} />
     <PageBody label="Terminal sessions">
       {feedback}
-      {state ?? <DataTable
+      {state ?? <Stack gap="item" align="start">
+        <SegmentedControl
+          size="sm"
+          ariaLabel="Session view"
+          value={view}
+          onValueChange={setViewParam}
+          options={[
+            { value: 'active', label: 'Active' },
+            ...(viewCount('review') > 0 ? [{ value: 'review' as const, label: 'Needs review' }] : []),
+            { value: 'completed', label: 'Completed' },
+            { value: 'all', label: 'All' },
+          ]}
+        />
+        {visible.length === 0 ? <SystemState kind="no-results" scope="section" title="No sessions in this view" description="Sessions in other states are hidden by the current view." action={<Button variant="outline" onClick={() => setViewParam('all')}>Show all sessions</Button>} /> : <DataTable
+        className="w-full"
         label="Terminal sessions"
-        rows={all}
+        rows={visible}
         rowKey={(item) => item.id}
+        defaultSort={{ field: 'activity', dir: 'desc' }}
         onRowActivate={(item) => router.push(`/terminal/${encodeURIComponent(item.id)}`)}
         rowActivateLabel={(item) => `Open terminal: ${item.title}`}
         columns={[
-          { key: 'title', header: 'Session', headClassName: 'w-1/4', cell: (item) => <PluginLink to={`/terminal/${encodeURIComponent(item.id)}`} aria-label={`Open terminal: ${item.title}`}><Text weight="semibold">{item.title}</Text></PluginLink> },
-          { key: 'program', header: 'Program' },
-          { key: 'agentId', header: 'Agent', cell: (item) => item.agentId ? agentChoices.find((agent) => agent.id === item.agentId)?.name ?? item.agentId : 'Unassigned' },
-          { key: 'state', header: 'Status', cell: (item) => <Stack gap="dense" align="start"><Badge size="xs" variant="outline">{item.state === 'running' ? 'Running' : item.state === 'exited' ? 'Exited' : 'Completed'}</Badge>{item.worktreePath && <Badge size="xs" variant="outline">Worktree retained</Badge>}</Stack> },
+          { key: 'title', header: 'Session', sortable: true, sortValue: (item) => item.title, headClassName: 'w-1/4', cell: (item) => <PluginLink to={`/terminal/${encodeURIComponent(item.id)}`} aria-label={`Open terminal: ${item.title}`}><Text weight="semibold">{item.title}</Text></PluginLink> },
+          { key: 'program', header: 'Program', sortable: true, sortValue: (item) => item.program },
+          { key: 'agent', header: 'Agent', sortable: true, sortValue: (item) => item.agentId ? agentChoices.find((agent) => agent.id === item.agentId)?.name ?? item.agentId : null, cell: (item) => {
+            if (!item.agentId) return <Text size="meta" tone="muted">Unassigned</Text>
+            const choice = agentChoices.find((agent) => agent.id === item.agentId)
+            const name = choice?.name ?? item.agentId
+            return <Inline gap="dense" wrap={false} className="min-w-0"><AgentAvatar size="xs" decorative agent={{ id: item.agentId, name, imageSrc: choice?.imageSrc, color: choice?.color }} /><Text size="meta" className="truncate">{name}</Text></Inline>
+          } },
+          { key: 'state', header: 'Status', sortable: true, sortValue: (item) => item.state === 'running' ? 0 : item.state === 'exited' ? 1 : 2, cell: (item) => <Stack gap="dense" align="start"><Badge size="xs" variant="outline">{item.state === 'running' ? 'Running' : item.state === 'exited' ? 'Exited' : 'Completed'}</Badge>{item.worktreePath && <Badge size="xs" variant="outline">Worktree retained</Badge>}</Stack> },
+          { key: 'activity', header: 'Last activity', sortable: true, sortValue: (item) => item.lastActivityAt, cell: (item) => <Text size="meta" tone="muted" title={new Date(item.lastActivityAt).toLocaleString()}>{formatAge(new Date(item.lastActivityAt))}</Text> },
           { key: 'cwd', header: 'Working directory', headClassName: 'w-1/3', cell: (item) => <Text size="meta" tone="muted" mono>{item.cwd}</Text> },
           { key: 'actions', header: 'Actions', hideLabel: true, align: 'end', headClassName: 'w-(--bakin-layout-size-row)', cell: (item) => <SessionActions session={item} busy={busy} label={`Actions for ${item.title}`} allowTake onOperate={(operation, id) => void operate(operation, {}, id)} onConfirm={setConfirm} /> },
         ]}
       />}
+      </Stack>}
     </PageBody>
   </Page> : <WorkspacePage mode="immersive" className="terminal-page" data-terminal-ui-ready={!loading ? '' : undefined}>
     <WorkspacePageHeader>
@@ -176,7 +227,19 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     </WorkspacePageBody>
   </WorkspacePage>}
     <NewSession open={creating} onOpenChange={setCreating} onCreated={(created) => { update(created); router.push(`/terminal/${encodeURIComponent(created.id)}`) }} />
-    <ConfirmDialog open={confirm !== null} busy={busy} error={error || undefined} onCancel={() => setConfirm(null)} title={confirm?.operation === 'terminate' ? 'Terminate this session?' : 'Delete output history?'} description={`${all.find((item) => item.id === confirm?.id)?.title ?? 'Terminal'}. ${confirm?.operation === 'terminate' ? 'This stops the running process. Unfinished worktrees will be retained.' : 'The retained terminal output will be permanently deleted. Session metadata is retained.'}`} confirmLabel={confirm?.operation === 'terminate' ? 'Terminate' : 'Delete output'} onConfirm={async () => { if (confirm && await operate(confirm.operation, {}, confirm.id)) setConfirm(null) }} />
+    <ConfirmDialog open={confirm !== null} busy={busy} error={error || undefined} onCancel={() => setConfirm(null)}
+      title={confirm?.operation === 'terminate' ? 'Terminate this session?' : confirm?.operation === 'delete' ? 'Delete this session?' : 'Delete output history?'}
+      description={`${all.find((item) => item.id === confirm?.id)?.title ?? 'Terminal'}. ${confirm?.operation === 'terminate' ? 'This stops the running process. Unfinished worktrees will be retained.' : confirm?.operation === 'delete' ? 'The session and all of its retained output will be permanently deleted.' : 'The retained terminal output will be permanently deleted. Session metadata is retained.'}`}
+      confirmLabel={confirm?.operation === 'terminate' ? 'Terminate' : confirm?.operation === 'delete' ? 'Delete session' : 'Delete output'}
+      onConfirm={async () => {
+        if (!confirm) return
+        const target = confirm
+        if (!await operate(target.operation, {}, target.id)) return
+        setConfirm(null)
+        if (target.operation !== 'delete') return
+        remove((id) => id === target.id)
+        if (target.id === sessionId) router.push('/terminal')
+      }} />
   </TooltipProvider>
 }
 export function TerminalPage(props: { sessionId?: string }) { return <Suspense><Workspace {...props} /></Suspense> }

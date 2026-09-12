@@ -14,7 +14,7 @@ export function human(request: Request): Principal {
 
 export const commandSchema = z.object({
   id: z.string().min(1).max(100),
-  operation: z.enum(['take', 'return', 'assign', 'write', 'resize', 'interrupt', 'complete', 'terminate', 'delete-history']),
+  operation: z.enum(['take', 'return', 'assign', 'write', 'resize', 'interrupt', 'complete', 'terminate', 'delete-history', 'delete']),
   generation: z.number().int().nonnegative().optional(),
   sequence: z.number().int().positive().optional(),
   data: z.string().max(65536).optional(),
@@ -33,6 +33,7 @@ export async function command(manager: Sessions, raw: unknown, principal: Princi
     case 'resize': return manager.resize(input.id, principal, input.generation ?? -1, input.cols ?? 100, input.rows ?? 30)
     case 'complete': case 'terminate': return manager.finish(input.id, principal, input.generation ?? -1, input.operation === 'terminate')
     case 'delete-history': await manager.deleteHistory(input.id, principal); return { deleted: true }
+    case 'delete': await manager.deleteSession(input.id, principal); return { deleted: true }
   }
 }
 

@@ -213,6 +213,16 @@ export class Sessions {
     session.historyDeleted = true
     this.store.save(session)
   }
+  deleteSession(id: string, principal: Principal): Promise<void> {
+    return this.run(async () => {
+      if (principal.kind !== 'human') throw new TerminalError('Only the human can delete a session', 403)
+      const session = this.get(id, principal)
+      if (session.state !== 'completed') throw new TerminalError('Complete the session before deleting it')
+      if (session.worktreePath) throw new TerminalError('Review the retained worktree before deleting this session')
+      await this.stopScreen(id)
+      this.store.deleteSession(id)
+    })
+  }
   private async clean(session: Session): Promise<void> {
     if (!session.worktreePath || session.state !== 'completed') return
     if (this.store.sessions().some((s) => {
