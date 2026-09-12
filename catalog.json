@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-07-27T05:00:00Z",
+  "updatedAt": "2026-09-17",
   "entries": [
     {
       "id": "pixel",
@@ -169,6 +169,32 @@
         "team"
       ],
       "defaultSelected": true,
+      "screenshots": []
+    },
+    {
+      "id": "terminal",
+      "kind": "plugin",
+      "name": "Terminal",
+      "emoji": "⌨️",
+      "description": "Persistent shared terminal sessions with per-agent access, human takeover, and retained coding worktrees.",
+      "category": "Development",
+      "tags": [
+        "terminal",
+        "shell",
+        "coding"
+      ],
+      "useCases": [
+        "Run Claude Code or Codex in a session agents operate and you can take over",
+        "Give an agent a persistent shell scoped to its own isolated worktree",
+        "Watch live terminal output from the browser and keep history across restarts"
+      ],
+      "source": "github:markhayden/bakin-bits-official#plugins/terminal",
+      "ref": null,
+      "trust": "official",
+      "dependencies": [
+        "git"
+      ],
+      "defaultSelected": false,
       "screenshots": []
     },
     {
