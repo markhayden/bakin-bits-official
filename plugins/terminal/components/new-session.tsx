@@ -48,7 +48,10 @@ export function NewSession({ open, onOpenChange, onCreated }: { open: boolean; o
   const agentChoices = useTerminalAgents(options?.agents)
   const agent = agentChoices.find((item) => item.id === agentId)
   const task = options?.tasks.find((item) => item.id === taskId)
-  const suggestedTitle = task?.title ?? `${programs[program]}${agent ? ` - ${agent.name}` : ''}`
+  // Descriptive, mostly-unique default so sessions aren't a wall of "Shell":
+  // task name wins, else program + working-directory + assigned agent.
+  const dirName = cwd.split('/').filter(Boolean).pop()
+  const suggestedTitle = task?.title ?? [programs[program], dirName, agent?.name].filter(Boolean).join(' · ')
   function assignAgent(id: string) {
     setAgentId(id)
     if (!cwdEdited) setCwd(options?.agents.find((item) => item.id === id)?.workspace ?? options?.defaults.cwd ?? '')
@@ -72,7 +75,7 @@ export function NewSession({ open, onOpenChange, onCreated }: { open: boolean; o
       <Form onSubmit={submit} busy={busy}>
         {error && <Alert tone="danger"><AlertDescription>{error}</AlertDescription></Alert>}
         {!options && !loading && <Button type="button" onClick={() => setAttempt((value) => value + 1)}>Retry loading choices</Button>}
-        <Field name="title"><FieldLabel>Title</FieldLabel><Input value={title ?? suggestedTitle.slice(0, 100)} disabled={loading || busy} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setTitle(e.target.value)} required maxLength={100} /></Field>
+        <Field name="title"><FieldLabel>Name</FieldLabel><Input value={title ?? suggestedTitle.slice(0, 100)} disabled={loading || busy} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setTitle(e.target.value)} required maxLength={100} placeholder="Name this session" /></Field>
         <Field name="program"><FieldLabel>Program</FieldLabel><Select items={{ shell: 'Shell', claude: 'Claude Code', codex: 'Codex' }} value={program} onValueChange={(value: string | null) => { if (value) setProgram(value) }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="shell">Shell</SelectItem><SelectItem value="claude">Claude Code</SelectItem><SelectItem value="codex">Codex</SelectItem></SelectContent></Select></Field>
         <Field name="cwd"><FieldLabel>Working directory</FieldLabel><Input value={cwd} disabled={loading || busy} onChange={(e: React.ChangeEvent<HTMLInputElement>) => { setCwd(e.target.value); setCwdEdited(true) }} required placeholder={loading ? 'Loading...' : '/absolute/path'} /></Field>
         {program !== 'shell' && <Field name="checkout"><FieldLabel>Checkout</FieldLabel><Select items={{ isolated: 'New isolated worktree', existing: 'Existing checkout' }} value={checkout} onValueChange={(value: string | null) => { if (value) setCheckout(value) }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="isolated">New isolated worktree</SelectItem><SelectItem value="existing">Existing checkout</SelectItem></SelectContent></Select></Field>}
