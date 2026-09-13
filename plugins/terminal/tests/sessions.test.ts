@@ -95,7 +95,7 @@ test('disconnected output fails honestly and a snapshot restores the attachment'
 test('delete removes a completed session entirely and only for the human', async () => {
   const { manager, live, allowRelease } = fixture()
   const session = await manager.create({ title: 'Done', cwd: '/tmp' }, agent)
-  await expect(manager.deleteSession(session.id, human)).rejects.toThrow('Complete')
+  await expect(manager.deleteSession(session.id, human)).rejects.toThrow('End the session')
   session.worktreePath = '/tmp/retained'
   manager.store.save(session)
   live.delete(session.id)
@@ -110,6 +110,20 @@ test('delete removes a completed session entirely and only for the human', async
   expect(manager.store.bytes()).toBe(0)
   expect(() => manager.get(session.id, human)).toThrow('not found')
   await manager.beforeUninstall(async () => {})
+})
+test('an exited session deletes without a completion step; any human tab can drive', async () => {
+  const { manager, live } = fixture()
+  // A second human client — a different browser tab or the phone.
+  const otherHuman = { kind: 'human', id: 'phone-000000000000' } as const
+  const session = await manager.create({ title: 'Ended', cwd: '/tmp' }, human)
+  // The operator's other tab drives the human-owned session without taking over.
+  await manager.write(session.id, otherHuman, session.generation, 1, 'ls\r')
+  live.delete(session.id)
+  await manager.refreshStates()
+  expect(manager.get(session.id, human).state).toBe('exited')
+  // Deletable straight from exited — no "complete" step, from either tab.
+  await manager.deleteSession(session.id, otherHuman)
+  expect(manager.list(human)).toHaveLength(0)
 })
 test('completed work is rechecked immediately after merge without a 30-day delay', async () => {
   const { manager, allowRelease } = fixture()

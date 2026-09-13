@@ -167,10 +167,13 @@ export class Sessions {
       return session
     })
   }
-  finish(id: string, principal: Principal, generation: number, terminate: boolean): Promise<Session> {
+  finish(id: string, principal: Principal, _generation: number, terminate: boolean): Promise<Session> {
     return this.run(async () => {
+      // Lifecycle, not input: get() already gates access (a human is the
+      // operator; an agent sees only its own session). Ending a session never
+      // needed to be the live input owner, so the operator can stop an agent's
+      // runaway session without seizing keyboard control first.
       const session = this.get(id, principal)
-      authorize(session, principal, this.enabled(), true, generation)
       if (session.state === 'completed') return session
       const alive = await this.driver.alive(id)
       if (alive && !terminate) throw new TerminalError('The process is still running; exit it or explicitly terminate it first')
@@ -217,7 +220,9 @@ export class Sessions {
     return this.run(async () => {
       if (principal.kind !== 'human') throw new TerminalError('Only the human can delete a session', 403)
       const session = this.get(id, principal)
-      if (session.state !== 'completed') throw new TerminalError('Complete the session before deleting it')
+      // The operator can always close an ended session; only a live process or
+      // a retained worktree (which would orphan its branch) is a real wall.
+      if (session.state === 'running') throw new TerminalError('End the session before deleting it')
       if (session.worktreePath) throw new TerminalError('Review the retained worktree before deleting this session')
       await this.stopScreen(id)
       this.store.deleteSession(id)

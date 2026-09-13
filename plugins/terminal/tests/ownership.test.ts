@@ -13,6 +13,9 @@ test('assignment, enablement and input generation are independent gates', () => 
   const taken = { ...session, owner: { kind: 'human' as const, id: 'tab' }, generation: 2 }
   expect(() => authorize(taken, { kind: 'agent', id: 'patch' }, ['patch'], true, 1)).toThrow()
   expect(() => authorize(taken, { kind: 'agent', id: 'patch' }, ['patch'])).not.toThrow()
-  expect(() => authorize(taken, { kind: 'human', id: 'other-tab' }, [], true, 2)).toThrow()
+  // The operator is not the tab: any human client may drive a human-owned
+  // session, but only at the current generation (a takeover invalidates the rest).
+  expect(() => authorize(taken, { kind: 'human', id: 'other-tab' }, [], true, 2)).not.toThrow()
   expect(() => authorize(taken, { kind: 'human', id: 'tab' }, [], true, 2)).not.toThrow()
+  expect(() => authorize(taken, { kind: 'human', id: 'other-tab' }, [], true, 1)).toThrow()
 })

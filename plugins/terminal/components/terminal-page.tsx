@@ -7,7 +7,7 @@ import { formatAge } from '@makinbakin/sdk/utils'
 import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Terminal, RotateCw } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
-import { api, clientId } from './api'
+import { api } from './api'
 import { TerminalCanvas } from './terminal-canvas'
 import { NewSession } from './new-session'
 import { TerminalTool as Tool } from './terminal-tool'
@@ -86,9 +86,12 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const view: SessionView = requestedView === 'review' && viewCount('review') === 0 ? 'active' : requestedView
   const visible = all.filter((item) => matchesView(item, view))
   const session = all.find((item) => item.id === sessionId)
-  const writable = Boolean(session && session.owner.kind === 'human' && session.owner.id === clientId() && session.state === 'running')
-  const controlStatus = session?.state === 'completed' ? 'Completed' : writable ? 'You have control' : session?.owner.kind === 'agent' ? `${agents.find((agent) => agent.id === session.owner.id)?.name ?? session.owner.id} has control` : 'Read only'
-  const status = session?.historyDeleted ? 'Output history deleted' : streamStatus === controlStatus ? streamStatus : `${streamStatus} / ${controlStatus}`
+  const ended = session?.state === 'exited' || session?.state === 'completed'
+  const ownerAgentName = session?.owner.kind === 'agent' ? agents.find((agent) => agent.id === session.owner.id)?.name ?? session.owner.id : undefined
+  // The operator is not the tab: any human client drives a human-owned live session.
+  const writable = Boolean(session && session.owner.kind === 'human' && session.state === 'running')
+  const controlStatus = ended ? 'Ended' : writable ? "You're driving" : ownerAgentName ? `Watching ${ownerAgentName}` : 'Watching'
+  const status = session?.historyDeleted ? 'Output history deleted' : ended ? 'Ended' : streamStatus === controlStatus ? streamStatus : `${streamStatus} / ${controlStatus}`
   const statusText = session && <Text as="span" size="meta" tone="muted" role="status" className="block truncate" title={status}>{status}</Text>
   useEffect(() => { setAssignment(session?.agentId ?? '') }, [session?.id, session?.agentId])
   async function operate(operation: string, extra: Record<string, unknown> = {}, targetId = sessionId) {
@@ -119,6 +122,17 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     setBusy(true); setError('')
     try { await api('/service', {}); await refresh() }
     catch (error) { setError(error instanceof Error ? error.message : 'Service setup failed') }
+    finally { setBusy(false) }
+  }
+  async function reopen(target: Session) {
+    // A dead session cannot be reconnected — there is no live process. Reopen
+    // starts a fresh session in the same directory (reusing an existing
+    // checkout, never minting a second worktree) with the same assignment.
+    setBusy(true); setError('')
+    try {
+      const created = await api<Session>('/sessions', { title: target.title, cwd: target.cwd, program: target.program, checkout: 'existing', agentId: target.agentId || undefined, taskId: target.taskId || undefined, projectId: target.projectId || undefined })
+      update(created); router.push(`/terminal/${encodeURIComponent(created.id)}`)
+    } catch (error) { setError(error instanceof Error ? error.message : 'Could not reopen session') }
     finally { setBusy(false) }
   }
   const newTerminal = <Tooltip><TooltipTrigger render={<Button size="sm" onClick={() => setCreating(true)} disabled={!serviceReady || Boolean(loadError) || busy} focusableWhenDisabled />}><Plus size={16} />New terminal</TooltipTrigger><TooltipContent>New terminal. Create a persistent shell or coding CLI session.</TooltipContent></Tooltip>
@@ -154,9 +168,13 @@ function Workspace({ sessionId }: { sessionId?: string }) {
                 </Stack>
               </PopoverContent>
             </Popover>
-            <Tool label="Take control" description={session.state === 'completed' ? 'This session has completed.' : writable ? 'This browser already has control.' : 'Give this browser exclusive keyboard input.'} disabled={busy || writable || session.state === 'completed'} onClick={() => void operate('take')}><Hand size={16} /></Tool>
-            <Tool label="Return control to agent" description={!session.agentId ? 'Assign an enabled agent first.' : 'Hand keyboard input back to the assigned agent.'} disabled={busy || !session.agentId || !writable} onClick={() => void operate('return')}><Play size={16} /></Tool>
-            <Tool label="Interrupt process" description="Send Ctrl+C to the foreground process. Requires control." disabled={busy || !writable} onClick={() => input('\x03')}><Square size={16} /></Tool>
+            {ended
+              ? <Tool label="Reopen" description="Start a fresh session in the same directory. Ended sessions cannot be reconnected." disabled={busy} onClick={() => void reopen(session)}><RotateCw size={16} /></Tool>
+              : <>
+                <Tool label="Drive" description={writable ? "You're already driving this session." : `Take over keyboard input.${ownerAgentName ? ` ${ownerAgentName} will pause sending input.` : ''} The running program is not interrupted.`} disabled={busy || writable} onClick={() => void operate('take')}><Hand size={16} /></Tool>
+                <Tool label={ownerAgentName ? `Let ${ownerAgentName} continue` : 'Let the agent continue'} description={!session.agentId ? 'Assign an enabled agent first.' : `Hand keyboard input back to ${ownerAgentName ?? 'the assigned agent'}.`} disabled={busy || !session.agentId || !writable} onClick={() => void operate('return')}><Play size={16} /></Tool>
+                <Tool label="Interrupt process" description="Send Ctrl+C to the foreground program. You must be driving." disabled={busy || !writable} onClick={() => input('\x03')}><Square size={16} /></Tool>
+              </>}
             <SessionActions session={session} busy={busy} onOperate={(operation, id) => void operate(operation, {}, id)} onConfirm={setConfirm}>
                 <DropdownMenuCheckboxItem checked={captureTab} onCheckedChange={setCaptureTab} disabled={session.historyDeleted}>Send Tab to terminal</DropdownMenuCheckboxItem>
                 <DropdownMenuItem disabled={session.historyDeleted} onClick={() => setAttempt((value) => value + 1)}><RotateCw size={16} />Reconnect terminal</DropdownMenuItem>

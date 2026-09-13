@@ -57,7 +57,14 @@ export function authorize(session: Session, principal: Principal, enabled: strin
   if (principal.kind === 'agent' && (!enabled.includes(principal.id) || session.agentId !== principal.id)) {
     throw new TerminalError('Session not available to this agent', 403)
   }
-  if (write && (session.owner.kind !== principal.kind || session.owner.id !== principal.id || session.generation !== generation)) {
+  if (!write) return
+  // The human is the operator, not the browser tab: any human client may drive
+  // a human-owned session (so a phone or a second tab is never locked out),
+  // while an agent-owned session admits only that exact agent. The generation
+  // still invalidates input queued before a takeover.
+  const ownerMatches = session.owner.kind === principal.kind
+    && (principal.kind === 'agent' ? session.owner.id === principal.id : true)
+  if (!ownerMatches || session.generation !== generation) {
     throw new TerminalError('Input ownership changed; refresh the session')
   }
 }
