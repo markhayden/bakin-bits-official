@@ -167,7 +167,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     <PageHeader title="Terminal" meta={!loading && !loadError && serviceReady ? <Badge size="xs" variant="outline">{all.filter((item) => item.state === 'running').length} running</Badge> : undefined} actions={all.length > 0 ? newTerminal : undefined} />
     <PageBody label="Terminal sessions">
       {feedback}
-      {state ?? <Stack gap="item" align="start">
+      {state ?? <Stack gap="item" align="start" className="min-h-0 w-full flex-1">
         <SegmentedControl
           size="sm"
           ariaLabel="Session view"
@@ -180,7 +180,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
             { value: 'all', label: 'All' },
           ]}
         />
-        {visible.length === 0 ? <SystemState kind="no-results" scope="section" title="No sessions in this view" description="Sessions in other states are hidden by the current view." action={<Button variant="outline" onClick={() => setViewParam('all')}>Show all sessions</Button>} /> : <DataTable
+        {visible.length === 0 ? <SystemState className="w-full" kind="no-results" scope="page" title="No sessions in this view" description="Sessions in other states are hidden by the current view." action={<Button variant="outline" onClick={() => setViewParam('all')}>Show all sessions</Button>} /> : <DataTable
         className="w-full"
         label="Terminal sessions"
         rows={visible}
