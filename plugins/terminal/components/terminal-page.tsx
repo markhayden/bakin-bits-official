@@ -101,7 +101,13 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const writable = Boolean(session && session.owner.kind === 'human' && session.state === 'running')
   const controlStatus = ended ? 'Ended' : writable ? "You're driving" : ownerAgentName ? `Watching ${ownerAgentName}` : 'Watching'
   const status = session?.historyDeleted ? 'Output history deleted' : ended ? 'Ended' : streamStatus === controlStatus ? streamStatus : `${streamStatus} / ${controlStatus}`
-  const statusText = session && <Text as="span" size="meta" tone="muted" role="status" className="block truncate" title={status}>{status}</Text>
+  // One compact status chip sits beside the name instead of a stacked line:
+  // green while you drive a live session, muted when ended, amber when the
+  // stream is not yet connected.
+  const connected = streamStatus.startsWith('Connected') || streamStatus === 'Completed'
+  const chipTone = session?.historyDeleted || ended ? 'neutral' : !connected ? 'attention' : writable ? 'success' : 'neutral'
+  const chipLabel = session?.historyDeleted ? 'Output deleted' : ended ? 'Ended' : !connected ? streamStatus.split(' / ')[0] : writable ? 'Driving' : ownerAgentName ? `Watching ${ownerAgentName}` : 'Watching'
+  const statusChip = session && <Badge size="xs" variant="soft" tone={chipTone} role="status" title={status}>{chipLabel}</Badge>
   useEffect(() => { setAssignment(session?.agentId ?? '') }, [session?.id, session?.agentId])
   async function operate(operation: string, extra: Record<string, unknown> = {}, targetId = sessionId) {
     const target = current.current.find((item) => item.id === targetId)
@@ -285,9 +291,9 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     </PageBody>
   </Page> : <WorkspacePage mode="immersive" className="terminal-page" data-terminal-ui-ready={!loading ? '' : undefined}>
     <WorkspacePageHeader>
-        <PageHeader navigation={back} eyebrow="Terminal" title={session?.title ?? 'Terminal'} meta={statusText} actions={controls} />
+        <PageHeader navigation={back} eyebrow="Terminal" title={session?.title ?? 'Terminal'} meta={statusChip} actions={controls} />
     </WorkspacePageHeader>
-    <WorkspacePageCompactHeader navigation={back} title={<><span className="block truncate">{session?.title ?? 'Terminal'}</span>{statusText}</>} action={controls} />
+    <WorkspacePageCompactHeader navigation={back} title={<Inline gap="dense" wrap={false} className="min-w-0 items-center"><span className="truncate">{session?.title ?? 'Terminal'}</span>{statusChip}</Inline>} action={controls} />
     <WorkspacePageBody>
       <Stack as="section" gap="none" className="min-h-0 flex-1 overflow-y-auto" aria-label="Selected terminal">
         {(loadError && all.length > 0 || error) && <Stack gap="item" className="shrink-0 p-bakin-4">
