@@ -106,8 +106,8 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   // stream is not yet connected.
   const connected = streamStatus.startsWith('Connected') || streamStatus === 'Completed'
   const chipTone = session?.historyDeleted || ended ? 'neutral' : !connected ? 'attention' : writable ? 'success' : 'neutral'
-  const chipLabel = session?.historyDeleted ? 'Output deleted' : ended ? 'Ended' : !connected ? streamStatus.split(' / ')[0] : writable ? 'Driving' : ownerAgentName ? `Watching ${ownerAgentName}` : 'Watching'
-  const statusChip = session && <Badge size="xs" variant="soft" tone={chipTone} role="status" title={status}>{chipLabel}</Badge>
+  const chipLabel = session?.historyDeleted ? 'Output deleted' : ended ? 'Ended' : !connected ? streamStatus.split(' / ')[0] : writable ? "You're driving" : ownerAgentName ? `You're watching ${ownerAgentName}` : "You're watching"
+  const statusChip = session && <Badge size="xs" variant="solid" tone={chipTone} role="status" title={status}>{chipLabel}</Badge>
   useEffect(() => { setAssignment(session?.agentId ?? '') }, [session?.id, session?.agentId])
   async function operate(operation: string, extra: Record<string, unknown> = {}, targetId = sessionId) {
     const target = current.current.find((item) => item.id === targetId)
