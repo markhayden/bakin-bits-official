@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Page, PageBody, PageHeader, WorkspacePage, WorkspacePageHeader, WorkspacePageCompactHeader, WorkspacePageBody, ConfirmDialog, AgentAvatar, AgentSelect, DataTable, SegmentedControl } from '@makinbakin/sdk/patterns'
 import { Inline, Stack } from '@makinbakin/sdk/layout'
 import { Alert, AlertDescription, Badge, Button, SystemState, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, Text, Separator, Popover, PopoverTrigger, PopoverContent, PopoverTitle, DropdownMenuItem, DropdownMenuCheckboxItem, DropdownMenuSeparator } from '@makinbakin/sdk/ui'
@@ -79,6 +79,15 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     catch { setAgentsError('Agent choices could not be loaded') }
   }, [])
   useEffect(() => { void loadAgents() }, [sessionId, loadAgents])
+  // A terminal fills the viewport — it is not a scroll-away document. The
+  // immersive header sizes the body for the compact row, so engage that row on
+  // open (scroll the tall identity off) instead of leaving the pane overflowing
+  // the page until the operator scrolls. Runs before paint, so there is no flash.
+  useLayoutEffect(() => {
+    if (!sessionId || loading) return
+    const shell = document.querySelector('[data-archetype="workspace"]')
+    if (shell instanceof HTMLElement) shell.scrollTop = shell.scrollHeight
+  }, [sessionId, loading])
   const [viewParam, setViewParam] = useQueryState('view', 'active')
   const viewCount = (target: SessionView) => all.filter((item) => matchesView(item, target)).length
   const requestedView = (VIEWS as readonly string[]).includes(viewParam) ? viewParam as SessionView : 'active'
