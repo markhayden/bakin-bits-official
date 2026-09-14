@@ -120,7 +120,7 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     await header.getByRole('status').waitFor()
     expect(output!.height).toBeGreaterThan(700)
     expect(await page.getByRole('button', { name: 'Fit terminal to viewport', exact: true }).count()).toBe(0)
-    for (const name of ['Session details', 'Take control', 'Return control to agent', 'Interrupt process', 'Session actions']) {
+    for (const name of ['Session details', 'Drive', 'Let the agent continue', 'Interrupt process', 'Session actions']) {
       await controls.getByRole('button', { name, exact: true }).hover()
       await page.getByRole('tooltip').filter({ hasText: name }).waitFor()
       await page.mouse.move(0, 0)
@@ -128,7 +128,7 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     }
     await controls.getByRole('button', { name: 'Session details', exact: true }).focus()
     await page.keyboard.press('Tab')
-    await page.getByRole('tooltip').filter({ hasText: 'Take control' }).waitFor()
+    await page.getByRole('tooltip').filter({ hasText: 'Drive' }).waitFor()
     await page.keyboard.press('Escape')
     await controls.getByRole('button', { name: 'Session details', exact: true }).click()
     await page.getByRole('dialog', { name: 'Session details' }).getByText(session.cwd, { exact: true }).waitFor()
@@ -147,7 +147,7 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     }))
     expect(await singleLineLabels()).toBe(true)
     await page.screenshot({ path: join(import.meta.dir, '../test-results/design/actions-desktop.png'), animations: 'disabled' })
-    expect(await page.getByRole('menuitem', { name: 'Terminate and complete', exact: true }).isDisabled()).toBe(true)
+    expect(await page.getByRole('menuitem', { name: 'Terminate', exact: true }).isDisabled()).toBe(false)
     await page.keyboard.press('Escape')
     await page.screenshot({ path: join(import.meta.dir, '../test-results/design/immersive-desktop.png') })
     await page.setViewportSize({ width: 320, height: 740 })

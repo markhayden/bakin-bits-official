@@ -6,12 +6,12 @@ import type { Session } from '../lib/contracts'
 import { terminalFetch } from './api'
 import '@xterm/xterm/css/xterm.css'
 
-export function TerminalCanvas({ session, writable, captureTab, attempt, onStatus, onInput, onSession, onResize }: {
-  session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string): void; onSession(session: Session): void; onResize(cols: number, rows: number): Promise<boolean | undefined>
+export function TerminalCanvas({ session, writable, captureTab, attempt, onStatus, onInput, onClaim, onSession, onResize }: {
+  session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string): void; onClaim(data: string): void; onSession(session: Session): void; onResize(cols: number, rows: number): Promise<boolean | undefined>
 }) {
   const element = useRef<HTMLDivElement>(null)
-  const callbacks = useRef({ onInput, onSession, onResize, writable, captureTab: false })
-  callbacks.current = { onInput, onSession, onResize, writable, captureTab }
+  const callbacks = useRef({ onInput, onClaim, onSession, onResize, writable, captureTab: false })
+  callbacks.current = { onInput, onClaim, onSession, onResize, writable, captureTab }
   const [status, setStatus] = useState('Connecting')
   const [truncated, setTruncated] = useState(false)
   useEffect(() => { onStatus(`${status}${truncated ? ' / Earlier output truncated' : ''}`) }, [status, truncated, onStatus])
@@ -43,7 +43,12 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, onStatu
     term.loadAddon(fit.current)
     term.open(element.current!)
     term.attachCustomKeyEventHandler((event) => event.key !== 'Tab' || callbacks.current.captureTab)
-    term.onData((data) => { if (callbacks.current.writable) callbacks.current.onInput(data) })
+    // Watching + typing claims the session (claim-on-type); the page decides
+    // whether to confirm. Drop control keys so a stray Ctrl-key can't claim.
+    term.onData((data) => {
+      if (callbacks.current.writable) callbacks.current.onInput(data)
+      else if (data && data.charCodeAt(0) >= 0x20) callbacks.current.onClaim(data)
+    })
     async function connect() {
       setStatus('Connecting')
       try {

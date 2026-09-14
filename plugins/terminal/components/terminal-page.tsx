@@ -109,6 +109,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   }
   function input(data: string) {
     if (!session || !writable) return
+    markActivity()
     const id = session.id, generation = session.generation, batch = epoch.current
     queue.current = queue.current.then(async () => {
       if (batch !== epoch.current) return
@@ -118,6 +119,56 @@ function Workspace({ sessionId }: { sessionId?: string }) {
       update(updated)
     }).catch((error) => { epoch.current++; setError(error.message); void refresh() })
   }
+  // Claim-on-type: typing while watching takes over, after a one-time confirm
+  // that is remembered for CLAIM_GRACE_MS so it does not nag on every keystroke.
+  const CLAIM_GRACE_MS = 15 * 60 * 1000
+  const [claimData, setClaimData] = useState<string | null>(null)
+  const activityAt = useRef(Date.now())
+  const [idleReturn, setIdleReturn] = useState(false)
+  const markActivity = useCallback(() => { activityAt.current = Date.now(); setIdleReturn(false) }, [])
+  function claimGraceActive() { try { return Date.now() - Number(localStorage.getItem('bakin-terminal-claimed-at') ?? 0) < CLAIM_GRACE_MS } catch { return false } }
+  function recordClaim() { try { localStorage.setItem('bakin-terminal-claimed-at', String(Date.now())) } catch { /* private mode */ } }
+  async function takeAndSend(data: string, targetId: string) {
+    markActivity()
+    if (!await operate('take', {}, targetId)) return
+    const latest = current.current.find((item) => item.id === targetId)
+    if (!data || !latest || latest.owner.kind !== 'human' || latest.state !== 'running') return
+    try {
+      const updated = await api<Session>('/session', { id: targetId, operation: 'write', generation: latest.generation, sequence: latest.inputSequence + 1, data })
+      update(updated)
+    } catch (error) { setError(error instanceof Error ? error.message : 'Terminal input failed'); void refresh() }
+  }
+  function handleClaim(data: string) {
+    const target = current.current.find((item) => item.id === sessionId)
+    if (!target || target.owner.kind !== 'agent' || target.state !== 'running') return
+    if (claimGraceActive()) { recordClaim(); void takeAndSend(data, target.id); return }
+    setClaimData(data)
+  }
+  // Auto hand-back: while you drive a session with an assigned agent, going idle
+  // returns control so the agent is never locked out. A 20s warning offers a
+  // "Keep driving" escape. Navigating away hands back immediately.
+  const IDLE_HANDBACK_MS = 2 * 60 * 1000
+  const returnControl = useRef(() => {})
+  returnControl.current = () => { void operate('return') }
+  const drivingWithAgent = writable && Boolean(session?.agentId)
+  useEffect(() => {
+    if (!drivingWithAgent) return
+    activityAt.current = Date.now()
+    const timer = setInterval(() => {
+      const idle = Date.now() - activityAt.current
+      if (idle >= IDLE_HANDBACK_MS + 20_000) { returnControl.current(); setIdleReturn(false) }
+      else if (idle >= IDLE_HANDBACK_MS) setIdleReturn(true)
+    }, 5000)
+    return () => clearInterval(timer)
+  }, [drivingWithAgent, session?.id, IDLE_HANDBACK_MS])
+  // Hand back immediately when leaving a session you were driving.
+  const leaving = useRef<{ id: string } | null>(null)
+  useEffect(() => {
+    const prev = leaving.current
+    if (prev && prev.id !== sessionId) void api('/session', { id: prev.id, operation: 'return' }).catch(() => {})
+    leaving.current = drivingWithAgent && session ? { id: session.id } : null
+  })
+  useEffect(() => () => { if (leaving.current) void api('/session', { id: leaving.current.id, operation: 'return' }).catch(() => {}) }, [])
   async function setup() {
     setBusy(true); setError('')
     try { await api('/service', {}); await refresh() }
@@ -234,12 +285,13 @@ function Workspace({ sessionId }: { sessionId?: string }) {
           {feedback}
         </Stack>}
         {state ?? (!session ? <SystemState kind="initial-empty" scope="page" icon={<Terminal size={32} />} title="Terminal not found" description="This session is not available." action={<Button variant="outline" nativeButton={false} render={<PluginLink to="/terminal" />}>Back to terminals</Button>} /> : <>
-          {(!serviceReady || session.cleanupReason) && <Stack gap="item" className="shrink-0 p-bakin-4">
+          {(!serviceReady || session.cleanupReason || (idleReturn && drivingWithAgent)) && <Stack gap="item" className="shrink-0 p-bakin-4">
           {!serviceReady && <SystemState kind="error" scope="inline" title="Terminal service unavailable" description="Existing sessions are retained." action={<Button disabled={busy} onClick={() => void setup()}>Set up service</Button>} />}
+          {idleReturn && drivingWithAgent && <Alert tone="attention"><AlertDescription><Inline gap="dense" wrap className="items-center justify-between"><span>You've been idle — returning control to {ownerAgentName ?? 'the agent'} shortly.</span><Button size="sm" variant="outline" onClick={markActivity}>Keep driving</Button></Inline></AlertDescription></Alert>}
           {session.cleanupReason && <Alert tone="attention"><AlertDescription>{session.cleanupReason}</AlertDescription></Alert>}
           </Stack>}
           <Separator />
-          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} captureTab={captureTab} attempt={attempt} onStatus={setStreamStatus} onInput={input} onSession={update} onResize={(cols, rows) => operate('resize', { cols, rows })} />}
+          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} captureTab={captureTab} attempt={attempt} onStatus={setStreamStatus} onInput={input} onClaim={handleClaim} onSession={update} onResize={(cols, rows) => operate('resize', { cols, rows })} />}
         </>)}
       </Stack>
     </WorkspacePageBody>
@@ -257,6 +309,17 @@ function Workspace({ sessionId }: { sessionId?: string }) {
         if (target.operation !== 'delete') return
         remove((id) => id === target.id)
         if (target.id === sessionId) router.push('/terminal')
+      }} />
+    <ConfirmDialog open={claimData !== null} busy={busy} error={error || undefined} onCancel={() => setClaimData(null)}
+      title="Take over this session?"
+      description={`${ownerAgentName ?? 'The agent'} will stop sending input until you hand control back. The running program keeps running.`}
+      confirmLabel="Take over" confirmTone="primary"
+      onConfirm={async () => {
+        if (claimData === null || !sessionId) return
+        const data = claimData
+        setClaimData(null)
+        recordClaim()
+        await takeAndSend(data, sessionId)
       }} />
   </TooltipProvider>
 }
