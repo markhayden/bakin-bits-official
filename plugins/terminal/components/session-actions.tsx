@@ -26,7 +26,7 @@ export function SessionActions({ session, busy, label = 'Session actions', onOpe
       {allowTake && <DropdownMenuItem disabled={busy || driving || !running} onClick={() => onOperate('take', session.id)}><Hand size={16} />Drive</DropdownMenuItem>}
       {session.state === 'exited' && <DropdownMenuItem disabled={busy} onClick={() => onOperate('complete', session.id)}><Check size={16} />Mark ended</DropdownMenuItem>}
       <DropdownMenuItem variant="danger" disabled={busy || !running} onClick={() => onConfirm({ id: session.id, operation: 'terminate' })}><Trash2 size={16} />Terminate</DropdownMenuItem>
-      <DropdownMenuItem variant="danger" disabled={busy || running || Boolean(session.worktreePath)} onClick={() => onConfirm({ id: session.id, operation: 'delete' })}><Trash2 size={16} />Delete session</DropdownMenuItem>
+      <DropdownMenuItem variant="danger" disabled={busy || running} onClick={() => onConfirm({ id: session.id, operation: 'delete' })}><Trash2 size={16} />Delete session</DropdownMenuItem>
       <DropdownMenuItem variant="danger" disabled={busy || session.state !== 'completed' || session.historyDeleted} onClick={() => onConfirm({ id: session.id, operation: 'delete-history' })}><Trash2 size={16} />Delete output only</DropdownMenuItem>
     </DropdownMenuContent>
   </DropdownMenu>

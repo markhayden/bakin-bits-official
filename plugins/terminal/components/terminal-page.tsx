@@ -314,7 +314,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     <NewSession open={creating} onOpenChange={setCreating} onCreated={(created) => { update(created); router.push(`/terminal/${encodeURIComponent(created.id)}`) }} />
     <ConfirmDialog open={confirm !== null} busy={busy} error={error || undefined} onCancel={() => setConfirm(null)}
       title={confirm?.operation === 'terminate' ? 'Terminate this session?' : confirm?.operation === 'delete' ? 'Delete this session?' : 'Delete output history?'}
-      description={`${all.find((item) => item.id === confirm?.id)?.title ?? 'Terminal'}. ${confirm?.operation === 'terminate' ? 'This stops the running process. Unfinished worktrees will be retained.' : confirm?.operation === 'delete' ? 'The session and all of its retained output will be permanently deleted.' : 'The retained terminal output will be permanently deleted. Session metadata is retained.'}`}
+      description={`${all.find((item) => item.id === confirm?.id)?.title ?? 'Terminal'}. ${confirm?.operation === 'terminate' ? 'This stops the running process. Unfinished worktrees will be retained.' : confirm?.operation === 'delete' ? `The session and all of its retained output will be permanently deleted.${all.find((item) => item.id === confirm?.id)?.worktreePath ? ' Its worktree checkout is removed; committed work on its branch is kept.' : ''}` : 'The retained terminal output will be permanently deleted. Session metadata is retained.'}`}
       confirmLabel={confirm?.operation === 'terminate' ? 'Terminate' : confirm?.operation === 'delete' ? 'Delete session' : 'Delete output'}
       onConfirm={async () => {
         if (!confirm) return

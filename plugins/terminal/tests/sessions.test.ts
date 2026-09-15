@@ -19,12 +19,14 @@ function fixture() {
     resize: async () => {}, alive: async (id) => live.has(id), screen: async () => '',
     terminate: async (id) => { terminated.push(id); live.delete(id) }, inUse: async () => false, detach: async (id) => { if (id) attached.delete(id); else attached.clear() },
   }
+  const releases: Array<{ sessionId: string; worktreePath: string; teardown?: boolean }> = []
   const manager = new Sessions(new Store(':memory:'), driver, {
     settings: () => ({ enabledAgents: enabled }), now: () => now,
-    prepare: async () => ({ ok: false }), release: async () => releasable ? { ok: true } : { ok: false, error: 'Unmerged work' },
+    prepare: async () => ({ ok: false }),
+    release: async (input) => { releases.push(input); return releasable ? { ok: true } : { ok: false, error: 'Unmerged work' } },
   })
   managers.push(manager)
-  return { manager, writes, live, attached, terminated, allowRelease: () => { releasable = true }, disable: () => { enabled = [] }, advance: () => { now += 31 * DAY } }
+  return { manager, writes, live, attached, terminated, releases, allowRelease: () => { releasable = true }, disable: () => { enabled = [] }, advance: () => { now += 31 * DAY } }
 }
 const agent = { kind: 'agent', id: 'patch' } as const
 const human = { kind: 'human', id: 'browser-123456789' } as const
@@ -92,20 +94,22 @@ test('disconnected output fails honestly and a snapshot restores the attachment'
   await manager.screen(session.id, human)
   expect(attached.has(session.id)).toBe(true)
 })
-test('delete removes a completed session entirely and only for the human', async () => {
-  const { manager, live, allowRelease } = fixture()
+test('delete always removes the session — a retained worktree tears down, never blocks', async () => {
+  const { manager, live, releases } = fixture()
   const session = await manager.create({ title: 'Done', cwd: '/tmp' }, agent)
   await expect(manager.deleteSession(session.id, human)).rejects.toThrow('End the session')
   session.worktreePath = '/tmp/retained'
   manager.store.save(session)
   live.delete(session.id)
   await manager.finish(session.id, agent, 1, false)
-  await expect(manager.deleteSession(session.id, human)).rejects.toThrow('retained worktree')
-  allowRelease()
-  await manager.sweep()
   manager.store.append(session.id, Buffer.from('history'))
   await expect(manager.deleteSession(session.id, agent)).rejects.toThrow('human')
+  // The fixture release fails ("Unmerged work"), yet the session is gone: the
+  // worktree teardown is best-effort and never blocks removing the record.
   await manager.deleteSession(session.id, human)
+  // The safe clean at finish ran without teardown; the delete forces it.
+  expect(releases.at(-1)).toEqual({ sessionId: session.id, worktreePath: '/tmp/retained', teardown: true })
+  expect(releases.some((r) => !r.teardown)).toBe(true)
   expect(manager.list(human)).toHaveLength(0)
   expect(manager.store.bytes()).toBe(0)
   expect(() => manager.get(session.id, human)).toThrow('not found')

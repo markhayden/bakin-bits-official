@@ -10,7 +10,7 @@ interface WorktreeResult { ok: boolean; error?: string; worktreePath?: string }
 export interface SessionOptions {
   settings(): TerminalSettings
   prepare(input: { repoPath: string; sessionId: string; agent: string }): Promise<WorktreeResult | undefined>
-  release(input: { sessionId: string; worktreePath: string }): Promise<WorktreeResult | undefined>
+  release(input: { sessionId: string; worktreePath: string; teardown?: boolean }): Promise<WorktreeResult | undefined>
   validateLinks?(input: CreateInput): Promise<void>
   now?(): number
 }
@@ -220,10 +220,14 @@ export class Sessions {
     return this.run(async () => {
       if (principal.kind !== 'human') throw new TerminalError('Only the human can delete a session', 403)
       const session = this.get(id, principal)
-      // The operator can always close an ended session; only a live process or
-      // a retained worktree (which would orphan its branch) is a real wall.
+      // The operator can always delete an ended session — no exceptions. A live
+      // process is the only wall (end it first). A retained worktree is torn
+      // down best-effort (force-removing the checkout keeps its branch); a
+      // git failure never blocks removing the session record.
       if (session.state === 'running') throw new TerminalError('End the session before deleting it')
-      if (session.worktreePath) throw new TerminalError('Review the retained worktree before deleting this session')
+      if (session.worktreePath) {
+        await this.options.release({ sessionId: session.id, worktreePath: session.worktreePath, teardown: true }).catch(() => undefined)
+      }
       await this.stopScreen(id)
       this.store.deleteSession(id)
     })
