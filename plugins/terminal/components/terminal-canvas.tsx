@@ -19,6 +19,23 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, onStatu
   const fit = useRef<FitAddon | null>(null)
   const resizing = useRef(false)
   const resizeAgain = useRef(false)
+  const BASE_FONT = 13
+  // Watching a session we don't own: we must not resize the shared PTY, so
+  // instead scale the font up/down so the agent's fixed grid fills the pane.
+  // Purely local; converges over a few animation frames as xterm re-renders.
+  function fitFontToPane(passes = 3): void {
+    const term = terminal.current
+    const el = element.current
+    if (!term || !el || callbacks.current.writable) return
+    const screen = el.querySelector('.xterm-screen') as HTMLElement | null
+    if (!screen || !screen.clientWidth || !screen.clientHeight || !el.clientWidth || !el.clientHeight) return
+    const current = term.options.fontSize ?? BASE_FONT
+    const ratio = Math.min(el.clientWidth / screen.clientWidth, el.clientHeight / screen.clientHeight)
+    const next = Math.max(8, Math.min(28, Math.floor(current * ratio)))
+    if (next === current) return
+    term.options.fontSize = next
+    if (passes > 0) requestAnimationFrame(() => fitFontToPane(passes - 1))
+  }
   async function resizeToViewport() {
     if (resizing.current) { resizeAgain.current = true; return }
     const term = terminal.current
@@ -85,15 +102,22 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, onStatu
     void connect()
     return () => { abort.abort(); term.dispose(); terminal.current = null }
   }, [session.id, attempt])
-  useEffect(() => { terminal.current?.resize(session.cols, session.rows) }, [session.cols, session.rows])
+  useEffect(() => { terminal.current?.resize(session.cols, session.rows); fitFontToPane() }, [session.cols, session.rows])
   useEffect(() => {
-    if (!writable || !element.current) return
+    if (!element.current) return
     let disposed = false
     let timer: ReturnType<typeof setTimeout>
     const schedule = () => {
       if (disposed) return
       clearTimeout(timer)
-      timer = setTimeout(() => void resizeToViewport(), 100)
+      timer = setTimeout(() => {
+        // Driving: fit the PTY to the pane at the base font. Watching: keep the
+        // PTY and scale the font so the fixed grid fills the pane instead.
+        if (callbacks.current.writable) {
+          if (terminal.current && terminal.current.options.fontSize !== BASE_FONT) terminal.current.options.fontSize = BASE_FONT
+          void resizeToViewport()
+        } else fitFontToPane()
+      }, 100)
     }
     // Observe the pane, not the terminal's cell grid: resizing rows must not
     // create a feedback loop, and read-only viewers must never resize a PTY.
