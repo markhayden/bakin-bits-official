@@ -113,11 +113,30 @@ export default definePlugin({
     })
     ctx.registerExecTool({
       name: 'bakin_exec_terminal_session',
-      description: 'Use an assigned terminal. List/create/read-screen/read-output/write/interrupt/complete share the human terminal. Writes require the current generation and next inputSequence. Never retry an ambiguous write. Human takeover blocks input until control is returned. Terminal access must be enabled for this agent.',
+      description: [
+        'Operate a real terminal session assigned to you. Every response returns the session with its current `generation` and `inputSequence` — always read those from the latest response.',
+        'Typical flow: `create` a session, then `screen` to read the visible pane, then `write` to type a command (end it with a trailing carriage return "\\r" to run it), then `screen` again to read the result, then `complete` when finished.',
+        'Writing requires `generation` (from your last response) and `sequence` = that response\'s `inputSequence` + 1. If a write fails, call `screen` to re-read the current state — never retry with the same or a guessed sequence.',
+        'A human can take control at any time; that bumps `generation` and rejects your writes until control returns. Treat a rejected write as "the human is driving", not an error to retry.',
+      ].join(' '),
       requiresVerifiedAgent: true,
       parameters: {
-        operation: z.enum(['list', 'create', 'screen', 'output', 'write', 'resize', 'interrupt', 'complete', 'terminate']),
-        input: z.record(z.string(), z.unknown()).default({}),
+        operation: z.enum(['list', 'create', 'screen', 'output', 'write', 'resize', 'interrupt', 'complete', 'terminate'])
+          .describe('list: your sessions. create: start one. screen: read the visible pane (start here). output: read raw output after a cursor. write: type input. interrupt: send Ctrl-C. resize: set cols/rows. complete: finish an exited session. terminate: stop a running process then finish.'),
+        input: z.object({
+          id: z.string().optional().describe('Session id. Required for screen, output, write, resize, interrupt, complete, terminate.'),
+          title: z.string().optional().describe('create: a short human-readable name for the session.'),
+          cwd: z.string().optional().describe('create: absolute working directory.'),
+          program: z.enum(['shell', 'claude', 'codex']).optional().describe('create: program to launch (default shell).'),
+          checkout: z.enum(['isolated', 'existing']).optional().describe('create (coding programs): new isolated git worktree (default) or the existing checkout at cwd.'),
+          taskId: z.string().optional().describe('create: link the session to a Bakin task id.'),
+          generation: z.number().int().optional().describe('write, resize, interrupt: the `generation` from your latest response for this session.'),
+          sequence: z.number().int().optional().describe('write: the latest `inputSequence` + 1. Consumed once — never reuse or guess it.'),
+          data: z.string().optional().describe('write: the exact keystrokes to send. End a command with a carriage return "\\r" to run it.'),
+          cursor: z.number().int().optional().describe('output: return output produced after this cursor (0 for all retained output).'),
+          cols: z.number().int().optional().describe('resize: terminal columns.'),
+          rows: z.number().int().optional().describe('resize: terminal rows.'),
+        }).default({}).describe('Operation arguments — each field notes which operations use it.'),
       },
       handler: async (params, _agent, context) => {
         try {
