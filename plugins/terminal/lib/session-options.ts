@@ -15,7 +15,7 @@ function directory(value: unknown): value is string {
 }
 export async function sessionOptions(ctx: Pick<PluginContext, 'runtime' | 'tasks' | 'getSettings'>, recent: Session[], cwd = process.cwd()): Promise<SessionOptionsData> {
   const [roster, tasks] = await Promise.all([ctx.runtime.agents.list(), ctx.tasks.list()])
-  const enabled = new Set(terminalSettings(ctx.getSettings<TerminalSettings>()).enabledAgents?.map((agent) => agent.id))
+  const enabled = new Set(terminalSettings(ctx.getSettings<Record<string, unknown>>()).enabledAgents?.map((agent) => agent.id))
   const agents = roster.map((agent) => {
     const workspace = agent.metadata?.workspacePath ?? agent.metadata?.workspace
     return { id: agent.id, name: agent.name || agent.id, enabled: enabled.has(agent.id), ...(directory(workspace) ? { workspace } : {}) }

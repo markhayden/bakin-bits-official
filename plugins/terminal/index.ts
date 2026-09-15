@@ -7,7 +7,7 @@ import { Store } from './lib/store'
 import { TerminalService } from './lib/service'
 import { TmuxProcesses } from './lib/processes'
 import { Sessions } from './lib/sessions'
-import { TerminalError, terminalSettings, type Principal, type TerminalSettings } from './lib/contracts'
+import { TerminalError, terminalSettings, type Principal } from './lib/contracts'
 import { command, failure, human, stream } from './lib/http'
 import { sessionOptions } from './lib/session-options'
 
@@ -55,7 +55,7 @@ export default definePlugin({
     route('/service', 'POST', 'Set up the persistent terminal service', async (request) => { human(request); await service?.install(); await sessions().start(); return Response.json({ ready: true }) }),
   ],
   settingsSchema: { fields: [
-    { key: 'enabledAgents', label: 'Terminal-enabled agents', type: 'list', default: [], addLabel: 'Add agent', uniqueField: 'id', itemShape: { id: { key: 'id', label: 'Agent ID', type: 'string', required: true } } },
+    { key: 'enabledAgents', label: 'Enable terminal access', description: 'Enabled agents can open and operate terminal sessions.', type: 'agent-toggles', default: ['main'] },
     { key: 'maxSessions', label: 'Maximum live sessions', type: 'number', default: 10 },
     { key: 'maxWorktrees', label: 'Maximum retained worktrees', type: 'number', default: 10 },
     { key: 'idleDays', label: 'Idle worktree review age (days)', type: 'number', default: 30 },
@@ -67,7 +67,7 @@ export default definePlugin({
     mkdirSync(root, { recursive: true, mode: 0o700 }); chmodSync(root, 0o700)
     service = new TerminalService(root)
     manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProcesses(service), {
-      settings: () => terminalSettings(ctx.getSettings<TerminalSettings>()),
+      settings: () => terminalSettings(ctx.getSettings<Record<string, unknown>>()),
       prepare: (input) => ctx.hooks.invoke('git.prepareSessionWorktree', input),
       release: (input) => ctx.hooks.invoke('git.releaseSessionWorktree', input),
       validateLinks: async (input) => {

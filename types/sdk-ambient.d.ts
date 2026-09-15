@@ -730,7 +730,7 @@ declare module '@makinbakin/sdk/types' {
     autoFix?: boolean
   }
 
-  export type FormFieldType = 'string' | 'text' | 'number' | 'boolean' | 'select' | 'agent' | 'skill' | 'list'
+  export type FormFieldType = 'string' | 'text' | 'number' | 'boolean' | 'select' | 'agent' | 'agent-toggles' | 'skill' | 'list'
   export interface PluginSettingsSchema {
     fields: Array<Record<string, unknown> & { type: FormFieldType; key: string; label: string }>
   }

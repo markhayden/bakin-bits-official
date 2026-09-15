@@ -39,10 +39,17 @@ export interface TerminalSettings {
   maxWorktrees?: number
   idleDays?: number
 }
-export function terminalSettings(raw: TerminalSettings): TerminalSettings {
-  const bounded = (value: number | undefined, fallback: number, max: number) => Number.isInteger(value) && value! >= 1 && value! <= max ? value : fallback
+export function terminalSettings(raw: Record<string, unknown>): TerminalSettings {
+  const bounded = (value: unknown, fallback: number, max: number) => Number.isInteger(value) && (value as number) >= 1 && (value as number) <= max ? (value as number) : fallback
+  // `enabledAgents` is the array of enabled agent ids from the toggle grid.
+  // Until the operator configures anything (undefined), the main agent is on;
+  // an explicit empty array is respected.
+  const stored = raw.enabledAgents
+  const enabledAgents = Array.isArray(stored)
+    ? stored.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 100).map((id) => ({ id }))
+    : [{ id: 'main' }]
   return {
-    enabledAgents: Array.isArray(raw.enabledAgents) ? raw.enabledAgents.filter((entry) => typeof entry?.id === 'string' && entry.id.length > 0 && entry.id.length <= 100) : [],
+    enabledAgents,
     maxSessions: bounded(raw.maxSessions, 10, 100),
     maxWorktrees: bounded(raw.maxWorktrees, 10, 100),
     idleDays: bounded(raw.idleDays, 30, 365),

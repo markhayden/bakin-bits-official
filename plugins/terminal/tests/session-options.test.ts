@@ -12,7 +12,7 @@ test('populates named agents without granting access and excludes completed task
       { id: 'active', title: 'Build Terminal', column: 'inProgress', agent: 'patch', projectId: 'bakin' },
       { id: 'done', title: 'Done', column: 'done' },
     ] },
-    getSettings: () => ({ enabledAgents: [{ id: 'patch' }] }),
+    getSettings: () => ({ enabledAgents: ['patch'] }),
   } as unknown as Parameters<typeof sessionOptions>[0], [], '/tmp')
   expect(result.agents).toEqual([
     { id: 'chef', name: 'Chef', enabled: false },

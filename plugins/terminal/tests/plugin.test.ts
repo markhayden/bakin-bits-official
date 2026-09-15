@@ -10,7 +10,7 @@ test('plugin activation registers protected tools and honest health without star
   const tools: ExecToolDefinition[] = []
   const checks: HealthCheckRegistrationInput[] = []
   const context = {
-    storage: { localRoot: root }, getSettings: () => ({ enabledAgents: [{ id: 'patch' }] }),
+    storage: { localRoot: root }, getSettings: () => ({ enabledAgents: ['patch'] }),
     hooks: { register: () => () => {}, invoke: async () => undefined },
     tasks: { get: async () => undefined }, log: { error: () => {} },
     registerExecTool: (tool: ExecToolDefinition) => { tools.push(tool) },
