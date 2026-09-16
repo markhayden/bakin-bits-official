@@ -276,20 +276,21 @@ function Workspace({ sessionId }: { sessionId?: string }) {
         rows={visible}
         rowKey={(item) => item.id}
         defaultSort={{ field: 'activity', dir: 'desc' }}
+        tableProps={{ style: { minWidth: '52rem' } }}
         onRowActivate={(item) => router.push(`/terminal/${encodeURIComponent(item.id)}`)}
         rowActivateLabel={(item) => `Open terminal: ${item.title}`}
         columns={[
-          { key: 'title', header: 'Session', sortable: true, sortValue: (item) => item.title, headClassName: 'w-1/4', cell: (item) => <PluginLink to={`/terminal/${encodeURIComponent(item.id)}`} aria-label={`Open terminal: ${item.title}`}><Text weight="semibold">{item.title}</Text></PluginLink> },
-          { key: 'program', header: 'Program', sortable: true, sortValue: (item) => item.program },
-          { key: 'agent', header: 'Agent', sortable: true, sortValue: (item) => item.agentId ? agentChoices.find((agent) => agent.id === item.agentId)?.name ?? item.agentId : null, cell: (item) => {
+          { key: 'title', header: 'Session', sortable: true, sortValue: (item) => item.title, headClassName: 'w-1/4', cellClassName: 'whitespace-nowrap', cell: (item) => <PluginLink to={`/terminal/${encodeURIComponent(item.id)}`} aria-label={`Open terminal: ${item.title}`}><Text weight="semibold">{item.title}</Text></PluginLink> },
+          { key: 'program', header: 'Program', sortable: true, cellClassName: 'whitespace-nowrap', sortValue: (item) => item.program },
+          { key: 'agent', header: 'Agent', sortable: true, cellClassName: 'whitespace-nowrap', sortValue: (item) => item.agentId ? agentChoices.find((agent) => agent.id === item.agentId)?.name ?? item.agentId : null, cell: (item) => {
             if (!item.agentId) return <Text size="meta" tone="muted">Unassigned</Text>
             const choice = agentChoices.find((agent) => agent.id === item.agentId)
             const name = choice?.name ?? item.agentId
             return <Inline gap="dense" wrap={false} className="min-w-0"><AgentAvatar size="xs" decorative agent={{ id: item.agentId, name, imageSrc: choice?.imageSrc, color: choice?.color }} /><Text size="meta" className="truncate">{name}</Text></Inline>
           } },
           { key: 'state', header: 'Status', sortable: true, sortValue: (item) => item.state === 'running' ? 0 : item.state === 'exited' ? 1 : 2, cell: (item) => <Stack gap="dense" align="start"><Badge size="xs" variant="outline">{item.state === 'running' ? 'Running' : item.state === 'exited' ? 'Exited' : 'Completed'}</Badge>{item.worktreePath && <Badge size="xs" variant="outline">Worktree retained</Badge>}</Stack> },
-          { key: 'activity', header: 'Last activity', sortable: true, sortValue: (item) => item.lastActivityAt, cell: (item) => <Text size="meta" tone="muted" title={new Date(item.lastActivityAt).toLocaleString()}>{formatAge(new Date(item.lastActivityAt))}</Text> },
-          { key: 'cwd', header: 'Working directory', headClassName: 'w-1/3', cell: (item) => <Text size="meta" tone="muted" mono>{item.cwd}</Text> },
+          { key: 'activity', header: 'Last activity', sortable: true, cellClassName: 'whitespace-nowrap', sortValue: (item) => item.lastActivityAt, cell: (item) => <Text size="meta" tone="muted" title={new Date(item.lastActivityAt).toLocaleString()}>{formatAge(new Date(item.lastActivityAt))}</Text> },
+          { key: 'cwd', header: 'Working directory', headClassName: 'w-1/3', cell: (item) => <Text size="meta" tone="muted" mono className="block max-w-xs truncate" title={item.cwd}>{item.cwd}</Text> },
           { key: 'actions', header: 'Actions', hideLabel: true, align: 'end', headClassName: 'w-(--bakin-layout-size-row)', cell: (item) => <SessionActions session={item} busy={busy} label={`Actions for ${item.title}`} allowTake onOperate={(operation, id) => void operate(operation, {}, id)} onConfirm={setConfirm} /> },
         ]}
       />}

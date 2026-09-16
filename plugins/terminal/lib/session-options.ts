@@ -2,7 +2,7 @@ import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute } from 'node:path'
 import type { PluginContext } from '@makinbakin/sdk/types'
-import { terminalSettings, type Session, type TerminalSettings } from './contracts'
+import { terminalSettings, type Session } from './contracts'
 
 export interface SessionOptionsData {
   agents: Array<{ id: string; name: string; enabled: boolean; workspace?: string }>
