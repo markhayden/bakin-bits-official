@@ -237,8 +237,14 @@ function Workspace({ sessionId }: { sessionId?: string }) {
             {ended
               ? <Tool label="Reopen" description="Start a fresh session in the same directory. Ended sessions cannot be reconnected." disabled={busy} onClick={() => void reopen(session)}><RotateCw size={16} /></Tool>
               : <>
-                <Tool label="Drive" description={writable ? "You're already driving this session." : `Take over keyboard input.${ownerAgentName ? ` ${ownerAgentName} will pause sending input.` : ''} The running program is not interrupted.`} disabled={busy || writable} onClick={() => void operate('take')}><Hand size={16} /></Tool>
-                <Tool label={ownerAgentName ? `Let ${ownerAgentName} continue` : 'Let the agent continue'} description={!session.agentId ? 'Assign an enabled agent first.' : `Hand keyboard input back to ${ownerAgentName ?? 'the assigned agent'}.`} disabled={busy || !session.agentId || !writable} onClick={() => void operate('return')}><Play size={16} /></Tool>
+                <Tool
+                  label={writable ? (ownerAgentName ? `Hand back to ${ownerAgentName}` : "You're driving") : 'Take over'}
+                  description={writable
+                    ? (session.agentId ? `You're driving. Hand keyboard input back to ${ownerAgentName}; the program keeps running.` : "You're driving this session. Assign an agent to hand control back.")
+                    : `Take over keyboard input.${ownerAgentName ? ` ${ownerAgentName} will pause sending input.` : ''} The running program is not interrupted.`}
+                  active={writable}
+                  disabled={busy || (writable && !session.agentId)}
+                  onClick={() => void operate(writable ? 'return' : 'take')}><Hand size={16} /></Tool>
                 <Tool label="Interrupt process" description="Send Ctrl+C to the foreground program. You must be driving." disabled={busy || !writable} onClick={() => input('\x03')}><Square size={16} /></Tool>
               </>}
             <SessionActions session={session} busy={busy} onOperate={(operation, id) => void operate(operation, {}, id)} onConfirm={setConfirm}>

@@ -120,7 +120,7 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     await header.getByRole('status').waitFor()
     expect(output!.height).toBeGreaterThan(700)
     expect(await page.getByRole('button', { name: 'Fit terminal to viewport', exact: true }).count()).toBe(0)
-    for (const name of ['Session details', 'Drive', 'Let the agent continue', 'Interrupt process', 'Session actions']) {
+    for (const name of ['Session details', "You're driving", 'Interrupt process', 'Session actions']) {
       await controls.getByRole('button', { name, exact: true }).hover()
       await page.getByRole('tooltip').filter({ hasText: name }).waitFor()
       await page.mouse.move(0, 0)
@@ -128,7 +128,7 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     }
     await controls.getByRole('button', { name: 'Session details', exact: true }).focus()
     await page.keyboard.press('Tab')
-    await page.getByRole('tooltip').filter({ hasText: 'Drive' }).waitFor()
+    await page.getByRole('tooltip').filter({ hasText: "You're driving" }).waitFor()
     await page.keyboard.press('Escape')
     await controls.getByRole('button', { name: 'Session details', exact: true }).click()
     await page.getByRole('dialog', { name: 'Session details' }).getByText(session.cwd, { exact: true }).waitFor()
