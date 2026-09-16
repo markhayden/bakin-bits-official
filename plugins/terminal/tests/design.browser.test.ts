@@ -135,7 +135,7 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     await page.keyboard.press('Escape')
     await controls.getByRole('button', { name: 'Session actions', exact: true }).click()
     await page.getByRole('menuitem', { name: 'Reconnect terminal', exact: true }).waitFor()
-    await page.getByRole('menuitemcheckbox', { name: 'Send Tab to terminal', exact: true }).waitFor()
+    await page.getByRole('menuitemcheckbox', { name: 'Capture Tab', exact: true }).waitFor()
     const menu = page.getByRole('menu', { name: 'Session actions', exact: true })
     expect((await menu.boundingBox())!.width).toBeGreaterThanOrEqual(250)
     const singleLineLabels = () => menu.evaluate((element) => Array.from(element.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"]')).every((item) => {
