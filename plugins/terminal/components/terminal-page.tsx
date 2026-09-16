@@ -1,10 +1,10 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Page, PageBody, PageHeader, WorkspacePage, WorkspacePageHeader, WorkspacePageCompactHeader, WorkspacePageBody, ConfirmDialog, AgentAvatar, AgentSelect, DataTable, SegmentedControl } from '@makinbakin/sdk/patterns'
 import { Inline, Stack } from '@makinbakin/sdk/layout'
-import { Alert, AlertDescription, Badge, Button, SystemState, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, Text, Separator, Popover, PopoverTrigger, PopoverContent, PopoverTitle, DropdownMenuItem, DropdownMenuCheckboxItem, DropdownMenuSeparator } from '@makinbakin/sdk/ui'
+import { Alert, AlertDescription, Badge, Button, SystemState, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, Text, Separator, Popover, PopoverTrigger, PopoverContent, PopoverTitle, DropdownMenuItem, DropdownMenuSwitchItem, DropdownMenuSeparator } from '@makinbakin/sdk/ui'
 import { PluginLink, useQueryState, useRouter } from '@makinbakin/sdk/navigation'
 import { formatAge } from '@makinbakin/sdk/utils'
-import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Terminal, RotateCw } from 'lucide-react'
+import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Terminal, RotateCw, Keyboard } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
 import { api } from './api'
@@ -34,10 +34,10 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const [busy, setBusy] = useState(false)
   const [creating, setCreating] = useState(false)
   const [assignment, setAssignment] = useState('')
-  const [captureTab, setCaptureTab] = useState(false)
+  const [captureTab, setCaptureTab] = useState(true)
   const [attempt, setAttempt] = useState(0)
   const [streamStatus, setStreamStatus] = useState('Connecting')
-  useEffect(() => { setCaptureTab(false); setAttempt(0); setStreamStatus('Connecting') }, [sessionId])
+  useEffect(() => { setCaptureTab(true); setAttempt(0); setStreamStatus('Connecting') }, [sessionId])
   const [agents, setAgents] = useState<SessionOptionsData['agents']>([])
   const [agentsError, setAgentsError] = useState('')
   const agentChoices = useTerminalAgents(agents)
@@ -248,7 +248,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
                 <Tool label="Interrupt process" description="Send Ctrl+C to the foreground program. You must be driving." disabled={busy || !writable} onClick={() => input('\x03')}><Square size={16} /></Tool>
               </>}
             <SessionActions session={session} busy={busy} onOperate={(operation, id) => void operate(operation, {}, id)} onConfirm={setConfirm}>
-                <DropdownMenuCheckboxItem checked={captureTab} onCheckedChange={setCaptureTab} disabled={session.historyDeleted}>Send Tab to terminal</DropdownMenuCheckboxItem>
+                <DropdownMenuSwitchItem checked={captureTab} onCheckedChange={setCaptureTab} disabled={session.historyDeleted}><Keyboard size={16} />Capture Tab</DropdownMenuSwitchItem>
                 <DropdownMenuItem disabled={session.historyDeleted} onClick={() => setAttempt((value) => value + 1)}><RotateCw size={16} />Reconnect terminal</DropdownMenuItem>
                 <DropdownMenuSeparator />
             </SessionActions>

@@ -946,6 +946,7 @@ declare module '@makinbakin/sdk/ui' {
   export const DropdownMenuContent: UIComponent
   export const DropdownMenuItem: UIComponent
   export const DropdownMenuCheckboxItem: UIComponent
+  export const DropdownMenuSwitchItem: UIComponent
   export const DropdownMenuSeparator: UIComponent
   export const Form: UIComponent
   export const FormActions: UIComponent
