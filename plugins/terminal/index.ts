@@ -55,7 +55,7 @@ export default definePlugin({
     route('/service', 'POST', 'Set up the persistent terminal service', async (request) => { human(request); await service?.install(); await sessions().start(); return Response.json({ ready: true }) }),
   ],
   settingsSchema: { fields: [
-    { key: 'enabledAgents', label: 'Enable terminal access', description: 'Enabled agents can open and operate terminal sessions.', type: 'agent-toggles', default: ['main'] },
+    { key: 'enabledAgents', label: 'Enable terminal access', description: 'Enabled agents can open and operate terminal sessions. A session is a real shell running as your user, so an enabled agent can read any file you can — including stored API keys and credentials. Enable only agents you trust with full access to this machine.', type: 'agent-toggles', default: ['main'] },
     { key: 'maxSessions', label: 'Maximum live sessions', type: 'number', default: 10 },
     { key: 'maxWorktrees', label: 'Maximum retained worktrees', type: 'number', default: 10 },
     { key: 'idleDays', label: 'Idle worktree review age (days)', type: 'number', default: 30 },

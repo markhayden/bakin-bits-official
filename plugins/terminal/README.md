@@ -100,8 +100,12 @@ host user's filesystem/network permissions. Any same-user process able to read
 local credentials or send arbitrary host HTTP requests is inside that trust
 boundary. Do not expose the service publicly or to untrusted users.
 
-The service environment excludes Bakin-injected provider secrets. Login shell
-profiles and CLI-local credentials remain accessible under normal OS rules.
+The service environment excludes Bakin-injected provider secrets, but that is
+not a sandbox: an enabled agent's shell can still read those secrets — and other
+agents' host credentials — from disk under normal OS rules, so it can act
+outside its own identity. Enable terminal access only for agents you trust with
+full access to this machine. Login shell profiles and CLI-local credentials
+remain accessible under normal OS rules.
 Private sockets/data use restricted permissions. Terminal output is not sent
 to shared activity, audit, or search; operation metadata may be audited by the
 host, and agent tool results may enter that runtime's conversation history.
@@ -168,8 +172,9 @@ inset; xterm's theme and unused viewport use the same canvas background as that
 inset. The fit addon measures the inner host, leaving padding outside the grid.
 Connection and ownership status share the title header; there is no separate
 stream toolbar. Session actions contains Reconnect terminal (reattach output,
-not restart the shell) and the kit checkbox item Send Tab to terminal. Tab exits
-the terminal by default; enabling that item sends Tab for shell completion.
+not restart the shell) and the kit toggle Capture Tab, on by default. While on,
+Tab reaches the shell for completion; turn it off to let Tab move focus out of
+the terminal.
 The composition uses `overlays/dropdown-menu.stories.tsx` / `Actions` and
 `layout/bounded-overflow.stories.tsx` / `CanonicalUsage` without a kit extension.
 Client markers use cryptographic random bytes
