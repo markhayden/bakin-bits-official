@@ -29,6 +29,7 @@ export const PageAside = ({ children, label, labelledBy, ...props }) => React.cr
   { ...props, 'aria-label': label, 'aria-labelledby': labelledBy },
   children,
 )
+export function useCollapsedAside() { return React.useState(false) }
 export const PageCanvas = ({ children, orientation, ...props }) => React.createElement('div', props, children)
 export const PageTimeline = ({ children, live, label, labelledBy, ...props }) => React.createElement(
   'div',
@@ -40,6 +41,7 @@ export const PageComposer = component('div')
 export const WorkspacePage = component('div')
 export const WorkspacePageBody = component('div')
 export const WorkspacePageHeader = component('div')
+export const WorkspacePageCompactHeader = component('div')
 export const StatusBadge = ({ children, tone = 'neutral', ...props }) => React.createElement(
   'span',
   { ...props, 'data-tone': tone },

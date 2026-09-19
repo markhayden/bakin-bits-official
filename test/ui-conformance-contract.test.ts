@@ -18,6 +18,7 @@ describe('official Bits plugin UI conformance enrollment', () => {
   it('names every current package and graduates the author template', () => {
     expect(validateOfficialBitsPluginUiEnrollment()).toEqual([])
     expect(OFFICIAL_BITS_PLUGIN_UI_ENROLLMENT.find((entry) => entry.id === '_template')?.status).toBe('conformant')
+    expect(OFFICIAL_BITS_PLUGIN_UI_ENROLLMENT.find((entry) => entry.id === 'terminal')?.status).toBe('conformant')
   })
 
   it('runs the installed-package harness in pinned Playwright CI', () => {

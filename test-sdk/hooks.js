@@ -86,6 +86,11 @@ export function useAgentList() {
   return defaultAgents
 }
 
+export function useAgentStore(selector) {
+  const override = hookOverride('useAgentStore')
+  return override ? override(selector) : selector({ displaySettings: {} })
+}
+
 export function useAgentIds() {
   const override = hookOverride('useAgentIds')
   if (override) return override()

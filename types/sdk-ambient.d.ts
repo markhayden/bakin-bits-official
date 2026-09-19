@@ -143,6 +143,7 @@ declare module '@makinbakin/sdk/types' {
   }
 
   export interface PluginManifest {
+    uninstallPreflightRequired?: boolean
     id: string
     name: string
     version: string
@@ -168,6 +169,7 @@ declare module '@makinbakin/sdk/types' {
   }
 
   export interface StorageAdapter {
+    readonly localRoot?: string
     read(path: string): string | null
     write(path: string, content: string): void
     append(path: string, content: string): void
@@ -646,6 +648,7 @@ declare module '@makinbakin/sdk/types' {
   }
 
   export interface PluginToolContext {
+    invocation?: { agentId: string }
     storage: StorageAdapter
     events: EventBus
     pluginId: string
@@ -659,6 +662,7 @@ declare module '@makinbakin/sdk/types' {
   }
 
   export interface ExecToolDefinition {
+    requiresVerifiedAgent?: boolean
     name: string
     description: string
     label?: string
@@ -703,6 +707,14 @@ declare module '@makinbakin/sdk/types' {
     status: 'healthy' | 'warning' | 'error' | 'unknown'
     summary: string
     evidence?: Record<string, unknown>
+    incident?: {
+      key: string
+      title: string
+      impact: string
+      class?: string
+      disposition: 'advisory' | 'watch' | 'action_required'
+      resolution: { key: string; type: 'navigate'; label: string; href: string }
+    }
   }
 
   export type HealthCheckRunInput =
@@ -718,7 +730,7 @@ declare module '@makinbakin/sdk/types' {
     autoFix?: boolean
   }
 
-  export type FormFieldType = 'string' | 'text' | 'number' | 'boolean' | 'select' | 'agent' | 'skill' | 'list'
+  export type FormFieldType = 'string' | 'text' | 'number' | 'boolean' | 'select' | 'agent' | 'agent-toggles' | 'skill' | 'list'
   export interface PluginSettingsSchema {
     fields: Array<Record<string, unknown> & { type: FormFieldType; key: string; label: string }>
   }
@@ -837,6 +849,7 @@ declare module '@makinbakin/sdk/types' {
   }
 
   export interface BakinPlugin {
+    beforeUninstall?(ctx: PluginContext): void | Promise<void>
     id: string
     name: string
     version: string
@@ -932,6 +945,8 @@ declare module '@makinbakin/sdk/ui' {
   export const DropdownMenuTrigger: UIComponent
   export const DropdownMenuContent: UIComponent
   export const DropdownMenuItem: UIComponent
+  export const DropdownMenuCheckboxItem: UIComponent
+  export const DropdownMenuSwitchItem: UIComponent
   export const DropdownMenuSeparator: UIComponent
   export const Form: UIComponent
   export const FormActions: UIComponent
@@ -942,6 +957,9 @@ declare module '@makinbakin/sdk/ui' {
   export const InputGroup: UIComponent
   export const Label: UIComponent
   export const Popover: UIComponent
+  export const PopoverTrigger: UIComponent
+  export const PopoverContent: UIComponent
+  export const PopoverTitle: UIComponent
   export const Progress: UIComponent
   export const Select: UIComponent
   export const SelectContent: UIComponent
@@ -1011,6 +1029,7 @@ declare module '@makinbakin/sdk/layout' {
   }
   type LayoutComponent = ComponentType<LayoutProps>
   export const Stack: LayoutComponent
+  export const Section: LayoutComponent
   export const Inline: LayoutComponent
   export const Grid: LayoutComponent
   export const PageShell: LayoutComponent
@@ -1068,6 +1087,7 @@ declare module '@makinbakin/sdk/patterns' {
     label?: string
     labelledBy?: string
   }>
+  export function useCollapsedAside(storageKey: string): [boolean, (collapsed: boolean) => void]
   export type PageCanvasOrientation = 'vertical' | 'horizontal'
   export const PageCanvas: ComponentType<PatternProps & {
     orientation?: PageCanvasOrientation
@@ -1089,6 +1109,7 @@ declare module '@makinbakin/sdk/patterns' {
   export const WorkspacePage: PatternComponent
   export const WorkspacePageBody: PatternComponent
   export const WorkspacePageHeader: PatternComponent
+  export const WorkspacePageCompactHeader: PatternComponent
   export const StatusBadge: PatternComponent
   export const StatusMarker: PatternComponent
 
@@ -1697,6 +1718,7 @@ declare module '@makinbakin/sdk/hooks' {
   }
   export function useAgent(agentId: string): AgentInfo | null
   export function useAgentList(): AgentInfo[]
+  export function useAgentStore<T>(selector: (state: { displaySettings: Record<string, { displayName?: string; accentColor?: string }> }) => T): T
   export function useAgentIds(): string[]
   export function useMainAgentId(): string | null
   export function useDebug(): [boolean]
