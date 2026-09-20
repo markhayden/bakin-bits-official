@@ -1217,7 +1217,7 @@ export function BrainstormView() {
         }}
       />
 
-      <PageControls label="Brainstorm filters">
+      <PageControls variant="filters" label="Brainstorm filters">
         <AgentFilter
           options={agentFilterOptions}
           value={agentFilter}

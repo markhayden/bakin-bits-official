@@ -1078,6 +1078,7 @@ declare module '@makinbakin/sdk/patterns' {
   export type PageControlsAs = 'section' | 'toolbar'
   export const PageControls: ComponentType<PatternProps & {
     as?: PageControlsAs
+    variant?: 'default' | 'filters'
     actions?: ReactNode
     divider?: boolean
     label?: string

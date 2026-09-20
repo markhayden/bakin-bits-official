@@ -175,7 +175,7 @@ export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
         )}
       />
 
-      <PageControls label="Plan filters">
+      <PageControls variant="filters" label="Plan filters">
         <AgentFilter options={agentOptions} value={agentFilter} onValueChange={setAgentFilter} compact />
         <FacetFilter
           label="Status"

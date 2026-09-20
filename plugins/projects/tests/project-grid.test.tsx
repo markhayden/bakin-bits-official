@@ -235,6 +235,7 @@ describe('ProjectGrid', () => {
     await waitFor(() => {
       expect(screen.getByRole('searchbox', { name: 'Search projects' })).toBeDefined()
     })
+    expect(screen.getByRole('region', { name: 'Project filters' }).getAttribute('data-variant')).toBe('filters')
   })
 
   it('renders project cards from the fetched list', async () => {

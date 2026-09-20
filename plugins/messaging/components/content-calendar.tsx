@@ -570,7 +570,7 @@ export function ContentCalendar() {
         )}
       />
 
-      <PageControls label="Calendar filters">
+      <PageControls variant="filters" label="Calendar filters">
         <AgentFilter options={agentOptions} value={agentFilter} onValueChange={setAgentFilter} compact />
         <FacetFilter label="Status" options={STATUS_OPTIONS} selected={statusFilter} onChange={setStatusFilter} />
         <FacetFilter label="Type" options={typeOptions} selected={typeFilter} onChange={setTypeFilter} />

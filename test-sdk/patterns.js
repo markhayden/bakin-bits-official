@@ -18,9 +18,9 @@ export const PageBody = ({ children, state, feedback, busy, layout, gap, label, 
   feedback ?? null,
   state ?? children,
 )
-export const PageControls = ({ children, actions, as, divider, label, labelledBy, ...props }) => React.createElement(
+export const PageControls = ({ children, actions, as, divider, variant = 'default', label, labelledBy, ...props }) => React.createElement(
   'section',
-  { ...props, 'aria-label': label, 'aria-labelledby': labelledBy },
+  { ...props, 'data-variant': variant, 'aria-label': label, 'aria-labelledby': labelledBy },
   children,
   actions ?? null,
 )

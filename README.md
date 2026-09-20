@@ -157,6 +157,15 @@ runtime provides these SDK modules when plugins are installed from git subpaths,
 so plugin packages should keep `@makinbakin/sdk` as an external peer instead of
 vendoring it.
 
+Page-level filter bars use `PageControls variant="filters"` from
+`@makinbakin/sdk/patterns`, including single-facet and status-only filters. The
+host kit owns one leading icon and suppresses duplicate icons in nested
+`AgentFilter` controls. Leave command and view-only bars on the default variant;
+do not add plugin-local filter icons. This treatment requires a Bakin host/SDK
+that includes the shared filter-mode change; release that host support before
+publishing these consumer updates. The local SDK test stub checks composition,
+not the host kit's visual behavior.
+
 For durable agent chat surfaces, use stable adapter-neutral thread IDs via
 `brainstormThreadId(scope, entityId, agentId)`. Store plugin-owned messages
 and tool activity for UI hydration, but let the runtime adapter maintain

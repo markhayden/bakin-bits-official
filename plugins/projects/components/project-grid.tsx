@@ -165,7 +165,7 @@ export function ProjectGrid() {
       />
 
       {/* Status filter */}
-      <PageControls label="Project filters">
+      <PageControls variant="filters" label="Project filters">
         <SegmentedControl
           ariaLabel="Filter by status"
           options={STATUS_TABS}
