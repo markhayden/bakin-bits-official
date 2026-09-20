@@ -145,6 +145,24 @@ bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging@me
 
 ## Troubleshooting
 
+- **SDK stylesheet differs from the canonical artifact** — the SDK build scans
+  `../bakin-bits-official/plugins` beside the Bakin checkout. CI and publishing
+  must expose the Bits source there **before** assembling the SDK. The publish
+  workflow clones Bakin into `$RUNNER_TEMP/bakin`, so its sibling must point to
+  the tagged `$GITHUB_WORKSPACE`. Missing sources produce a smaller stylesheet;
+  do not regenerate canonical CSS or bypass the identity check to hide this.
+- **Latest has no plugin catalog** — binary mirrors (such as `ocrit-v1.1`) and
+  agent releases must not displace a catalog-bearing plugin release as Latest.
+  Before publishing, verify `releases/latest/download/whiskit-artifacts.json`
+  resolves and contains the existing plugins. If it does not, stop: the current
+  workflow's download fallback would start a fresh catalog. Locate and inspect
+  the most recent complete plugin catalog, obtain approval to mark that release
+  Latest (`gh release edit <tag> --latest`), and verify the download again.
+  Keep mirror assets and existing tags intact.
+- **A workflow fix landed after a failed release tag** — rerunning the old job
+  uses the old workflow. Confirm no release or assets were published, then obtain
+  approval to recreate the failed tag at fixed, tested main (or use a new version).
+  Never move a tag that has already shipped.
 - **Run fails on "Tag '…' is vX but … is version 'Y'"** — bump the manifest to
   match the tag, or delete + retag: `git tag -d <tag> && git push origin :<tag>`
   then re-tag at the right version.
