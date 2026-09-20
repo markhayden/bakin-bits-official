@@ -17,7 +17,7 @@ export function ProjectStatusBadge({ status, onClick }: { status: ProjectStatus;
   return (
     <StatusBadge
       tone={meta.tone}
-      variant="soft"
+      variant="solid"
       size="xs"
       onClick={onClick}
       className={onClick ? 'cursor-pointer' : undefined}
