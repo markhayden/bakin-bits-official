@@ -87,6 +87,12 @@ jobs:
           git clone --depth 1 https://github.com/markhayden/bakin.git "$RUNNER_TEMP/bakin"
           (cd "$RUNNER_TEMP/bakin" && bun install --frozen-lockfile)
 
+      # Match CI's stylesheet source layout. Bakin scans its sibling Bits
+      # checkout and rejects SDK CSS that differs from the canonical artifact.
+      - name: Expose Bits at Bakin's sibling path
+        if: steps.tag.outputs.kind == 'plugin'
+        run: ln -s "$GITHUB_WORKSPACE" "$RUNNER_TEMP/bakin-bits-official"
+
       - name: Assemble the current SDK
         # Plugins may use SDK surface newer than the last npm publish — build
         # server bundles against the SDK assembled from Bakin main, not the
