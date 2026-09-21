@@ -3,5 +3,5 @@ import { definePluginUiConformance } from '@makinbakin/sdk/testing/ui/conformanc
 export default definePluginUiConformance({
   pluginId: 'messaging',
   fixtureEntry: './tests/ui.fixture.tsx',
-  readySelector: '[data-slot="list-row-group"]:first-child [data-list-rows]',
+  readySelector: '[data-slot="data-table"]',
 })

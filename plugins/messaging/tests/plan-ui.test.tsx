@@ -170,29 +170,32 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('Plan client UI', () => {
-  it('uses separated date groups and a soft shown count without changing review priority', async () => {
+  it('uses one table collection sorted by target date with review priority within each day', async () => {
     listPlans = [
       { ...PLAN, id: 'later', title: 'Later plan', targetDate: '2026-05-26' },
       { ...PLAN, id: 'recent', title: 'Recently updated', updatedAt: '2026-05-12T00:00:00Z' },
       { ...PLAN, id: 'review', title: 'Review first', status: 'needs_review' },
       { ...PLAN, id: 'older', title: 'Older plan' },
     ]
-    render(<PlanList />)
+    render(<PlanList onSelectPlan={mock()} />)
     await screen.findByText('Review first')
-    const headers = screen.getAllByRole('heading', { level: 2 })
-    expect(headers.map(header => header.textContent)).toEqual(['May 25, 20263 plans', 'May 26, 20261 plan'])
-    expect(headers.every(header => header.getAttribute('data-header-tone') === 'accent')).toBe(true)
     const lists = screen.getAllByRole('list')
-    expect(lists).toHaveLength(2)
-    expect(lists.every(list => list.getAttribute('data-variant') === 'separated')).toBe(true)
+    expect(lists).toHaveLength(1)
+    expect(document.querySelector('[data-slot="list-row-group"]')).toBeNull()
     expect(within(lists[0]).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual([
-      'Open plan: Review first', 'Open plan: Recently updated', 'Open plan: Older plan',
+      'Open plan: Review first', 'Open plan: Recently updated', 'Open plan: Older plan', 'Open plan: Later plan',
     ])
-    expect(within(lists[1]).getByRole('button', { name: 'Open plan: Later plan' })).toBeDefined()
     expect(screen.getByText('4 shown').getAttribute('variant')).toBe('soft')
+    fireEvent.click(screen.getByRole('button', { name: 'Target date', exact: true }))
+    expect(within(lists[0]).getAllByRole('button')[0].getAttribute('aria-label')).toBe('Open plan: Later plan')
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('targetDate:desc')
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'title:asc' } })
+    expect(within(lists[0]).getAllByRole('button')[0].getAttribute('aria-label')).toBe('Open plan: Later plan')
+    fireEvent.click(screen.getByRole('button', { name: 'Plan', exact: true }))
+    expect(within(lists[0]).getAllByRole('button')[0].getAttribute('aria-label')).toBe('Open plan: Review first')
   })
 
-  it('searches campaign text and removes empty date groups, then clears the search', async () => {
+  it('searches campaign text within one collection, then clears the search', async () => {
     listPlans = [PLAN, { ...PLAN, id: 'later', title: 'Later plan', targetDate: '2026-05-26', campaign: 'Summer launch' }]
     render(<PlanList />)
     await screen.findByText('Soup Week')
@@ -203,7 +206,8 @@ describe('Plan client UI', () => {
     fireEvent.change(search, { target: { value: 'no-match' } })
     expect(screen.getByText('No plans match this view')).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
-    expect(screen.getAllByRole('list')).toHaveLength(2)
+    expect(screen.getAllByRole('list')).toHaveLength(1)
+    expect(screen.getAllByRole('listitem')).toHaveLength(2)
   })
 
   it('distinguishes load failure from an empty list and allows retry', async () => {

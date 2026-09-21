@@ -42,21 +42,28 @@ The header-level Quick Post action creates a free-floating Deliverable with
 
 ### Plans collection
 
-The Plans index uses separated `ListRows` grouped by local target date, with
-accent section headers owned by `ListRowGroup`. Within each day, review-needed
-plans come first, then most recently updated plans. Search and agent/status
-filters keep their existing URL state; only nonempty groups are rendered.
-Titles wrap, statuses remain solid, and the shown count is soft and hidden
-while loading or on error. A failed load offers Retry rather than an empty list.
+The Plans index uses one `DataTable`: Plan, Target date, Status, Agent, Channels.
+Default ordering is earliest local target date first, with review-needed plans
+then most recently updated plans as same-date tie breakers. Unknown dates stay
+last in either direction. Target date is a calendar day, not a publishing instant.
+Headers and the always-available Sort selector share the `sort=field:direction`
+URL state; invalid values fall back to the default. Search and agent/status
+filters preserve that order. Narrow containers use the kit's separated rows
+with labelled dates/status/agent/channels, and retain the same Sort selector.
+Titles wrap, statuses remain solid, and the shown count is soft and hidden while
+loading or on error. A failed load offers Retry rather than an empty list.
 
-This composes `storybook/public/recipes/collection-patterns.stories.tsx` —
-`RowBehaviors`, through the focused SDK UI/layout/patterns/navigation entrypoints.
+This composes `storybook/public/lists/data-table.stories.tsx` — `NarrowRoles`,
+`recipes/filterable-table.stories.tsx` — `FilterableTable`, and the public Select,
+through the focused SDK UI/layout/patterns/navigation entrypoints.
 Calendar, workspace and brainstorm layouts are not part of this migration.
 
 Run `bun run test:ui` in a standalone package copy with the assembled/released
 real SDK, React/React DOM and declared browser test devDependencies installed;
 the monorepo's `test-sdk` is only a unit-test double. The deterministic fixture
 mounts the real Plans index with multiple dates, long content, and varied states.
+Sorting regression tests cover defaults, ties, direction, missing dates, displayed
+labels and input immutability; component tests cover header/selector parity.
 Inspect `test-results/bakin-ui/index.html` for desktop/mobile conformance evidence.
 
 ## Lifecycle

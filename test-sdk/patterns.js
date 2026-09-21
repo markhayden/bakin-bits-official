@@ -207,11 +207,15 @@ export const ListRow = ({ children, interactive, selected, ...props }) =>
   )
 export const ListRowLabels = ({ children, ...props }) =>
   React.createElement('li', { ...props, 'aria-hidden': 'true', 'data-slot': 'list-row-labels' }, children)
-export const DataTable = ({ rows, renderRow, tableProps, label, rowKey, columns, onRowActivate, rowActivateLabel, collapseBelow, listVariant, rowProps, renderTableRow, ...props }) =>
+export const DataTable = ({ rows, renderRow, tableProps, label, rowKey, columns, onRowActivate, rowActivateLabel, collapseBelow, listVariant, rowProps, renderTableRow, sort, defaultSort, onSortChange, ...props }) =>
   React.createElement('div', { 'aria-label': label, ...(tableProps ?? {}), ...props },
+    onSortChange ? React.createElement('div', null, columns.filter(column => column.sortable).map(column =>
+      React.createElement('button', { key: column.key, onClick: () => onSortChange(column.key) }, column.header))) : null,
     React.createElement('ul', { 'data-list-rows': '' }, rows.map((row, index) =>
       React.createElement('li', { key: rowKey ? rowKey(row) : index, 'data-slot': 'list-row' },
-        renderRow ? renderRow(row) : columns.map((column) => React.createElement('span', { key: column.key }, column.cell ? column.cell(row) : null))))))
+        renderRow ? renderRow(row) : React.createElement(React.Fragment, null,
+          onRowActivate ? React.createElement('button', { 'aria-label': rowActivateLabel?.(row), onClick: () => onRowActivate(row) }) : null,
+          columns.map((column) => React.createElement('span', { key: column.key }, column.cell ? column.cell(row) : null)))))))
 export const ListRowGroup = ({ label, children, headerVariant = 'plain', headerTone = 'neutral', headingLevel = 3, ...props }) =>
   React.createElement(
     'div',
