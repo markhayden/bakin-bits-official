@@ -53,8 +53,17 @@ with labelled dates/status/agent/channels, and retain the same Sort selector.
 Titles wrap, statuses remain solid, and the shown count is soft and hidden while
 loading or on error. A failed load offers Retry rather than an empty list.
 
+Every row includes a trailing ⋯ menu on desktop and mobile. Delete shares the
+individual plan workspace's confirmation and cleanup: the named plan, its content
+pieces, and linked board tasks. It prevents duplicate requests and busy dismissal,
+shows errors for retry, and removes the row only after success. Cancelling returns
+focus to the menu trigger; successful deletion returns it to the Sort selector.
+Late list refreshes cannot restore a successfully deleted row.
+
 This composes `storybook/public/lists/data-table.stories.tsx` — `NarrowRoles`,
-`recipes/filterable-table.stories.tsx` — `FilterableTable`, and the public Select,
+`recipes/filterable-table.stories.tsx` — `FilterableTable`,
+`recipes/collection-patterns.stories.tsx` — `SameRecords`,
+`feedback/confirm-dialog.stories.tsx` — `FocusReturn`, and the public Select,
 through the focused SDK UI/layout/patterns/navigation entrypoints.
 Calendar, workspace and brainstorm layouts are not part of this migration.
 

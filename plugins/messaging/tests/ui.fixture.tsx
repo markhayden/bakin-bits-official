@@ -40,7 +40,10 @@ createRoot(document.getElementById('root')!).render(
       ...DEFAULT_PLUGIN_UI_FIXTURE,
       route: '/messaging/plans',
       randomSeed: 'official-messaging-plans',
-      network: [{ path: '/api/plugins/messaging/plans', status: 200, json: { plans } }],
+      network: [
+        { path: '/api/plugins/messaging/plans', status: 200, json: { plans } },
+        ...plans.map(plan => ({ method: 'DELETE', path: `/api/plugins/messaging/plans/${plan.id}?id=${plan.id}&deleteLinkedTasks=true`, status: 200, json: { ok: true } })),
+      ],
     }}
     registrations={[{ id: 'messaging', routes: { '/messaging/plans': PlansFixture } }]}
   />,

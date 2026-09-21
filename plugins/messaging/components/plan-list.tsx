@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   AgentAvatar,
   AgentFilter,
@@ -19,6 +19,7 @@ import { useQueryArrayState, useQueryState } from "@makinbakin/sdk/navigation"
 import type { Plan } from '../types'
 import { PLAN_SORT_FIELDS, PLAN_STATUS_LABELS, parsePlanSort, sortPlans } from '../lib/plan-sort'
 import { PlanTable } from './plan-table'
+import { PlanDeleteDialog } from './plan-delete-dialog'
 import { usePlans } from '../hooks/use-plans'
 
 const PLAN_STATUS_OPTIONS = Object.entries(PLAN_STATUS_LABELS).map(([value, label]) => ({ value, label, icon: <Circle className="size-bakin-3" /> }))
@@ -34,7 +35,10 @@ interface PlanListProps {
 }
 
 export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
-  const { plans, loading, error, refresh } = usePlans()
+  const { plans, loading, error, refresh, removePlan } = usePlans()
+  const [deleteTarget, setDeleteTarget] = useState<Plan | null>(null)
+  const deleteTrigger = useRef<HTMLButtonElement | null>(null)
+  const sortTrigger = useRef<HTMLButtonElement>(null)
   const agents = useAgentList()
   const [search, setSearch] = useQueryState('q', '')
   const [agentFilter, setAgentFilter] = useQueryState('agent', 'all')
@@ -150,7 +154,7 @@ export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
         <Inline gap="dense">
           <Text size="meta" tone="muted">Sort</Text>
           <Select items={SORT_LABELS} value={`${sort.field}:${sort.dir}`} onValueChange={value => { if (value) setSortQuery(value) }}>
-            <SelectTrigger aria-label="Sort plans"><SelectValue /></SelectTrigger>
+            <SelectTrigger ref={sortTrigger} aria-label="Sort plans"><SelectValue /></SelectTrigger>
             <SelectContent>
               {SORT_OPTIONS.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
             </SelectContent>
@@ -165,8 +169,22 @@ export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
           sort={sort}
           onSortChange={field => setSortQuery(`${field}:${sort.field === field && sort.dir === 'asc' ? 'desc' : 'asc'}`)}
           onSelectPlan={onSelectPlan}
+          onDeletePlan={(plan, trigger) => {
+            deleteTrigger.current = trigger
+            setDeleteTarget(plan)
+          }}
         />
       </PageBody>
+      {deleteTarget && <PlanDeleteDialog
+        plan={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onDeleted={() => {
+          // The dialog can restore focus before React detaches the deleted row.
+          deleteTrigger.current = null
+          removePlan(deleteTarget.id)
+        }}
+        finalFocus={() => deleteTrigger.current?.isConnected ? deleteTrigger.current : sortTrigger.current}
+      />}
     </Page>
   )
 }

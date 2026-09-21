@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import type { Deliverable, Plan } from '../../../plugins/messaging/types'
 
@@ -73,10 +73,12 @@ mock.module('@/components/ui/skeleton', () => ({
 }))
 
 class FakeEventSource {
+  static instances: FakeEventSource[] = []
   url: string
   onmessage: ((ev: MessageEvent) => void) | null = null
   constructor(url: string) {
     this.url = url
+    FakeEventSource.instances.push(this)
   }
   close() {}
 }
@@ -125,9 +127,15 @@ let planResponse: Plan = PLAN
 let deliverables: Deliverable[] = []
 let listPlans: Plan[] | undefined
 let listFails = false
+let deleteCalls: string[] = []
+let deleteResponse: () => Promise<Response> = async () => Response.json({ ok: true })
 
 function installFetchMock() {
-  globalThis.fetch = mock().mockImplementation(async (url: string) => {
+  globalThis.fetch = mock().mockImplementation(async (url: string, init?: RequestInit) => {
+    if (init?.method === 'DELETE' && url.startsWith('/api/plugins/messaging/plans/')) {
+      deleteCalls.push(url)
+      return deleteResponse()
+    }
     if (typeof url === 'string' && url.startsWith('/api/plugin-settings/messaging')) {
       return { ok: true, json: async () => ({ contentTypes: [{ id: 'blog', label: 'Blog post', prepLeadHours: 72 }] }) }
     }
@@ -164,12 +172,103 @@ beforeEach(() => {
   deliverables = []
   listPlans = undefined
   listFails = false
+  FakeEventSource.instances = []
+  deleteCalls = []
+  deleteResponse = async () => Response.json({ ok: true })
   installFetchMock()
 })
 
 afterEach(() => cleanup())
 
 describe('Plan client UI', () => {
+  async function openListDelete(title = PLAN.title) {
+    const trigger = await screen.findByRole('button', { name: `More actions for ${title}` })
+    fireEvent.click(trigger)
+    fireEvent.click(within(trigger.closest('li')!).getByRole('button', { name: 'Delete', exact: true }))
+    return screen.getByRole('dialog', { name: 'Delete this plan?' })
+  }
+
+  it('opens the row menu without opening the plan and cancels without deleting', async () => {
+    const onSelectPlan = mock()
+    render(<PlanList onSelectPlan={onSelectPlan} />)
+    const dialog = await openListDelete()
+    expect(dialog.textContent).toContain(PLAN.title)
+    expect(dialog.textContent).toContain('linked board tasks')
+    expect(onSelectPlan).not.toHaveBeenCalled()
+    expect(deleteCalls).toHaveLength(0)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.getByText(PLAN.title)).toBeDefined()
+    expect(deleteCalls).toHaveLength(0)
+  })
+
+  it('deletes the exact selected plan with the same linked-task cleanup as the detail view', async () => {
+    listPlans = [PLAN, { ...PLAN, id: 'plan-2', title: 'Another plan' }]
+    render(<PlanList />)
+    const dialog = await openListDelete('Another plan')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete plan' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(deleteCalls).toEqual(['/api/plugins/messaging/plans/plan-2?id=plan-2&deleteLinkedTasks=true'])
+    expect(screen.queryByText('Another plan')).toBeNull()
+    expect(screen.getByText('1 shown')).toBeDefined()
+  })
+
+  it('keeps a failed deletion actionable and shows the empty state after a successful retry', async () => {
+    deleteResponse = async () => Response.json({ error: 'Cleanup unavailable' }, { status: 503 })
+    render(<PlanList />)
+    const dialog = await openListDelete()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete plan' }))
+    await within(dialog).findByText('Cleanup unavailable')
+    expect(screen.getByText('1 shown')).toBeDefined()
+    deleteResponse = async () => Response.json({ ok: true })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete plan' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(screen.getByText('No plans yet')).toBeDefined()
+  })
+
+  it('blocks duplicate deletion and cancellation while cleanup is pending', async () => {
+    let finish!: (response: Response) => void
+    deleteResponse = () => new Promise(resolve => { finish = resolve })
+    render(<PlanList />)
+    const dialog = await openListDelete()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete plan' }))
+    const busy = within(dialog).getByRole('button', { name: 'Deleting...' }) as HTMLButtonElement
+    expect(busy.disabled).toBe(true)
+    expect((within(dialog).getByRole('button', { name: 'Cancel' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(busy)
+    expect(deleteCalls).toHaveLength(1)
+    finish(Response.json({ ok: true }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('does not resurrect a deleted plan from a stale content-event refresh', async () => {
+    render(<PlanList />)
+    const dialog = await openListDelete()
+    const fetchBefore = globalThis.fetch
+    let finishRefresh!: (response: Response) => void
+    globalThis.fetch = mock((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/plugins/messaging/plans') return new Promise<Response>(resolve => { finishRefresh = resolve })
+      return fetchBefore(input, init)
+    }) as typeof fetch
+    act(() => FakeEventSource.instances[0].onmessage?.({ data: JSON.stringify({ file: 'messaging/plans/plan-1.json' }) } as MessageEvent))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete plan' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await act(async () => finishRefresh(Response.json({ plans: [PLAN] })))
+    expect(screen.queryByText(PLAN.title)).toBeNull()
+    expect(screen.getByText('0 shown')).toBeDefined()
+  })
+
+  it('keeps a network failure in the dialog and permits cancellation', async () => {
+    deleteResponse = async () => { throw new Error('Network unavailable') }
+    render(<PlanList />)
+    const dialog = await openListDelete()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete plan' }))
+    await within(dialog).findByText('Network unavailable')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.getByText('1 shown')).toBeDefined()
+  })
+
   it('uses one table collection sorted by target date with review priority within each day', async () => {
     listPlans = [
       { ...PLAN, id: 'later', title: 'Later plan', targetDate: '2026-05-26' },
@@ -182,7 +281,7 @@ describe('Plan client UI', () => {
     const lists = screen.getAllByRole('list')
     expect(lists).toHaveLength(1)
     expect(document.querySelector('[data-slot="list-row-group"]')).toBeNull()
-    expect(within(lists[0]).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual([
+    expect(within(lists[0]).getAllByRole('button', { name: /^Open plan:/ }).map(button => button.getAttribute('aria-label'))).toEqual([
       'Open plan: Review first', 'Open plan: Recently updated', 'Open plan: Older plan', 'Open plan: Later plan',
     ])
     expect(screen.getByText('4 shown').getAttribute('variant')).toBe('soft')

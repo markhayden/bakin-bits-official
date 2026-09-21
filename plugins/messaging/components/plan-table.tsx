@@ -6,6 +6,7 @@ import { Text } from '@makinbakin/sdk/ui'
 import { PLAN_STATUS_TONE } from '../constants'
 import { PLAN_STATUS_LABELS, planTargetDate, type PlanSort } from '../lib/plan-sort'
 import type { Plan } from '../types'
+import { PlanActions } from './plan-actions'
 
 function formatTargetDate(value: string): string {
   // Target dates are local calendar days, not UTC publishing instants.
@@ -14,11 +15,12 @@ function formatTargetDate(value: string): string {
   return Number.isNaN(date.getTime()) ? value || 'Not set' : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-export function PlanTable({ plans, sort, onSortChange, onSelectPlan, agentById }: {
+export function PlanTable({ plans, sort, onSortChange, onSelectPlan, onDeletePlan, agentById }: {
   plans: Plan[]
   sort: PlanSort
   onSortChange: (field: string) => void
   onSelectPlan?: (plan: Plan) => void
+  onDeletePlan: (plan: Plan, trigger: HTMLButtonElement | null) => void
   agentById: ReadonlyMap<string, { name?: string; headshot?: string | null }>
 }) {
   const columns: ReadonlyArray<DataTableColumn<Plan>> = [
@@ -55,6 +57,7 @@ export function PlanTable({ plans, sort, onSortChange, onSelectPlan, agentById }
       narrowCell: plan => <Text size="meta">{agentById.get(plan.agent)?.name || plan.agent}</Text>,
     },
     { key: 'channels', header: 'Channels', sortable: true, narrow: 'label', cell: plan => plan.channels?.map(channel => channel.channel).join(', ') || 'None' },
+    { key: 'actions', header: 'Actions', hideLabel: true, align: 'end', narrow: 'trailing', headClassName: 'w-bakin-10', cell: plan => <PlanActions plan={plan} onDelete={onDeletePlan} /> },
   ]
   return <DataTable
     label="Plans"

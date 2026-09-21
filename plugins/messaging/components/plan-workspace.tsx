@@ -46,6 +46,7 @@ import { getContentTypeLabel, useContentTypes } from '../hooks/use-content-types
 import { getDistributionChannelDefinition, MESSAGING_DISTRIBUTION_CHANNELS } from '../lib/distribution-channels'
 import { DeliverableDrawer } from './deliverable-drawer'
 import { DeliverableStatusBadge } from './deliverable-status-badge'
+import { PlanDeleteDialog } from './plan-delete-dialog'
 import { formatDateTime } from '@makinbakin/sdk/utils'
 
 interface PlanWorkspaceProps {
@@ -109,7 +110,6 @@ const DISTRIBUTION_CHANNEL_OPTIONS: DistributionChannelOption[] = MESSAGING_DIST
   ...channel,
   icon: DISTRIBUTION_CHANNEL_ICONS[channel.id] ?? MessageSquareText,
 }))
-const DELETE_REQUEST_TIMEOUT_MS = 10000
 const TASK_STATE_TONE: Record<PlanningTaskState, 'neutral' | 'success' | 'attention'> = {
   done: 'success',
   current: 'neutral',
@@ -323,8 +323,6 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
   )
   const [selectedDeliverable, setSelectedDeliverable] = useState<Deliverable | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
-  const [deleteError, setDeleteError] = useState<string | null>(null)
-  const [deleting, setDeleting] = useState(false)
   const [channelPendingDelete, setChannelPendingDelete] = useState<PlanChannel | null>(null)
   const [channelDeleteError, setChannelDeleteError] = useState<string | null>(null)
   const [deletingChannel, setDeletingChannel] = useState(false)
@@ -506,36 +504,6 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
     if (lastUser?.kind === 'user' && lastUser.content) void brainstorm.send(lastUser.content)
   }, [brainstorm])
 
-  const handleDeletePlan = async () => {
-    if (!plan) return
-    setDeleting(true)
-    setDeleteError(null)
-    const controller = new AbortController()
-    const timeout = window.setTimeout(() => controller.abort(), DELETE_REQUEST_TIMEOUT_MS)
-    try {
-      const encoded = encodeURIComponent(plan.id)
-      const response = await fetch(`/api/plugins/messaging/plans/${encoded}?id=${encoded}&deleteLinkedTasks=true`, {
-        method: 'DELETE',
-        signal: controller.signal,
-      })
-      if (!response.ok) {
-        setDeleteError(await readErrorMessage(response, 'Could not delete this plan.'))
-        return
-      }
-      setDeleteOpen(false)
-      ;(onDeleted ?? onBack)?.()
-    } catch (err) {
-      setDeleteError(
-        err instanceof Error && err.name === 'AbortError'
-          ? 'Plan delete timed out. Cleanup may still be running; refresh the Plans list in a moment.'
-          : err instanceof Error ? err.message : String(err),
-      )
-    } finally {
-      window.clearTimeout(timeout)
-      setDeleting(false)
-    }
-  }
-
   const handleDeleteChannel = async () => {
     if (!plan || !channelPendingDelete) return
     setDeletingChannel(true)
@@ -673,7 +641,6 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
           <DropdownMenuItem
             variant="danger"
             onClick={() => {
-              setDeleteError(null)
               setDeleteOpen(true)
             }}
           >
@@ -989,22 +956,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
         onUpdated={refresh}
       />
 
-      <ConfirmDialog
-        open={deleteOpen}
-        title="Delete this plan?"
-        description="This removes the plan, its content pieces, and any linked board tasks created for this plan."
-        confirmLabel="Delete plan"
-        busyLabel="Deleting..."
-        confirmTone="danger"
-        busy={deleting}
-        error={deleteError}
-        onConfirm={handleDeletePlan}
-        onCancel={() => {
-          if (deleting) return
-          setDeleteError(null)
-          setDeleteOpen(false)
-        }}
-      />
+      {deleteOpen && <PlanDeleteDialog plan={plan} onClose={() => setDeleteOpen(false)} onDeleted={onDeleted ?? onBack} />}
 
       <ConfirmDialog
         open={Boolean(channelPendingDelete)}
