@@ -671,12 +671,12 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
       <PageBody className="min-h-0 overflow-hidden">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-bakin-6 overflow-hidden">
           <div className="flex min-h-0 flex-1 flex-col gap-bakin-6 overflow-y-auto @3xl/page-shell:flex-row @3xl/page-shell:overflow-hidden">
-            <main className="flex min-h-0 min-w-0 flex-1 flex-col @3xl/page-shell:min-w-[360px]">
+            <div className="flex min-h-0 min-w-0 flex-none flex-col @3xl/page-shell:min-w-[360px] @3xl/page-shell:flex-1">
             <TabsContent
               value="plan"
               id="messaging-plan-panel-plan"
               aria-labelledby="messaging-plan-tab-plan"
-              className="min-h-0 flex-none overflow-visible [scrollbar-gutter:stable] @3xl/page-shell:flex-1 @3xl/page-shell:overflow-y-auto @3xl/page-shell:pr-bakin-2"
+              className="min-h-0 flex-none overflow-visible focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-bakin-focus-ring focus-visible:outline-offset-[-2px] [scrollbar-gutter:stable] @3xl/page-shell:flex-1 @3xl/page-shell:overflow-y-auto @3xl/page-shell:pr-bakin-2"
             >
               <section className="pb-5">
                 {plan.status === 'needs_review' && (
@@ -723,9 +723,9 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                       {planChannels.length === 0 ? (
                         <SystemState kind="initial-empty" scope="inline" title="No channels are linked." />
                       ) : (
-                        <ListRows variant="bordered" aria-label="Plan channels">
+                        <ListRows variant="separated" size="sm" aria-label="Plan channels">
                           {planChannels.map((channel) => (
-                            <ListRow key={channel.id} className="flex items-center gap-bakin-2 px-bakin-3 py-bakin-2">
+                            <ListRow key={channel.id} className="flex items-center gap-bakin-2">
                               <Text as="div" size="meta" tone="muted" className="flex min-w-0 flex-1 flex-wrap items-center gap-bakin-2">
                                 <DistributionChannelIcon channelId={channel.channel} className="size-3.5" />
                                 <Text as="span" size="meta" weight="medium">{getDistributionChannelOption(channel.channel).label}</Text>
@@ -785,7 +785,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
               <section className="flex flex-col gap-bakin-3">
                 <div className="flex items-center justify-between gap-bakin-3">
                   <h3>Content Pieces</h3>
-                  <Badge size="xs" variant="outline">
+                  <Badge size="xs" variant="soft">
                     {contentPiecesLabel(nonProposedDeliverables.length)}
                   </Badge>
                 </div>
@@ -793,18 +793,17 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                 {nonProposedDeliverables.length === 0 ? (
                   <SystemState kind="initial-empty" scope="inline" title="No content pieces have been planned yet." />
                 ) : (
-                  <ListRows variant="bordered" aria-label="Content pieces">
+                  <ListRows variant="separated" aria-label="Content pieces">
                     {nonProposedDeliverables.map((deliverable) => (
                       <ListRow
                         key={deliverable.id}
                         interactive={{ label: `Open ${deliverable.title}`, onActivate: () => setSelectedDeliverable(deliverable) }}
-                        className="p-bakin-3"
                       >
                           <div className="flex items-start justify-between gap-bakin-3">
                             <div className="min-w-0">
-                              <div className="flex min-w-0 items-center gap-bakin-2">
-                                <Text as="h4" weight="medium" className="truncate">{deliverable.title}</Text>
-                                <Badge size="xs" variant="outline">{deliverable.channel}</Badge>
+                              <div className="flex min-w-0 flex-wrap items-center gap-bakin-2">
+                                <Text as="h4" weight="medium" className="min-w-0 break-words">{deliverable.title}</Text>
+                                <Badge size="xs" variant="soft">{deliverable.channel}</Badge>
                               </div>
                               <Text as="p" size="meta" tone="muted" className="mt-bakin-1 line-clamp-2">{deliverable.brief}</Text>
                             </div>
@@ -825,7 +824,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
               value="brainstorm"
               id="messaging-plan-panel-brainstorm"
               aria-labelledby="messaging-plan-tab-brainstorm"
-              className="flex min-h-144 flex-1 flex-col @3xl/page-shell:min-h-0"
+              className="flex min-h-144 flex-1 flex-col focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-bakin-focus-ring focus-visible:outline-offset-[-2px] @3xl/page-shell:min-h-0"
             >
               {plan.sourceSessionId ? (
                 <div className="flex h-full min-h-0 flex-col gap-bakin-3">
@@ -865,7 +864,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                 />
               )}
             </TabsContent>
-            </main>
+            </div>
 
             <aside
               className="relative w-full shrink-0 border-t border-bakin-border-subtle pt-bakin-6 @3xl/page-shell:w-[var(--plan-sidebar-width)] @3xl/page-shell:overflow-y-auto @3xl/page-shell:border-l @3xl/page-shell:border-t-0 @3xl/page-shell:pl-bakin-6 @3xl/page-shell:pr-bakin-2 @3xl/page-shell:pt-0"

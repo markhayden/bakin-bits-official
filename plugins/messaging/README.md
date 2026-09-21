@@ -65,7 +65,33 @@ This composes `storybook/public/lists/data-table.stories.tsx` — `NarrowRoles`,
 `recipes/collection-patterns.stories.tsx` — `SameRecords`,
 `feedback/confirm-dialog.stories.tsx` — `FocusReturn`, and the public Select,
 through the focused SDK UI/layout/patterns/navigation entrypoints.
-Calendar, workspace and brainstorm layouts are not part of this migration.
+Calendar, workspace and brainstorm are separate slices from the Plans index.
+
+### Remaining collection views
+
+Brainstorm sessions and a plan's channel/content-piece lists use separated
+rows, wrapping titles and existing independent controls. Editable channel
+selection, conversations and task timelines remain specialized. Page counts
+and content/channel metadata use soft chips; state badges remain solid.
+
+Calendar list mode uses the public DataTable narrow roles instead of a private
+mobile row renderer. Publishes, channel, type, agent and status remain labelled
+when narrow. A persistent Sort selector and desktop headings share URL-backed
+`sort=field:direction` state; filtering and reload preserve that order. Publishing
+dates sort as instants (not date-only strings), unknown dates sort last, and
+agent/type sorting uses displayed labels. Month/week/day ordering stays
+chronological. Failed Calendar and Brainstorm loads offer Retry and hide counts.
+
+`bun run test:ui` now also runs `test:ui:collections`: isolated real-SDK fixtures
+for Calendar list, Brainstorm index and plan-workspace collections, with reports
+under `test-results/bakin-ui-{calendar,brainstorm,workspace}`. The workspace
+composes inside the host's main landmark and uses the existing Tabs focus tokens
+on its keyboard-focusable panels. This is consumer composition, not a new kit
+API. Conversation/editor and other interactive workspace branches still need
+their own broader audit; these fixtures do not declare that entire surface done.
+In the height-contained host, the stacked workspace column keeps its intrinsic
+height on narrow screens so the details rail cannot overlap its rows; desktop
+retains the existing independently scrollable, resizable columns.
 
 Run `bun run test:ui` in a standalone package copy with the assembled/released
 real SDK, React/React DOM and declared browser test devDependencies installed;

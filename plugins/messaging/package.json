@@ -5,7 +5,8 @@
   "type": "module",
   "main": "./index.ts",
   "scripts": {
-    "test:ui": "bakin-plugin-test-ui"
+    "test:ui": "bakin-plugin-test-ui && bun run test:ui:collections",
+    "test:ui:collections": "MESSAGING_UI_SURFACE=calendar bakin-plugin-test-ui --config tests/collection.ui-test.ts && MESSAGING_UI_SURFACE=brainstorm bakin-plugin-test-ui --config tests/collection.ui-test.ts && MESSAGING_UI_SURFACE=workspace bakin-plugin-test-ui --config tests/collection.ui-test.ts"
   },
   "peerDependencies": {
     "react": "^19.0.0",

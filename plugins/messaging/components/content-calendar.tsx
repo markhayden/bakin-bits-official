@@ -21,7 +21,8 @@ import {
   SegmentedControl,
   StatusMarker,
 } from '@makinbakin/sdk/patterns'
-import { Badge, Button, SystemState, Text } from '@makinbakin/sdk/ui'
+import { Badge, Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SystemState, Text } from '@makinbakin/sdk/ui'
+import { Inline } from '@makinbakin/sdk/layout'
 import {
   CalendarDays,
   CalendarRange,
@@ -39,6 +40,13 @@ import { useDeliverables } from '../hooks/use-deliverables'
 import { DeliverableDrawer } from './deliverable-drawer'
 import { DeliverableStatusBadge } from './deliverable-status-badge'
 import { QuickPostButton } from './quick-post-button'
+import { CALENDAR_SORT_FIELDS, parseCalendarSort, sortCalendarDeliverables } from '../lib/calendar-sort'
+
+const SORT_OPTIONS = Object.entries(CALENDAR_SORT_FIELDS).flatMap(([field, label]) => [
+  { value: `${field}:asc`, label: `${label}: ${field === 'publishAt' ? 'earliest first' : 'A–Z'}` },
+  { value: `${field}:desc`, label: `${label}: ${field === 'publishAt' ? 'latest first' : 'Z–A'}` },
+])
+const SORT_LABELS = Object.fromEntries(SORT_OPTIONS.map(option => [option.value, option.label]))
 
 type CalendarView = 'list' | 'today' | 'week' | 'month'
 type CalendarViewOption = {
@@ -243,10 +251,10 @@ function CalendarDeliverable({
         <AgentAvatar agent={identity} size="sm" decorative />
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-bakin-2">
-            <Text as="span" weight="semibold" className="truncate">{deliverable.title}</Text>
+            <Text as="span" weight="semibold" className="min-w-0 break-words">{deliverable.title}</Text>
             <DeliverableStatusBadge status={deliverable.status} />
           </span>
-          <Text as="span" size="meta" tone="muted" className="mt-bakin-1 block truncate">
+          <Text as="span" size="meta" tone="muted" className="mt-bakin-1 block break-words">
             {formatTime(deliverable.publishAt)} · {deliverable.channel} · {getContentTypeLabel(deliverable.contentType, contentTypes)}
           </Text>
         </span>
@@ -274,7 +282,7 @@ function CalendarDeliverable({
 }
 
 export function ContentCalendar() {
-  const { deliverables, loading, refresh } = useDeliverables()
+  const { deliverables, loading, error, refresh } = useDeliverables()
   const contentTypes = useContentTypes()
   const agents = useAgentList()
   const channels = useNotificationChannels()
@@ -284,6 +292,8 @@ export function ContentCalendar() {
   const [channelFilter, setChannelFilter] = useQueryArrayState('channel')
   const [search, setSearch] = useQueryState('q', '')
   const [view, setView] = useQueryState('view', 'month')
+  const [sortQuery, setSortQuery] = useQueryState('sort', 'publishAt:asc')
+  const sort = useMemo(() => parseCalendarSort(sortQuery), [sortQuery])
   const calendarView: CalendarView = VIEW_OPTIONS.some(option => option.value === view)
     ? view as CalendarView
     : 'month'
@@ -392,28 +402,28 @@ export function ContentCalendar() {
     return groups
   }, [calendarItems])
 
-  // Flat chronological rows for the list view — the same pattern schedule's
-  // job list uses (DataTable, collapsing to the row render when narrow).
+  // One ordering pipeline for desktop headings and the persistent narrow control.
   const listRows = useMemo(
-    () => Array.from(groupedDeliverables.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .flatMap(([, items]) => items),
-    [groupedDeliverables],
+    () => sortCalendarDeliverables(filteredDeliverables, sort, {
+      agentName: id => agentById.get(id)?.name || id,
+      typeName: id => getContentTypeLabel(id, contentTypes),
+    }),
+    [filteredDeliverables, sort, agentById, contentTypes],
   )
 
   const listColumns = useMemo<ReadonlyArray<DataTableColumn<Deliverable>>>(() => [
     {
       key: 'title',
       header: 'Title',
+      narrow: 'primary',
       sortable: true,
-      sortValue: deliverable => deliverable.title,
-      cell: deliverable => <Text as="span" weight="semibold" className="block truncate">{deliverable.title}</Text>,
+      cell: deliverable => <Text as="span" weight="semibold" className="block break-words">{deliverable.title}</Text>,
     },
     {
       key: 'publishAt',
       header: 'Publishes',
+      narrow: 'label',
       sortable: true,
-      sortValue: deliverable => new Date(deliverable.publishAt),
       cell: deliverable => (
         <Text as="span" tone="muted" className="block whitespace-nowrap">
           {compactDayLabel(localDateKey(new Date(deliverable.publishAt)))} · {formatTime(deliverable.publishAt)}
@@ -423,8 +433,8 @@ export function ContentCalendar() {
     {
       key: 'channel',
       header: 'Channel',
+      narrow: 'label',
       sortable: true,
-      sortValue: deliverable => deliverable.channel,
       cell: deliverable => (
         <span className="inline-flex min-w-0 items-center gap-bakin-2">
           <ChannelIcon channelId={deliverable.channel} className="size-bakin-4 shrink-0" />
@@ -435,15 +445,16 @@ export function ContentCalendar() {
     {
       key: 'type',
       header: 'Type',
+      narrow: 'label',
       sortable: true,
-      sortValue: deliverable => getContentTypeLabel(deliverable.contentType, contentTypes),
       cell: deliverable => <Text as="span" tone="muted">{getContentTypeLabel(deliverable.contentType, contentTypes)}</Text>,
     },
     {
       key: 'agent',
       header: 'Agent',
+      narrow: 'label',
+      narrowCell: deliverable => <Text size="meta">{agentById.get(deliverable.agent)?.name || deliverable.agent}</Text>,
       sortable: true,
-      sortValue: deliverable => agentById.get(deliverable.agent)?.name || deliverable.agent,
       cell: deliverable => {
         const agent = agentById.get(deliverable.agent)
         return (
@@ -457,8 +468,8 @@ export function ContentCalendar() {
     {
       key: 'status',
       header: 'Status',
+      narrow: 'label',
       sortable: true,
-      sortValue: deliverable => deliverable.status,
       cell: deliverable => <DeliverableStatusBadge status={deliverable.status} />,
     },
   ], [agentById, contentTypes])
@@ -470,6 +481,9 @@ export function ContentCalendar() {
       title="Loading the content calendar"
       description="Scheduled deliverables will appear as soon as the current messaging plan is available."
     />
+  ) : error ? (
+    <SystemState kind="error" scope="page" title="Could not load the content calendar" description={error}
+      action={<Button variant="outline" onClick={() => { void refresh() }}>Retry</Button>} />
   ) : filteredDeliverables.length === 0 && hasActiveFilters ? (
     <SystemState
       kind="no-results"
@@ -540,7 +554,7 @@ export function ContentCalendar() {
       <PageHeader
         title="Calendar"
         description="Plan and review content across channels, then see exactly when each deliverable is scheduled to publish."
-        meta={<Badge size="xs" tone="neutral" variant="outline">{filteredDeliverables.length} shown</Badge>}
+        meta={!loading && !error && <Badge size="xs" tone="neutral" variant="soft">{filteredDeliverables.length} shown</Badge>}
         controlsLabel="Calendar search, view, and actions"
         controls={(
           <div className="grid w-full min-w-0 gap-bakin-2 @3xl/page-header:flex @3xl/page-header:items-start">
@@ -575,6 +589,15 @@ export function ContentCalendar() {
         <FacetFilter label="Status" options={STATUS_OPTIONS} selected={statusFilter} onChange={setStatusFilter} />
         <FacetFilter label="Type" options={typeOptions} selected={typeFilter} onChange={setTypeFilter} />
         <FacetFilter label="Channel" options={channelOptions} selected={channelFilter} onChange={setChannelFilter} />
+        {calendarView === 'list' && <Inline gap="dense">
+          <Text size="meta" tone="muted">Sort</Text>
+          <Select items={SORT_LABELS} value={`${sort.field}:${sort.dir}`} onValueChange={value => { if (value) setSortQuery(value) }}>
+            <SelectTrigger aria-label="Sort calendar"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {SORT_OPTIONS.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </Inline>}
       </PageControls>
 
       <PageBody label="Scheduled deliverables" state={state}>
@@ -618,7 +641,7 @@ export function ContentCalendar() {
                 label={`${dayLabel(activeDate)} content calendar`}
                 items={calendarItems}
                 renderItem={(item) => (
-                  <ListRows variant="bordered">
+                  <ListRows variant="separated">
                     {renderDeliverable(item.deliverable, 'row')}
                   </ListRows>
                 )}
@@ -641,12 +664,12 @@ export function ContentCalendar() {
             columns={listColumns}
             rows={listRows}
             rowKey={deliverable => deliverable.id}
-            defaultSort={{ field: 'publishAt', dir: 'asc' }}
-            listVariant="bordered"
+            sort={sort}
+            onSortChange={field => setSortQuery(`${field}:${sort.field === field && sort.dir === 'asc' ? 'desc' : 'asc'}`)}
+            listVariant="separated"
             tableProps={{ 'data-testid': 'calendar-view-list', className: 'min-w-max' }}
             onRowActivate={setSelectedDeliverable}
             rowActivateLabel={deliverable => `Open ${deliverable.title}`}
-            renderRow={deliverable => renderDeliverable(deliverable, 'row')}
           />
         )}
       </PageBody>

@@ -538,7 +538,8 @@ export function BrainstormView() {
   const [search, setSearch] = useQueryState('q', '')
   const [agentFilter, setAgentFilter] = useQueryState('agent', 'all')
   const [sessions, setSessions] = useState<SessionSummary[]>([])
-  const [sessionsLoading, setSessionsLoading] = useState(false)
+  const [sessionsLoading, setSessionsLoading] = useState(true)
+  const [sessionsError, setSessionsError] = useState<string | null>(null)
   const [newSessionOpen, setNewSessionOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -640,11 +641,14 @@ export function BrainstormView() {
 
   const loadSessions = useCallback(async () => {
     setSessionsLoading(true)
+    setSessionsError(null)
     try {
       const response = await fetch('/api/plugins/messaging/sessions')
-      if (!response.ok) return
+      if (!response.ok) throw new Error(`Failed to load brainstorms (${response.status})`)
       const data = await response.json() as { sessions?: SessionSummary[] }
       setSessions(Array.isArray(data.sessions) ? data.sessions : [])
+    } catch (error) {
+      setSessionsError(error instanceof Error ? error.message : String(error))
     } finally {
       setSessionsLoading(false)
     }
@@ -1147,6 +1151,9 @@ export function BrainstormView() {
       title="Loading brainstorms"
       description="Your recent idea sessions will appear here when they are ready."
     />
+  ) : sessionsError ? (
+    <SystemState kind="error" scope="page" title="Could not load brainstorms" description={sessionsError}
+      action={<Button variant="outline" onClick={() => { void loadSessions() }}>Retry</Button>} />
   ) : sessions.length === 0 ? (
     <SystemState
       kind="initial-empty"
@@ -1175,8 +1182,8 @@ export function BrainstormView() {
       <PageHeader
         title="Brainstorm"
         description="Develop ideas with an agent, revisit recent sessions, and turn accepted directions into campaign plans."
-        meta={(
-          <Badge size="xs" tone="neutral" variant="outline">
+        meta={!sessionsLoading && !sessionsError && (
+          <Badge size="xs" tone="neutral" variant="soft">
             {visibleSessions.length} shown
           </Badge>
         )}
@@ -1228,14 +1235,13 @@ export function BrainstormView() {
 
       <PageBody label="Brainstorm sessions" state={sessionState}>
         {!sessionState ? (
-          <ListRows variant="bordered" aria-label="Brainstorm sessions">
+          <ListRows variant="separated" aria-label="Brainstorm sessions">
             {visibleSessions.map(session => {
               const agent = agentById.get(session.agentId)
               return (
               <ListRow
                 key={session.id}
                 interactive={{ label: `Open brainstorm: ${session.title || session.id}`, onActivate: () => pushSessionId(session.id) }}
-                className="px-bakin-4 py-bakin-3"
               >
                   <div className="flex min-w-0 items-start gap-bakin-3">
                     <AgentAvatar
@@ -1249,7 +1255,7 @@ export function BrainstormView() {
                     />
                     <div className="min-w-0 flex-1">
                       <div className="flex min-w-0 flex-wrap items-center gap-bakin-2">
-                        <Text as="h2" weight="semibold" className="min-w-0 truncate">
+                        <Text as="h2" weight="semibold" className="min-w-0 break-words">
                           {session.title}
                         </Text>
                         <StatusBadge

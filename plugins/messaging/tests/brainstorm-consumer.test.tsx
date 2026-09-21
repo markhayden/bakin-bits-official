@@ -325,6 +325,18 @@ afterAll(() => {
 // ---------------------------------------------------------------------------
 
 describe('BrainstormView (search consumer)', () => {
+  it('offers retry for a failed session load instead of reporting no sessions', async () => {
+    const previousFetch = globalThis.fetch
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => String(input) === '/api/plugins/messaging/sessions'
+      ? Response.json({ error: 'Unavailable' }, { status: 503 }) : previousFetch(input, init)) as typeof fetch
+    render(<BrainstormView />)
+    await screen.findByText('Could not load brainstorms')
+    expect(screen.queryByText('0 shown')).toBeNull()
+    globalThis.fetch = previousFetch
+    fireEvent.click(screen.getByRole('button', { name: 'Retry', exact: true }))
+    await screen.findByText('Week 16 recipes')
+  })
+
   it('renders without crashing and shows fetched sessions', async () => {
     render(<BrainstormView />)
     await waitFor(() => {
@@ -334,6 +346,8 @@ describe('BrainstormView (search consumer)', () => {
       expect(screen.getByText('Week 16 recipes')).toBeDefined()
     })
     expect(screen.getByText('Outdoor sprint')).toBeDefined()
+    expect(screen.getByRole('list', { name: 'Brainstorm sessions' }).getAttribute('data-variant')).toBe('separated')
+    expect(screen.getByText('Week 16 recipes').classList.contains('truncate')).toBe(false)
   })
 
   it('configures useSearch with plugin "messaging" and brainstorm facets', async () => {

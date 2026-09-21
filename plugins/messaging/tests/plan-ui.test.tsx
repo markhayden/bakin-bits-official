@@ -381,6 +381,13 @@ describe('Plan client UI', () => {
     expect(screen.queryByText('Select one or more channels')).toBeNull()
     expect(screen.queryByText('Channel edits are locked after activation because linked board tasks already exist.')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Instagram' })).toBeNull()
+    expect(screen.getByRole('list', { name: 'Plan channels' }).getAttribute('data-variant')).toBe('separated')
+    expect(screen.getByRole('list', { name: 'Content pieces' }).getAttribute('data-variant')).toBe('separated')
+    expect(screen.getByText(PROPOSED_DELIVERABLE.title).classList.contains('truncate')).toBe(false)
+    // A contained page must not shrink the stacked column underneath its sidebar.
+    const column = document.getElementById('messaging-plan-panel-plan')!.parentElement!
+    expect(column.classList.contains('flex-none')).toBe(true)
+    expect(column.classList.contains('@3xl/page-shell:flex-1')).toBe(true)
   })
 
   it('requires an explicit kickoff before content prep starts', async () => {
