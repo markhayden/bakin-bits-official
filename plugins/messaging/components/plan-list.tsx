@@ -16,6 +16,7 @@ import {
   StatusBadge,
 } from "@makinbakin/sdk/patterns"
 import { Badge, Button, SystemState, Text } from "@makinbakin/sdk/ui"
+import { Inline, Stack } from "@makinbakin/sdk/layout"
 import { Circle } from 'lucide-react'
 import { useAgentList } from "@makinbakin/sdk/hooks"
 import { useQueryArrayState, useQueryState } from "@makinbakin/sdk/navigation"
@@ -62,7 +63,7 @@ function formatStatus(status: PlanStatus): string {
 }
 
 export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
-  const { plans, loading } = usePlans()
+  const { plans, loading, error, refresh } = usePlans()
   const agents = useAgentList()
   const [search, setSearch] = useQueryState('q', '')
   const [agentFilter, setAgentFilter] = useQueryState('agent', 'all')
@@ -138,6 +139,14 @@ export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
       title="Loading plans"
       description="The latest campaign plans will appear here when they are ready."
     />
+  ) : error ? (
+    <SystemState
+      kind="error"
+      scope="page"
+      title="Could not load plans"
+      description={error}
+      action={<Button variant="outline" onClick={() => { void refresh() }}>Retry</Button>}
+    />
   ) : plans.length === 0 ? (
     <SystemState
       kind="initial-empty"
@@ -161,7 +170,7 @@ export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
       <PageHeader
         title="Plans"
         description="Review campaign direction, channel coverage, and production status before opening a plan to move the work forward."
-        meta={<Badge size="xs" tone="neutral" variant="outline">{filteredPlans.length} shown</Badge>}
+        meta={loading || error ? undefined : <Badge size="xs" tone="neutral" variant="soft">{filteredPlans.length} shown</Badge>}
         controls={(
           <SearchInput
             align="end"
@@ -186,29 +195,31 @@ export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
       </PageControls>
 
       <PageBody label="Campaign plans" state={state}>
-        <div className="grid gap-bakin-6">
+        <Stack gap="item">
           {groupedPlans.map(({ targetDate, plans: dayPlans }) => (
             <ListRowGroup
               key={targetDate}
+              headerVariant="section"
+              headerTone="accent"
+              headingLevel={2}
               label={(
-                <span className="flex items-center justify-between gap-bakin-3">
+                <Inline as="span" justify="between" gap="dense">
                   <span>{formatTargetDate(targetDate)}</span>
                   <span>
                     {dayPlans.length} {dayPlans.length === 1 ? 'plan' : 'plans'}
                   </span>
-                </span>
+                </Inline>
               )}
             >
-              <ListRows variant="bordered">
+              <ListRows variant="separated" className="border-y-0">
                 {dayPlans.map((plan) => {
                   const agent = agentById.get(plan.agent)
                   return (
                     <ListRow
                       key={plan.id}
                       interactive={{ label: `Open plan: ${plan.title}`, onActivate: () => onSelectPlan?.(plan) }}
-                      className="px-bakin-4 py-bakin-3"
                     >
-                        <div className="flex min-w-0 items-start gap-bakin-3">
+                        <Inline align="start" gap="item" wrap={false}>
                           <AgentAvatar
                             agent={{
                               id: plan.agent,
@@ -218,35 +229,37 @@ export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
                             size="md"
                             decorative
                           />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex min-w-0 flex-wrap items-center gap-bakin-2">
-                              <Text as="h3" weight="semibold" className="min-w-0 truncate">
+                          <Stack gap="dense" className="min-w-0 flex-1">
+                            <Inline align="start" justify="between" gap="dense">
+                              <Text as="h3" weight="semibold" className="min-w-0 break-words">
                                 {plan.title}
                               </Text>
                               <StatusBadge size="xs" tone={PLAN_STATUS_TONE[plan.status]}>
                                 {formatStatus(plan.status)}
                               </StatusBadge>
-                            </div>
-                            <Text as="p" tone="muted" className="mt-bakin-1 line-clamp-2">
+                            </Inline>
+                            <Text as="p" tone="muted" className="break-words line-clamp-2">
                               {plan.brief}
                             </Text>
-                            <Text as="div" size="meta" tone="muted" className="mt-bakin-2 flex flex-wrap items-center gap-x-bakin-3 gap-y-bakin-1">
-                              <span>{agent?.name || plan.agent}</span>
-                              {plan.channels && plan.channels.length > 0 && (
-                                <span>{plan.channels.map((channel) => channel.channel).join(', ')}</span>
-                              )}
-                              {plan.campaign && <span>{plan.campaign}</span>}
-                              {plan.sourceSessionId && <span>From brainstorm</span>}
+                            <Text as="div" size="meta" tone="muted" className="break-words">
+                              <Inline gap="item">
+                                <span>{agent?.name || plan.agent}</span>
+                                {plan.channels && plan.channels.length > 0 && (
+                                  <span>{plan.channels.map((channel) => channel.channel).join(', ')}</span>
+                                )}
+                                {plan.campaign && <span>{plan.campaign}</span>}
+                                {plan.sourceSessionId && <span>From brainstorm</span>}
+                              </Inline>
                             </Text>
-                          </div>
-                        </div>
+                          </Stack>
+                        </Inline>
                     </ListRow>
                   )
                 })}
               </ListRows>
             </ListRowGroup>
           ))}
-        </div>
+        </Stack>
       </PageBody>
     </Page>
   )

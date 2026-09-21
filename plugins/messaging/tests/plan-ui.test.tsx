@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import type { Deliverable, Plan } from '../../../plugins/messaging/types'
 
@@ -123,6 +123,8 @@ const PROPOSED_DELIVERABLE: Deliverable = {
 let activationStarted = false
 let planResponse: Plan = PLAN
 let deliverables: Deliverable[] = []
+let listPlans: Plan[] | undefined
+let listFails = false
 
 function installFetchMock() {
   globalThis.fetch = mock().mockImplementation(async (url: string) => {
@@ -150,7 +152,7 @@ function installFetchMock() {
       }
     }
     if (typeof url === 'string' && url.startsWith('/api/plugins/messaging/plans')) {
-      return { ok: true, json: async () => ({ plans: [planResponse] }) }
+      return { ok: !listFails, status: listFails ? 503 : 200, json: async () => ({ plans: listPlans ?? [planResponse] }) }
     }
     return { ok: true, json: async () => ({}) }
   }) as unknown as typeof fetch
@@ -160,12 +162,73 @@ beforeEach(() => {
   activationStarted = false
   planResponse = PLAN
   deliverables = []
+  listPlans = undefined
+  listFails = false
   installFetchMock()
 })
 
 afterEach(() => cleanup())
 
 describe('Plan client UI', () => {
+  it('uses separated date groups and a soft shown count without changing review priority', async () => {
+    listPlans = [
+      { ...PLAN, id: 'later', title: 'Later plan', targetDate: '2026-05-26' },
+      { ...PLAN, id: 'recent', title: 'Recently updated', updatedAt: '2026-05-12T00:00:00Z' },
+      { ...PLAN, id: 'review', title: 'Review first', status: 'needs_review' },
+      { ...PLAN, id: 'older', title: 'Older plan' },
+    ]
+    render(<PlanList />)
+    await screen.findByText('Review first')
+    const headers = screen.getAllByRole('heading', { level: 2 })
+    expect(headers.map(header => header.textContent)).toEqual(['May 25, 20263 plans', 'May 26, 20261 plan'])
+    expect(headers.every(header => header.getAttribute('data-header-tone') === 'accent')).toBe(true)
+    const lists = screen.getAllByRole('list')
+    expect(lists).toHaveLength(2)
+    expect(lists.every(list => list.getAttribute('data-variant') === 'separated')).toBe(true)
+    expect(within(lists[0]).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual([
+      'Open plan: Review first', 'Open plan: Recently updated', 'Open plan: Older plan',
+    ])
+    expect(within(lists[1]).getByRole('button', { name: 'Open plan: Later plan' })).toBeDefined()
+    expect(screen.getByText('4 shown').getAttribute('variant')).toBe('soft')
+  })
+
+  it('searches campaign text and removes empty date groups, then clears the search', async () => {
+    listPlans = [PLAN, { ...PLAN, id: 'later', title: 'Later plan', targetDate: '2026-05-26', campaign: 'Summer launch' }]
+    render(<PlanList />)
+    await screen.findByText('Soup Week')
+    const search = screen.getByRole('searchbox', { name: 'Search plans' })
+    fireEvent.change(search, { target: { value: 'Summer launch' } })
+    expect(screen.getAllByRole('list')).toHaveLength(1)
+    expect(screen.queryByText('Soup Week')).toBeNull()
+    fireEvent.change(search, { target: { value: 'no-match' } })
+    expect(screen.getByText('No plans match this view')).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
+    expect(screen.getAllByRole('list')).toHaveLength(2)
+  })
+
+  it('distinguishes load failure from an empty list and allows retry', async () => {
+    listFails = true
+    render(<PlanList />)
+    await screen.findByText('Could not load plans')
+    expect(screen.queryByText('No plans yet')).toBeNull()
+    listFails = false
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await screen.findByText('Soup Week')
+    expect(screen.queryByText('Could not load plans')).toBeNull()
+  })
+
+  it('hides the shown count during loading and preserves the initial-empty action', async () => {
+    listPlans = []
+    const onStartBrainstorm = mock()
+    render(<PlanList onStartBrainstorm={onStartBrainstorm} />)
+    expect(screen.getByText('Loading plans')).toBeDefined()
+    expect(screen.queryByText('0 shown')).toBeNull()
+    await screen.findByText('No plans yet')
+    expect(screen.getByText('0 shown')).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: 'Start brainstorming' }))
+    expect(onStartBrainstorm).toHaveBeenCalledTimes(1)
+  })
+
   it('renders Plans and calls onSelectPlan when a Plan is selected', async () => {
     const onSelectPlan = mock()
     render(<PlanList onSelectPlan={onSelectPlan} />)

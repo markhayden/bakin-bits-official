@@ -212,11 +212,14 @@ export const DataTable = ({ rows, renderRow, tableProps, label, rowKey, columns,
     React.createElement('ul', { 'data-list-rows': '' }, rows.map((row, index) =>
       React.createElement('li', { key: rowKey ? rowKey(row) : index, 'data-slot': 'list-row' },
         renderRow ? renderRow(row) : columns.map((column) => React.createElement('span', { key: column.key }, column.cell ? column.cell(row) : null))))))
-export const ListRowGroup = ({ label, children, ...props }) =>
+export const ListRowGroup = ({ label, children, headerVariant = 'plain', headerTone = 'neutral', headingLevel = 3, ...props }) =>
   React.createElement(
     'div',
-    { ...props, 'data-slot': 'list-row-group' },
-    React.createElement('div', { 'data-slot': 'list-row-group-label' }, label),
+    { ...props, 'data-slot': 'list-row-group', 'data-header-variant': headerVariant },
+    React.createElement(headerVariant === 'section' ? `h${headingLevel}` : 'div', {
+      'data-slot': 'list-row-group-label',
+      'data-header-tone': headerVariant === 'section' ? headerTone : undefined,
+    }, label),
     children,
   )
 

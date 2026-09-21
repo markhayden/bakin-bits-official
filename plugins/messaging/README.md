@@ -40,6 +40,25 @@ Messaging contributes three top-level routes:
 The header-level Quick Post action creates a free-floating Deliverable with
 `planId: null` for one-off content.
 
+### Plans collection
+
+The Plans index uses separated `ListRows` grouped by local target date, with
+accent section headers owned by `ListRowGroup`. Within each day, review-needed
+plans come first, then most recently updated plans. Search and agent/status
+filters keep their existing URL state; only nonempty groups are rendered.
+Titles wrap, statuses remain solid, and the shown count is soft and hidden
+while loading or on error. A failed load offers Retry rather than an empty list.
+
+This composes `storybook/public/recipes/collection-patterns.stories.tsx` —
+`RowBehaviors`, through the focused SDK UI/layout/patterns/navigation entrypoints.
+Calendar, workspace and brainstorm layouts are not part of this migration.
+
+Run `bun run test:ui` in a standalone package copy with the assembled/released
+real SDK, React/React DOM and declared browser test devDependencies installed;
+the monorepo's `test-sdk` is only a unit-test double. The deterministic fixture
+mounts the real Plans index with multiple dates, long content, and varied states.
+Inspect `test-results/bakin-ui/index.html` for desktop/mobile conformance evidence.
+
 ## Lifecycle
 
 1. Brainstorm with an agent. The agent emits fenced JSON Plan proposals with
