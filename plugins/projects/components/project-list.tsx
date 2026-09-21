@@ -3,8 +3,10 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Plus } from 'lucide-react'
 import { Badge, Button, Skeleton, SystemState } from "@makinbakin/sdk/ui"
-import { Grid } from "@makinbakin/sdk/layout"
+import { Stack } from "@makinbakin/sdk/layout"
 import {
+  ListRow,
+  ListRows,
   Page,
   PageBody,
   PageControls,
@@ -16,7 +18,7 @@ import {
 import { useQueryState, useRouter } from "@makinbakin/sdk/navigation"
 import { useSearch } from "@makinbakin/sdk/hooks"
 import { useDebug, usePluginEvent } from "@makinbakin/sdk/hooks"
-import { ProjectCard } from './project-card'
+import { ProjectRow } from './project-row'
 import { NewProjectDialog } from './new-project-dialog'
 import type { ProjectSummary, ProjectStatus } from '../types'
 
@@ -33,7 +35,7 @@ const STATUS_TABS: { label: string; value: ProjectStatus | 'all' }[] = [
   { label: 'Archived', value: 'archived' },
 ]
 
-export function ProjectGrid() {
+export function ProjectList() {
   const router = useRouter()
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -64,7 +66,7 @@ export function ProjectGrid() {
     fetchProjects()
   }, [fetchProjects])
 
-  // Keep the per-card unread/working indicators live: settles and seen
+  // Keep the per-row unread/working indicators live: settles and seen
   // writes refresh; the first chunk of a NEW turn refreshes once so the
   // working dot appears (later chunks for an already-marked project skip).
   usePluginEvent('projects.brainstorm.done', () => { void fetchProjects() })
@@ -143,7 +145,7 @@ export function ProjectGrid() {
         title="Projects"
         description="Organize related work, track progress, and keep project context, assets, and tasks together."
         meta={loading ? undefined : (
-          <Badge size="xs" tone="neutral" variant="outline">{filtered.length} shown</Badge>
+          <Badge size="xs" tone="neutral" variant="soft">{filtered.length} shown</Badge>
         )}
         controls={(
           <SearchInput
@@ -174,7 +176,7 @@ export function ProjectGrid() {
         />
       </PageControls>
 
-      {/* Grid */}
+      {/* Standard separated rows */}
       <PageBody label="Projects">
         {loading ? (
           <SystemState
@@ -182,11 +184,16 @@ export function ProjectGrid() {
             scope="section"
             title="Loading projects"
             preview={(
-              <Grid layout="cards">
+              <ListRows variant="separated" aria-label="Loading projects">
                 {Array.from({ length: 6 }).map((_, i) => (
-                  <Skeleton key={i} className="h-40 w-full" />
+                  <ListRow key={i}>
+                    <Stack gap="dense">
+                      <Skeleton className="h-bakin-4 w-1/3" />
+                      <Skeleton className="h-bakin-4 w-2/3" />
+                    </Stack>
+                  </ListRow>
                 ))}
-              </Grid>
+              </ListRows>
             )}
           />
         ) : filtered.length === 0 ? (
@@ -213,23 +220,22 @@ export function ProjectGrid() {
             />
           )
         ) : (
-          <Grid layout="cards">
+          <ListRows variant="separated" aria-label="Projects">
             {filtered.map((p) => {
               const scoreInfo = scoreMap.get(p.id)
               const showScores = debug && scoreInfo && search.trim()
               return (
-                <div key={p.id} className="relative">
-                  <ProjectCard
-                    project={p}
-                    onClick={() => router.push(`/projects/${p.id}`)}
-                  />
-                  {showScores && scoreInfo && (
-                    <ScoreOverlay info={scoreInfo} className="absolute left-bakin-1 top-bakin-1 z-10" />
-                  )}
-                </div>
+                <ProjectRow
+                  key={p.id}
+                  project={p}
+                  onClick={() => router.push(`/projects/${p.id}`)}
+                  scoreOverlay={showScores && scoreInfo ? (
+                    <ScoreOverlay info={scoreInfo} className="pointer-events-auto absolute left-bakin-1 top-bakin-1 z-10" />
+                  ) : undefined}
+                />
               )
             })}
-          </Grid>
+          </ListRows>
         )}
       </PageBody>
 

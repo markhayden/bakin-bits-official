@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 /**
- * ProjectGrid component smoke — verifies the projects list page renders,
+ * ProjectList component smoke — verifies the projects list page renders,
  * fetches the project list, integrates with the mocked useSearch hook,
  * filters/reorders by score when results return, and falls back to a
  * local substring filter when useSearch is empty.
@@ -15,7 +15,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from 'bun
 import { mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import React from 'react'
 
 // ---------------------------------------------------------------------------
@@ -93,6 +93,7 @@ type StubSearchResult = {
 }
 
 let stubSearchResults: StubSearchResult[] = []
+let debug = false
 const searchSpy = mock<(q: string) => void>()
 const clearSpy = mock<() => void>()
 const routerPushSpy = mock<(path: string) => void>()
@@ -128,20 +129,11 @@ mock.module('@/components/ui/badge', () => ({
   Badge: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
 }))
 
-// project-card has its own dependencies — stub it to a simple title button.
-mock.module('../../../plugins/projects/components/project-card', () => ({
-  ProjectCard: ({ project, onClick }: { project: { id: string; title: string }; onClick: () => void }) => (
-    <button data-testid={`project-card-${project.id}`} onClick={onClick}>
-      {project.title}
-    </button>
-  ),
-}))
-
 // ---------------------------------------------------------------------------
 // Module under test (imported AFTER mocks)
 // ---------------------------------------------------------------------------
 
-import { ProjectGrid } from '../../../plugins/projects/components/project-grid'
+import { ProjectList } from '../components/project-list'
 
 // ---------------------------------------------------------------------------
 // Fixtures + fetch stub
@@ -154,6 +146,8 @@ const fixtureProjects = [
     status: 'active',
     progress: 50,
     taskCount: 3,
+    brainstormStreaming: true,
+    brainstormUnread: true,
     updated: '2026-04-10T00:00:00Z',
   },
   {
@@ -162,6 +156,7 @@ const fixtureProjects = [
     status: 'active',
     progress: 25,
     taskCount: 2,
+    brainstormUnread: true,
     updated: '2026-04-09T00:00:00Z',
   },
   {
@@ -194,10 +189,12 @@ beforeEach(() => {
   for (const k of Object.keys(queryState)) delete queryState[k]
   for (const k of Object.keys(querySetters)) delete querySetters[k]
   stubSearchResults = []
+  debug = false
   searchSpy.mockClear()
   clearSpy.mockClear()
   routerPushSpy.mockClear()
   ;(globalThis as unknown as { __bakinTestSdkHooks?: Record<string, unknown> }).__bakinTestSdkHooks = {
+    useDebug: () => [debug, () => {}],
     useRouter: () => ({
       push: routerPushSpy,
       replace: mock(),
@@ -228,9 +225,9 @@ afterEach(() => {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('ProjectGrid', () => {
+describe('ProjectList', () => {
   it('renders the search input from the shared page header', async () => {
-    render(<ProjectGrid />)
+    render(<ProjectList />)
 
     await waitFor(() => {
       expect(screen.getByRole('searchbox', { name: 'Search projects' })).toBeDefined()
@@ -238,22 +235,23 @@ describe('ProjectGrid', () => {
     expect(screen.getByRole('region', { name: 'Project filters' }).getAttribute('data-variant')).toBe('filters')
   })
 
-  it('renders project cards from the fetched list', async () => {
-    render(<ProjectGrid />)
-
-    await waitFor(() => {
-      expect(screen.getByTestId('project-card-p1')).toBeDefined()
-      expect(screen.getByTestId('project-card-p2')).toBeDefined()
-      expect(screen.getByTestId('project-card-p3')).toBeDefined()
-    })
-    expect(screen.getByText('Alpha Launch')).toBeDefined()
+  it('renders one separated list with solid states and a soft header count', async () => {
+    render(<ProjectList />)
+    const list = await screen.findByRole('list', { name: 'Projects' })
+    expect(list.getAttribute('data-variant')).toBe('separated')
+    expect(within(list).getAllByRole('listitem')).toHaveLength(3)
+    // The lightweight SDK test doubles forward these props as attributes.
+    expect(screen.getByText('3 shown').getAttribute('variant')).toBe('soft')
+    expect(within(list).getAllByText('Active')[0].getAttribute('variant')).toBe('solid')
+    fireEvent.click(within(list).getByRole('button', { name: 'Open project: Alpha Launch' }))
+    expect(routerPushSpy).toHaveBeenCalledWith('/projects/p1')
   })
 
   it('calls useSearch.search() when the URL search state updates', async () => {
-    render(<ProjectGrid />)
+    render(<ProjectList />)
 
     await waitFor(() => {
-      expect(screen.getByTestId('project-card-p1')).toBeDefined()
+      expect(screen.getByRole('button', { name: 'Open project: Alpha Launch' })).toBeDefined()
     })
 
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search projects' }), { target: { value: 'alpha' } })
@@ -269,47 +267,47 @@ describe('ProjectGrid', () => {
       { id: 'p1', table: 'bakin_projects', score: 0.4, fields: {} },
     ]
 
-    render(<ProjectGrid />)
+    render(<ProjectList />)
 
     await waitFor(() => {
-      expect(screen.getByTestId('project-card-p1')).toBeDefined()
+      expect(screen.getByRole('button', { name: 'Open project: Alpha Launch' })).toBeDefined()
     })
 
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search projects' }), { target: { value: 'launch' } })
 
     await waitFor(() => {
       // p3 is excluded entirely; p1 and p2 remain
-      expect(screen.queryByTestId('project-card-p3')).toBeNull()
-      expect(screen.queryByTestId('project-card-p1')).not.toBeNull()
-      expect(screen.queryByTestId('project-card-p2')).not.toBeNull()
+      expect(screen.queryByRole('button', { name: 'Open project: Gamma Cleanup' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Open project: Alpha Launch' })).not.toBeNull()
+      expect(screen.queryByRole('button', { name: 'Open project: Beta Roadmap' })).not.toBeNull()
     })
 
     // p2 (higher score) should appear before p1 in the DOM order
-    const cards = screen.getAllByTestId(/^project-card-/)
-    const ids = cards.map((c) => c.getAttribute('data-testid'))
-    expect(ids.indexOf('project-card-p2')).toBeLessThan(ids.indexOf('project-card-p1'))
+    const rows = within(screen.getByRole('list', { name: 'Projects' })).getAllByRole('listitem')
+    expect(within(rows[0]).getByText('Beta Roadmap')).toBeDefined()
+    expect(within(rows[1]).getByText('Alpha Launch')).toBeDefined()
   })
 
   it('falls back to local substring filter on title when useSearch returns empty', async () => {
     stubSearchResults = []
 
-    render(<ProjectGrid />)
+    render(<ProjectList />)
 
     await waitFor(() => {
-      expect(screen.getByTestId('project-card-p1')).toBeDefined()
+      expect(screen.getByRole('button', { name: 'Open project: Alpha Launch' })).toBeDefined()
     })
 
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search projects' }), { target: { value: 'beta' } })
 
     await waitFor(() => {
-      expect(screen.queryByTestId('project-card-p2')).not.toBeNull()
-      expect(screen.queryByTestId('project-card-p1')).toBeNull()
-      expect(screen.queryByTestId('project-card-p3')).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Open project: Beta Roadmap' })).not.toBeNull()
+      expect(screen.queryByRole('button', { name: 'Open project: Alpha Launch' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Open project: Gamma Cleanup' })).toBeNull()
     })
   })
 
   it('creates a titled project before opening the edit view', async () => {
-    render(<ProjectGrid />)
+    render(<ProjectList />)
 
     await waitFor(() => {
       expect(screen.getByText('New Project')).toBeDefined()
@@ -335,5 +333,54 @@ describe('ProjectGrid', () => {
     ))
     expect(createCall).toBeDefined()
     expect(JSON.parse(String((createCall?.[1] as RequestInit).body))).toEqual({ title: 'Website Refresh' })
+  })
+
+  it('preserves progress, item counts, and live brainstorm attention in each row', async () => {
+    render(<ProjectList />)
+    const rows = within(await screen.findByRole('list', { name: 'Projects' })).getAllByRole('listitem')
+    expect(within(rows[0]).getByRole('progressbar', { name: 'Alpha Launch progress' }).getAttribute('value')).toBe('50')
+    expect(within(rows[0]).getByText('50% complete')).toBeDefined()
+    expect(within(rows[0]).getByText('3 items')).toBeDefined()
+    expect(within(rows[0]).getByText(/^Updated /)).toBeDefined()
+    expect(within(rows[0]).getByRole('img', { name: 'Brainstorm reply in progress' })).toBeDefined()
+    expect(within(rows[0]).queryByRole('img', { name: 'Unseen brainstorm reply' })).toBeNull()
+    expect(within(rows[1]).getByRole('img', { name: 'Unseen brainstorm reply' })).toBeDefined()
+    expect(within(rows[2]).queryByRole('img')).toBeNull()
+  })
+
+  it('shows row-shaped loading placeholders until the request finishes', () => {
+    globalThis.fetch = mock(() => new Promise<Response>(() => {})) as unknown as typeof fetch
+    render(<ProjectList />)
+    const list = screen.getByRole('list', { hidden: true })
+    expect(list.getAttribute('aria-label')).toBe('Loading projects')
+    expect(list.getAttribute('data-variant')).toBe('separated')
+    expect(within(list).getAllByRole('listitem', { hidden: true })).toHaveLength(6)
+    expect(within(list).queryByRole('button')).toBeNull()
+  })
+
+  it('clears an empty search and returns to the same list', async () => {
+    render(<ProjectList />)
+    await screen.findByRole('list', { name: 'Projects' })
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search projects' }), { target: { value: 'no-match' } })
+    expect(screen.getByText('No matching projects')).toBeDefined()
+    expect(screen.queryByRole('list', { name: 'Projects' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }))
+    expect(within(screen.getByRole('list', { name: 'Projects' })).getAllByRole('listitem')).toHaveLength(3)
+  })
+
+  it('keeps debug relevance overlays out of the row activation layer', async () => {
+    debug = true
+    stubSearchResults = [{ id: 'p1', table: 'bakin_projects', score: 0.9, fields: {} }]
+    render(<ProjectList />)
+    await screen.findByRole('list', { name: 'Projects' })
+    expect(screen.queryByRole('note')).toBeNull()
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search projects' }), { target: { value: 'alpha' } })
+    const overlay = screen.getByRole('note', { name: 'Search relevance details' })
+    expect(overlay.textContent).toContain('0.9000')
+    // Direct ListRow children receive relative positioning and click-through.
+    // Keep this absolute, tooltip-bearing note nested in the content instead.
+    expect(overlay.parentElement?.getAttribute('data-slot')).not.toBe('list-row')
+    expect(overlay.classList.contains('absolute')).toBe(true)
+    expect(overlay.classList.contains('pointer-events-auto')).toBe(true)
   })
 })

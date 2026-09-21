@@ -190,6 +190,7 @@ export function SystemState({ action, description, title, headingLevel = 2, prev
     { ...props, 'data-kind': props.kind, 'data-recovery': recovery },
     React.createElement(`h${headingLevel}`, null, title),
     description ? React.createElement('p', null, description) : null,
+    preview ? React.createElement('div', { 'aria-hidden': 'true' }, preview) : null,
     action,
   )
 }

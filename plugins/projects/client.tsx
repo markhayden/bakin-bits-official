@@ -2,14 +2,14 @@
  * Projects plugin — client entry point.
  *
  * Routes render bare components inside Suspense; each page composes the
- * SDK `Page` archetype itself (ProjectGrid and ProjectDetail own their
+ * SDK `Page` archetype itself (ProjectList and ProjectDetail own their
  * page canvas), so there is no local page frame.
  */
 import { registerPlugin } from '@makinbakin/sdk'
 import type { NavItem } from '@makinbakin/sdk'
 import { useRouter } from '@makinbakin/sdk/navigation'
 import { Suspense, useEffect } from 'react'
-import { ProjectGrid } from './components/project-grid'
+import { ProjectList } from './components/project-list'
 import { ProjectDetail } from './components/project-detail'
 import { BrainstormBadgeProvider } from './components/brainstorm-badge-provider'
 
@@ -32,7 +32,7 @@ interface PluginRouteProps {
 function ProjectsIndexRoute() {
   return (
     <Suspense>
-      <ProjectGrid />
+      <ProjectList />
     </Suspense>
   )
 }
