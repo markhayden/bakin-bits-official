@@ -20,6 +20,7 @@ const fixture = {
   randomSeed: 'official-projects-list',
   network: [
     { path: '/api/plugins/projects/', status: 200, json: { projects } },
+    ...projects.map(project => ({ method: 'DELETE', path: `/api/plugins/projects/${project.id}`, status: 200, json: { ok: true } })),
     ...['draft', 'active', 'completed', 'archived'].map(status => ({
       path: `/api/plugins/projects/?status=${status}`,
       status: 200,

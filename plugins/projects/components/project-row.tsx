@@ -1,19 +1,22 @@
 'use client'
 
-import type { ReactNode } from 'react'
-import { Progress, Text } from '@makinbakin/sdk/ui'
+import { useRef, type ReactNode } from 'react'
+import { MoreHorizontal, Trash2 } from 'lucide-react'
+import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Progress, Text } from '@makinbakin/sdk/ui'
 import { Inline, Stack } from '@makinbakin/sdk/layout'
-import { ListRow, StatusMarker } from '@makinbakin/sdk/patterns'
+import { ListRow, ListRowActions, StatusMarker } from '@makinbakin/sdk/patterns'
 import { formatAge } from '@makinbakin/sdk/utils'
 import { ProjectStatusBadge } from './project-status-badge'
 import type { ProjectSummary } from '../types'
 
-export function ProjectRow({ project, onClick, scoreOverlay }: {
+export function ProjectRow({ project, onClick, onDelete, scoreOverlay }: {
   project: ProjectSummary
   onClick: () => void
+  onDelete: (trigger: HTMLButtonElement | null) => void
   scoreOverlay?: ReactNode
 }) {
   const title = project.title || 'Untitled project'
+  const actionsRef = useRef<HTMLButtonElement>(null)
   return (
     <ListRow
       interactive={{ label: `Open project: ${title}`, onActivate: onClick }}
@@ -30,6 +33,19 @@ export function ProjectRow({ project, onClick, scoreOverlay }: {
               <StatusMarker tone="attention" label="Unseen brainstorm reply" />
             ) : null}
             <ProjectStatusBadge status={project.status} />
+            <ListRowActions>
+              <DropdownMenu>
+                <DropdownMenuTrigger ref={actionsRef} render={<Button size="icon-xs" variant="ghost" />} aria-label={`More actions for ${title}`}>
+                  <MoreHorizontal aria-hidden="true" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem variant="danger" onClick={() => onDelete(actionsRef.current)}>
+                    <Trash2 aria-hidden="true" />
+                    Delete project
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </ListRowActions>
           </Inline>
         </Inline>
         <Inline gap="item">

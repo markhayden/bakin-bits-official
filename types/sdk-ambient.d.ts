@@ -1177,6 +1177,7 @@ declare module '@makinbakin/sdk/patterns' {
     className?: string
     confirmValue?: string
     confirmPrompt?: ReactNode
+    finalFocus?: boolean | { current: HTMLElement | null } | (() => HTMLElement | null)
     children?: ReactNode
     onConfirm: () => void
     onCancel: () => void

@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Plus } from 'lucide-react'
 import { Badge, Button, Skeleton, SystemState } from "@makinbakin/sdk/ui"
 import { Stack } from "@makinbakin/sdk/layout"
 import {
   ListRow,
   ListRows,
+  ConfirmDialog,
   Page,
   PageBody,
   PageControls,
@@ -42,12 +43,19 @@ export function ProjectList() {
   const [newProjectOpen, setNewProjectOpen] = useState(false)
   const [creatingProject, setCreatingProject] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<ProjectSummary | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const deleteTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const newProjectButtonRef = useRef<HTMLButtonElement>(null)
+  const listRequestVersion = useRef(0)
 
   const [status, setStatus] = useQueryState('status', 'all')
   const [search, setSearch] = useQueryState('q', '')
   const [debug] = useDebug()
 
   const fetchProjects = useCallback(async () => {
+    const requestVersion = ++listRequestVersion.current
     try {
       const url = status === 'all'
         ? '/api/plugins/projects/'
@@ -55,10 +63,10 @@ export function ProjectList() {
       const res = await fetch(url)
       if (res.ok) {
         const data = await res.json()
-        setProjects(data.projects)
+        if (requestVersion === listRequestVersion.current) setProjects(data.projects)
       }
     } finally {
-      setLoading(false)
+      if (requestVersion === listRequestVersion.current) setLoading(false)
     }
   }, [status])
 
@@ -113,6 +121,28 @@ export function ProjectList() {
     setNewProjectOpen(true)
   }
 
+  const handleDeleteProject = async () => {
+    if (!deleteTarget || deleting) return
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      const res = await fetch(`/api/plugins/projects/${encodeURIComponent(deleteTarget.id)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deleteLinkedTasks: false }),
+      })
+      if (!res.ok) throw new Error(`Could not delete project (${res.status}). Please try again.`)
+      // An earlier brainstorm-triggered refresh must not restore the deleted row.
+      listRequestVersion.current += 1
+      setProjects(current => current.filter(project => project.id !== deleteTarget.id))
+      setDeleteTarget(null)
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Could not delete project. Please try again.')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   const handleCreateProject = async (title: string) => {
     setCreatingProject(true)
     setCreateError(null)
@@ -159,7 +189,7 @@ export function ProjectList() {
           />
         )}
         actions={(
-          <Button onClick={handleNew}>
+          <Button ref={newProjectButtonRef} onClick={handleNew}>
             <Plus className="size-bakin-4" />
             New Project
           </Button>
@@ -229,6 +259,11 @@ export function ProjectList() {
                   key={p.id}
                   project={p}
                   onClick={() => router.push(`/projects/${p.id}`)}
+                  onDelete={(trigger) => {
+                    deleteTriggerRef.current = trigger
+                    setDeleteError(null)
+                    setDeleteTarget(p)
+                  }}
                   scoreOverlay={showScores && scoreInfo ? (
                     <ScoreOverlay info={scoreInfo} className="pointer-events-auto absolute left-bakin-1 top-bakin-1 z-10" />
                   ) : undefined}
@@ -238,6 +273,22 @@ export function ProjectList() {
           </ListRows>
         )}
       </PageBody>
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title="Delete project?"
+        description={`This will permanently delete “${deleteTarget?.title || 'Untitled project'}” and all its checklist items. Any running brainstorm will be stopped. Linked board tasks and assets will be kept.`}
+        confirmLabel="Delete project"
+        busyLabel="Deleting…"
+        confirmTone="danger"
+        busy={deleting}
+        error={deleteError}
+        finalFocus={() => deleteTriggerRef.current?.isConnected ? deleteTriggerRef.current : newProjectButtonRef.current}
+        onConfirm={() => { void handleDeleteProject() }}
+        onCancel={() => {
+          if (!deleting) setDeleteTarget(null)
+        }}
+      />
 
       <NewProjectDialog
         open={newProjectOpen}

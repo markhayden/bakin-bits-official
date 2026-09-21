@@ -15,8 +15,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from 'bun
 import { mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import React from 'react'
+import { emitPluginEvent } from '@makinbakin/sdk/hooks'
 
 // ---------------------------------------------------------------------------
 // Mandatory CLAUDE.md test mocks
@@ -94,6 +95,7 @@ type StubSearchResult = {
 
 let stubSearchResults: StubSearchResult[] = []
 let debug = false
+let deleteResponse: () => Promise<Response> = async () => new Response(null, { status: 204 })
 const searchSpy = mock<(q: string) => void>()
 const clearSpy = mock<() => void>()
 const routerPushSpy = mock<(path: string) => void>()
@@ -171,6 +173,7 @@ const fixtureProjects = [
 
 const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === 'string' ? input : String(input)
+  if (init?.method === 'DELETE') return deleteResponse()
   if (url === '/api/plugins/projects/' && init?.method === 'POST') {
     return {
       ok: true,
@@ -190,6 +193,7 @@ beforeEach(() => {
   for (const k of Object.keys(querySetters)) delete querySetters[k]
   stubSearchResults = []
   debug = false
+  deleteResponse = async () => new Response(null, { status: 204 })
   searchSpy.mockClear()
   clearSpy.mockClear()
   routerPushSpy.mockClear()
@@ -382,5 +386,116 @@ describe('ProjectList', () => {
     expect(overlay.parentElement?.getAttribute('data-slot')).not.toBe('list-row')
     expect(overlay.classList.contains('absolute')).toBe(true)
     expect(overlay.classList.contains('pointer-events-auto')).toBe(true)
+  })
+
+  async function requestDelete(title = 'Alpha Launch') {
+    const trigger = await screen.findByRole('button', { name: `More actions for ${title}` })
+    fireEvent.click(trigger)
+    const row = trigger.closest('li')!
+    fireEvent.click(within(row).getByRole('button', { name: 'Delete project' }))
+    return screen.getByRole('dialog', { name: 'Delete project?' })
+  }
+
+  function deleteCalls() {
+    return (fetchMock as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls
+      .filter(([, init]) => init?.method === 'DELETE')
+  }
+
+  it('opens a named delete confirmation without navigating, and cancel does not delete', async () => {
+    render(<ProjectList />)
+    const dialog = await requestDelete()
+    expect(dialog.textContent).toContain('Alpha Launch')
+    expect(dialog.textContent).toContain('Linked board tasks and assets will be kept')
+    expect(routerPushSpy).not.toHaveBeenCalled()
+    expect(deleteCalls()).toHaveLength(0)
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(deleteCalls()).toHaveLength(0)
+    expect(screen.getByRole('button', { name: 'Open project: Alpha Launch' })).toBeDefined()
+  })
+
+  it('deletes only the confirmed project, keeps linked tasks, and updates the list count', async () => {
+    render(<ProjectList />)
+    const dialog = await requestDelete('Beta Roadmap')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete project' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    const calls = deleteCalls()
+    expect(calls).toHaveLength(1)
+    expect(calls[0][0]).toBe('/api/plugins/projects/p2')
+    expect(JSON.parse(String(calls[0][1].body))).toEqual({ deleteLinkedTasks: false })
+    expect(screen.queryByRole('button', { name: 'Open project: Beta Roadmap' })).toBeNull()
+    expect(screen.getByText('2 shown')).toBeDefined()
+    expect(routerPushSpy).not.toHaveBeenCalled()
+  })
+
+  it('keeps the project on HTTP failure and permits an explicit retry', async () => {
+    deleteResponse = async () => new Response('unavailable', { status: 503 })
+    render(<ProjectList />)
+    const dialog = await requestDelete()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete project' }))
+    await within(dialog).findByRole('alert')
+    expect(screen.getByRole('button', { name: 'Open project: Alpha Launch' })).toBeDefined()
+    expect(screen.getByText('3 shown')).toBeDefined()
+    deleteResponse = async () => new Response(null, { status: 204 })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete project' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(deleteCalls()).toHaveLength(2)
+  })
+
+  it('blocks duplicate confirmation and dismissal while deletion is pending', async () => {
+    let finish!: (response: Response) => void
+    deleteResponse = () => new Promise(resolve => { finish = resolve })
+    render(<ProjectList />)
+    const dialog = await requestDelete()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete project' }))
+    const deleting = within(dialog).getByRole('button', { name: 'Deleting…' }) as HTMLButtonElement
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' }) as HTMLButtonElement
+    expect(deleting.disabled).toBe(true)
+    expect(cancel.disabled).toBe(true)
+    fireEvent.click(deleting)
+    fireEvent.click(cancel)
+    expect(deleteCalls()).toHaveLength(1)
+    expect(screen.getByRole('dialog')).toBeDefined()
+    finish(new Response(null, { status: 204 }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('does not restore a deleted row when an earlier background refresh settles late', async () => {
+    render(<ProjectList />)
+    await screen.findByRole('list', { name: 'Projects' })
+    let finishRefresh!: (response: Response) => void
+    globalThis.fetch = mock((input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'DELETE') return deleteResponse()
+      return new Promise<Response>(resolve => { finishRefresh = resolve })
+    }) as unknown as typeof fetch
+    act(() => emitPluginEvent({ event: 'projects.brainstorm.done', projectId: 'p1' }))
+    const dialog = await requestDelete()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete project' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await act(async () => finishRefresh(Response.json({ projects: fixtureProjects })))
+    expect(screen.queryByRole('button', { name: 'Open project: Alpha Launch' })).toBeNull()
+    expect(screen.getByText('2 shown')).toBeDefined()
+  })
+
+  it('keeps the confirmation and project visible when the network request rejects', async () => {
+    deleteResponse = async () => { throw new Error('Network unavailable') }
+    render(<ProjectList />)
+    const dialog = await requestDelete()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete project' }))
+    expect((await within(dialog).findByRole('alert')).textContent).toContain('Network unavailable')
+    expect(screen.getByText('3 shown')).toBeDefined()
+    expect((within(dialog).getByRole('button', { name: 'Delete project' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('shows the standard empty state after deleting the final project', async () => {
+    render(<ProjectList />)
+    for (const project of fixtureProjects) {
+      const dialog = await requestDelete(project.title)
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Delete project' }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    }
+    expect(screen.getByText('0 shown')).toBeDefined()
+    expect(screen.getByText('No projects yet')).toBeDefined()
+    expect(screen.queryByRole('list', { name: 'Projects' })).toBeNull()
   })
 })
