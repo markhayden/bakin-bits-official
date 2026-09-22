@@ -491,8 +491,10 @@ describe('ProjectList', () => {
     render(<ProjectList />)
     for (const project of fixtureProjects) {
       const dialog = await requestDelete(project.title)
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Delete project' }))
-      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+      await act(async () => {
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Delete project' }))
+      })
+      expect(screen.queryByRole('dialog')).toBeNull()
     }
     expect(screen.getByText('0 shown')).toBeDefined()
     expect(screen.getByText('No projects yet')).toBeDefined()
