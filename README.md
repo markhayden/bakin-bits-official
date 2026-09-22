@@ -145,6 +145,38 @@ Before opening a PR, run the same gates CI runs:
 bun run typecheck && bun run test && bun run lint
 ```
 
+### Installed-SDK browser conformance
+
+`bun run ui:conformance:coverage` validates enrollment for every official
+plugin. `_template`, Terminal, Projects, and Messaging all run browser fixtures
+in CI; none is exempt as migration-pending.
+
+To run those fixtures against an assembled real SDK (not the workspace test
+stub):
+
+```sh
+BAKIN_SDK_PACKAGE_DIR=/absolute/path/to/assembled-sdk bun run ui:conformance
+```
+
+The runner packs that SDK and installs each plugin in a temporary consumer.
+Every package runs the canonical `test:ui` (`bakin-plugin-test-ui`). Messaging
+also runs `test:ui:collections` for Calendar, Brainstorm, and workspace pieces.
+Reports, including partial failures, are copied to
+`test-results/plugin-ui-conformance/<plugin>/`; Messaging's additional reports
+live in its `calendar/`, `brainstorm/`, and `workspace/` subdirectories.
+
+The enrollment's `installed-package` mode additionally runs package-local
+typechecks and unit tests for the template and Terminal. Projects and Messaging
+use `workspace-checks`: their unit tests depend on the root DOM preload and SDK
+stubs, so the separate CI Checks job runs their full workspace typecheck and
+tests with coverage. Only these redundant isolated unit/type commands differ;
+both modes always execute the real installed-SDK browser fixtures.
+
+CI pins the compatible Bakin SDK source to an immutable commit in
+`.github/workflows/ci.yml`. Update that pin intentionally with the matching
+host SDK implementation and canonical stylesheet; do not substitute a moving
+branch. Release the compatible host first, then publish the plugin consumers.
+
 ## Plugin architecture notes
 
 Official plugins should stay on the public SDK surface: `@makinbakin/sdk`,
