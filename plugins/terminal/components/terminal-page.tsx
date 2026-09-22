@@ -1,7 +1,7 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Page, PageBody, PageHeader, WorkspacePage, WorkspacePageHeader, WorkspacePageCompactHeader, WorkspacePageBody, ConfirmDialog, AgentAvatar, AgentSelect, DataTable, SegmentedControl } from '@makinbakin/sdk/patterns'
 import { Inline, Stack } from '@makinbakin/sdk/layout'
-import { Alert, AlertDescription, Badge, Button, SystemState, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, Text, Separator, Popover, PopoverTrigger, PopoverContent, PopoverTitle, DropdownMenuItem, DropdownMenuSwitchItem, DropdownMenuSeparator } from '@makinbakin/sdk/ui'
+import { Alert, AlertDescription, Badge, Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SystemState, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, Text, Separator, Popover, PopoverTrigger, PopoverContent, PopoverTitle, DropdownMenuItem, DropdownMenuSwitchItem, DropdownMenuSeparator } from '@makinbakin/sdk/ui'
 import { PluginLink, useQueryState, useRouter } from '@makinbakin/sdk/navigation'
 import { formatAge } from '@makinbakin/sdk/utils'
 import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Terminal, RotateCw, Keyboard } from 'lucide-react'
@@ -93,7 +93,24 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const requestedView = (VIEWS as readonly string[]).includes(viewParam) ? viewParam as SessionView : 'active'
   // The attention segment only exists while something needs review.
   const view: SessionView = requestedView === 'review' && viewCount('review') === 0 ? 'active' : requestedView
-  const visible = all.filter((item) => matchesView(item, view))
+  const [sortQuery, setSortQuery] = useQueryState('sort', 'activity:desc')
+  const sortLabels = { title: 'Session', program: 'Program', agent: 'Agent', state: 'Status', activity: 'Last activity' }
+  const sortItems = Object.fromEntries(Object.entries(sortLabels).flatMap(([key, label]) => [
+    [`${key}:asc`, `${label}: ascending`], [`${key}:desc`, `${label}: descending`],
+  ]))
+  const sortValue = Object.hasOwn(sortItems, sortQuery) ? sortQuery : 'activity:desc'
+  const [sortField, sortDir] = sortValue.split(':') as [keyof typeof sortLabels, 'asc' | 'desc']
+  const sortAccessor = (item: Session): string | number | null => sortField === 'activity' ? item.lastActivityAt
+    : sortField === 'state' ? item.state === 'running' ? 0 : item.state === 'exited' ? 1 : 2
+    : sortField === 'agent' ? item.agentId ? agentChoices.find(agent => agent.id === item.agentId)?.name ?? item.agentId : null
+    : item[sortField]
+  const visible = all.filter((item) => matchesView(item, view)).sort((a, b) => {
+    const left = sortAccessor(a), right = sortAccessor(b)
+    if (left == null || right == null) return left == null ? right == null ? 0 : 1 : -1
+    const compared = typeof left === 'number' && typeof right === 'number' ? left - right
+      : String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: 'base' })
+    return sortDir === 'asc' ? compared : -compared
+  })
   const session = all.find((item) => item.id === sessionId)
   const ended = session?.state === 'exited' || session?.state === 'completed'
   const ownerAgentName = session?.owner.kind === 'agent' ? agents.find((agent) => agent.id === session.owner.id)?.name ?? session.owner.id : undefined
@@ -270,28 +287,33 @@ function Workspace({ sessionId }: { sessionId?: string }) {
             { value: 'all', label: 'All' },
           ]}
         />
+        <Select items={sortItems} value={sortValue} onValueChange={next => { if (next && Object.hasOwn(sortItems, next)) setSortQuery(next) }}>
+          <SelectTrigger aria-label="Sort terminals"><SelectValue /></SelectTrigger>
+          <SelectContent>{Object.entries(sortItems).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent>
+        </Select>
         {visible.length === 0 ? <SystemState className="w-full" kind="no-results" scope="page" title="No sessions in this view" description="Sessions in other states are hidden by the current view." action={<Button variant="outline" onClick={() => setViewParam('all')}>Show all sessions</Button>} /> : <DataTable
         className="w-full"
         label="Terminal sessions"
         rows={visible}
         rowKey={(item) => item.id}
-        defaultSort={{ field: 'activity', dir: 'desc' }}
-        tableProps={{ style: { minWidth: '52rem' } }}
+        sort={{ field: sortField, dir: sortDir }}
+        onSortChange={key => setSortQuery(`${key}:${sortField === key && sortDir === 'asc' ? 'desc' : 'asc'}`)}
+        collapseBelow="3xl" listVariant="separated"
         onRowActivate={(item) => router.push(`/terminal/${encodeURIComponent(item.id)}`)}
         rowActivateLabel={(item) => `Open terminal: ${item.title}`}
         columns={[
-          { key: 'title', header: 'Session', sortable: true, sortValue: (item) => item.title, headClassName: 'w-1/4', cellClassName: 'whitespace-nowrap', cell: (item) => <PluginLink to={`/terminal/${encodeURIComponent(item.id)}`} aria-label={`Open terminal: ${item.title}`}><Text weight="semibold">{item.title}</Text></PluginLink> },
-          { key: 'program', header: 'Program', sortable: true, cellClassName: 'whitespace-nowrap', sortValue: (item) => item.program },
-          { key: 'agent', header: 'Agent', sortable: true, cellClassName: 'whitespace-nowrap', sortValue: (item) => item.agentId ? agentChoices.find((agent) => agent.id === item.agentId)?.name ?? item.agentId : null, cell: (item) => {
+          { key: 'title', header: 'Session', narrow: 'primary', sortable: true, sortValue: (item) => item.title, headClassName: 'w-1/4', cellClassName: 'whitespace-normal break-words', cell: (item) => <Text weight="semibold">{item.title}</Text> },
+          { key: 'program', header: 'Program', narrow: 'meta', sortable: true, sortValue: (item) => item.program },
+          { key: 'agent', header: 'Agent', narrow: 'meta', sortable: true, cellClassName: 'whitespace-normal', sortValue: (item) => item.agentId ? agentChoices.find((agent) => agent.id === item.agentId)?.name ?? item.agentId : null, cell: (item) => {
             if (!item.agentId) return <Text size="meta" tone="muted">Unassigned</Text>
             const choice = agentChoices.find((agent) => agent.id === item.agentId)
             const name = choice?.name ?? item.agentId
             return <Inline gap="dense" wrap={false} className="min-w-0"><AgentAvatar size="xs" decorative agent={{ id: item.agentId, name, imageSrc: choice?.imageSrc, color: choice?.color }} /><Text size="meta" className="truncate">{name}</Text></Inline>
           } },
-          { key: 'state', header: 'Status', sortable: true, sortValue: (item) => item.state === 'running' ? 0 : item.state === 'exited' ? 1 : 2, cell: (item) => <Stack gap="dense" align="start"><Badge size="xs" variant="outline">{item.state === 'running' ? 'Running' : item.state === 'exited' ? 'Exited' : 'Completed'}</Badge>{item.worktreePath && <Badge size="xs" variant="outline">Worktree retained</Badge>}</Stack> },
-          { key: 'activity', header: 'Last activity', sortable: true, cellClassName: 'whitespace-nowrap', sortValue: (item) => item.lastActivityAt, cell: (item) => <Text size="meta" tone="muted" title={new Date(item.lastActivityAt).toLocaleString()}>{formatAge(new Date(item.lastActivityAt).toISOString())}</Text> },
-          { key: 'cwd', header: 'Working directory', headClassName: 'w-1/3', cell: (item) => <Text size="meta" tone="muted" mono className="block max-w-xs truncate" title={item.cwd}>{item.cwd}</Text> },
-          { key: 'actions', header: 'Actions', hideLabel: true, align: 'end', headClassName: 'w-(--bakin-layout-size-row)', cell: (item) => <SessionActions session={item} busy={busy} label={`Actions for ${item.title}`} allowTake onOperate={(operation, id) => void operate(operation, {}, id)} onConfirm={setConfirm} /> },
+          { key: 'state', header: 'Status', narrow: 'meta', sortable: true, sortValue: (item) => item.state === 'running' ? 0 : item.state === 'exited' ? 1 : 2, cell: (item) => <Stack gap="dense" align="start"><Badge size="xs" variant="solid" tone={item.state === 'running' ? 'success' : 'neutral'}>{item.state === 'running' ? 'Running' : item.state === 'exited' ? 'Exited' : 'Completed'}</Badge>{item.worktreePath && <Badge size="xs" variant="soft">Worktree retained</Badge>}</Stack> },
+          { key: 'activity', header: 'Last activity', narrow: 'label', sortable: true, sortValue: (item) => item.lastActivityAt, cell: (item) => <Text size="meta" tone="muted" title={new Date(item.lastActivityAt).toLocaleString()}>{formatAge(new Date(item.lastActivityAt).toISOString())}</Text> },
+          { key: 'cwd', header: 'Working directory', narrow: 'label', headClassName: 'w-1/3', cellClassName: 'whitespace-normal', cell: (item) => <Text size="meta" tone="muted" mono className="block break-all">{item.cwd}</Text> },
+          { key: 'actions', header: 'Actions', narrow: 'trailing', hideLabel: true, align: 'end', headClassName: 'w-(--bakin-layout-size-row)', cell: (item) => <SessionActions session={item} busy={busy} label={`Actions for ${item.title}`} allowTake onOperate={(operation, id) => void operate(operation, {}, id)} onConfirm={setConfirm} /> },
         ]}
       />}
       </Stack>}
