@@ -230,6 +230,50 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('ProjectList', () => {
+  it('reports initial HTTP failure instead of an empty list and permits retry', async () => {
+    globalThis.fetch = mock(async () => new Response(null, { status: 503 })) as unknown as typeof fetch
+    render(<ProjectList />)
+    await screen.findByText('Could not load projects')
+    expect(screen.queryByText('No projects yet')).toBeNull()
+    expect(screen.queryByText('0 shown')).toBeNull()
+    globalThis.fetch = fetchMock
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await screen.findByText(fixtureProjects[0].title)
+    expect(screen.queryByText('Could not load projects')).toBeNull()
+  })
+
+  it('does not show stale rows under a failed status filter and retries that filter', async () => {
+    render(<ProjectList />)
+    await screen.findByText(fixtureProjects[0].title)
+    globalThis.fetch = mock(async () => { throw new Error('Connection unavailable') }) as unknown as typeof fetch
+    fireEvent.click(screen.getByRole('tab', { name: 'Active', exact: true }))
+    await screen.findByText('Could not load projects')
+    expect(screen.getByText('Connection unavailable')).toBeDefined()
+    expect(screen.queryByRole('list', { name: 'Projects' })).toBeNull()
+    expect(screen.queryByText('3 shown')).toBeNull()
+    const retryFetch = mock(async (_input: RequestInfo | URL) => Response.json({ projects: [fixtureProjects[0]] }))
+    globalThis.fetch = retryFetch as unknown as typeof fetch
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await screen.findByText(fixtureProjects[0].title)
+    expect(retryFetch.mock.calls[0]?.[0]).toBe('/api/plugins/projects/?status=active')
+    expect(screen.getByText('1 shown')).toBeDefined()
+  })
+
+  it('ignores an older request failure after a newer filter succeeds', async () => {
+    let rejectInitial!: (reason: Error) => void
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/plugins/projects/') return new Promise<Response>((_resolve, reject) => { rejectInitial = reject })
+      return Response.json({ projects: [fixtureProjects[0]] })
+    }) as unknown as typeof fetch
+    render(<ProjectList />)
+    fireEvent.click(screen.getByRole('tab', { name: 'Active', exact: true }))
+    await screen.findByText(fixtureProjects[0].title)
+    await act(async () => rejectInitial(new Error('Stale failure')))
+    expect(screen.queryByText('Could not load projects')).toBeNull()
+    expect(screen.getByRole('list', { name: 'Projects' })).toBeDefined()
+    expect(screen.getByText('1 shown')).toBeDefined()
+  })
+
   it('renders the search input from the shared page header', async () => {
     render(<ProjectList />)
 

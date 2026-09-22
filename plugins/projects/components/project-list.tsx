@@ -40,6 +40,7 @@ export function ProjectList() {
   const router = useRouter()
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [newProjectOpen, setNewProjectOpen] = useState(false)
   const [creatingProject, setCreatingProject] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -60,10 +61,17 @@ export function ProjectList() {
       const url = status === 'all'
         ? '/api/plugins/projects/'
         : `/api/plugins/projects/?status=${status}`
-      const res = await fetch(url)
-      if (res.ok) {
-        const data = await res.json()
-        if (requestVersion === listRequestVersion.current) setProjects(data.projects)
+      const res = await fetch(url, { signal: AbortSignal.timeout(15_000) })
+      if (!res.ok) throw new Error(`Could not load projects (HTTP ${res.status})`)
+      const data = await res.json()
+      if (!Array.isArray(data.projects)) throw new Error('The project list response was invalid. Please retry.')
+      if (requestVersion === listRequestVersion.current) {
+        setProjects(data.projects)
+        setLoadError(null)
+      }
+    } catch (err) {
+      if (requestVersion === listRequestVersion.current) {
+        setLoadError(err instanceof Error ? err.message : 'Could not load projects. Please retry.')
       }
     } finally {
       if (requestVersion === listRequestVersion.current) setLoading(false)
@@ -71,7 +79,9 @@ export function ProjectList() {
   }, [status])
 
   useEffect(() => {
-    fetchProjects()
+    setLoading(true)
+    void fetchProjects()
+    return () => { listRequestVersion.current += 1 }
   }, [fetchProjects])
 
   // Keep the per-row unread/working indicators live: settles and seen
@@ -134,6 +144,7 @@ export function ProjectList() {
       if (!res.ok) throw new Error(`Could not delete project (${res.status}). Please try again.`)
       // An earlier brainstorm-triggered refresh must not restore the deleted row.
       listRequestVersion.current += 1
+      setLoading(false)
       setProjects(current => current.filter(project => project.id !== deleteTarget.id))
       setDeleteTarget(null)
     } catch (err) {
@@ -174,7 +185,7 @@ export function ProjectList() {
       <PageHeader
         title="Projects"
         description="Organize related work, track progress, and keep project context, assets, and tasks together."
-        meta={loading ? undefined : (
+        meta={loading || loadError ? undefined : (
           <Badge size="xs" tone="neutral" variant="soft">{filtered.length} shown</Badge>
         )}
         controls={(
@@ -225,6 +236,14 @@ export function ProjectList() {
                 ))}
               </ListRows>
             )}
+          />
+        ) : loadError ? (
+          <SystemState
+            kind="error"
+            scope="section"
+            title="Could not load projects"
+            description={loadError}
+            action={<Button variant="outline" onClick={() => { setLoading(true); void fetchProjects() }}>Retry</Button>}
           />
         ) : filtered.length === 0 ? (
           search ? (
