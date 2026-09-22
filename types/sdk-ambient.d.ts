@@ -1078,6 +1078,7 @@ declare module '@makinbakin/sdk/patterns' {
   export type PageControlsAs = 'section' | 'toolbar'
   export const PageControls: ComponentType<PatternProps & {
     as?: PageControlsAs
+    variant?: 'default' | 'filters'
     actions?: ReactNode
     divider?: boolean
     label?: string
@@ -1176,6 +1177,7 @@ declare module '@makinbakin/sdk/patterns' {
     className?: string
     confirmValue?: string
     confirmPrompt?: ReactNode
+    finalFocus?: boolean | { current: HTMLElement | null } | (() => HTMLElement | null)
     children?: ReactNode
     onConfirm: () => void
     onCancel: () => void

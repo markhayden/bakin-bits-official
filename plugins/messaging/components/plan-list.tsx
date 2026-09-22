@@ -1,72 +1,50 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   AgentAvatar,
   AgentFilter,
   FacetFilter,
-  ListRow,
-  ListRowGroup,
-  ListRows,
   Page,
   PageBody,
   PageControls,
   PageHeader,
   SearchInput,
-  StatusBadge,
 } from "@makinbakin/sdk/patterns"
-import { Badge, Button, SystemState, Text } from "@makinbakin/sdk/ui"
+import { Badge, Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SystemState, Text } from "@makinbakin/sdk/ui"
+import { Inline } from "@makinbakin/sdk/layout"
 import { Circle } from 'lucide-react'
 import { useAgentList } from "@makinbakin/sdk/hooks"
 import { useQueryArrayState, useQueryState } from "@makinbakin/sdk/navigation"
-import type { Plan, PlanStatus } from '../types'
-import { PLAN_STATUS_TONE } from '../constants'
+import type { Plan } from '../types'
+import { PLAN_SORT_FIELDS, PLAN_STATUS_LABELS, parsePlanSort, sortPlans } from '../lib/plan-sort'
+import { PlanTable } from './plan-table'
+import { PlanDeleteDialog } from './plan-delete-dialog'
 import { usePlans } from '../hooks/use-plans'
 
-const PLAN_STATUS_OPTIONS: Array<{ value: PlanStatus; label: string; icon: React.ReactNode }> = [
-  { value: 'needs_review', label: 'Needs review', icon: <Circle className="size-bakin-3" /> },
-  { value: 'planning', label: 'Planning', icon: <Circle className="size-bakin-3" /> },
-  { value: 'in_prep', label: 'In production', icon: <Circle className="size-bakin-3" /> },
-  { value: 'in_review', label: 'In review', icon: <Circle className="size-bakin-3" /> },
-  { value: 'scheduled', label: 'Scheduled', icon: <Circle className="size-bakin-3" /> },
-  { value: 'overdue', label: 'Overdue', icon: <Circle className="size-bakin-3" /> },
-  { value: 'partially_published', label: 'Partially published', icon: <Circle className="size-bakin-3" /> },
-  { value: 'done', label: 'Published', icon: <Circle className="size-bakin-3" /> },
-  { value: 'cancelled', label: 'Cancelled', icon: <Circle className="size-bakin-3" /> },
-  { value: 'failed', label: 'Failed', icon: <Circle className="size-bakin-3" /> },
-]
+const PLAN_STATUS_OPTIONS = Object.entries(PLAN_STATUS_LABELS).map(([value, label]) => ({ value, label, icon: <Circle className="size-bakin-3" /> }))
+const SORT_OPTIONS = Object.entries(PLAN_SORT_FIELDS).flatMap(([field, label]) => [
+  { value: `${field}:asc`, label: `${label}: ${field === 'targetDate' ? 'earliest first' : 'A–Z'}` },
+  { value: `${field}:desc`, label: `${label}: ${field === 'targetDate' ? 'latest first' : 'Z–A'}` },
+])
+const SORT_LABELS = Object.fromEntries(SORT_OPTIONS.map(option => [option.value, option.label]))
 
 interface PlanListProps {
   onSelectPlan?: (plan: Plan) => void
   onStartBrainstorm?: () => void
 }
 
-/**
- * Plan target dates are date-only (`YYYY-MM-DD`) — a calendar day with no
- * instant. The SDK `formatDateTime` renders instants (and would read a bare
- * date as UTC midnight, shifting the day in western zones), so the day-only
- * formatter stays local.
- */
-function formatTargetDate(value: string): string {
-  const date = new Date(`${value}T00:00:00`)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-}
-
-function targetDateKey(value: string): string {
-  return value.slice(0, 10)
-}
-
-function formatStatus(status: PlanStatus): string {
-  return PLAN_STATUS_OPTIONS.find(option => option.value === status)?.label ?? status.replaceAll('_', ' ')
-}
-
 export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
-  const { plans, loading } = usePlans()
+  const { plans, loading, error, refresh, removePlan } = usePlans()
+  const [deleteTarget, setDeleteTarget] = useState<Plan | null>(null)
+  const deleteTrigger = useRef<HTMLButtonElement | null>(null)
+  const sortTrigger = useRef<HTMLButtonElement>(null)
   const agents = useAgentList()
   const [search, setSearch] = useQueryState('q', '')
   const [agentFilter, setAgentFilter] = useQueryState('agent', 'all')
   const [statusFilter, setStatusFilter] = useQueryArrayState('status')
+  const [sortQuery, setSortQuery] = useQueryState('sort', 'targetDate:asc')
+  const sort = useMemo(() => parsePlanSort(sortQuery), [sortQuery])
   const agentById = useMemo(() => new Map(agents.map(agent => [agent.id, agent])), [agents])
   const planAgentIds = useMemo(
     () => [...new Set([...agents.map(agent => agent.id), ...plans.map(plan => plan.agent)])],
@@ -105,25 +83,7 @@ export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
     })
   }, [agentFilter, plans, search, statusFilter])
 
-  const groupedPlans = useMemo(() => {
-    const groups = new Map<string, Plan[]>()
-    for (const plan of filteredPlans) {
-      const key = targetDateKey(plan.targetDate)
-      const existing = groups.get(key) ?? []
-      existing.push(plan)
-      groups.set(key, existing)
-    }
-    return [...groups.entries()]
-      .sort(([a], [b]) => Date.parse(`${a}T00:00:00`) - Date.parse(`${b}T00:00:00`))
-      .map(([targetDate, rows]) => ({
-        targetDate,
-        plans: rows.sort((a, b) => {
-          const statusPriority = Number(b.status === 'needs_review') - Number(a.status === 'needs_review')
-          if (statusPriority !== 0) return statusPriority
-          return Date.parse(b.updatedAt) - Date.parse(a.updatedAt)
-        }),
-      }))
-  }, [filteredPlans])
+  const sortedPlans = useMemo(() => sortPlans(filteredPlans, sort, id => agentById.get(id)?.name || id), [filteredPlans, sort, agentById])
 
   const clearFilters = () => {
     setSearch('')
@@ -137,6 +97,14 @@ export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
       scope="page"
       title="Loading plans"
       description="The latest campaign plans will appear here when they are ready."
+    />
+  ) : error ? (
+    <SystemState
+      kind="error"
+      scope="page"
+      title="Could not load plans"
+      description={error}
+      action={<Button variant="outline" onClick={() => { void refresh() }}>Retry</Button>}
     />
   ) : plans.length === 0 ? (
     <SystemState
@@ -161,7 +129,7 @@ export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
       <PageHeader
         title="Plans"
         description="Review campaign direction, channel coverage, and production status before opening a plan to move the work forward."
-        meta={<Badge size="xs" tone="neutral" variant="outline">{filteredPlans.length} shown</Badge>}
+        meta={loading || error ? undefined : <Badge size="xs" tone="neutral" variant="soft">{filteredPlans.length} shown</Badge>}
         controls={(
           <SearchInput
             align="end"
@@ -175,7 +143,7 @@ export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
         )}
       />
 
-      <PageControls label="Plan filters">
+      <PageControls variant="filters" label="Plan filters">
         <AgentFilter options={agentOptions} value={agentFilter} onValueChange={setAgentFilter} compact />
         <FacetFilter
           label="Status"
@@ -183,71 +151,40 @@ export function PlanList({ onSelectPlan, onStartBrainstorm }: PlanListProps) {
           selected={statusFilter}
           onChange={setStatusFilter}
         />
+        <Inline gap="dense">
+          <Text size="meta" tone="muted">Sort</Text>
+          <Select items={SORT_LABELS} value={`${sort.field}:${sort.dir}`} onValueChange={value => { if (value) setSortQuery(value) }}>
+            <SelectTrigger ref={sortTrigger} aria-label="Sort plans"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {SORT_OPTIONS.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </Inline>
       </PageControls>
 
       <PageBody label="Campaign plans" state={state}>
-        <div className="grid gap-bakin-6">
-          {groupedPlans.map(({ targetDate, plans: dayPlans }) => (
-            <ListRowGroup
-              key={targetDate}
-              label={(
-                <span className="flex items-center justify-between gap-bakin-3">
-                  <span>{formatTargetDate(targetDate)}</span>
-                  <span>
-                    {dayPlans.length} {dayPlans.length === 1 ? 'plan' : 'plans'}
-                  </span>
-                </span>
-              )}
-            >
-              <ListRows variant="bordered">
-                {dayPlans.map((plan) => {
-                  const agent = agentById.get(plan.agent)
-                  return (
-                    <ListRow
-                      key={plan.id}
-                      interactive={{ label: `Open plan: ${plan.title}`, onActivate: () => onSelectPlan?.(plan) }}
-                      className="px-bakin-4 py-bakin-3"
-                    >
-                        <div className="flex min-w-0 items-start gap-bakin-3">
-                          <AgentAvatar
-                            agent={{
-                              id: plan.agent,
-                              name: agent?.name || plan.agent,
-                              imageSrc: agent?.headshot || null,
-                            }}
-                            size="md"
-                            decorative
-                          />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex min-w-0 flex-wrap items-center gap-bakin-2">
-                              <Text as="h3" weight="semibold" className="min-w-0 truncate">
-                                {plan.title}
-                              </Text>
-                              <StatusBadge size="xs" tone={PLAN_STATUS_TONE[plan.status]}>
-                                {formatStatus(plan.status)}
-                              </StatusBadge>
-                            </div>
-                            <Text as="p" tone="muted" className="mt-bakin-1 line-clamp-2">
-                              {plan.brief}
-                            </Text>
-                            <Text as="div" size="meta" tone="muted" className="mt-bakin-2 flex flex-wrap items-center gap-x-bakin-3 gap-y-bakin-1">
-                              <span>{agent?.name || plan.agent}</span>
-                              {plan.channels && plan.channels.length > 0 && (
-                                <span>{plan.channels.map((channel) => channel.channel).join(', ')}</span>
-                              )}
-                              {plan.campaign && <span>{plan.campaign}</span>}
-                              {plan.sourceSessionId && <span>From brainstorm</span>}
-                            </Text>
-                          </div>
-                        </div>
-                    </ListRow>
-                  )
-                })}
-              </ListRows>
-            </ListRowGroup>
-          ))}
-        </div>
+        <PlanTable
+          plans={sortedPlans}
+          agentById={agentById}
+          sort={sort}
+          onSortChange={field => setSortQuery(`${field}:${sort.field === field && sort.dir === 'asc' ? 'desc' : 'asc'}`)}
+          onSelectPlan={onSelectPlan}
+          onDeletePlan={(plan, trigger) => {
+            deleteTrigger.current = trigger
+            setDeleteTarget(plan)
+          }}
+        />
       </PageBody>
+      {deleteTarget && <PlanDeleteDialog
+        plan={deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onDeleted={() => {
+          // The dialog can restore focus before React detaches the deleted row.
+          deleteTrigger.current = null
+          removePlan(deleteTarget.id)
+        }}
+        finalFocus={() => deleteTrigger.current?.isConnected ? deleteTrigger.current : sortTrigger.current}
+      />}
     </Page>
   )
 }

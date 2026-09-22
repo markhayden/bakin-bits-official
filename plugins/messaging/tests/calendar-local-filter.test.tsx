@@ -7,7 +7,7 @@
  * title | brief | draft.caption | draft.agentNotes, plus URL-backed facets.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { readFileSync, rmSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -59,14 +59,17 @@ mock.module('@makinbakin/sdk/patterns', () => ({
   ),
   ListRows: ({ children }: { children: React.ReactNode }) => <ul data-list-rows="">{children}</ul>,
   ListRow: ({ children }: { children: React.ReactNode }) => <li data-slot="list-row">{children}</li>,
-  DataTable: ({ rows, renderRow, tableProps, label }: {
-    rows: unknown[]
-    renderRow: (row: unknown) => React.ReactNode
+  DataTable: ({ rows, columns, onSortChange, listVariant, tableProps, label }: {
+    rows: Deliverable[]
+    columns: Array<{ key: string; header: string; cell: (row: Deliverable) => React.ReactNode }>
+    onSortChange: (field: string) => void
+    listVariant: string
     tableProps?: Record<string, unknown>
     label: string
   }) => (
     <div aria-label={label} {...(tableProps ?? {})}>
-      <ul data-list-rows="">{rows.map((row, index) => <li key={index} data-slot="list-row">{renderRow(row)}</li>)}</ul>
+      {columns.map(column => <button key={column.key} onClick={() => onSortChange(column.key)}>{column.header}</button>)}
+      <ul aria-label={label} data-list-rows="" data-variant={listVariant}>{rows.map(row => <li key={row.id} data-slot="list-row">{columns.map(column => <span key={column.key}>{column.cell(row)}</span>)}</li>)}</ul>
     </div>
   ),
   ListRowGroup: ({ label, children }: { label: React.ReactNode; children: React.ReactNode }) => (
@@ -164,6 +167,7 @@ mock.module('@makinbakin/sdk/navigation', () => {
 
 mock.module('@makinbakin/sdk/layout', () => ({
   BoundedOverflow: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  Inline: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }))
 
 mock.module('@/components/plugin-header', () => ({
@@ -347,6 +351,19 @@ afterAll(() => {
 })
 
 describe('ContentCalendar (Deliverable local filter)', () => {
+  it('shows a retryable load error rather than an empty calendar or count', async () => {
+    const previousFetch = globalThis.fetch
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => String(input).includes('/deliverables')
+      ? Response.json({ error: 'Unavailable' }, { status: 503 }) : previousFetch(input, init)) as typeof fetch
+    render(<ContentCalendar />)
+    await screen.findByText('Could not load the content calendar')
+    expect(screen.queryByText('0 shown')).toBeNull()
+    globalThis.fetch = previousFetch
+    fireEvent.click(screen.getByRole('button', { name: 'Retry', exact: true }))
+    await screen.findByTestId('calendar-deliverable-a')
+    expect(screen.getByText('3 shown').getAttribute('variant')).toBe('soft')
+  })
+
   it('renders without crashing', async () => {
     render(<ContentCalendar />)
     await waitFor(() => {
@@ -368,6 +385,23 @@ describe('ContentCalendar (Deliverable local filter)', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'List' }))
     expect(screen.getByTestId('calendar-view-list')).toBeDefined()
+  })
+
+  it('keeps list headers and the persistent sort selector in sync, preserving filters', async () => {
+    render(<ContentCalendar />)
+    await screen.findByTestId('calendar-view-month')
+    fireEvent.click(screen.getByRole('tab', { name: 'List' }))
+    const rows = () => within(screen.getByRole('list', { name: 'Content calendar list' })).getAllByRole('listitem')
+    expect(rows()[0].textContent).toContain('Spring Smoothie')
+    expect(screen.getByRole('list', { name: 'Content calendar list' }).getAttribute('data-variant')).toBe('separated')
+    fireEvent.click(screen.getByRole('button', { name: 'Publishes', exact: true }))
+    expect(rows()[0].textContent).toContain('Mindful Breathing')
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('publishAt:desc')
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'title:desc' } })
+    expect(rows()[0].textContent).toContain('Trail Run Tips')
+    fireEvent.change(screen.getByPlaceholderText('Search calendar…'), { target: { value: 'Smoothie' } })
+    expect(rows()).toHaveLength(1)
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('title:desc')
   })
 
   it('shows only calendar-visible Deliverables when search query is empty', async () => {

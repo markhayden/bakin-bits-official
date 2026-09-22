@@ -1,10 +1,13 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Plus } from 'lucide-react'
 import { Badge, Button, Skeleton, SystemState } from "@makinbakin/sdk/ui"
-import { Grid } from "@makinbakin/sdk/layout"
+import { Stack } from "@makinbakin/sdk/layout"
 import {
+  ListRow,
+  ListRows,
+  ConfirmDialog,
   Page,
   PageBody,
   PageControls,
@@ -16,7 +19,7 @@ import {
 import { useQueryState, useRouter } from "@makinbakin/sdk/navigation"
 import { useSearch } from "@makinbakin/sdk/hooks"
 import { useDebug, usePluginEvent } from "@makinbakin/sdk/hooks"
-import { ProjectCard } from './project-card'
+import { ProjectRow } from './project-row'
 import { NewProjectDialog } from './new-project-dialog'
 import type { ProjectSummary, ProjectStatus } from '../types'
 
@@ -33,38 +36,55 @@ const STATUS_TABS: { label: string; value: ProjectStatus | 'all' }[] = [
   { label: 'Archived', value: 'archived' },
 ]
 
-export function ProjectGrid() {
+export function ProjectList() {
   const router = useRouter()
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [newProjectOpen, setNewProjectOpen] = useState(false)
   const [creatingProject, setCreatingProject] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<ProjectSummary | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const deleteTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const newProjectButtonRef = useRef<HTMLButtonElement>(null)
+  const listRequestVersion = useRef(0)
 
   const [status, setStatus] = useQueryState('status', 'all')
   const [search, setSearch] = useQueryState('q', '')
   const [debug] = useDebug()
 
   const fetchProjects = useCallback(async () => {
+    const requestVersion = ++listRequestVersion.current
     try {
       const url = status === 'all'
         ? '/api/plugins/projects/'
         : `/api/plugins/projects/?status=${status}`
-      const res = await fetch(url)
-      if (res.ok) {
-        const data = await res.json()
+      const res = await fetch(url, { signal: AbortSignal.timeout(15_000) })
+      if (!res.ok) throw new Error(`Could not load projects (HTTP ${res.status})`)
+      const data = await res.json()
+      if (!Array.isArray(data.projects)) throw new Error('The project list response was invalid. Please retry.')
+      if (requestVersion === listRequestVersion.current) {
         setProjects(data.projects)
+        setLoadError(null)
+      }
+    } catch (err) {
+      if (requestVersion === listRequestVersion.current) {
+        setLoadError(err instanceof Error ? err.message : 'Could not load projects. Please retry.')
       }
     } finally {
-      setLoading(false)
+      if (requestVersion === listRequestVersion.current) setLoading(false)
     }
   }, [status])
 
   useEffect(() => {
-    fetchProjects()
+    setLoading(true)
+    void fetchProjects()
+    return () => { listRequestVersion.current += 1 }
   }, [fetchProjects])
 
-  // Keep the per-card unread/working indicators live: settles and seen
+  // Keep the per-row unread/working indicators live: settles and seen
   // writes refresh; the first chunk of a NEW turn refreshes once so the
   // working dot appears (later chunks for an already-marked project skip).
   usePluginEvent('projects.brainstorm.done', () => { void fetchProjects() })
@@ -111,6 +131,29 @@ export function ProjectGrid() {
     setNewProjectOpen(true)
   }
 
+  const handleDeleteProject = async () => {
+    if (!deleteTarget || deleting) return
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      const res = await fetch(`/api/plugins/projects/${encodeURIComponent(deleteTarget.id)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deleteLinkedTasks: false }),
+      })
+      if (!res.ok) throw new Error(`Could not delete project (${res.status}). Please try again.`)
+      // An earlier brainstorm-triggered refresh must not restore the deleted row.
+      listRequestVersion.current += 1
+      setLoading(false)
+      setProjects(current => current.filter(project => project.id !== deleteTarget.id))
+      setDeleteTarget(null)
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Could not delete project. Please try again.')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   const handleCreateProject = async (title: string) => {
     setCreatingProject(true)
     setCreateError(null)
@@ -142,8 +185,8 @@ export function ProjectGrid() {
       <PageHeader
         title="Projects"
         description="Organize related work, track progress, and keep project context, assets, and tasks together."
-        meta={loading ? undefined : (
-          <Badge size="xs" tone="neutral" variant="outline">{filtered.length} shown</Badge>
+        meta={loading || loadError ? undefined : (
+          <Badge size="xs" tone="neutral" variant="soft">{filtered.length} shown</Badge>
         )}
         controls={(
           <SearchInput
@@ -157,7 +200,7 @@ export function ProjectGrid() {
           />
         )}
         actions={(
-          <Button onClick={handleNew}>
+          <Button ref={newProjectButtonRef} onClick={handleNew}>
             <Plus className="size-bakin-4" />
             New Project
           </Button>
@@ -165,7 +208,7 @@ export function ProjectGrid() {
       />
 
       {/* Status filter */}
-      <PageControls label="Project filters">
+      <PageControls variant="filters" label="Project filters">
         <SegmentedControl
           ariaLabel="Filter by status"
           options={STATUS_TABS}
@@ -174,7 +217,7 @@ export function ProjectGrid() {
         />
       </PageControls>
 
-      {/* Grid */}
+      {/* Standard separated rows */}
       <PageBody label="Projects">
         {loading ? (
           <SystemState
@@ -182,12 +225,25 @@ export function ProjectGrid() {
             scope="section"
             title="Loading projects"
             preview={(
-              <Grid layout="cards">
+              <ListRows variant="separated" aria-label="Loading projects">
                 {Array.from({ length: 6 }).map((_, i) => (
-                  <Skeleton key={i} className="h-40 w-full" />
+                  <ListRow key={i}>
+                    <Stack gap="dense">
+                      <Skeleton className="h-bakin-4 w-1/3" />
+                      <Skeleton className="h-bakin-4 w-2/3" />
+                    </Stack>
+                  </ListRow>
                 ))}
-              </Grid>
+              </ListRows>
             )}
+          />
+        ) : loadError ? (
+          <SystemState
+            kind="error"
+            scope="section"
+            title="Could not load projects"
+            description={loadError}
+            action={<Button variant="outline" onClick={() => { setLoading(true); void fetchProjects() }}>Retry</Button>}
           />
         ) : filtered.length === 0 ? (
           search ? (
@@ -213,25 +269,45 @@ export function ProjectGrid() {
             />
           )
         ) : (
-          <Grid layout="cards">
+          <ListRows variant="separated" aria-label="Projects">
             {filtered.map((p) => {
               const scoreInfo = scoreMap.get(p.id)
               const showScores = debug && scoreInfo && search.trim()
               return (
-                <div key={p.id} className="relative">
-                  <ProjectCard
-                    project={p}
-                    onClick={() => router.push(`/projects/${p.id}`)}
-                  />
-                  {showScores && scoreInfo && (
-                    <ScoreOverlay info={scoreInfo} className="absolute left-bakin-1 top-bakin-1 z-10" />
-                  )}
-                </div>
+                <ProjectRow
+                  key={p.id}
+                  project={p}
+                  onClick={() => router.push(`/projects/${p.id}`)}
+                  onDelete={(trigger) => {
+                    deleteTriggerRef.current = trigger
+                    setDeleteError(null)
+                    setDeleteTarget(p)
+                  }}
+                  scoreOverlay={showScores && scoreInfo ? (
+                    <ScoreOverlay info={scoreInfo} className="pointer-events-auto absolute left-bakin-1 top-bakin-1 z-10" />
+                  ) : undefined}
+                />
               )
             })}
-          </Grid>
+          </ListRows>
         )}
       </PageBody>
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title="Delete project?"
+        description={`This will permanently delete “${deleteTarget?.title || 'Untitled project'}” and all its checklist items. Any running brainstorm will be stopped. Linked board tasks and assets will be kept.`}
+        confirmLabel="Delete project"
+        busyLabel="Deleting…"
+        confirmTone="danger"
+        busy={deleting}
+        error={deleteError}
+        finalFocus={() => deleteTriggerRef.current?.isConnected ? deleteTriggerRef.current : newProjectButtonRef.current}
+        onConfirm={() => { void handleDeleteProject() }}
+        onCancel={() => {
+          if (!deleting) setDeleteTarget(null)
+        }}
+      />
 
       <NewProjectDialog
         open={newProjectOpen}

@@ -19,16 +19,16 @@ const REPO_ROOT = resolve(import.meta.dir, '..')
 const REPORT_ROOT = join(REPO_ROOT, 'test-results/plugin-ui-conformance')
 
 export type OfficialBitsPluginUiEnrollment =
-  | { id: string; root: string; status: 'conformant'; migrationTask: string }
+  | { id: string; root: string; status: 'conformant'; migrationTask: string; verification: 'installed-package' | 'workspace-checks'; collections?: true }
   | { id: string; root: string; status: 'migration-pending'; migrationTask: string }
   | { id: string; root: string; status: 'server-only'; reason: string }
 
 /** Every official package is named before any migration can silently skip it. */
 export const OFFICIAL_BITS_PLUGIN_UI_ENROLLMENT: readonly OfficialBitsPluginUiEnrollment[] = [
-  { id: '_template', root: 'plugins/_template', status: 'conformant', migrationTask: 'T42b' },
-  { id: 'terminal', root: 'plugins/terminal', status: 'conformant', migrationTask: 'terminal-plugin' },
-  { id: 'messaging', root: 'plugins/messaging', status: 'migration-pending', migrationTask: 'T67-T68' },
-  { id: 'projects', root: 'plugins/projects', status: 'migration-pending', migrationTask: 'T69-T70' },
+  { id: '_template', root: 'plugins/_template', status: 'conformant', migrationTask: 'T42b', verification: 'installed-package' },
+  { id: 'terminal', root: 'plugins/terminal', status: 'conformant', migrationTask: 'terminal-plugin', verification: 'installed-package' },
+  { id: 'messaging', root: 'plugins/messaging', status: 'conformant', migrationTask: 'T67-T68', verification: 'workspace-checks', collections: true },
+  { id: 'projects', root: 'plugins/projects', status: 'conformant', migrationTask: 'T69-T70', verification: 'workspace-checks' },
 ] as const
 
 function manifestId(root: string, packageRoot: string): string | undefined {
@@ -83,9 +83,38 @@ export function validateOfficialBitsPluginUiEnrollment(
       if (packageJson?.scripts?.['test:ui'] !== 'bakin-plugin-test-ui') {
         errors.push(`${entry.id} is conformant but does not expose the canonical test:ui command`)
       }
+      if (entry.collections && !packageJson?.scripts?.['test:ui:collections']?.trim()) {
+        errors.push(`${entry.id} requires test:ui:collections for its additional browser surfaces`)
+      }
     }
   }
   return errors.sort((left, right) => left.localeCompare(right))
+}
+
+type ConformantEnrollment = Extract<OfficialBitsPluginUiEnrollment, { status: 'conformant' }>
+
+/** Workspace tests need the root preload/stubs; browser fixtures never use them. */
+export function pluginUiVerificationCommands(entry: ConformantEnrollment, scripts: Record<string, string>): string[][] {
+  if (scripts['test:ui'] !== 'bakin-plugin-test-ui') throw new Error(`${entry.id} must run the canonical test:ui command`)
+  if (entry.collections && !scripts['test:ui:collections']?.trim()) throw new Error(`${entry.id} requires test:ui:collections`)
+  return [
+    ['install'],
+    ...(entry.verification === 'installed-package' ? [['run', 'typecheck'], ['test']] : []),
+    ['run', 'test:ui'],
+    ...(scripts['test:ui:collections']?.trim() ? [['run', 'test:ui:collections']] : []),
+  ]
+}
+
+/** Copy partial failure evidence too, before the isolated consumer is removed. */
+export function copyPluginUiReports(consumerRoot: string, destinationRoot: string): void {
+  const reportRoot = join(consumerRoot, 'test-results')
+  if (!existsSync(reportRoot)) return
+  for (const entry of readdirSync(reportRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !/^bakin-ui(?:-[a-z0-9-]+)?$/.test(entry.name)) continue
+    const destination = entry.name === 'bakin-ui' ? destinationRoot : join(destinationRoot, entry.name.slice('bakin-ui-'.length))
+    mkdirSync(destination, { recursive: true })
+    cpSync(join(reportRoot, entry.name), destination, { recursive: true })
+  }
 }
 
 function run(command: string, args: string[], cwd: string, env = process.env): void {
@@ -114,9 +143,11 @@ function packSdk(sdkPackageDir: string, scratchRoot: string): string {
   return join(scratchRoot, filename)
 }
 
-function runConformantPackage(entry: Extract<OfficialBitsPluginUiEnrollment, { status: 'conformant' }>, sdkTarball: string): void {
+function runConformantPackage(entry: ConformantEnrollment, sdkTarball: string): void {
   const scratchRoot = mkdtempSync(join(tmpdir(), `bakin-bits-${entry.id}-ui-`))
   const consumerRoot = join(scratchRoot, 'plugin')
+  const destinationReport = join(REPORT_ROOT, entry.id)
+  rmSync(destinationReport, { recursive: true, force: true })
   try {
     cpSync(join(REPO_ROOT, entry.root), consumerRoot, {
       recursive: true,
@@ -125,6 +156,7 @@ function runConformantPackage(entry: Extract<OfficialBitsPluginUiEnrollment, { s
     const packageJsonPath = join(consumerRoot, 'package.json')
     const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {
       devDependencies?: Record<string, string>
+      scripts?: Record<string, string>
     }
     packageJson.devDependencies = {
       ...packageJson.devDependencies,
@@ -133,19 +165,14 @@ function runConformantPackage(entry: Extract<OfficialBitsPluginUiEnrollment, { s
     writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`)
 
     const env = { ...process.env, TMPDIR: scratchRoot }
-    run('bun', ['install'], consumerRoot, env)
-    run('bun', ['run', 'typecheck'], consumerRoot, env)
-    run('bun', ['test'], consumerRoot, env)
-    run('bun', ['run', 'test:ui'], consumerRoot, env)
-
-    const sourceReport = join(consumerRoot, 'test-results/bakin-ui')
-    const destinationReport = join(REPORT_ROOT, entry.id)
-    rmSync(destinationReport, { recursive: true, force: true })
-    mkdirSync(REPORT_ROOT, { recursive: true })
-    cpSync(sourceReport, destinationReport, { recursive: true })
+    for (const args of pluginUiVerificationCommands(entry, packageJson.scripts ?? {})) run('bun', args, consumerRoot, env)
+    if (!existsSync(join(consumerRoot, 'test-results/bakin-ui/index.html'))) {
+      throw new Error(`${entry.id}: the primary browser fixture produced no report`)
+    }
     console.log(`✓ ${entry.id}: clean installed-package conformance passed`)
   } finally {
-    rmSync(scratchRoot, { recursive: true, force: true })
+    try { copyPluginUiReports(consumerRoot, destinationReport) }
+    finally { rmSync(scratchRoot, { recursive: true, force: true }) }
   }
 }
 

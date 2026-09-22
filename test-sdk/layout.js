@@ -8,7 +8,8 @@ function component(tag) {
 
 export const Stack = component('div')
 export const Section = component('section')
-export const Inline = component('div')
+export const Inline = ({ as, children, wrap, ...props }) =>
+  React.createElement(as ?? 'div', props, children)
 export const Grid = component('div')
 export const PageShell = component('div')
 export const BoundedOverflow = component('div')

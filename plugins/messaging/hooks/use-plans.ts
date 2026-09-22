@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Plan } from '../types'
 import { useMessagingContentRefresh } from './use-messaging-refresh'
 
@@ -17,6 +17,7 @@ interface UsePlansResult {
   loading: boolean
   error: string | null
   refresh: () => Promise<void>
+  removePlan: (id: string) => void
 }
 
 function plansUrl(options: UsePlansOptions): string {
@@ -32,6 +33,7 @@ export function usePlans(options: UsePlansOptions = {}): UsePlansResult {
   const [plans, setPlans] = useState<Plan[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const requestVersion = useRef(0)
   const optionsKey = useMemo(
     () => JSON.stringify({
       status: options.status ?? '',
@@ -42,6 +44,7 @@ export function usePlans(options: UsePlansOptions = {}): UsePlansResult {
   )
 
   const refresh = useCallback(async () => {
+    const version = ++requestVersion.current
     setLoading(true)
     setError(null)
     try {
@@ -49,12 +52,14 @@ export function usePlans(options: UsePlansOptions = {}): UsePlansResult {
       const response = await fetch(plansUrl(parsed))
       if (!response.ok) throw new Error(`Failed to load Plans (${response.status})`)
       const data = await response.json() as { plans?: Plan[] }
-      setPlans(Array.isArray(data.plans) ? data.plans : [])
+      if (version === requestVersion.current) setPlans(Array.isArray(data.plans) ? data.plans : [])
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-      setPlans([])
+      if (version === requestVersion.current) {
+        setError(err instanceof Error ? err.message : String(err))
+        setPlans([])
+      }
     } finally {
-      setLoading(false)
+      if (version === requestVersion.current) setLoading(false)
     }
   }, [optionsKey])
 
@@ -63,5 +68,12 @@ export function usePlans(options: UsePlansOptions = {}): UsePlansResult {
   useEffect(() => { void refresh() }, [refresh])
   useMessagingContentRefresh(refreshFromEvent, PLAN_REFRESH_PREFIXES)
 
-  return { plans, loading, error, refresh }
+  const removePlan = useCallback((id: string) => {
+    // A refresh begun before successful deletion must not restore its old row.
+    requestVersion.current += 1
+    setPlans(current => current.filter(plan => plan.id !== id))
+    setLoading(false)
+  }, [])
+
+  return { plans, loading, error, refresh, removePlan }
 }

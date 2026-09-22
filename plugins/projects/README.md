@@ -3,6 +3,32 @@
 Markdown project specs, checklists, task links, assets, and project-scoped
 brainstorming for Bakin.
 
+## Projects collection
+
+The index uses the kit's `ListRows variant="separated"` and interactive
+`ListRow` pattern, not preview cards. Projects are text-first records; status,
+item count, completion progress, and update time remain visible without opening
+a project. A row opens the existing detail route. A visible three-dot menu offers
+Delete project without opening the row. Confirmation names the project; deletion
+removes it and its checklist items, retaining linked board tasks and asset files.
+Any running project brainstorm is stopped by the existing delete endpoint.
+The detail page still offers the separate opt-in to delete linked board tasks.
+While deleting, confirmation and dismissal are disabled; failures stay in the
+dialog for retry. Cancel returns focus to the row menu; success returns focus to
+New Project after removing the row. There are no new pin or inline expansion actions.
+
+Status chips are solid; the header's shown count is soft. Long titles and metadata
+wrap on narrow screens. The shared status filter remains horizontally scrollable
+on mobile; the full-screen mobile filter redesign is a separate follow-up (#759).
+Search relevance ordering, URL-backed filters, creation, and live unread/working
+brainstorm indicators retain their existing behavior.
+
+Public reference: Bakin `storybook/public/lists/list-rows.stories.tsx` —
+`CanonicalUsage` (separated) and `InteractiveRows`; collection composition in
+`storybook/public/recipes/collection-patterns.stories.tsx` (`RowBehaviors`), and
+`storybook/public/feedback/confirm-dialog.stories.tsx` (`FocusReturn`, `Busy`,
+`FailedConfirmation`).
+
 ## Runtime Contract
 
 Project brainstorm talks to agents only through `ctx.runtime.messaging`. The
@@ -85,6 +111,16 @@ omitted, the existing project label is preserved.
 
 Relevant coverage:
 
+- `tests/project-list.test.tsx` — separated row semantics, search/relevance,
+  navigation/creation, loading, and progress/brainstorm indicators
+- `tests/ui.fixture.tsx` / `bakin.ui-test.ts` — real index page at desktop and
+  mobile widths, with long titles and all four project states. Run `bun run
+  test:ui` from a standalone copy of this package with the assembled/released
+  real `@makinbakin/sdk` installed, plus React/React DOM and the declared browser
+  test devDependencies. The monorepo's `test-sdk` is only a unit-test double and
+  cannot run this browser fixture. Inspect `test-results/bakin-ui/index.html`.
+  This fixture covers the index only; detail/editor and nav-slot conformance
+  enrollment remain tracked separately under T69–T70.
 - `tests/routes.test.ts` — stable thread IDs, no prompt-history replay,
   activity streaming and persistence
 - `tests/project-detail.test.tsx` — brainstorm hydration after reopening

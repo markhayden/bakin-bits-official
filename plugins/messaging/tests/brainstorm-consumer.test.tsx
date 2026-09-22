@@ -325,6 +325,18 @@ afterAll(() => {
 // ---------------------------------------------------------------------------
 
 describe('BrainstormView (search consumer)', () => {
+  it('offers retry for a failed session load instead of reporting no sessions', async () => {
+    const previousFetch = globalThis.fetch
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => String(input) === '/api/plugins/messaging/sessions'
+      ? Response.json({ error: 'Unavailable' }, { status: 503 }) : previousFetch(input, init)) as typeof fetch
+    render(<BrainstormView />)
+    await screen.findByText('Could not load brainstorms')
+    expect(screen.queryByText('0 shown')).toBeNull()
+    globalThis.fetch = previousFetch
+    fireEvent.click(screen.getByRole('button', { name: 'Retry', exact: true }))
+    await screen.findByText('Week 16 recipes')
+  })
+
   it('renders without crashing and shows fetched sessions', async () => {
     render(<BrainstormView />)
     await waitFor(() => {
@@ -334,6 +346,27 @@ describe('BrainstormView (search consumer)', () => {
       expect(screen.getByText('Week 16 recipes')).toBeDefined()
     })
     expect(screen.getByText('Outdoor sprint')).toBeDefined()
+    expect(screen.getByTestId('brainstorm-table')).toBeDefined()
+    expect(screen.getByText('Week 16 recipes').classList.contains('truncate')).toBe(false)
+  })
+
+  it('shares newest-first sorting between table headings and the narrow sort selector', async () => {
+    render(<BrainstormView />)
+    const table = await screen.findByTestId('brainstorm-table')
+    const rows = () => within(table).getAllByRole('listitem')
+    expect(rows()[0].textContent).toContain('Outdoor sprint')
+    for (const label of ['Brainstorm', 'Agent', 'Status', 'Proposals', 'Accepted', 'Updated']) {
+      expect(within(table).getByRole('button', { name: label, exact: true })).toBeDefined()
+    }
+    fireEvent.click(within(table).getByRole('button', { name: 'Updated', exact: true }))
+    expect(rows()[0].textContent).toContain('Week 16 recipes')
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('updatedAt:asc')
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'proposalCount:asc' } })
+    expect(rows()[0].textContent).toContain('Outdoor sprint')
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search brainstorm sessions' }), { target: { value: 'recipes' } })
+    expect(rows()).toHaveLength(1)
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('proposalCount:asc')
+    expect(within(rows()[0]).getByRole('button', { name: 'Open brainstorm: Week 16 recipes' })).toBeDefined()
   })
 
   it('configures useSearch with plugin "messaging" and brainstorm facets', async () => {

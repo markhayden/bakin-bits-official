@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "main": "./index.ts",
+  "scripts": {
+    "test:ui": "bakin-plugin-test-ui",
+    "test:ui:collections": "MESSAGING_UI_SURFACE=calendar bakin-plugin-test-ui --config tests/collection.ui-test.ts && MESSAGING_UI_SURFACE=brainstorm bakin-plugin-test-ui --config tests/collection.ui-test.ts && MESSAGING_UI_SURFACE=workspace bakin-plugin-test-ui --config tests/collection.ui-test.ts"
+  },
   "peerDependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -13,6 +17,10 @@
     "js-yaml": "^4.1.1",
     "lucide-react": "^0.577.0",
     "zod": "^4.3.0"
+  },
+  "devDependencies": {
+    "axe-core": "^4.12.0",
+    "playwright": "1.60.0"
   },
   "peerDependenciesMeta": {
     "@makinbakin/sdk": {

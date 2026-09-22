@@ -40,6 +40,71 @@ Messaging contributes three top-level routes:
 The header-level Quick Post action creates a free-floating Deliverable with
 `planId: null` for one-off content.
 
+### Plans collection
+
+The Plans index uses one `DataTable`: Plan, Target date, Status, Agent, Channels.
+Default ordering is earliest local target date first, with review-needed plans
+then most recently updated plans as same-date tie breakers. Unknown dates stay
+last in either direction. Target date is a calendar day, not a publishing instant.
+Headers and the always-available Sort selector share the `sort=field:direction`
+URL state; invalid values fall back to the default. Search and agent/status
+filters preserve that order. Narrow containers use the kit's separated rows
+with labelled dates/status/agent/channels, and retain the same Sort selector.
+Titles wrap, statuses remain solid, and the shown count is soft and hidden while
+loading or on error. A failed load offers Retry rather than an empty list.
+
+Every row includes a trailing ⋯ menu on desktop and mobile. Delete shares the
+individual plan workspace's confirmation and cleanup: the named plan, its content
+pieces, and linked board tasks. It prevents duplicate requests and busy dismissal,
+shows errors for retry, and removes the row only after success. Cancelling returns
+focus to the menu trigger; successful deletion returns it to the Sort selector.
+Late list refreshes cannot restore a successfully deleted row.
+
+This composes `storybook/public/lists/data-table.stories.tsx` — `NarrowRoles`,
+`recipes/filterable-table.stories.tsx` — `FilterableTable`,
+`recipes/collection-patterns.stories.tsx` — `SameRecords`,
+`feedback/confirm-dialog.stories.tsx` — `FocusReturn`, and the public Select,
+through the focused SDK UI/layout/patterns/navigation entrypoints.
+Calendar, workspace and brainstorm are separate slices from the Plans index.
+
+### Remaining collection views
+
+DataTable is the default for record collections; cards are reserved for useful
+visual previews. Brainstorm sessions use a table with Brainstorm, Agent, Status,
+Proposals, Accepted and Updated columns, defaulting to newest updates first.
+Headings and the persistent Sort selector share URL state, including on mobile;
+unread/working indicators and session opening remain intact. A plan's embedded
+channel/content-piece lists retain compact separated rows. Editable channel
+selection, conversations and task timelines remain specialized. Page counts
+and content/channel metadata use soft chips; state badges remain solid.
+
+Calendar list mode uses the public DataTable narrow roles instead of a private
+mobile row renderer. Publishes, channel, type, agent and status remain labelled
+when narrow. A persistent Sort selector and desktop headings share URL-backed
+`sort=field:direction` state; filtering and reload preserve that order. Publishing
+dates sort as instants (not date-only strings), unknown dates sort last, and
+agent/type sorting uses displayed labels. Month/week/day ordering stays
+chronological. Failed Calendar and Brainstorm loads offer Retry and hide counts.
+
+`bun run test:ui` now also runs `test:ui:collections`: isolated real-SDK fixtures
+for Calendar list, Brainstorm index and plan-workspace collections, with reports
+under `test-results/bakin-ui-{calendar,brainstorm,workspace}`. The workspace
+composes inside the host's main landmark and uses the existing Tabs focus tokens
+on its keyboard-focusable panels. This is consumer composition, not a new kit
+API. Conversation/editor and other interactive workspace branches still need
+their own broader audit; these fixtures do not declare that entire surface done.
+In the height-contained host, the stacked workspace column keeps its intrinsic
+height on narrow screens so the details rail cannot overlap its rows; desktop
+retains the existing independently scrollable, resizable columns.
+
+Run `bun run test:ui` in a standalone package copy with the assembled/released
+real SDK, React/React DOM and declared browser test devDependencies installed;
+the monorepo's `test-sdk` is only a unit-test double. The deterministic fixture
+mounts the real Plans index with multiple dates, long content, and varied states.
+Sorting regression tests cover defaults, ties, direction, missing dates, displayed
+labels and input immutability; component tests cover header/selector parity.
+Inspect `test-results/bakin-ui/index.html` for desktop/mobile conformance evidence.
+
 ## Lifecycle
 
 1. Brainstorm with an agent. The agent emits fenced JSON Plan proposals with
