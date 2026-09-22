@@ -79,7 +79,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: markhayden/bakin
-          ref: main
+          # Collection rollout SDK/CSS pair. Keep immutable so a concurrent
+          # host release cannot change the contract under this plugin PR.
+          ref: a1f7faeb3c5f696d9716bf30dbfb864fb498ba66
           path: .bakin-source
 
       # The playwright container image ships without unzip, which setup-bun
