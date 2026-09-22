@@ -69,8 +69,12 @@ Calendar, workspace and brainstorm are separate slices from the Plans index.
 
 ### Remaining collection views
 
-Brainstorm sessions and a plan's channel/content-piece lists use separated
-rows, wrapping titles and existing independent controls. Editable channel
+DataTable is the default for record collections; cards are reserved for useful
+visual previews. Brainstorm sessions use a table with Brainstorm, Agent, Status,
+Proposals, Accepted and Updated columns, defaulting to newest updates first.
+Headings and the persistent Sort selector share URL state, including on mobile;
+unread/working indicators and session opening remain intact. A plan's embedded
+channel/content-piece lists retain compact separated rows. Editable channel
 selection, conversations and task timelines remain specialized. Page counts
 and content/channel metadata use soft chips; state badges remain solid.
 

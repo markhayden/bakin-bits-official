@@ -4,18 +4,18 @@ import { useCallback, useEffect, useMemo, useState, type ClipboardEvent, type Fo
 import { ConversationEmptyState, ConversationPanel, useConversationThread } from "@makinbakin/sdk/conversation"
 import type { ConversationAgent, ConversationMessage } from "@makinbakin/sdk/conversation"
 import { emitPluginEvent, toast, useAgentIds, useAgentList, useHorizontalResize, usePluginEvent, useSearch } from "@makinbakin/sdk/hooks"
-import { Panel } from "@makinbakin/sdk/layout"
+import { Inline, Panel } from "@makinbakin/sdk/layout"
 import { usePathname, useQueryState, useRouter, useSearchParams } from "@makinbakin/sdk/navigation"
 import {
   AgentAvatar,
   AgentFilter,
   ConfirmDialog,
+  DataTable,
+  type DataTableColumn,
   InspectorPanel,
   InspectorPanelContent,
   InspectorPanelFooter,
   InspectorPanelHeader,
-  ListRow,
-  ListRows,
   Page,
   PageBody,
   PageControls,
@@ -54,6 +54,11 @@ import {
   Overline,
   Radio,
   RadioGroup,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Separator,
   SubmitButton,
   SystemState,
@@ -67,7 +72,17 @@ import {
 import { ArrowLeft, Check, ClipboardList, Columns2, Plus, SquareStack, Trash2, X } from 'lucide-react'
 import type { BrainstormSession, PlanProposal } from '../types'
 import { sessionMessageToConversation } from '../lib/session-to-conversation'
-import { cn } from '@makinbakin/sdk/utils'
+import { BRAINSTORM_SORT_FIELDS, parseBrainstormSort, sortBrainstorms } from '../lib/brainstorm-sort'
+import { cn, formatDateTime } from '@makinbakin/sdk/utils'
+
+const SORT_OPTIONS = Object.entries(BRAINSTORM_SORT_FIELDS).flatMap(([field, label]) => {
+  const numeric = field === 'proposalCount' || field === 'approvedCount'
+  return [
+    { value: `${field}:asc`, label: `${label}: ${field === 'updatedAt' ? 'oldest first' : numeric ? 'fewest first' : 'A–Z'}` },
+    { value: `${field}:desc`, label: `${label}: ${field === 'updatedAt' ? 'newest first' : numeric ? 'most first' : 'Z–A'}` },
+  ]
+})
+const SORT_LABELS = Object.fromEntries(SORT_OPTIONS.map(option => [option.value, option.label]))
 
 interface SessionSummary {
   id: string
@@ -537,6 +552,8 @@ export function BrainstormView() {
 
   const [search, setSearch] = useQueryState('q', '')
   const [agentFilter, setAgentFilter] = useQueryState('agent', 'all')
+  const [sortQuery, setSortQuery] = useQueryState('sort', 'updatedAt:desc')
+  const sort = useMemo(() => parseBrainstormSort(sortQuery), [sortQuery])
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(true)
   const [sessionsError, setSessionsError] = useState<string | null>(null)
@@ -690,6 +707,45 @@ export function BrainstormView() {
     }
     return rows
   }, [agentFilter, search, searchHook.loading, searchHook.results, sessions])
+
+  const sortedSessions = useMemo(
+    () => sortBrainstorms(visibleSessions, sort, id => agentById.get(id)?.name ?? id),
+    [visibleSessions, sort, agentById],
+  )
+  const sessionColumns = useMemo<ReadonlyArray<DataTableColumn<SessionSummary>>>(() => [
+    {
+      key: 'title', header: 'Brainstorm', sortable: true, narrow: 'primary',
+      cell: session => <span className="flex min-w-0 flex-wrap items-center gap-bakin-2">
+        <Text weight="semibold" className="min-w-0 break-words">{session.title || 'Untitled brainstorm'}</Text>
+        {session.streaming ? (
+          <StatusMarker data-testid="session-streaming" tone="accent" label="Reply in progress" className="animate-pulse motion-reduce:animate-none" />
+        ) : session.unread ? (
+          <StatusMarker data-testid="session-unread" tone="attention" label="Unseen reply" />
+        ) : null}
+      </span>,
+    },
+    {
+      key: 'agentId', header: 'Agent', sortable: true, narrow: 'label',
+      cell: session => {
+        const agent = agentById.get(session.agentId)
+        return <span className="inline-flex min-w-0 items-center gap-bakin-2">
+          <AgentAvatar agent={{ id: session.agentId, name: agent?.name ?? session.agentId, imageSrc: agent?.imageSrc ?? null }} size="sm" decorative />
+          <Text className="break-words">{agent?.name ?? session.agentId}</Text>
+        </span>
+      },
+      narrowCell: session => <Text size="meta">{agentById.get(session.agentId)?.name ?? session.agentId}</Text>,
+    },
+    {
+      key: 'status', header: 'Status', sortable: true, narrow: 'label',
+      cell: session => <StatusBadge size="xs" tone={session.status === 'active' ? 'success' : 'neutral'} className="capitalize">{session.status}</StatusBadge>,
+    },
+    { key: 'proposalCount', header: 'Proposals', sortable: true, narrow: 'label', align: 'end', cell: session => <Text>{session.proposalCount}</Text> },
+    { key: 'approvedCount', header: 'Accepted', sortable: true, narrow: 'label', align: 'end', cell: session => <Text>{session.approvedCount}</Text> },
+    {
+      key: 'updatedAt', header: 'Updated', sortable: true, narrow: 'label',
+      cell: session => <Text size="meta" tone="muted">{Number.isNaN(Date.parse(session.updatedAt)) ? 'Unknown' : formatDateTime(session.updatedAt)}</Text>,
+    },
+  ], [agentById])
 
   const createSession = async ({ title, agentId }: { title: string; agentId: string }) => {
     setCreating(true)
@@ -1231,55 +1287,32 @@ export function BrainstormView() {
           onValueChange={setAgentFilter}
           compact
         />
+        <Inline gap="dense">
+          <Text size="meta" tone="muted">Sort</Text>
+          <Select items={SORT_LABELS} value={`${sort.field}:${sort.dir}`} onValueChange={value => { if (value) setSortQuery(value) }}>
+            <SelectTrigger aria-label="Sort brainstorms"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {SORT_OPTIONS.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </Inline>
       </PageControls>
 
       <PageBody label="Brainstorm sessions" state={sessionState}>
         {!sessionState ? (
-          <ListRows variant="separated" aria-label="Brainstorm sessions">
-            {visibleSessions.map(session => {
-              const agent = agentById.get(session.agentId)
-              return (
-              <ListRow
-                key={session.id}
-                interactive={{ label: `Open brainstorm: ${session.title || session.id}`, onActivate: () => pushSessionId(session.id) }}
-              >
-                  <div className="flex min-w-0 items-start gap-bakin-3">
-                    <AgentAvatar
-                      agent={{
-                        id: session.agentId,
-                        name: agent?.name ?? session.agentId,
-                        imageSrc: agent?.imageSrc ?? null,
-                      }}
-                      size="md"
-                      decorative
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex min-w-0 flex-wrap items-center gap-bakin-2">
-                        <Text as="h2" weight="semibold" className="min-w-0 break-words">
-                          {session.title}
-                        </Text>
-                        <StatusBadge
-                          size="xs"
-                          tone={session.status === 'active' ? 'success' : 'neutral'}
-                          className="capitalize"
-                        >
-                          {session.status}
-                        </StatusBadge>
-                        {session.streaming ? (
-                          <StatusMarker data-testid="session-streaming" tone="accent" label="Reply in progress" className="animate-pulse motion-reduce:animate-none" />
-                        ) : session.unread ? (
-                          <StatusMarker data-testid="session-unread" tone="attention" label="Unseen reply" />
-                        ) : null}
-                      </div>
-                      <Text as="p" size="meta" tone="muted" className="mt-bakin-1">
-                        {agent?.name ?? session.agentId} · {session.proposalCount} proposals · {session.approvedCount} accepted
-                      </Text>
-                    </div>
-                  </div>
-              </ListRow>
-              )
-            })}
-          </ListRows>
+          <DataTable
+            label="Brainstorm sessions"
+            columns={sessionColumns}
+            rows={sortedSessions}
+            rowKey={session => session.id}
+            collapseBelow="3xl"
+            listVariant="separated"
+            sort={sort}
+            onSortChange={field => setSortQuery(`${field}:${sort.field === field && sort.dir === 'asc' ? 'desc' : 'asc'}`)}
+            onRowActivate={session => pushSessionId(session.id)}
+            rowActivateLabel={session => `Open brainstorm: ${session.title || session.id}`}
+            tableProps={{ 'data-testid': 'brainstorm-table' }}
+          />
         ) : null}
       </PageBody>
       {deleteSessionDialog}

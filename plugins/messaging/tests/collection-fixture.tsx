@@ -22,8 +22,9 @@ export const collectionPlan: Plan = {
   createdAt: '2026-01-10T10:00:00Z', updatedAt: '2026-01-14T10:00:00Z',
 }
 export const collectionSessions = [
-  { id: 'launch', title: 'Spring menu launch with cross-team editorial review and publication approval', agentId: 'basil', status: 'active', proposalCount: 3, approvedCount: 1, unread: true, streaming: false, createdAt: '2026-01-10T10:00:00Z', updatedAt: '2026-01-14T10:00:00Z' },
+  { id: 'launch', title: 'Spring menu launch with cross-team editorial review and publication approval', agentId: 'basil', status: 'active', proposalCount: 3, approvedCount: 1, unread: true, streaming: false, createdAt: '2026-01-10T10:00:00Z', updatedAt: '2026-01-13T10:00:00Z' },
   { id: 'weekend', title: 'Weekend brunch guide', agentId: 'pixel', status: 'completed', proposalCount: 2, approvedCount: 2, unread: false, streaming: false, createdAt: '2026-01-10T10:00:00Z', updatedAt: '2026-01-14T10:00:00Z' },
+  { id: 'channels', title: 'Channel launch concepts', agentId: 'basil', status: 'active', proposalCount: 10, approvedCount: 0, unread: false, streaming: true, createdAt: '2026-01-12T10:00:00Z', updatedAt: '2026-01-15T10:00:00Z' },
 ]
 
 function WorkspaceFixture() { return <PlanWorkspace planId="launch" /> }

@@ -7,5 +7,5 @@ export default definePluginUiConformance({
   pluginId: 'messaging',
   fixtureEntry: `./tests/${surface}.fixture.tsx`,
   reportDir: `test-results/bakin-ui-${surface}`,
-  readySelector: surface === 'calendar' ? '[data-slot="data-table"]' : `[aria-label="${surface === 'brainstorm' ? 'Brainstorm sessions' : 'Content pieces'}"][data-list-rows]`,
+  readySelector: surface === 'workspace' ? '[aria-label="Content pieces"][data-list-rows]' : '[data-slot="data-table"]',
 })
