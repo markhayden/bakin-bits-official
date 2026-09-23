@@ -81,7 +81,7 @@ jobs:
           repository: markhayden/bakin
           # Projects audit contracts, atomic scoped writes, and canonical SDK/CSS.
           # Pin the reviewed prerequisite commit, not a moving branch.
-          ref: d361de367a69ea1887adffa4abaee0f979b090c2
+          ref: dc047ffa3990f748d96e3d922a769f793e652f77
           path: .bakin-source
 
       # The playwright container image ships without unzip, which setup-bun
