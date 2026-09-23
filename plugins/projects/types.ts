@@ -77,3 +77,7 @@ export interface ProjectDetailData extends Project {
   resolvedAssets: ResolvedProjectAsset[]
   brainstormMessages?: ProjectBrainstormMessage[]
 }
+
+export type ProjectEditableValues = Pick<Project, 'title' | 'owner' | 'status' | 'body'>
+export type ProjectPatch = Partial<ProjectEditableValues>
+export type ChecklistPatch = Partial<Pick<ProjectTask, 'title' | 'description'>>

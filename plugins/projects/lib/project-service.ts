@@ -11,6 +11,7 @@ import {
   nextTaskItemId,
 } from './parser'
 import type { Project, ProjectTask, ProjectStatus } from '../types'
+import { assertExpectedFields, ProjectMutationError, validateItemPatch, validateProjectPatch } from './project-mutations'
 
 const log = {
   info: (...args: unknown[]) => console.info('[projects]', ...args),
@@ -102,14 +103,14 @@ export interface ProjectService {
   getProjectForTask(boardTaskId: string): TaskLinkEntry | undefined
   getProjectTitleForTask(boardTaskId: string): string | null
   createProject(opts: CreateProjectOpts): Promise<{ id: string; taskItems: { id: string; title: string }[] }>
-  updateProject(id: string, updates: UpdateProjectOpts, agent?: string): Promise<void>
+  updateProject(id: string, updates: UpdateProjectOpts, agent?: string, expected?: UpdateProjectOpts): Promise<void>
   applyProjectPlan(id: string, updates: ApplyProjectPlanOpts, agent?: string): Promise<ApplyProjectPlanResult>
   /** Restore a plan snapshot by history index; snapshots the current body first (bakin#703). */
   restorePlanVersion(id: string, index: number, expectedTs?: string): Promise<{ changed: boolean }>
   deleteProject(id: string, agent?: string): Promise<void>
   addChecklistItem(projectId: string, title: string): Promise<{ taskItemId: string }>
   markChecklistItem(projectId: string, taskItemId: string, checked: boolean): Promise<{ progress: number }>
-  updateChecklistItem(projectId: string, taskItemId: string, updates: { title?: string; description?: string }): Promise<void>
+  updateChecklistItem(projectId: string, taskItemId: string, updates: { title?: string; description?: string }, expected?: { title?: string; description?: string }): Promise<void>
   removeChecklistItem(projectId: string, taskItemId: string): Promise<void>
   linkChecklistItem(projectId: string, taskItemId: string, boardTaskId: string): Promise<void>
   attachAsset(projectId: string, assetId: string, label?: string): Promise<void>
@@ -177,17 +178,20 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     })
   }
 
-  async function updateProject(id: string, updates: UpdateProjectOpts, agent?: string): Promise<void> {
+  async function updateProject(id: string, updates: UpdateProjectOpts, agent?: string, expected?: UpdateProjectOpts): Promise<void> {
+    const patch = validateProjectPatch(updates)
     return withProjectLock(() => {
       const project = repo.readProject(id)
-      if (!project) throw new Error(`Project not found: ${id}`)
-      if (updates.status === 'completed') {
+      if (!project) throw new ProjectMutationError(`Project not found: ${id}`, 404, 'not_found')
+      assertExpectedFields(project, patch, expected)
+      if (Object.entries(patch).every(([field, value]) => value === undefined || project[field as keyof UpdateProjectOpts] === value)) return
+      if (patch.status === 'completed') {
         const unchecked = project.tasks.filter(t => !t.checked)
         if (unchecked.length > 0) throw new Error(`Cannot complete project: ${unchecked.length} unchecked items remain`)
       }
-      if (updates.title !== undefined) project.title = updates.title
-      if (updates.status !== undefined) project.status = updates.status
-      if (updates.body !== undefined && updates.body !== project.body) {
+      if (patch.title !== undefined) project.title = patch.title
+      if (patch.status !== undefined) project.status = patch.status
+      if (patch.body !== undefined && patch.body !== project.body) {
         // Snapshot the PRIOR body before it changes (bakin#703) — no-op
         // writes never snapshot.
         repo.appendPlanSnapshot(id, {
@@ -195,9 +199,9 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
           author: agent ? 'agent' : 'user',
           body: project.body,
         })
-        project.body = updates.body
+        project.body = patch.body
       }
-      if (updates.owner !== undefined) project.owner = updates.owner
+      if (patch.owner !== undefined) project.owner = patch.owner
       project.updated = new Date().toISOString()
       project.progress = computeProgress(project.tasks)
       repo.writeProject(project)
@@ -324,14 +328,17 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     })
   }
 
-  async function updateChecklistItem(projectId: string, taskItemId: string, updates: { title?: string; description?: string }): Promise<void> {
+  async function updateChecklistItem(projectId: string, taskItemId: string, updates: { title?: string; description?: string }, expected?: { title?: string; description?: string }): Promise<void> {
+    const patch = validateItemPatch(updates)
     return withProjectLock(() => {
       const project = repo.readProject(projectId)
-      if (!project) throw new Error(`Project not found: ${projectId}`)
+      if (!project) throw new ProjectMutationError(`Project not found: ${projectId}`, 404, 'not_found')
       const item = project.tasks.find(t => t.id === taskItemId)
-      if (!item) throw new Error(`Checklist item not found: ${taskItemId}`)
-      if (updates.title !== undefined) item.title = updates.title
-      if (updates.description !== undefined) item.description = updates.description || undefined
+      if (!item) throw new ProjectMutationError(`Checklist item not found: ${taskItemId}`, 404, 'not_found')
+      assertExpectedFields(item, patch, expected)
+      if (Object.entries(patch).every(([field, value]) => value === undefined || (item[field as 'title' | 'description'] ?? '') === value)) return
+      if (patch.title !== undefined) item.title = patch.title
+      if (patch.description !== undefined) item.description = patch.description || undefined
       project.updated = new Date().toISOString()
       repo.writeProject(project)
       broadcast({ type: 'project.checklist_changed', projectId, action: 'update', taskItemId })

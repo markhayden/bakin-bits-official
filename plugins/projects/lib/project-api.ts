@@ -1,4 +1,3 @@
-import { z } from 'zod'
 import { PROJECT_STATUSES } from '../types'
 import type { ProjectDetailData } from '../types'
 
@@ -29,19 +28,26 @@ export async function projectRequest(path: string, init?: RequestInit): Promise<
   return payload
 }
 
-const projectSchema = z.object({
-  id: z.string(), title: z.string(), status: z.enum(PROJECT_STATUSES), owner: z.string(),
-  body: z.string(), created: z.string(), updated: z.string(), progress: z.number().min(0).max(100),
-  tasks: z.array(z.object({ id: z.string(), title: z.string(), checked: z.boolean(), description: z.string().optional(), taskId: z.string().optional() })),
-  assets: z.array(z.object({ assetId: z.string(), label: z.string().optional() })),
-  resolvedTasks: z.record(z.string(), z.object({ column: z.string(), title: z.string() }).nullable()),
-  resolvedAssets: z.array(z.object({ assetId: z.string(), type: z.string(), label: z.string().optional(), description: z.string().optional(), tags: z.array(z.string()).optional(), missing: z.boolean().optional() })),
-  brainstormMessages: z.array(z.custom<NonNullable<ProjectDetailData['brainstormMessages']>[number]>(value => value != null && typeof value === 'object' && 'kind' in value && ['user', 'assistant', 'tool', 'error', 'aborted', 'done'].includes(String(value.kind)))).optional(),
-})
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+const string = (value: unknown): value is string => typeof value === 'string'
+const optionalString = (value: unknown) => value === undefined || string(value)
+
+function validProject(value: unknown): value is ProjectDetailData {
+  if (!record(value)) return false
+  return ['id', 'title', 'owner', 'body', 'created', 'updated'].every(field => string(value[field]))
+    && PROJECT_STATUSES.some(status => status === value.status)
+    && typeof value.progress === 'number' && Number.isFinite(value.progress) && value.progress >= 0 && value.progress <= 100
+    && Array.isArray(value.tasks) && value.tasks.every(task => record(task) && string(task.id) && string(task.title) && typeof task.checked === 'boolean' && optionalString(task.description) && optionalString(task.taskId))
+    && Array.isArray(value.assets) && value.assets.every(asset => record(asset) && string(asset.assetId) && optionalString(asset.label))
+    && record(value.resolvedTasks) && Object.values(value.resolvedTasks).every(task => task === null || (record(task) && string(task.column) && string(task.title)))
+    && Array.isArray(value.resolvedAssets) && value.resolvedAssets.every(asset => record(asset) && string(asset.assetId) && string(asset.type) && optionalString(asset.label) && optionalString(asset.description) && (asset.missing === undefined || typeof asset.missing === 'boolean') && (asset.tags === undefined || (Array.isArray(asset.tags) && asset.tags.every(string))))
+    && (value.brainstormMessages === undefined || (Array.isArray(value.brainstormMessages) && value.brainstormMessages.every(row => record(row) && ['user', 'assistant', 'tool', 'error', 'aborted', 'done'].includes(String(row.kind)))))
+}
 
 export async function readProjectDetail(id: string, signal: AbortSignal): Promise<ProjectDetailData> {
   const payload = await projectRequest(encodeURIComponent(id), { signal })
-  const parsed = z.object({ project: projectSchema }).safeParse(payload)
-  if (!parsed.success || parsed.data.project.id !== id) throw new ProjectApiError('Projects returned invalid project data.', 502, 'invalid_response')
-  return parsed.data.project
+  if (!record(payload) || !validProject(payload.project) || payload.project.id !== id) throw new ProjectApiError('Projects returned invalid project data.', 502, 'invalid_response')
+  return payload.project
 }

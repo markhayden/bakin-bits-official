@@ -323,13 +323,13 @@ describe('Routes', () => {
       expect(body.error).toMatch(/[Mm]issing/)
     })
 
-    it('returns 400 for non-existent project', async () => {
+    it('returns 404 for non-existent project', async () => {
       const route = findRoute(plugin.routes, 'PUT', '/:projectId')!
       const { status, body } = await callRoute(route, plugin.ctx, {
         searchParams: { projectId: 'ghost' },
         body: { title: 'Nope' },
       })
-      expect(status).toBe(400)
+      expect(status).toBe(404)
       expect(body.error).toMatch(/not found/i)
     })
   })
@@ -1068,6 +1068,21 @@ describe('Routes', () => {
       })
       expect(ok.status).toBe(200)
       expect(ok.body.changed).toBe(true)
+    })
+
+    it('PUT returns structured conflicts and saves none of an overlapping patch', async () => {
+      writeProjectFixture('overlap', { title: 'Agent value', body: 'Original body' })
+      const route = findRoute(plugin.routes, 'PUT', '/:projectId')!
+      const result = await callRoute(route, plugin.ctx, {
+        searchParams: { projectId: 'overlap' },
+        body: { title: 'My value', body: 'Must not save', expected: { title: 'Old value', body: 'Original body' } },
+      })
+      expect(result.status).toBe(409)
+      expect(result.body.conflicts.title.current).toBe('Agent value')
+      const project = await callRoute(findRoute(plugin.routes, 'GET', '/:projectId')!, plugin.ctx, { searchParams: { projectId: 'overlap' } })
+      expect(project.body.project.body).toBe('Original body')
+      const missing = await callRoute(route, plugin.ctx, { searchParams: { projectId: 'missing' }, body: { title: 'Mine', expected: { title: 'Old' } } })
+      expect(missing.status).toBe(404)
     })
 
     it('PUT rejects an unknown status instead of silently coercing to draft', async () => {
