@@ -5,7 +5,8 @@
   "type": "module",
   "main": "./index.ts",
   "scripts": {
-    "test:ui": "bakin-plugin-test-ui"
+    "test:ui": "bakin-plugin-test-ui",
+    "test:ui:collections": "bakin-plugin-test-ui --config tests/plan.ui-test.ts"
   },
   "peerDependencies": {
     "react": "^19.0.0",

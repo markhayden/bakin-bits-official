@@ -29,6 +29,27 @@ Public reference: Bakin `storybook/public/lists/list-rows.stories.tsx` —
 `storybook/public/feedback/confirm-dialog.stories.tsx` (`FocusReturn`, `Busy`,
 `FailedConfirmation`).
 
+## Read-only plans
+
+Rendered plans use `MarkdownContent` from `@makinbakin/sdk/content`, including
+individual blocks annotated by Show changes. `MarkdownEditor` owns the editing
+canvas and the existing empty-plan placeholder; its document-height preview
+must not wrap each read-only block. That reserves 320px even for one heading.
+Change markers and the rendered/diff toggle retain their existing behavior.
+
+Public reference: Bakin `storybook/public/content/markdown-content.stories.tsx`
+— `CanonicalUsage` and `ReadingAndCode`. Run `bun run test:ui:collections`
+with the installed real SDK to check changed, hints-hidden, and no-history plans
+at desktop and mobile widths. The plugin CI enrollment requires this fixture
+alongside the index fixture. After fonts and change markers are ready, it
+asserts actual gaps between rendered headings, paragraphs and lists, including
+unused space after the final block. A gap over 64px fails the canonical harness
+at both viewport widths. Unit tests use lightweight SDK stubs and therefore
+cannot validate real markdown layout by themselves.
+
+See [the Projects UI audit](UI-AUDIT.md) for control inventory, remaining
+usability findings, and verification evidence.
+
 ## Runtime Contract
 
 Project brainstorm talks to agents only through `ctx.runtime.messaging`. The

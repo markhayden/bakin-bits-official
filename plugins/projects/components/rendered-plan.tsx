@@ -10,7 +10,7 @@
  * line-level review lives in the Diff toggle.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { MarkdownEditor } from '@makinbakin/sdk/content'
+import { MarkdownContent, MarkdownEditor } from '@makinbakin/sdk/content'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@makinbakin/sdk/ui'
 import type { PlanSnapshot } from '../types'
 import { diffBlocks } from '../lib/block-diff'
@@ -46,6 +46,7 @@ export function RenderedPlan({ projectId, body, hintsEnabled = true }: { project
   )
   const hasChanges = entries?.some((entry) => entry.type === 'removed' || (entry.type === 'block' && entry.changed))
   if (!entries || !hasChanges) {
+    if (body.trim()) return <MarkdownContent content={body} />
     return <MarkdownEditor content={body} editing={false} onChange={() => {}} placeholder="Project details, goals, background..." format="markdown" />
   }
 
@@ -76,7 +77,7 @@ export function RenderedPlan({ projectId, body, hintsEnabled = true }: { project
               )}
             >
               <span className="sr-only">{CHANGED_BLOCK_HINT}</span>
-              <MarkdownEditor content={entry.text} editing={false} onChange={() => {}} format="markdown" />
+              <MarkdownContent content={entry.text} />
             </TooltipTrigger>
             <TooltipContent>{CHANGED_BLOCK_HINT}</TooltipContent>
           </Tooltip>
@@ -85,7 +86,7 @@ export function RenderedPlan({ projectId, body, hintsEnabled = true }: { project
           // bar is in normal flow (a negative margin put it outside the
           // scroll container's clip — invisible).
           <div key={index} className="border-l-2 border-transparent pl-bakin-3">
-            <MarkdownEditor content={entry.text} editing={false} onChange={() => {}} format="markdown" />
+            <MarkdownContent content={entry.text} />
           </div>
         ),
       )}
