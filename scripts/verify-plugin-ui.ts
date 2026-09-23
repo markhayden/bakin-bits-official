@@ -28,7 +28,7 @@ export const OFFICIAL_BITS_PLUGIN_UI_ENROLLMENT: readonly OfficialBitsPluginUiEn
   { id: '_template', root: 'plugins/_template', status: 'conformant', migrationTask: 'T42b', verification: 'installed-package' },
   { id: 'terminal', root: 'plugins/terminal', status: 'conformant', migrationTask: 'terminal-plugin', verification: 'installed-package' },
   { id: 'messaging', root: 'plugins/messaging', status: 'conformant', migrationTask: 'T67-T68', verification: 'workspace-checks', collections: true },
-  { id: 'projects', root: 'plugins/projects', status: 'conformant', migrationTask: 'T69-T70', verification: 'workspace-checks' },
+  { id: 'projects', root: 'plugins/projects', status: 'conformant', migrationTask: 'T69-T70', verification: 'workspace-checks', collections: true },
 ] as const
 
 function manifestId(root: string, packageRoot: string): string | undefined {

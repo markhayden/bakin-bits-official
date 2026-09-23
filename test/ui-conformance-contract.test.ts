@@ -48,6 +48,10 @@ describe('official Bits plugin UI conformance enrollment', () => {
           expect(pkg.scripts['test:ui:collections']).toContain(`MESSAGING_UI_SURFACE=${surface} bakin-plugin-test-ui --config tests/collection.ui-test.ts`)
         }
       }
+      if (entry.id === 'projects') {
+        browser.push(['run', 'test:ui:collections'])
+        expect(pkg.scripts['test:ui:collections']).toBe('bakin-plugin-test-ui --config tests/plan.ui-test.ts')
+      }
       const independent = entry.id === '_template' || entry.id === 'terminal'
       expect(commands).toEqual([
         ['install'], ...(independent ? [['run', 'typecheck'], ['test']] : []), ...browser,
@@ -56,10 +60,12 @@ describe('official Bits plugin UI conformance enrollment', () => {
   })
 
   it('refuses missing collection coverage or a noncanonical primary command', () => {
-    const entry = OFFICIAL_BITS_PLUGIN_UI_ENROLLMENT.find(item => item.id === 'messaging')!
-    if (entry.status !== 'conformant') throw new Error('Messaging must be enrolled')
-    expect(() => pluginUiVerificationCommands(entry, { 'test:ui': 'bakin-plugin-test-ui' })).toThrow('requires test:ui:collections')
-    expect(() => pluginUiVerificationCommands(entry, { 'test:ui': 'echo skipped' })).toThrow('canonical test:ui')
+    for (const id of ['messaging', 'projects']) {
+      const entry = OFFICIAL_BITS_PLUGIN_UI_ENROLLMENT.find(item => item.id === id)!
+      if (entry.status !== 'conformant') throw new Error(`${id} must be enrolled`)
+      expect(() => pluginUiVerificationCommands(entry, { 'test:ui': 'bakin-plugin-test-ui' })).toThrow('requires test:ui:collections')
+      expect(() => pluginUiVerificationCommands(entry, { 'test:ui': 'echo skipped' })).toThrow('canonical test:ui')
+    }
   })
 
   it('preserves primary and partial collection reports before scratch cleanup', () => {
