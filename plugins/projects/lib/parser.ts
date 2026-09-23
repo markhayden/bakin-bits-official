@@ -163,6 +163,13 @@ export interface ProjectRepository {
   projectsGlob(): string
 }
 
+export class PlanHistoryUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super('Plan history is unavailable', { cause })
+    this.name = 'PlanHistoryUnavailableError'
+  }
+}
+
 export function createProjectRepository(storage: StorageAdapter): ProjectRepository {
   // The attention endpoint polls every project's transcript for its last
   // agent-activity timestamp — cache it against the sidecar's mtime+size so
@@ -185,13 +192,18 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
   }
 
   function readPlanHistory(id: string): PlanSnapshot[] {
-    const content = storage.read(projectHistoryPath(id))
-    if (!content) return []
     try {
-      const parsed = JSON.parse(content)
-      return Array.isArray(parsed) ? (parsed as PlanSnapshot[]) : []
-    } catch {
-      return []
+      const content = storage.read(projectHistoryPath(id))
+      if (content == null) return []
+      const parsed: unknown = JSON.parse(content)
+      if (!Array.isArray(parsed) || !parsed.every(value => value && typeof value === 'object'
+        && typeof value.ts === 'string' && Number.isFinite(Date.parse(value.ts))
+        && (value.author === 'user' || value.author === 'agent') && typeof value.body === 'string')) {
+        throw new Error('Invalid plan history payload')
+      }
+      return parsed as PlanSnapshot[]
+    } catch (cause) {
+      throw new PlanHistoryUnavailableError(cause)
     }
   }
 

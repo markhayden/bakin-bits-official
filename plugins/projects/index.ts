@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { defineRoute } from '@makinbakin/sdk'
 import type { BakinPlugin, PluginContext, RuntimeAgent } from '@makinbakin/sdk/types'
 import { conversationThreadId } from '@makinbakin/sdk/utils'
-import { createProjectRepository, projectToSummary } from './lib/parser'
+import { createProjectRepository, PlanHistoryUnavailableError, projectToSummary } from './lib/parser'
 import { createProjectService } from './lib/project-service'
 import { PROJECT_STATUSES } from './types'
 import type { Project, ProjectBrainstormMessage, ProjectStatus } from './types'
@@ -710,7 +710,12 @@ const projectsPlugin: BakinPlugin = {
       const id = url.searchParams.get('projectId')
       if (!id) return json({ error: 'Missing projectId' }, 400)
       if (!readProject(id)) return json({ error: 'Project not found' }, 404)
-      return json({ history: repo.readPlanHistory(id) })
+      try {
+        return json({ history: repo.readPlanHistory(id) })
+      } catch (error) {
+        log.error('Failed to load plan history', error, { projectId: id })
+        return json({ error: 'Plan history is unavailable' }, 500)
+      }
     })
 
     // POST /:projectId/history/:index/restore — never destructive: the
@@ -727,9 +732,11 @@ const projectsPlugin: BakinPlugin = {
         return json({ ok: true, changed })
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        const status = message.startsWith('Project not found') ? 404
+        const status = err instanceof PlanHistoryUnavailableError ? 500
+          : message.startsWith('Project not found') ? 404
           : message.startsWith('History changed') ? 409
           : 400
+        if (status === 500) log.error('Failed to restore plan history', err, { projectId: id })
         return json({ error: message }, status)
       }
     })

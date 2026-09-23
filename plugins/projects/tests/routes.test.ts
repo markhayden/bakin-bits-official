@@ -1181,6 +1181,24 @@ describe('Routes', () => {
       await settled
     })
 
+    it('reports corrupt history as unavailable for reads and restore', async () => {
+      writeProjectFixture('corrupt-history', { body: 'Keep this body' })
+      writeFileSync(join(projectsDir, 'corrupt-history.history.json'), '{broken')
+      const history = await callRoute(findRoute(plugin.routes, 'GET', '/:projectId/history')!, plugin.ctx, {
+        searchParams: { projectId: 'corrupt-history' },
+      })
+      expect(history.status).toBe(500)
+      expect(history.body.error).toBe('Plan history is unavailable')
+      const restored = await callRoute(findRoute(plugin.routes, 'POST', '/:projectId/history/:index/restore')!, plugin.ctx, {
+        searchParams: { projectId: 'corrupt-history', index: '0' },
+      })
+      expect(restored.status).toBe(500)
+      const project = await callRoute(findRoute(plugin.routes, 'GET', '/:projectId')!, plugin.ctx, {
+        searchParams: { projectId: 'corrupt-history' },
+      })
+      expect(project.body.project.body).toBe('Keep this body')
+    })
+
     it('history routes: GET lists snapshots; restore round-trips through the service', async () => {
       writeProjectFixture('proj-hist', { title: 'History Project', body: 'original body' })
       const putRoute = findRoute(plugin.routes, 'PUT', '/:projectId')!
