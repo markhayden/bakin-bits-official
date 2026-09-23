@@ -11,6 +11,7 @@ interface EditorProps {
 export function ProjectEditor({ body, editing, onChange }: EditorProps) {
   return (
     <MarkdownEditor
+      label="Project plan"
       content={body}
       editing={editing}
       onChange={onChange}

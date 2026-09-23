@@ -935,6 +935,8 @@ declare module '@makinbakin/sdk/ui' {
   export const CardMedia: UIComponent
   export const CardTitle: UIComponent
   export const Checkbox: UIComponent
+  export const CollapsibleTrigger: UIComponent
+  export const CollapsibleContent: UIComponent
   export const Collapsible: UIComponent
   export const Command: UIComponent
   export const Dialog: UIComponent
@@ -1131,7 +1133,10 @@ declare module '@makinbakin/sdk/patterns' {
     color?: string
     disabled?: boolean
   }
+  export const SaveBar: ComponentType<{ dirty: boolean; saving?: boolean; error?: ReactNode; children?: ReactNode; onSave: () => void; onDiscard: () => void }>
   export const AgentSelect: ComponentType<{
+    size?: 'sm' | 'md' | 'lg'
+    variant?: 'outlined' | 'filled' | 'ghost'
     id?: string
     name?: string
     value: string
@@ -1410,6 +1415,12 @@ declare module '@makinbakin/sdk/patterns' {
 }
 
 declare module '@makinbakin/sdk/navigation' {
+  export function useUnsavedChangesGuard(options: {
+    hasUnsavedChanges: boolean; saving: boolean; onCancel?: () => void;
+    onSaveAndExit: () => Promise<boolean>; onDiscardAndExit: () => void;
+    saveLabel?: string; description?: import('react').ReactNode; error?: import('react').ReactNode;
+  }): { requestExit: () => void; reset: () => void; dialog: import('react').ReactNode }
+
   import type { ComponentType, ReactNode } from 'react'
   export const PluginLink: ComponentType<{
     to: string
@@ -1561,7 +1572,9 @@ declare module '@makinbakin/sdk/conversation' {
   }
   export type ConversationTextTransform = (text: string) => { text: string; extras?: ReactNode }
 
+  export interface ComposerHandle { isEmpty(): boolean; setText(text: string): void; focus(): void }
   export interface ConversationPanelProps {
+    composerHandleRef?: import('react').Ref<ComposerHandle>
     messages: readonly ConversationMessage[]
     liveChunks?: readonly ConversationChunk[] | null
     streaming?: boolean
