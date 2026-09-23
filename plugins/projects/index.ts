@@ -572,16 +572,16 @@ const projectsPlugin: BakinPlugin = {
 
     // POST /:projectId/checklist/:itemId/promote — promote to board task
     const promoteHandler = async (req: Request) => {
-      const url = new URL(req.url, 'http://localhost')
-      const body = await readBody<{ projectId?: string; taskItemId?: string; assignee?: string }>(req)
-      const projectId = url.searchParams.get('projectId') || body.projectId
-      const taskItemId = url.searchParams.get('itemId') || body.taskItemId
-      if (!projectId || !taskItemId) return json({ error: 'Missing projectId or taskItemId' }, 400)
-      const result = await promoteItemToTask(projectId, taskItemId, { assignee: body.assignee })
-      ctx.activity.audit('checklist.promoted', 'system', { projectId })
-      ctx.activity.log('system', `Promoted checklist item to task in project ${projectId}`)
-      indexProject(projectId).catch(() => {})
-      return json({ ok: true, ...result })
+      try {
+        const url = new URL(req.url, 'http://localhost')
+        const body = await readBody<{ projectId?: string; taskItemId?: string; assignee?: string; requestId?: string }>(req)
+        const projectId = url.searchParams.get('projectId') || body.projectId
+        const taskItemId = url.searchParams.get('itemId') || body.taskItemId
+        if (!projectId || !taskItemId) return json({ error: 'Missing projectId or taskItemId' }, 400)
+        const result = await promoteItemToTask(projectId, taskItemId, { assignee: body.assignee, requestId: body.requestId })
+        indexProject(projectId).catch(() => {})
+        return json({ ok: true, ...result })
+      } catch (err) { return mutationFailure(err) }
     }
     routeHandlers.set('POST /:projectId/checklist/:itemId/promote', promoteHandler)
 

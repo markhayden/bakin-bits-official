@@ -30,7 +30,7 @@ export interface ProjectFrontmatter {
   tasks: ProjectTask[]
   assets: ProjectAsset[]
   /** Private durable mutation receipts; omitted from browser projections. */
-  operations?: ChecklistAddOperation[]
+  operations?: (ChecklistAddOperation | ChecklistPromotionOperation)[]
 }
 
 export interface Project extends ProjectFrontmatter {
@@ -93,4 +93,17 @@ export interface ChecklistAddOperation {
   taskItemId: string
   instanceId: string
   phase: 'complete'
+}
+
+export interface ChecklistPromotionOperation {
+  kind: 'promote-checklist'
+  requestId: string
+  taskItemId: string
+  instanceId: string
+  taskId: string
+  title: string
+  assignee?: string
+  workflowId?: string
+  skipWorkflowReason?: string
+  phase: 'reserved' | 'complete'
 }

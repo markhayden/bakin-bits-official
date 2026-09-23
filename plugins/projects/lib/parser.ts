@@ -70,11 +70,16 @@ export const BRAINSTORM_ROW_CAP = 300
 // Parse / Serialize
 // ---------------------------------------------------------------------------
 
-const operationsSchema = z.array(z.object({
+const operationsSchema = z.array(z.discriminatedUnion('kind', [z.object({
   kind: z.literal('add-checklist'), requestId: z.string().min(8).max(128),
   title: z.string().min(1), taskItemId: z.string().min(1),
   instanceId: z.string().uuid(), phase: z.literal('complete'),
-}).strict())
+}).strict(), z.object({
+  kind: z.literal('promote-checklist'), requestId: z.string().min(8).max(128),
+  title: z.string().min(1), taskItemId: z.string().min(1), instanceId: z.string().uuid(),
+  taskId: z.string().min(1), assignee: z.string().optional(), workflowId: z.string().optional(),
+  skipWorkflowReason: z.string().optional(), phase: z.enum(['reserved', 'complete']),
+}).strict()]))
 
 export function parseProject(content: string): Project {
   // Split on YAML frontmatter fences

@@ -10,7 +10,7 @@ import {
   computeProgress,
   nextTaskItemId,
 } from './parser'
-import type { Project, ProjectTask, ProjectStatus } from '../types'
+import type { ChecklistPromotionOperation, Project, ProjectTask, ProjectStatus } from '../types'
 import { assertExpectedFields, ProjectMutationError, validateItemPatch, validateProjectPatch } from './project-mutations'
 
 const log = {
@@ -84,6 +84,7 @@ export interface ApplyProjectPlanResult {
 }
 
 export interface PromoteItemOpts {
+  requestId?: string
   assignee?: string
   workflowId?: string
   skipWorkflowReason?: string
@@ -125,6 +126,9 @@ export interface ProjectService {
     resolvedAssets: ResolvedAsset[]
   }>
 }
+
+// Reservations have globally unique IDs; simultaneous callers share only their own operation.
+const promotionsInFlight = new Map<string, Promise<{ taskId: string }>>()
 
 export function createProjectService(ctx: PluginContext, repo: ProjectRepository): ProjectService {
   function rebuildIndex(): void {
@@ -445,26 +449,85 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     })
   }
 
-  async function promoteItemToTask(projectId: string, taskItemId: string, opts?: PromoteItemOpts): Promise<{ taskId: string }> {
-    const { title, projectIdVal } = await withProjectLock(() => {
+  async function promoteItemToTask(projectId: string, taskItemId: string, opts: PromoteItemOpts = {}): Promise<{ taskId: string }> {
+    if (Object.values(opts).some(value => value !== undefined && typeof value !== 'string')
+      || (opts.requestId !== undefined && !/^[a-zA-Z0-9_-]{8,128}$/.test(opts.requestId))) {
+      throw new ProjectMutationError('Invalid promotion options.', 400, 'invalid_request')
+    }
+    const reservation = await withProjectLock(() => {
       const project = repo.readProject(projectId)
-      if (!project) throw new Error(`Project not found: ${projectId}`)
+      if (!project) throw new ProjectMutationError(`Project not found: ${projectId}`, 404, 'not_found')
       const item = project.tasks.find(t => t.id === taskItemId)
-      if (!item) throw new Error(`Checklist item not found: ${taskItemId}`)
-      if (item.taskId) throw new Error(`Item already linked to board task: ${item.taskId}`)
-      return { title: item.title, projectIdVal: project.id }
+      if (!item) throw new ProjectMutationError(`Checklist item not found: ${taskItemId}`, 404, 'not_found')
+      const keyed = opts.requestId ? project.operations?.find(operation => operation.requestId === opts.requestId) : undefined
+      const prior = keyed ?? project.operations?.find(operation => operation.kind === 'promote-checklist' && operation.instanceId === item.instanceId)
+      if (prior) {
+        if (prior.kind !== 'promote-checklist' || prior.instanceId !== item.instanceId || prior.taskItemId !== taskItemId
+          || prior.assignee !== opts.assignee || prior.workflowId !== opts.workflowId || prior.skipWorkflowReason !== opts.skipWorkflowReason) {
+          throw new ProjectMutationError('This promotion no longer matches the checklist item or requested options.', 409, 'promotion_conflict')
+        }
+        return prior
+      }
+      if (item.taskId) throw new ProjectMutationError(`Item already linked to board task: ${item.taskId}`, 409, 'already_linked')
+      item.instanceId ??= crypto.randomUUID()
+      const operation: ChecklistPromotionOperation = {
+        kind: 'promote-checklist', requestId: opts.requestId ?? crypto.randomUUID(),
+        instanceId: item.instanceId, taskItemId, taskId: `task-${crypto.randomUUID()}`,
+        title: item.title, assignee: opts.assignee, workflowId: opts.workflowId,
+        skipWorkflowReason: opts.skipWorkflowReason, phase: 'reserved',
+      }
+      ;(project.operations ??= []).push(operation)
+      repo.writeProject(project)
+      return operation
     })
+    const running = promotionsInFlight.get(reservation.taskId)
+    if (running) return running
+    const operation = finishPromotion(projectId, reservation)
+    promotionsInFlight.set(reservation.taskId, operation)
+    try { return await operation } finally { promotionsInFlight.delete(reservation.taskId) }
+  }
 
-    const task = await ctx.tasks.create({
-      title,
-      agent: opts?.assignee,
-      projectId: projectIdVal,
-      description: 'Project task',
-      workflowId: opts?.workflowId,
-      skipWorkflowReason: opts?.skipWorkflowReason,
+  async function finishPromotion(projectId: string, reservation: ChecklistPromotionOperation): Promise<{ taskId: string }> {
+    const source = { pluginId: 'projects', entityType: 'checklist', entityId: `${projectId}:${reservation.instanceId}`, purpose: reservation.requestId }
+    // Never hold the project lock over task APIs: their hooks can call Projects.
+    let task = await ctx.tasks.get(reservation.taskId)
+    if (!task && reservation.phase === 'complete') {
+      throw new ProjectMutationError('The promoted task was deleted. Refresh the project to review it.', 409, 'promoted_task_missing')
+    }
+    if (!task) {
+      // A throw may follow a successful durable create. Leave the reservation and
+      // report the failure; a retry reads this exact ID instead of blindly creating.
+      task = await ctx.tasks.create({
+        id: reservation.taskId, title: reservation.title, source, projectId,
+        agent: reservation.assignee, description: 'Project task',
+        workflowId: reservation.workflowId, skipWorkflowReason: reservation.skipWorkflowReason,
+      })
+    }
+    if (task.id !== reservation.taskId || task.projectId !== projectId
+      || Object.entries(source).some(([key, value]) => task!.source?.[key as keyof typeof source] !== value)) {
+      throw new ProjectMutationError('The reserved board task belongs to a different operation. Review the project before retrying.', 409, 'promotion_conflict')
+    }
+    return withProjectLock(() => {
+      const project = repo.readProject(projectId)
+      const item = project?.tasks.find(t => t.id === reservation.taskItemId && t.instanceId === reservation.instanceId)
+      const receipt = project?.operations?.find(operation => operation.kind === 'promote-checklist' && operation.taskId === reservation.taskId)
+      if (!project || !item || !receipt || (item.taskId && item.taskId !== reservation.taskId)) {
+        throw new ProjectMutationError(`Board task ${reservation.taskId} exists, but the checklist item changed or was removed. Refresh to review.`, 409, 'promotion_conflict')
+      }
+      if (receipt.phase === 'complete' && !item.taskId) {
+        throw new ProjectMutationError('This completed promotion was unlinked. Refresh to review it.', 409, 'promotion_conflict')
+      }
+      if (receipt.phase !== 'complete') {
+        item.taskId = reservation.taskId
+        receipt.phase = 'complete'
+        project.updated = new Date().toISOString()
+        repo.writeProject(project)
+        ctx.activity.audit('checklist.promoted', 'system', { projectId, taskItemId: item.id, taskId: reservation.taskId })
+        broadcast({ type: 'project.checklist_changed', projectId, action: 'link', taskItemId: item.id, boardTaskId: reservation.taskId })
+      }
+      getIndex().set(reservation.taskId, { projectId, taskItemId: item.id })
+      return { taskId: reservation.taskId }
     })
-    await linkChecklistItem(projectId, taskItemId, task.id)
-    return { taskId: task.id }
   }
 
   async function autoCheckLinkedItem(boardTaskId: string): Promise<void> {

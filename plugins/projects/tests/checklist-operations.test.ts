@@ -61,3 +61,98 @@ it('retains receipts for deleted items without silently accepting corrupt metada
   await expect(service.addChecklistItem(id, 'Task', '' )).rejects.toMatchObject({ status: 400 })
   await expect(service.addChecklistItem(id, '   ', 'request-valid')).rejects.toMatchObject({ status: 400 })
 })
+
+
+it('coalesces concurrent promotions and permits hooks to reenter the project service', async () => {
+  const { taskItemId } = await service.addChecklistItem(id, 'Promote')
+  const create = setup.ctx.tasks.create
+  let calls = 0
+  setup.ctx.tasks.create = async input => {
+    calls++
+    await service.updateProject(id, { owner: 'hook-agent' })
+    return create(input)
+  }
+  const results = await Promise.all(Array.from({ length: 8 }, () => service.promoteItemToTask(id, taskItemId, { requestId: 'promote-request' })))
+  expect(new Set(results.map(result => result.taskId)).size).toBe(1)
+  expect(calls).toBe(1)
+  expect(repo.readProject(id)?.owner).toBe('hook-agent')
+})
+
+it('resumes a failed link after reconstruction without creating another board task', async () => {
+  const { taskItemId } = await service.addChecklistItem(id, 'Promote')
+  const write = repo.writeProject
+  let writes = 0
+  repo.writeProject = project => { if (++writes === 2) throw new Error('link write failed'); write(project) }
+  await expect(service.promoteItemToTask(id, taskItemId, { requestId: 'promote-request' })).rejects.toThrow('link write failed')
+  expect(await setup.ctx.tasks.list()).toHaveLength(1)
+  service = createProjectService(setup.ctx, createProjectRepository(setup.ctx.storage))
+  const recovered = await service.promoteItemToTask(id, taskItemId, { requestId: 'promote-request' })
+  expect(await setup.ctx.tasks.list()).toHaveLength(1)
+  expect(repo.readProject(id)?.tasks[0]?.taskId).toBe(recovered.taskId)
+  await expect(service.promoteItemToTask(id, taskItemId, { requestId: 'promote-request', assignee: 'different' })).rejects.toMatchObject({ status: 409 })
+})
+
+it('reports a downstream create failure and later reconciles the exact reserved task', async () => {
+  const { taskItemId } = await service.addChecklistItem(id, 'Promote')
+  const create = setup.ctx.tasks.create
+  setup.ctx.tasks.create = async input => { await create(input); throw new Error('downstream hook failed') }
+  await expect(service.promoteItemToTask(id, taskItemId)).rejects.toThrow('downstream hook failed')
+  expect(repo.readProject(id)?.tasks[0]?.taskId).toBeUndefined()
+  const result = await service.promoteItemToTask(id, taskItemId)
+  expect(await setup.ctx.tasks.list()).toHaveLength(1)
+  expect(repo.readProject(id)?.tasks[0]?.taskId).toBe(result.taskId)
+})
+
+it('does not link a replacement item or resurrect a deleted project after creation', async () => {
+  const { taskItemId } = await service.addChecklistItem(id, 'Promote')
+  const create = setup.ctx.tasks.create
+  setup.ctx.tasks.create = async input => {
+    const task = await create(input)
+    await service.removeChecklistItem(id, taskItemId)
+    await service.addChecklistItem(id, 'Replacement')
+    return task
+  }
+  await expect(service.promoteItemToTask(id, taskItemId, { requestId: 'promote-request' })).rejects.toMatchObject({ status: 409 })
+  await expect(service.promoteItemToTask(id, taskItemId, { requestId: 'promote-request' })).rejects.toMatchObject({ status: 409 })
+  expect(repo.readProject(id)?.tasks[0]?.taskId).toBeUndefined()
+  expect(await setup.ctx.tasks.list()).toHaveLength(1)
+})
+
+it('rejects a foreign task collision and never recreates a deleted completed promotion', async () => {
+  const { taskItemId } = await service.addChecklistItem(id, 'Promote')
+  const get = setup.ctx.tasks.get
+  setup.ctx.tasks.get = async taskId => ({ id: taskId, projectId: 'foreign', source: {} }) as never
+  await expect(service.promoteItemToTask(id, taskItemId)).rejects.toMatchObject({ status: 409 })
+  expect(await setup.ctx.tasks.list()).toHaveLength(0)
+  setup.ctx.tasks.get = get
+  const result = await service.promoteItemToTask(id, taskItemId)
+  await setup.ctx.tasks.remove(result.taskId)
+  await service.autoUnlinkTask(result.taskId)
+  await expect(service.promoteItemToTask(id, taskItemId)).rejects.toMatchObject({ status: 409 })
+  expect(await setup.ctx.tasks.list()).toHaveLength(0)
+})
+
+
+it('does not create a task before the reservation is durable', async () => {
+  const { taskItemId } = await service.addChecklistItem(id, 'Promote')
+  const write = repo.writeProject
+  repo.writeProject = () => { throw new Error('reservation failed') }
+  await expect(service.promoteItemToTask(id, taskItemId)).rejects.toThrow('reservation failed')
+  expect(await setup.ctx.tasks.list()).toHaveLength(0)
+  repo.writeProject = write
+  await service.promoteItemToTask(id, taskItemId)
+  expect(await setup.ctx.tasks.list()).toHaveLength(1)
+})
+
+it('does not recreate a project deleted by a task hook', async () => {
+  const { taskItemId } = await service.addChecklistItem(id, 'Promote')
+  const create = setup.ctx.tasks.create
+  setup.ctx.tasks.create = async input => {
+    const task = await create(input)
+    await service.deleteProject(id)
+    return task
+  }
+  await expect(service.promoteItemToTask(id, taskItemId)).rejects.toMatchObject({ status: 409 })
+  expect(repo.readProject(id)).toBeNull()
+  expect(await setup.ctx.tasks.list()).toHaveLength(1)
+})

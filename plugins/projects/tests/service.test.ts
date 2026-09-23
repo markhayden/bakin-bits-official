@@ -85,7 +85,7 @@ function buildCtx(): PluginContext {
     runtime: {} as PluginContext['runtime'],
     events: {} as PluginContext['events'],
     tasks: {
-      create: mock(async () => ({ id: 'newtask1', title: 'New task', checked: false, column: 'todo' as const })),
+      create: mock(async input => ({ ...input, id: input.id!, checked: false, column: 'todo' as const })),
       update: mock(async () => ({ id: 'newtask1', title: 'New task', checked: false, column: 'todo' as const })),
       move: mock(async () => ({ id: 'newtask1', title: 'New task', checked: false, column: 'todo' as const })),
       remove: mock(async () => {}),
@@ -341,10 +341,10 @@ describe('promoteItemToTask', () => {
     const { id } = await createProject({ title: 'P', tasks: ['Promote me'] })
     const result = await promoteItemToTask(id, 't001')
 
-    expect(result.taskId).toBe('newtask1')
+    expect(result.taskId).toMatch(/^task-/)
 
     const project = readProject(id)
-    expect(project!.tasks[0].taskId).toBe('newtask1')
+    expect(project!.tasks[0].taskId).toBe(result.taskId)
   })
 
   it('rejects if already linked', async () => {
