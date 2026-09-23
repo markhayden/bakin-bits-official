@@ -62,3 +62,18 @@ export interface ProjectSummary {
   brainstormUnread?: boolean
   brainstormStreaming?: boolean
 }
+
+
+export interface ResolvedProjectAsset extends ProjectAsset {
+  type: string
+  description?: string
+  tags?: string[]
+  missing?: boolean
+}
+
+/** Hydrated detail projection; checklist descriptions retain their shared type. */
+export interface ProjectDetailData extends Project {
+  resolvedTasks: Record<string, { column: string; title: string } | null>
+  resolvedAssets: ResolvedProjectAsset[]
+  brainstormMessages?: ProjectBrainstormMessage[]
+}

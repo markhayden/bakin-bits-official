@@ -6,7 +6,7 @@ import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, ChevronDow
 import { useAgentList, useMainAgentId } from "@makinbakin/sdk/hooks"
 import { PluginLink, useRouter } from "@makinbakin/sdk/navigation"
 import { ConversationEmptyState, ConversationPanel, useConversationThread } from "@makinbakin/sdk/conversation"
-import type { ConversationAgent, ConversationMessage } from "@makinbakin/sdk/conversation"
+import type { ConversationAgent } from "@makinbakin/sdk/conversation"
 import {
   AgentSelect,
   AssetPicker,
@@ -53,37 +53,13 @@ import {
 } from "@makinbakin/sdk/ui"
 import { PlanHistoryPanel } from './plan-history'
 import { RenderedPlan } from './rendered-plan'
-import type { ProjectStatus } from '../types'
+import type { ProjectStatus, ResolvedProjectAsset as ResolvedAsset } from '../types'
+import { useProjectDetail } from '../hooks/use-project-detail'
 import { formatAge, formatDateTime } from '@makinbakin/sdk/utils'
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-interface ResolvedAsset {
-  assetId: string
-  label?: string
-  type: string
-  description?: string
-  tags?: string[]
-  missing?: boolean
-}
-
-interface ProjectData {
-  id: string
-  title: string
-  status: ProjectStatus
-  owner: string
-  progress: number
-  tasks: Array<{ id: string; title: string; taskId?: string; checked: boolean }>
-  assets: Array<{ assetId: string; label?: string }>
-  body: string
-  created: string
-  updated: string
-  resolvedTasks: Record<string, { column: string; title: string } | null>
-  resolvedAssets: ResolvedAsset[]
-  brainstormMessages?: ConversationMessage[]
-}
 
 type AssetPickerMode = { type: 'attach' } | { type: 'relink'; target: ResolvedAsset }
 
@@ -200,8 +176,8 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   const isNew = !projectId
   const currentId = projectId || ''
   const mainAgentId = useMainAgentId() ?? ''
-  const [project, setProject] = useState<ProjectData | null>(null)
-  const [loading, setLoading] = useState(!isNew)
+  const detail = useProjectDetail(currentId)
+  const { project, loading, error: loadError, refresh } = detail
 
   // Draggable divider between the main plan column and the progress/tasks sidebar.
   const { width: sidebarWidth, handleProps: sidebarResizeProps } = useHorizontalResize({
@@ -280,38 +256,39 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   const editingRef = useRef(false)
   editingRef.current = editing
 
-  const fetchProject = useCallback(async (enterEdit?: boolean) => {
-    if (!currentId) return
-    try {
-      const res = await fetch(`/api/plugins/projects/${currentId}`)
-      if (res.ok) {
-        const data = await res.json()
-        setProject(data.project)
-        if (editingRef.current && enterEdit === undefined) {
-          // Mid-edit background refresh: update the server copy only —
-          // never the draft fields or the mode.
-          return
-        }
-        setEditTitle(data.project.title)
-        setEditOwner(data.project.owner)
-        setEditStatus(data.project.status)
-        setEditBody(data.project.body)
-        const shouldEdit = enterEdit ?? false
-        setEditing(shouldEdit)
-        onEditChange?.(shouldEdit)
-      }
-    } finally {
-      setLoading(false)
+  const initializedProject = useRef('')
+  useEffect(() => {
+    if (!project) return
+    const firstLoad = initializedProject.current !== currentId
+    if (firstLoad || !editingRef.current) {
+      setEditTitle(project.title)
+      setEditOwner(project.owner)
+      setEditStatus(project.status)
+      setEditBody(project.body)
     }
-  }, [currentId, onEditChange])
+    if (firstLoad) {
+      initializedProject.current = currentId
+      setEditing(initialEdit)
+      onEditChange?.(initialEdit)
+    }
+  }, [project, currentId, initialEdit, onEditChange])
+
+  const fetchProject = useCallback(async (enterEdit?: boolean) => {
+    const next = await refresh()
+    if (next && enterEdit !== undefined) {
+      setEditTitle(next.title)
+      setEditOwner(next.owner)
+      setEditStatus(next.status)
+      setEditBody(next.body)
+      setEditing(enterEdit)
+      onEditChange?.(enterEdit)
+    }
+    return next
+  }, [refresh, onEditChange])
 
   useEffect(() => {
-    if (isNew) {
-      router.replace('/projects')
-    } else {
-      fetchProject(initialEdit)
-    }
-  }, [])
+    if (isNew) router.replace('/projects')
+  }, [isNew, router])
 
   // Sync default owner once main agent id resolves from the team store.
   useEffect(() => {
@@ -319,7 +296,6 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
     setBrainstormAgent((prev) => (prev ? prev : mainAgentId))
     if (isNew) {
       setEditOwner((prev) => (prev ? prev : mainAgentId))
-      setProject((prev) => (prev && !prev.owner ? { ...prev, owner: mainAgentId } : prev))
     }
   }, [mainAgentId, isNew])
 
@@ -648,7 +624,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   // Render
   // ---------------------------------------------------------------------------
 
-  if (loading) {
+  if (loading && !project) {
     return (
       <Page>
         <SystemState
@@ -672,10 +648,11 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
       <Page>
         <SystemState
           kind="error"
-          recovery="unavailable"
+          recovery={loadError?.status === 404 ? 'unavailable' : 'available'}
           scope="section"
-          title="Project not found"
-          description="This project may have been deleted or its file moved."
+          title={loadError?.status === 404 ? 'Project not found' : 'Project could not be loaded'}
+          description={loadError?.status === 404 ? 'This project may have been deleted or its file moved.' : loadError?.message ?? 'Try loading this project again.'}
+          action={<Button variant="outline" onClick={() => { void fetchProject() }}>Try again</Button>}
         />
       </Page>
     )
@@ -686,6 +663,8 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   return (
     <Page scroll="contained">
     <div data-slot="project-detail" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+
+      {loadError ? <SystemState kind="error" recovery="available" scope="inline" title="Project could not be refreshed" description={loadError.message} action={<Button variant="outline" size="sm" onClick={() => { void fetchProject() }}>Try again</Button>} /> : null}
 
       {/* ── Header ── */}
       <PageHeader
