@@ -323,13 +323,13 @@ describe('Routes', () => {
       expect(body.error).toMatch(/[Mm]issing/)
     })
 
-    it('returns 400 for non-existent project', async () => {
+    it('returns 404 for non-existent project', async () => {
       const route = findRoute(plugin.routes, 'PUT', '/:projectId')!
       const { status, body } = await callRoute(route, plugin.ctx, {
         searchParams: { projectId: 'ghost' },
         body: { title: 'Nope' },
       })
-      expect(status).toBe(400)
+      expect(status).toBe(404)
       expect(body.error).toMatch(/not found/i)
     })
   })
@@ -1070,6 +1070,21 @@ describe('Routes', () => {
       expect(ok.body.changed).toBe(true)
     })
 
+    it('PUT returns structured conflicts and saves none of an overlapping patch', async () => {
+      writeProjectFixture('overlap', { title: 'Agent value', body: 'Original body' })
+      const route = findRoute(plugin.routes, 'PUT', '/:projectId')!
+      const result = await callRoute(route, plugin.ctx, {
+        searchParams: { projectId: 'overlap' },
+        body: { title: 'My value', body: 'Must not save', expected: { title: 'Old value', body: 'Original body' } },
+      })
+      expect(result.status).toBe(409)
+      expect(result.body.conflicts.title.current).toBe('Agent value')
+      const project = await callRoute(findRoute(plugin.routes, 'GET', '/:projectId')!, plugin.ctx, { searchParams: { projectId: 'overlap' } })
+      expect(project.body.project.body).toBe('Original body')
+      const missing = await callRoute(route, plugin.ctx, { searchParams: { projectId: 'missing' }, body: { title: 'Mine', expected: { title: 'Old' } } })
+      expect(missing.status).toBe(404)
+    })
+
     it('PUT rejects an unknown status instead of silently coercing to draft', async () => {
       writeProjectFixture('proj-status', { title: 'Status Project' })
       const putRoute = findRoute(plugin.routes, 'PUT', '/:projectId')!
@@ -1179,6 +1194,24 @@ describe('Routes', () => {
       expect(midTurn.body.inflight).toEqual(['proj-att2'])
       release()
       await settled
+    })
+
+    it('reports corrupt history as unavailable for reads and restore', async () => {
+      writeProjectFixture('corrupt-history', { body: 'Keep this body' })
+      writeFileSync(join(projectsDir, 'corrupt-history.history.json'), '{broken')
+      const history = await callRoute(findRoute(plugin.routes, 'GET', '/:projectId/history')!, plugin.ctx, {
+        searchParams: { projectId: 'corrupt-history' },
+      })
+      expect(history.status).toBe(500)
+      expect(history.body.error).toBe('Plan history is unavailable')
+      const restored = await callRoute(findRoute(plugin.routes, 'POST', '/:projectId/history/:index/restore')!, plugin.ctx, {
+        searchParams: { projectId: 'corrupt-history', index: '0' },
+      })
+      expect(restored.status).toBe(500)
+      const project = await callRoute(findRoute(plugin.routes, 'GET', '/:projectId')!, plugin.ctx, {
+        searchParams: { projectId: 'corrupt-history' },
+      })
+      expect(project.body.project.body).toBe('Keep this body')
     })
 
     it('history routes: GET lists snapshots; restore round-trips through the service', async () => {
@@ -1369,7 +1402,7 @@ describe('Exec Tools', () => {
       expect(result.error).toMatch(/not found/i)
     })
 
-    it('returns error when completing with unchecked items', async () => {
+    it('allows explicit lifecycle completion with unchecked items', async () => {
       writeProjectFixture('proj-incomplete', {
         title: 'Incomplete',
         tasks: [{ id: 't001', title: 'Not done', checked: false }],
@@ -1377,8 +1410,8 @@ describe('Exec Tools', () => {
 
       const tool = findTool(plugin.execTools, 'bakin_exec_projects_update')!
       const result = await callTool(tool, { projectId: 'proj-incomplete', status: 'completed' })
-      expect(result.ok).toBe(false)
-      expect(result.error).toMatch(/unchecked/i)
+      expect(result.ok).toBe(true)
+      expect(result.error).toBeUndefined()
     })
   })
 

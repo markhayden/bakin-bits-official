@@ -6,6 +6,7 @@
  */
 import type { StorageAdapter } from '@makinbakin/sdk/types'
 import yaml from 'js-yaml'
+import { z } from 'zod'
 import type { PlanSnapshot, Project, ProjectFrontmatter, ProjectTask, ProjectAsset, ProjectBrainstormMessage, ProjectSummary } from '../types'
 
 // ---------------------------------------------------------------------------
@@ -69,6 +70,17 @@ export const BRAINSTORM_ROW_CAP = 300
 // Parse / Serialize
 // ---------------------------------------------------------------------------
 
+const operationsSchema = z.array(z.discriminatedUnion('kind', [z.object({
+  kind: z.literal('add-checklist'), requestId: z.string().min(8).max(128),
+  title: z.string().min(1), taskItemId: z.string().min(1),
+  instanceId: z.string().uuid(), phase: z.literal('complete'),
+}).strict(), z.object({
+  kind: z.literal('promote-checklist'), requestId: z.string().min(8).max(128),
+  title: z.string().min(1), taskItemId: z.string().min(1), instanceId: z.string().uuid(),
+  taskId: z.string().min(1), assignee: z.string().optional(), workflowId: z.string().optional(),
+  skipWorkflowReason: z.string().optional(), phase: z.enum(['reserved', 'complete']),
+}).strict()]))
+
 export function parseProject(content: string): Project {
   // Split on YAML frontmatter fences
   const fenceRe = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/
@@ -84,6 +96,7 @@ export function parseProject(content: string): Project {
     ? raw.tasks.map((t: Record<string, unknown>) => ({
         id: String(t.id || ''),
         title: String(t.title || ''),
+        instanceId: typeof t.instanceId === 'string' ? t.instanceId : undefined,
         description: t.description ? String(t.description) : undefined,
         taskId: t.taskId ? String(t.taskId) : undefined,
         checked: Boolean(t.checked),
@@ -103,6 +116,7 @@ export function parseProject(content: string): Project {
     owner: String(raw.owner || ''),
     tasks,
     assets,
+    ...(raw.operations === undefined ? {} : { operations: operationsSchema.parse(raw.operations) }),
   }
 
   return {
@@ -117,6 +131,7 @@ export function serializeProject(project: Project): string {
   // Ensure tasks array is serialized correctly (omit undefined taskId)
   const cleanTasks = fm.tasks.map(t => {
     const item: Record<string, unknown> = { id: t.id, title: t.title, checked: t.checked }
+    if (t.instanceId) item.instanceId = t.instanceId
     if (t.description) item.description = t.description
     if (t.taskId) item.taskId = t.taskId
     return item
@@ -163,6 +178,13 @@ export interface ProjectRepository {
   projectsGlob(): string
 }
 
+export class PlanHistoryUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super('Plan history is unavailable', { cause })
+    this.name = 'PlanHistoryUnavailableError'
+  }
+}
+
 export function createProjectRepository(storage: StorageAdapter): ProjectRepository {
   // The attention endpoint polls every project's transcript for its last
   // agent-activity timestamp — cache it against the sidecar's mtime+size so
@@ -185,13 +207,18 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
   }
 
   function readPlanHistory(id: string): PlanSnapshot[] {
-    const content = storage.read(projectHistoryPath(id))
-    if (!content) return []
     try {
-      const parsed = JSON.parse(content)
-      return Array.isArray(parsed) ? (parsed as PlanSnapshot[]) : []
-    } catch {
-      return []
+      const content = storage.read(projectHistoryPath(id))
+      if (content == null) return []
+      const parsed: unknown = JSON.parse(content)
+      if (!Array.isArray(parsed) || !parsed.every(value => value && typeof value === 'object'
+        && typeof value.ts === 'string' && Number.isFinite(Date.parse(value.ts))
+        && (value.author === 'user' || value.author === 'agent') && typeof value.body === 'string')) {
+        throw new Error('Invalid plan history payload')
+      }
+      return parsed as PlanSnapshot[]
+    } catch (cause) {
+      throw new PlanHistoryUnavailableError(cause)
     }
   }
 

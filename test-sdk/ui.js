@@ -35,7 +35,11 @@ export const CardFooter = ({ children, variant, ...props }) =>
 export const CardHeader = createElement('div')
 export const CardTitle = createElement('div')
 export const Checkbox = createElement('input', { type: 'checkbox' })
-export const Collapsible = createElement('div')
+const DisclosureContext = React.createContext({ open: true, toggle: () => {} })
+export function Collapsible({ open, onOpenChange, children }) { return React.createElement(DisclosureContext.Provider, { value: { open, toggle: () => onOpenChange?.(!open) } }, children) }
+export function CollapsibleTrigger({ children, ...props }) { const value = React.useContext(DisclosureContext); return React.createElement('button', { ...props, type: 'button', 'aria-expanded': value.open, onClick: value.toggle }, children) }
+export function CollapsibleContent({ keepMounted, children, ...props }) { const value = React.useContext(DisclosureContext); return value.open || keepMounted ? React.createElement('div', { ...props, hidden: !value.open }, children) : null }
+
 export const Command = createElement('div')
 // Functional minimum of the kit Dialog: role/aria-labelledby wiring from the
 // title and Escape → onOpenChange(false), so tests can find a dialog by its

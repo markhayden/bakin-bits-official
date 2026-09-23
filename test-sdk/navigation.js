@@ -32,3 +32,17 @@ export function useQueryArrayState() {
   const [value, setValue] = useState([])
   return [value, setValue, setValue]
 }
+
+// Unit-only controlled exit surface; actual routing/beforeunload is browser-tested.
+export function useUnsavedChangesGuard(options) {
+  const [open, setOpen] = useState(false)
+  return {
+    requestExit: () => options.hasUnsavedChanges ? setOpen(true) : options.onCancel?.(),
+    reset: () => setOpen(false),
+    dialog: open ? React.createElement('div', { role: 'dialog', 'aria-label': 'Unsaved changes' },
+      options.error ? React.createElement('div', { role: 'alert' }, options.error) : null,
+      React.createElement('button', { disabled: options.saving, onClick: async () => { if (await options.onSaveAndExit()) { setOpen(false); options.onCancel?.() } } }, options.saveLabel ?? 'Save and exit'),
+      React.createElement('button', { disabled: options.saving, onClick: () => { options.onDiscardAndExit(); setOpen(false); options.onCancel?.() } }, 'Discard and leave'),
+      React.createElement('button', { onClick: () => setOpen(false) }, 'Stay')) : null,
+  }
+}

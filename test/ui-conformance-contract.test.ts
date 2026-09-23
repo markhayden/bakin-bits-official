@@ -50,7 +50,7 @@ describe('official Bits plugin UI conformance enrollment', () => {
       }
       if (entry.id === 'projects') {
         browser.push(['run', 'test:ui:collections'])
-        expect(pkg.scripts['test:ui:collections']).toBe('bakin-plugin-test-ui --config tests/plan.ui-test.ts')
+        expect(pkg.scripts['test:ui:collections']).toBe('bakin-plugin-test-ui --config tests/plan.ui-test.ts && bakin-plugin-test-ui --config tests/detail.ui-test.ts && PROJECTS_UI_SURFACE=edit bakin-plugin-test-ui --config tests/detail.ui-test.ts && bun tests/detail.browser-test.ts')
       }
       const independent = entry.id === '_template' || entry.id === 'terminal'
       expect(commands).toEqual([

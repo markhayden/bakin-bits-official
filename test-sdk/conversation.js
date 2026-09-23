@@ -329,3 +329,7 @@ export function useConversationAttention(config) {
 
   useNavBadge(config.pluginId, config.navItemId, badgeFor(unreadTotal, inflight.size))
 }
+
+// Browser fixtures use the real SDK. This export keeps the workspace import
+// contract complete without pretending the stub exercises draft persistence.
+export function writeComposerDraft() {}

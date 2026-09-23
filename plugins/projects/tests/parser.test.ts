@@ -328,3 +328,23 @@ describe('projectToSummary', () => {
     expect(summary.updated).toBe('2026-03-28T12:00:00.000Z')
   })
 })
+
+
+describe('honest plan history reads', () => {
+  it('distinguishes absent history from corrupt data and never rewrites a failed read', () => {
+    expect(repo.readPlanHistory('history')).toEqual([])
+    const path = join(projectsDir, 'history.history.json')
+    for (const invalid of ['', '{broken', '{}', '[{"ts":"now","author":"invalid","body":"x"}]']) {
+      writeFileSync(path, invalid)
+      expect(() => repo.readPlanHistory('history')).toThrow('Plan history is unavailable')
+      expect(() => repo.appendPlanSnapshot('history', { ts: '2026-09-23T00:00:00.000Z', author: 'user', body: 'new' })).toThrow()
+      expect(readFileSync(path, 'utf8')).toBe(invalid)
+    }
+  })
+
+  it('propagates storage failure rather than reporting no snapshots', () => {
+    const storage = new MarkdownStorageAdapter(testDir)
+    storage.read = () => { throw new Error('disk unavailable') }
+    expect(() => createProjectRepository(storage).readPlanHistory('history')).toThrow('Plan history is unavailable')
+  })
+})

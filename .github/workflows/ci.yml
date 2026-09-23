@@ -79,9 +79,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: markhayden/bakin
-          # Markdown browser packaging fix plus the current canonical SDK/CSS.
+          # Projects audit contracts, atomic scoped writes, and canonical SDK/CSS.
           # Pin the reviewed prerequisite commit, not a moving branch.
-          ref: 949da83f539ecb5c1eb4f0d71d88d159644d9254
+          ref: 351bd0e64291f40e1453e12081311871f69c58bf
           path: .bakin-source
 
       # The playwright container image ships without unzip, which setup-bun

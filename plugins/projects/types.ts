@@ -8,6 +8,8 @@ export type ProjectStatus = (typeof PROJECT_STATUSES)[number]
 export interface ProjectTask {
   id: string          // "t001", "t002" — auto-incrementing
   title: string
+  /** Stable identity even when the display ID is reused after deletion. */
+  instanceId?: string
   description?: string
   taskId?: string     // linked board task ID (8-char hex)
   checked: boolean
@@ -27,6 +29,8 @@ export interface ProjectFrontmatter {
   owner: string
   tasks: ProjectTask[]
   assets: ProjectAsset[]
+  /** Private durable mutation receipts; omitted from browser projections. */
+  operations?: (ChecklistAddOperation | ChecklistPromotionOperation)[]
 }
 
 export interface Project extends ProjectFrontmatter {
@@ -61,4 +65,45 @@ export interface ProjectSummary {
   /** Brainstorm attention (bakin#703): unseen agent reply / turn running. */
   brainstormUnread?: boolean
   brainstormStreaming?: boolean
+}
+
+
+export interface ResolvedProjectAsset extends ProjectAsset {
+  type: string
+  description?: string
+  tags?: string[]
+  missing?: boolean
+}
+
+/** Hydrated detail projection; checklist descriptions retain their shared type. */
+export interface ProjectDetailData extends Project {
+  resolvedTasks: Record<string, { column: string; title: string } | null>
+  resolvedAssets: ResolvedProjectAsset[]
+  brainstormMessages?: ProjectBrainstormMessage[]
+}
+
+export type ProjectEditableValues = Pick<Project, 'title' | 'owner' | 'status' | 'body'>
+export type ProjectPatch = Partial<ProjectEditableValues>
+export type ChecklistPatch = Partial<Pick<ProjectTask, 'title' | 'description'>>
+
+export interface ChecklistAddOperation {
+  kind: 'add-checklist'
+  requestId: string
+  title: string
+  taskItemId: string
+  instanceId: string
+  phase: 'complete'
+}
+
+export interface ChecklistPromotionOperation {
+  kind: 'promote-checklist'
+  requestId: string
+  taskItemId: string
+  instanceId: string
+  taskId: string
+  title: string
+  assignee?: string
+  workflowId?: string
+  skipWorkflowReason?: string
+  phase: 'reserved' | 'complete'
 }

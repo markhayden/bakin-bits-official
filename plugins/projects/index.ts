@@ -6,10 +6,10 @@ import { z } from 'zod'
 import { defineRoute } from '@makinbakin/sdk'
 import type { BakinPlugin, PluginContext, RuntimeAgent } from '@makinbakin/sdk/types'
 import { conversationThreadId } from '@makinbakin/sdk/utils'
-import { createProjectRepository, projectToSummary } from './lib/parser'
+import { createProjectRepository, PlanHistoryUnavailableError, projectToSummary } from './lib/parser'
 import { createProjectService } from './lib/project-service'
-import { PROJECT_STATUSES } from './types'
-import type { Project, ProjectBrainstormMessage, ProjectStatus } from './types'
+import { ProjectMutationError } from './lib/project-mutations'
+import type { Project, ProjectBrainstormMessage, ProjectStatus, ProjectPatch, ChecklistPatch } from './types'
 
 const log = {
   info: (...args: unknown[]) => console.info('[projects]', ...args),
@@ -28,6 +28,13 @@ function json(data: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   })
+}
+
+function mutationFailure(error: unknown): Response {
+  if (error instanceof SyntaxError) return json({ error: 'Invalid JSON request.', code: 'invalid_request' }, 400)
+  if (error instanceof ProjectMutationError) return json({ error: error.message, code: error.code, conflicts: error.conflicts }, error.status)
+  log.error('Project mutation failed', error)
+  return json({ error: error instanceof PlanHistoryUnavailableError ? error.message : 'Project could not be saved. Try again.', code: 'storage_error' }, 500)
 }
 
 async function readBody<T>(req: Request): Promise<T> {
@@ -156,7 +163,7 @@ const projectsPlugin: BakinPlugin = {
     legacyRoute('GET', '/', 'List projects'),
     legacyRoute('GET', '/:projectId', 'Get project by ID'),
     legacyRoute('POST', '/', 'Create project'),
-    legacyRoute('PUT', '/:projectId', 'Update project'),
+    legacyRoute('PUT', '/:projectId', 'Update project; optional expected values protect edited fields (409 on overlap)'),
     legacyRoute('DELETE', '/:projectId', 'Delete project'),
     legacyRoute('POST', '/:projectId/checklist', 'Add checklist item'),
     legacyRoute('PUT', '/:projectId/checklist/:itemId/toggle', 'Toggle checklist item'),
@@ -348,6 +355,7 @@ const projectsPlugin: BakinPlugin = {
       const path = data.path as string | undefined
       if (path && path.includes('projects/') && path.endsWith('.md')) {
         rebuildIndex()
+        ctx.events.emit('projects.changed', { projectId: path.split('/').at(-1)!.slice(0, -3), action: 'file.changed' })
       }
     })
 
@@ -398,7 +406,7 @@ const projectsPlugin: BakinPlugin = {
       if (!id) return json({ error: 'Missing id parameter' }, 400)
       const project = readProject(id)
       if (!project) return json({ error: 'Project not found' }, 404)
-      const resolvedProject = await resolveLinkedTaskStatuses(project)
+      const { operations: _operations, ...resolvedProject } = await resolveLinkedTaskStatuses(project)
       // Sample the flag before the preview: if the turn settles between the
       // two reads we return streaming:false with no text (honest), never
       // text without the flag.
@@ -433,20 +441,19 @@ const projectsPlugin: BakinPlugin = {
     // PUT /:projectId — update project
     const updateHandler = async (req: Request) => {
       const url = new URL(req.url, 'http://localhost')
-      const body = await readBody<{ id?: string; title?: string; status?: ProjectStatus; body?: string; owner?: string }>(req)
-      const id = url.searchParams.get('projectId') || body.id
+      const body = await readBody<ProjectPatch & { id?: string; expected?: ProjectPatch }>(req).catch(() => null)
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'Invalid project update' }, 400)
+      const { id: bodyId, expected, ...patch } = body
+      const id = url.searchParams.get('projectId') || bodyId
       if (!id) return json({ error: 'Missing id' }, 400)
-      if (body.status !== undefined && !PROJECT_STATUSES.includes(body.status)) {
-        return json({ error: `Invalid status: ${String(body.status)}` }, 400)
-      }
       try {
-        await updateProject(id, body)
+        await updateProject(id, patch, undefined, expected)
         ctx.activity.audit('updated', 'system', { projectId: id })
         ctx.activity.log('system', `Updated project ${id}`)
         indexProject(id).catch(() => {})
         return json({ ok: true })
-      } catch (err: unknown) {
-        return json({ error: (err as Error).message }, 400)
+      } catch (error) {
+        return mutationFailure(error)
       }
     }
     routeHandlers.set('PUT /:projectId', updateHandler)
@@ -484,60 +491,72 @@ const projectsPlugin: BakinPlugin = {
 
     // POST /:projectId/checklist — add checklist item
     const addItemHandler = async (req: Request) => {
-      const url = new URL(req.url, 'http://localhost')
-      const body = await readBody<{ projectId?: string; title: string }>(req)
-      const projectId = url.searchParams.get('projectId') || body.projectId
-      if (!projectId || !body.title) return json({ error: 'Missing projectId or title' }, 400)
-      const result = await addChecklistItem(projectId, body.title)
-      ctx.activity.audit('checklist.added', 'system', { projectId })
-      ctx.activity.log('system', `Added checklist item to project ${projectId}`)
-      indexProject(projectId).catch(() => {})
-      return json({ ok: true, ...result })
+      try {
+        const url = new URL(req.url, 'http://localhost')
+        const body = await readBody<{ projectId?: string; title: string; requestId?: string }>(req)
+        const projectId = url.searchParams.get('projectId') || body.projectId
+        if (!projectId || !body.title) return json({ error: 'Missing projectId or title' }, 400)
+        const result = await addChecklistItem(projectId, body.title, body.requestId)
+        indexProject(projectId).catch(() => {})
+        return json({ ok: true, ...result })
+      } catch (err) {
+        return mutationFailure(err)
+      }
     }
     routeHandlers.set('POST /:projectId/checklist', addItemHandler)
 
     // PUT /:projectId/checklist/:itemId/toggle — toggle checklist item
     const toggleHandler = async (req: Request) => {
-      const url = new URL(req.url, 'http://localhost')
-      const body = await readBody<{ projectId?: string; taskItemId?: string; checked: boolean }>(req)
-      const projectId = url.searchParams.get('projectId') || body.projectId
-      const taskItemId = url.searchParams.get('itemId') || body.taskItemId
-      if (!projectId || !taskItemId) return json({ error: 'Missing projectId or taskItemId' }, 400)
-      const result = await markChecklistItem(projectId, taskItemId, body.checked)
-      ctx.activity.audit('checklist.toggled', 'system', { projectId, checked: body.checked })
-      ctx.activity.log('system', 'Toggled checklist item in project', { taskId: projectId })
-      indexProject(projectId).catch(() => {})
-      return json({ ok: true, ...result })
+      try {
+        const url = new URL(req.url, 'http://localhost')
+        const body = await readBody<{ projectId?: string; taskItemId?: string; checked: boolean; expectedInstanceId?: string }>(req)
+        const projectId = url.searchParams.get('projectId') || body.projectId
+        const taskItemId = url.searchParams.get('itemId') || body.taskItemId
+        if (!projectId || !taskItemId) return json({ error: 'Missing projectId or taskItemId' }, 400)
+        const result = await markChecklistItem(projectId, taskItemId, body.checked, body.expectedInstanceId)
+        ctx.activity.audit('checklist.toggled', 'system', { projectId, checked: body.checked })
+        ctx.activity.log('system', 'Toggled checklist item in project', { taskId: projectId })
+        indexProject(projectId).catch(() => {})
+        return json({ ok: true, ...result })
+      } catch (error) { return mutationFailure(error) }
     }
     routeHandlers.set('PUT /:projectId/checklist/:itemId/toggle', toggleHandler)
 
     // PUT /:projectId/checklist/:itemId — update checklist item
     const updateItemHandler = async (req: Request) => {
       const url = new URL(req.url, 'http://localhost')
-      const body = await readBody<{ projectId?: string; taskItemId?: string; title?: string; description?: string }>(req)
-      const projectId = url.searchParams.get('projectId') || body.projectId
-      const taskItemId = url.searchParams.get('itemId') || body.taskItemId
+      const body = await readBody<ChecklistPatch & { projectId?: string; taskItemId?: string; expected?: ChecklistPatch; expectedInstanceId?: string }>(req).catch(() => null)
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'Invalid checklist update' }, 400)
+      const { projectId: bodyProjectId, taskItemId: bodyItemId, expected, expectedInstanceId, ...patch } = body
+      const projectId = url.searchParams.get('projectId') || bodyProjectId
+      const taskItemId = url.searchParams.get('itemId') || bodyItemId
       if (!projectId || !taskItemId) return json({ error: 'Missing projectId or taskItemId' }, 400)
-      await updateChecklistItem(projectId, taskItemId, { title: body.title, description: body.description })
-      ctx.activity.audit('checklist.updated', 'system', { projectId })
-      ctx.activity.log('system', 'Updated checklist item in project', { taskId: projectId })
-      indexProject(projectId).catch(() => {})
-      return json({ ok: true })
+      try {
+        await updateChecklistItem(projectId, taskItemId, patch, expected, expectedInstanceId)
+        ctx.activity.audit('checklist.updated', 'system', { projectId })
+        ctx.activity.log('system', 'Updated checklist item in project', { taskId: projectId })
+        indexProject(projectId).catch(() => {})
+        return json({ ok: true })
+      } catch (error) {
+        return mutationFailure(error)
+      }
     }
     routeHandlers.set('PUT /:projectId/checklist/:itemId', updateItemHandler)
 
     // DELETE /:projectId/checklist/:itemId — remove checklist item
     const removeItemHandler = async (req: Request) => {
-      const url = new URL(req.url, 'http://localhost')
-      const body = await readBody<{ projectId?: string; taskItemId?: string }>(req).catch(() => ({} as { projectId?: string; taskItemId?: string }))
-      const projectId = url.searchParams.get('projectId') || body.projectId
-      const taskItemId = url.searchParams.get('itemId') || body.taskItemId
-      if (!projectId || !taskItemId) return json({ error: 'Missing projectId or taskItemId' }, 400)
-      await removeChecklistItem(projectId, taskItemId)
-      ctx.activity.audit('checklist.removed', 'system', { projectId })
-      ctx.activity.log('system', 'Removed checklist item from project', { taskId: projectId })
-      indexProject(projectId).catch(() => {})
-      return json({ ok: true })
+      try {
+        const url = new URL(req.url, 'http://localhost')
+        const body = await readBody<{ projectId?: string; taskItemId?: string; expectedInstanceId?: string }>(req).catch(() => ({} as { projectId?: string; taskItemId?: string; expectedInstanceId?: string }))
+        const projectId = url.searchParams.get('projectId') || body.projectId
+        const taskItemId = url.searchParams.get('itemId') || body.taskItemId
+        if (!projectId || !taskItemId) return json({ error: 'Missing projectId or taskItemId' }, 400)
+        await removeChecklistItem(projectId, taskItemId, body.expectedInstanceId)
+        ctx.activity.audit('checklist.removed', 'system', { projectId })
+        ctx.activity.log('system', 'Removed checklist item from project', { taskId: projectId })
+        indexProject(projectId).catch(() => {})
+        return json({ ok: true })
+      } catch (error) { return mutationFailure(error) }
     }
     routeHandlers.set('DELETE /:projectId/checklist/:itemId', removeItemHandler)
 
@@ -558,16 +577,16 @@ const projectsPlugin: BakinPlugin = {
 
     // POST /:projectId/checklist/:itemId/promote — promote to board task
     const promoteHandler = async (req: Request) => {
-      const url = new URL(req.url, 'http://localhost')
-      const body = await readBody<{ projectId?: string; taskItemId?: string; assignee?: string }>(req)
-      const projectId = url.searchParams.get('projectId') || body.projectId
-      const taskItemId = url.searchParams.get('itemId') || body.taskItemId
-      if (!projectId || !taskItemId) return json({ error: 'Missing projectId or taskItemId' }, 400)
-      const result = await promoteItemToTask(projectId, taskItemId, { assignee: body.assignee })
-      ctx.activity.audit('checklist.promoted', 'system', { projectId })
-      ctx.activity.log('system', `Promoted checklist item to task in project ${projectId}`)
-      indexProject(projectId).catch(() => {})
-      return json({ ok: true, ...result })
+      try {
+        const url = new URL(req.url, 'http://localhost')
+        const body = await readBody<{ projectId?: string; taskItemId?: string; assignee?: string; requestId?: string; expectedInstanceId?: string }>(req)
+        const projectId = url.searchParams.get('projectId') || body.projectId
+        const taskItemId = url.searchParams.get('itemId') || body.taskItemId
+        if (!projectId || !taskItemId) return json({ error: 'Missing projectId or taskItemId' }, 400)
+        const result = await promoteItemToTask(projectId, taskItemId, { assignee: body.assignee, requestId: body.requestId, expectedInstanceId: body.expectedInstanceId })
+        indexProject(projectId).catch(() => {})
+        return json({ ok: true, ...result })
+      } catch (err) { return mutationFailure(err) }
     }
     routeHandlers.set('POST /:projectId/checklist/:itemId/promote', promoteHandler)
 
@@ -710,7 +729,12 @@ const projectsPlugin: BakinPlugin = {
       const id = url.searchParams.get('projectId')
       if (!id) return json({ error: 'Missing projectId' }, 400)
       if (!readProject(id)) return json({ error: 'Project not found' }, 404)
-      return json({ history: repo.readPlanHistory(id) })
+      try {
+        return json({ history: repo.readPlanHistory(id) })
+      } catch (error) {
+        log.error('Failed to load plan history', error, { projectId: id })
+        return json({ error: 'Plan history is unavailable' }, 500)
+      }
     })
 
     // POST /:projectId/history/:index/restore — never destructive: the
@@ -727,9 +751,11 @@ const projectsPlugin: BakinPlugin = {
         return json({ ok: true, changed })
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        const status = message.startsWith('Project not found') ? 404
+        const status = err instanceof PlanHistoryUnavailableError ? 500
+          : message.startsWith('Project not found') ? 404
           : message.startsWith('History changed') ? 409
           : 400
+        if (status === 500) log.error('Failed to restore plan history', err, { projectId: id })
         return json({ error: message }, status)
       }
     })
@@ -793,7 +819,7 @@ const projectsPlugin: BakinPlugin = {
     ctx.registerExecTool({
       name: 'bakin_exec_projects_update',
       label: 'Updated a project',
-      description: 'Update a project\'s title, status, body, or owner. Cannot set status to "completed" if unchecked items remain.',
+      description: 'Update a project\'s title, status, body, or owner. Lifecycle status is independent of checklist completion; completed may contain unchecked work.',
       parameters: {
         projectId: z.string().describe('Project ID'),
         title: z.string().optional().describe('New title'),

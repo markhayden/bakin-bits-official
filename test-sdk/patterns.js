@@ -529,3 +529,11 @@ export function computeMatchedFields(query, fields) {
     return terms.some((term) => text.includes(term)) ? [name] : []
   })
 }
+
+export function SaveBar({ dirty, saving, error, onSave, onDiscard, children }) {
+  if (!dirty) return null
+  return React.createElement('section', { role: 'region', 'aria-label': 'Unsaved changes' },
+    children, error ? React.createElement('div', { role: 'alert' }, error) : null,
+    React.createElement('button', { type: 'button', disabled: saving, onClick: onSave }, error ? 'Retry save' : 'Save changes'),
+    React.createElement('button', { type: 'button', disabled: saving, onClick: onDiscard }, 'Discard'))
+}
