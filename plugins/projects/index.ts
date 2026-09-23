@@ -32,7 +32,6 @@ function json(data: unknown, status = 200): Response {
 
 function mutationFailure(error: unknown): Response {
   if (error instanceof ProjectMutationError) return json({ error: error.message, code: error.code, conflicts: error.conflicts }, error.status)
-  if (error instanceof Error && error.message.startsWith('Cannot complete project:')) return json({ error: error.message }, 400)
   log.error('Project mutation failed', error)
   return json({ error: error instanceof PlanHistoryUnavailableError ? error.message : 'Project could not be saved. Try again.', code: 'storage_error' }, 500)
 }
@@ -812,7 +811,7 @@ const projectsPlugin: BakinPlugin = {
     ctx.registerExecTool({
       name: 'bakin_exec_projects_update',
       label: 'Updated a project',
-      description: 'Update a project\'s title, status, body, or owner. Cannot set status to "completed" if unchecked items remain.',
+      description: 'Update a project\'s title, status, body, or owner. Lifecycle status is independent of checklist completion; completed may contain unchecked work.',
       parameters: {
         projectId: z.string().describe('Project ID'),
         title: z.string().optional().describe('New title'),

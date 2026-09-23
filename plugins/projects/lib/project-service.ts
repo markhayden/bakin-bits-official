@@ -185,10 +185,6 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       if (!project) throw new ProjectMutationError(`Project not found: ${id}`, 404, 'not_found')
       assertExpectedFields(project, patch, expected)
       if (Object.entries(patch).every(([field, value]) => value === undefined || project[field as keyof UpdateProjectOpts] === value)) return
-      if (patch.status === 'completed') {
-        const unchecked = project.tasks.filter(t => !t.checked)
-        if (unchecked.length > 0) throw new Error(`Cannot complete project: ${unchecked.length} unchecked items remain`)
-      }
       if (patch.title !== undefined) project.title = patch.title
       if (patch.status !== undefined) project.status = patch.status
       if (patch.body !== undefined && patch.body !== project.body) {
@@ -223,10 +219,6 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
         .map((title) => title.trim())
         .filter(Boolean)
 
-      if (updates.status === 'completed') {
-        const uncheckedCount = project.tasks.filter(t => !t.checked).length + checklistItems.length
-        if (uncheckedCount > 0) throw new Error(`Cannot complete project: ${uncheckedCount} unchecked items remain`)
-      }
 
       const addedItems: { id: string; title: string }[] = []
       for (const title of checklistItems) {
@@ -318,10 +310,6 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       item.checked = checked
       project.updated = new Date().toISOString()
       project.progress = computeProgress(project.tasks)
-      if (project.progress === 100 && project.status === 'active') {
-        project.status = 'completed'
-        broadcast({ type: 'project.auto_completed', projectId })
-      }
       repo.writeProject(project)
       broadcast({ type: 'project.checklist_changed', projectId, action: 'mark', taskItemId, checked })
       return { progress: project.progress }

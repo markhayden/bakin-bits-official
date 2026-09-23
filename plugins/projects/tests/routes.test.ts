@@ -1402,7 +1402,7 @@ describe('Exec Tools', () => {
       expect(result.error).toMatch(/not found/i)
     })
 
-    it('returns error when completing with unchecked items', async () => {
+    it('allows explicit lifecycle completion with unchecked items', async () => {
       writeProjectFixture('proj-incomplete', {
         title: 'Incomplete',
         tasks: [{ id: 't001', title: 'Not done', checked: false }],
@@ -1410,8 +1410,8 @@ describe('Exec Tools', () => {
 
       const tool = findTool(plugin.execTools, 'bakin_exec_projects_update')!
       const result = await callTool(tool, { projectId: 'proj-incomplete', status: 'completed' })
-      expect(result.ok).toBe(false)
-      expect(result.error).toMatch(/unchecked/i)
+      expect(result.ok).toBe(true)
+      expect(result.error).toBeUndefined()
     })
   })
 

@@ -203,9 +203,11 @@ describe('updateProject', () => {
     expect(project!.status).toBe('active')
   })
 
-  it('prevents completing with unchecked items', async () => {
+  it('allows explicit completion with unchecked items', async () => {
     const { id } = await createProject({ title: 'Incomplete', tasks: ['Task'] })
-    await expect(updateProject(id, { status: 'completed' })).rejects.toThrow('unchecked items')
+    await updateProject(id, { status: 'completed' })
+    expect(readProject(id)?.status).toBe('completed')
+    expect(readProject(id)?.progress).toBe(0)
   })
 
   it('allows completing when all items checked', async () => {
@@ -268,13 +270,13 @@ describe('markChecklistItem', () => {
     expect(project!.progress).toBe(0)
   })
 
-  it('auto-completes active project when all checked', async () => {
+  it('keeps active lifecycle independent when all items are checked', async () => {
     const { id } = await createProject({ title: 'P', tasks: ['Only'] })
     await updateProject(id, { status: 'active' })
 
     await markChecklistItem(id, 't001', true)
     const project = readProject(id)
-    expect(project!.status).toBe('completed')
+    expect(project!.status).toBe('active')
     expect(project!.progress).toBe(100)
   })
 
@@ -619,5 +621,25 @@ describe('plan history (bakin#703)', () => {
     expect(repo.readPlanHistory(id)).toHaveLength(1)
     await deleteProject(id)
     expect(repo.readPlanHistory(id)).toEqual([])
+  })
+})
+
+
+describe('independent project lifecycle', () => {
+  it('allows completed agent plans to append unchecked work', async () => {
+    const { id } = await createProject({ title: 'Plan', tasks: ['Old task'] })
+    await service.applyProjectPlan(id, { status: 'completed', checklistItems: ['New task'] }, 'agent')
+    expect(readProject(id)?.status).toBe('completed')
+    expect(readProject(id)?.tasks).toHaveLength(2)
+    expect(readProject(id)?.progress).toBe(0)
+  })
+
+  it('linked task completion updates progress without changing lifecycle', async () => {
+    const { id } = await createProject({ title: 'Plan', tasks: ['Linked'] })
+    await updateProject(id, { status: 'active' })
+    await linkChecklistItem(id, 't001', 'board02')
+    await autoCheckLinkedItem('board02')
+    expect(readProject(id)?.progress).toBe(100)
+    expect(readProject(id)?.status).toBe('active')
   })
 })
