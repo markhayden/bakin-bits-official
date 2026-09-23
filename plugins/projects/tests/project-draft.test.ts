@@ -1,0 +1,40 @@
+import { expect, it } from 'bun:test'
+import { createDraft, refreshDraft, editDraft, resolveDraft, prepareDraft, acceptDraft, draftDirty } from '../lib/project-draft'
+const base = { title: 'Original', body: 'Original body', owner: 'main', status: 'draft' as const }
+it('merges untouched fields without replacing an edited field baseline', () => {
+  let state = editDraft(createDraft(base), 'title', 'Mine')
+  state = refreshDraft(state, { ...base, owner: 'agent' })
+  expect(state.values.owner).toBe('agent')
+  expect(state.values.title).toBe('Mine')
+  expect(prepareDraft(state).patch).toEqual({ title: 'Mine' })
+  expect(prepareDraft(state).expected).toEqual({ title: 'Original' })
+})
+it('protects overlap until the user resolves against the latest reviewed value', () => {
+  let state = refreshDraft(editDraft(createDraft(base), 'body', 'Mine'), { ...base, body: 'Agent' })
+  expect(state.conflicts.body).toEqual({ baseline: 'Original body', latest: 'Agent', local: 'Mine' })
+  expect(() => prepareDraft(state)).toThrow('overlapping')
+  state = resolveDraft(state, 'body', 'mine')
+  expect(prepareDraft(state).expected).toEqual({ body: 'Agent' })
+  state = refreshDraft(state, { ...base, body: 'Agent again' })
+  expect(state.conflicts.body?.latest).toBe('Agent again')
+  state = resolveDraft(state, 'body', 'latest')
+  expect(state.values.body).toBe('Agent again')
+  expect(draftDirty(state)).toBe(false)
+})
+it('accepts convergence and retains edits typed after a submitted snapshot', () => {
+  let state = editDraft(createDraft(base), 'title', 'Mine')
+  const sent = prepareDraft(state)
+  state = editDraft(state, 'title', 'Later typing')
+  state = acceptDraft(state, sent)
+  expect(state.values.title).toBe('Later typing')
+  expect(prepareDraft(state).expected).toEqual({ title: 'Mine' })
+  state = refreshDraft(state, { ...base, title: 'Later typing' })
+  expect(draftDirty(state)).toBe(false)
+})
+it('validates and normalizes submitted title without altering body text', () => {
+  expect(() => prepareDraft(editDraft(createDraft(base), 'title', '   '))).toThrow('Title')
+  const state = editDraft(editDraft(createDraft(base), 'title', ' New '), 'body', '  Body  ')
+  const sent = prepareDraft(state)
+  expect(sent.patch).toEqual({ title: 'New', body: '  Body  ' })
+  expect(acceptDraft(state, sent).values.title).toBe('New')
+})
