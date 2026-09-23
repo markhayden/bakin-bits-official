@@ -355,6 +355,7 @@ const projectsPlugin: BakinPlugin = {
       const path = data.path as string | undefined
       if (path && path.includes('projects/') && path.endsWith('.md')) {
         rebuildIndex()
+        ctx.events.emit('projects.changed', { projectId: path.split('/').at(-1)!.slice(0, -3), action: 'file.changed' })
       }
     })
 

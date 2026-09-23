@@ -36,11 +36,6 @@ function withProjectLock<T>(fn: () => T | Promise<T>): Promise<T> {
   return next
 }
 
-function broadcast(data: Record<string, unknown>): void {
-  const fn = (globalThis as { __bakinBroadcast?: (data: Record<string, unknown>) => void }).__bakinBroadcast
-  if (fn) fn(data)
-}
-
 export interface TaskLinkEntry {
   projectId: string
   taskItemId: string
@@ -132,6 +127,11 @@ export interface ProjectService {
 const promotionsInFlight = new Map<string, Promise<{ taskId: string }>>()
 
 export function createProjectService(ctx: PluginContext, repo: ProjectRepository): ProjectService {
+  function broadcast(data: Record<string, unknown>): void {
+    const { type, ...payload } = data
+    ctx.events.emit('projects.changed', { ...payload, projectId: payload.projectId ?? payload.id, action: type })
+  }
+
   function rebuildIndex(): void {
     const index = getIndex()
     index.clear()

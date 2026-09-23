@@ -76,3 +76,13 @@ it('rejects an old description intent when a deleted display ID is reused', asyn
   await expect(service.updateChecklistItem(id, first.taskItemId, { description: 'Old draft' }, { description: '' }, instanceId)).rejects.toMatchObject({ status: 409 })
   expect(repo.readProject(id)?.tasks[0]?.description).toBeUndefined()
 })
+
+
+it('announces durable changes on the plugin event bus with project identity', async () => {
+  const { ctx } = createTestContext('projects', root)
+  const events: Array<{ event: string; data: unknown }> = []
+  ctx.events.emit = (event, data) => { events.push({ event, data }) }
+  const observed = createProjectService(ctx, repo)
+  await observed.updateProject(id, { title: 'Event update' })
+  expect(events).toContainEqual({ event: 'projects.changed', data: { id, projectId: id, title: 'Event update', action: 'project.updated' } })
+})

@@ -83,7 +83,7 @@ function buildCtx(): PluginContext {
     pluginId: 'projects',
     storage: new MarkdownStorageAdapter(testDir),
     runtime: {} as PluginContext['runtime'],
-    events: {} as PluginContext['events'],
+    events: { emit: mock(), on: mock(() => () => {}), once: mock(() => () => {}) } as PluginContext['events'],
     tasks: {
       create: mock(async input => ({ ...input, id: input.id!, checked: false, column: 'todo' as const })),
       update: mock(async () => ({ id: 'newtask1', title: 'New task', checked: false, column: 'todo' as const })),
