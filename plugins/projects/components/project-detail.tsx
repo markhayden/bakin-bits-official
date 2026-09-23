@@ -794,8 +794,13 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
           <div
             {...sidebarResizeProps}
             aria-label="Resize progress panel"
-            className="absolute inset-y-0 left-0 z-10 hidden w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-bakin-signal-accent/50 active:bg-bakin-signal-accent lg:block"
-          />
+            className="group/handle absolute inset-y-0 left-0 z-10 hidden w-bakin-2 cursor-col-resize items-center justify-center outline-none transition-colors hover:bg-bakin-signal-accent/50 focus-visible:bg-bakin-signal-accent/50 active:bg-bakin-signal-accent focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-2px] focus-visible:outline-bakin-focus-ring motion-reduce:transition-none lg:flex"
+          >
+            <span
+              aria-hidden="true"
+              className="h-bakin-8 w-px rounded-bakin-pill bg-bakin-border-subtle opacity-60 transition-[background-color,opacity] group-hover/handle:bg-bakin-signal-accent group-focus-visible/handle:bg-bakin-signal-accent group-active/handle:bg-bakin-signal-accent group-hover/handle:opacity-100 group-focus-visible/handle:opacity-100 group-active/handle:opacity-100 motion-reduce:transition-none"
+            />
+          </div>
 
           {/* Progress */}
           <div>

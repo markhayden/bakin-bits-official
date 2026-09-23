@@ -37,6 +37,11 @@ No live project data or agent activity was used in verification.
 - `storybook/public/primitives/collapsible.stories.tsx` — `CanonicalUsage`;
   `conversation/panel-and-drawer.stories.tsx` — `DraftHandle`: optional mobile
   brainstorm retains its mounted content and uses the public composer handle.
+- `storybook/public/conversation/panel-and-drawer.stories.tsx` — `DocumentDividerPanel`;
+  `overlays/drawer.stories.tsx` — `CanonicalUsage`: desktop brainstorm omits its
+  redundant heading; both detail dividers have faint centered grips and full-length
+  pink hover/focus/drag feedback. Real-SDK browser coverage checks both controls
+  and preserves the mobile brainstorm disclosure.
 - `storybook/public/content/markdown-content.stories.tsx` — `WholeDocumentComparison`,
   `ManagedDocumentContext`: full-document rendering and bounded semantic hints.
 - `storybook/public/lists/list-rows.stories.tsx` — `CanonicalUsage`: separated

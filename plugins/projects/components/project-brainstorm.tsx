@@ -21,7 +21,6 @@ export function ProjectBrainstorm({ hasHistory = false, ...props }: Conversation
   const meaningful = hasHistory || props.messages.length > 0 || props.streaming || hasDraft
   const open = !narrow || (choice ?? meaningful)
   return <Collapsible open={Boolean(open)} onOpenChange={value => setChoice(value)}>
-    <h2 className="hidden lg:block">Brainstorm</h2>
     <h2 className="lg:hidden"><CollapsibleTrigger>Brainstorm <Text size="meta" tone="muted">{props.streaming ? 'Agent working' : open ? 'Collapse' : 'Ask an agent'}</Text></CollapsibleTrigger></h2>
     <CollapsibleContent keepMounted>
       <ConversationPanel {...props} composerHandleRef={composer} title="Project brainstorm" />
