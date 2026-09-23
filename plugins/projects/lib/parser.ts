@@ -6,6 +6,7 @@
  */
 import type { StorageAdapter } from '@makinbakin/sdk/types'
 import yaml from 'js-yaml'
+import { z } from 'zod'
 import type { PlanSnapshot, Project, ProjectFrontmatter, ProjectTask, ProjectAsset, ProjectBrainstormMessage, ProjectSummary } from '../types'
 
 // ---------------------------------------------------------------------------
@@ -69,6 +70,12 @@ export const BRAINSTORM_ROW_CAP = 300
 // Parse / Serialize
 // ---------------------------------------------------------------------------
 
+const operationsSchema = z.array(z.object({
+  kind: z.literal('add-checklist'), requestId: z.string().min(8).max(128),
+  title: z.string().min(1), taskItemId: z.string().min(1),
+  instanceId: z.string().uuid(), phase: z.literal('complete'),
+}).strict())
+
 export function parseProject(content: string): Project {
   // Split on YAML frontmatter fences
   const fenceRe = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/
@@ -84,6 +91,7 @@ export function parseProject(content: string): Project {
     ? raw.tasks.map((t: Record<string, unknown>) => ({
         id: String(t.id || ''),
         title: String(t.title || ''),
+        instanceId: typeof t.instanceId === 'string' ? t.instanceId : undefined,
         description: t.description ? String(t.description) : undefined,
         taskId: t.taskId ? String(t.taskId) : undefined,
         checked: Boolean(t.checked),
@@ -103,6 +111,7 @@ export function parseProject(content: string): Project {
     owner: String(raw.owner || ''),
     tasks,
     assets,
+    ...(raw.operations === undefined ? {} : { operations: operationsSchema.parse(raw.operations) }),
   }
 
   return {
@@ -117,6 +126,7 @@ export function serializeProject(project: Project): string {
   // Ensure tasks array is serialized correctly (omit undefined taskId)
   const cleanTasks = fm.tasks.map(t => {
     const item: Record<string, unknown> = { id: t.id, title: t.title, checked: t.checked }
+    if (t.instanceId) item.instanceId = t.instanceId
     if (t.description) item.description = t.description
     if (t.taskId) item.taskId = t.taskId
     return item

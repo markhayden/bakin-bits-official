@@ -108,7 +108,7 @@ export interface ProjectService {
   /** Restore a plan snapshot by history index; snapshots the current body first (bakin#703). */
   restorePlanVersion(id: string, index: number, expectedTs?: string): Promise<{ changed: boolean }>
   deleteProject(id: string, agent?: string): Promise<void>
-  addChecklistItem(projectId: string, title: string): Promise<{ taskItemId: string }>
+  addChecklistItem(projectId: string, title: string, requestId?: string): Promise<{ taskItemId: string; deleted?: boolean }>
   markChecklistItem(projectId: string, taskItemId: string, checked: boolean): Promise<{ progress: number }>
   updateChecklistItem(projectId: string, taskItemId: string, updates: { title?: string; description?: string }, expected?: { title?: string; description?: string }): Promise<void>
   removeChecklistItem(projectId: string, taskItemId: string): Promise<void>
@@ -155,6 +155,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       const taskItems: ProjectTask[] = (opts.tasks || []).map((title, i) => ({
         id: `t${String(i + 1).padStart(3, '0')}`,
         title,
+        instanceId: crypto.randomUUID(),
         checked: false,
       }))
 
@@ -223,7 +224,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       const addedItems: { id: string; title: string }[] = []
       for (const title of checklistItems) {
         const itemId = nextTaskItemId(project.tasks)
-        project.tasks.push({ id: itemId, title, checked: false })
+        project.tasks.push({ id: itemId, title, instanceId: crypto.randomUUID(), checked: false })
         addedItems.push({ id: itemId, title })
       }
 
@@ -287,15 +288,31 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     })
   }
 
-  async function addChecklistItem(projectId: string, title: string): Promise<{ taskItemId: string }> {
+  async function addChecklistItem(projectId: string, title: string, requestId?: string): Promise<{ taskItemId: string; deleted?: boolean }> {
+    const normalized = validateItemPatch({ title }).title!
+    if (requestId !== undefined && (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(requestId))) {
+      throw new ProjectMutationError('Invalid checklist request identity.', 400, 'invalid_request_id')
+    }
     return withProjectLock(() => {
       const project = repo.readProject(projectId)
-      if (!project) throw new Error(`Project not found: ${projectId}`)
+      if (!project) throw new ProjectMutationError(`Project not found: ${projectId}`, 404, 'not_found')
+      const receipt = project.operations?.find(operation => operation.requestId === requestId)
+      if (receipt) {
+        if (receipt.kind !== 'add-checklist' || receipt.title !== normalized) {
+          throw new ProjectMutationError('This request was already used for a different checklist action.', 409, 'request_conflict')
+        }
+        const exists = project.tasks.some(item => item.instanceId === receipt.instanceId)
+        return { taskItemId: receipt.taskItemId, ...(exists ? {} : { deleted: true }) }
+      }
       const itemId = nextTaskItemId(project.tasks)
-      project.tasks.push({ id: itemId, title, checked: false })
+      const instanceId = crypto.randomUUID()
+      project.tasks.push({ id: itemId, title: normalized, instanceId, checked: false })
+      if (requestId) (project.operations ??= []).push({ kind: 'add-checklist', requestId, title: normalized, taskItemId: itemId, instanceId, phase: 'complete' })
       project.updated = new Date().toISOString()
       project.progress = computeProgress(project.tasks)
+      // The host atomically replaces this one file: receipt and result travel together.
       repo.writeProject(project)
+      ctx.activity.audit('checklist.added', 'system', { projectId, taskItemId: itemId })
       broadcast({ type: 'project.checklist_changed', projectId, action: 'add', taskItemId: itemId })
       return { taskItemId: itemId }
     })

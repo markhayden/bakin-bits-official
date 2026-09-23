@@ -31,6 +31,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 function mutationFailure(error: unknown): Response {
+  if (error instanceof SyntaxError) return json({ error: 'Invalid JSON request.', code: 'invalid_request' }, 400)
   if (error instanceof ProjectMutationError) return json({ error: error.message, code: error.code, conflicts: error.conflicts }, error.status)
   log.error('Project mutation failed', error)
   return json({ error: error instanceof PlanHistoryUnavailableError ? error.message : 'Project could not be saved. Try again.', code: 'storage_error' }, 500)
@@ -404,7 +405,7 @@ const projectsPlugin: BakinPlugin = {
       if (!id) return json({ error: 'Missing id parameter' }, 400)
       const project = readProject(id)
       if (!project) return json({ error: 'Project not found' }, 404)
-      const resolvedProject = await resolveLinkedTaskStatuses(project)
+      const { operations: _operations, ...resolvedProject } = await resolveLinkedTaskStatuses(project)
       // Sample the flag before the preview: if the turn settles between the
       // two reads we return streaming:false with no text (honest), never
       // text without the flag.
@@ -489,15 +490,17 @@ const projectsPlugin: BakinPlugin = {
 
     // POST /:projectId/checklist — add checklist item
     const addItemHandler = async (req: Request) => {
-      const url = new URL(req.url, 'http://localhost')
-      const body = await readBody<{ projectId?: string; title: string }>(req)
-      const projectId = url.searchParams.get('projectId') || body.projectId
-      if (!projectId || !body.title) return json({ error: 'Missing projectId or title' }, 400)
-      const result = await addChecklistItem(projectId, body.title)
-      ctx.activity.audit('checklist.added', 'system', { projectId })
-      ctx.activity.log('system', `Added checklist item to project ${projectId}`)
-      indexProject(projectId).catch(() => {})
-      return json({ ok: true, ...result })
+      try {
+        const url = new URL(req.url, 'http://localhost')
+        const body = await readBody<{ projectId?: string; title: string; requestId?: string }>(req)
+        const projectId = url.searchParams.get('projectId') || body.projectId
+        if (!projectId || !body.title) return json({ error: 'Missing projectId or title' }, 400)
+        const result = await addChecklistItem(projectId, body.title, body.requestId)
+        indexProject(projectId).catch(() => {})
+        return json({ ok: true, ...result })
+      } catch (err) {
+        return mutationFailure(err)
+      }
     }
     routeHandlers.set('POST /:projectId/checklist', addItemHandler)
 

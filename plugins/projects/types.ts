@@ -8,6 +8,8 @@ export type ProjectStatus = (typeof PROJECT_STATUSES)[number]
 export interface ProjectTask {
   id: string          // "t001", "t002" — auto-incrementing
   title: string
+  /** Stable identity even when the display ID is reused after deletion. */
+  instanceId?: string
   description?: string
   taskId?: string     // linked board task ID (8-char hex)
   checked: boolean
@@ -27,6 +29,8 @@ export interface ProjectFrontmatter {
   owner: string
   tasks: ProjectTask[]
   assets: ProjectAsset[]
+  /** Private durable mutation receipts; omitted from browser projections. */
+  operations?: ChecklistAddOperation[]
 }
 
 export interface Project extends ProjectFrontmatter {
@@ -81,3 +85,12 @@ export interface ProjectDetailData extends Project {
 export type ProjectEditableValues = Pick<Project, 'title' | 'owner' | 'status' | 'body'>
 export type ProjectPatch = Partial<ProjectEditableValues>
 export type ChecklistPatch = Partial<Pick<ProjectTask, 'title' | 'description'>>
+
+export interface ChecklistAddOperation {
+  kind: 'add-checklist'
+  requestId: string
+  title: string
+  taskItemId: string
+  instanceId: string
+  phase: 'complete'
+}
