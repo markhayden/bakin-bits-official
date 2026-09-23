@@ -288,10 +288,10 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
     error: exitError,
     onSaveAndExit: async () => {
       setExitError(null)
-      if (!draft.validate() || !checklist.validate()) { setExitError('Resolve the highlighted draft conflicts before leaving. Choose Stay to review them.'); return false }
+      if (!draft.validate() || !checklist.validate()) { setExitError('Resolve the highlighted draft conflicts before leaving. Choose Cancel to review them.'); return false }
       setExitSaving(true)
       try {
-        if (!await draft.save()) { setExitError('Project edits remain unsaved. Choose Stay to review conflicts, or retry.'); return false }
+        if (!await draft.save()) { setExitError('Project edits remain unsaved. Choose Cancel to review conflicts, or retry.'); return false }
         if (!await checklist.saveAll()) { setExitError('Project changes are saved. Some checklist edits remain unsaved; retry saves only the unfinished work.'); return false }
         return !draft.isDirty() && !checklist.isDirty()
       } finally { setExitSaving(false) }

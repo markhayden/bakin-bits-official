@@ -29,26 +29,68 @@ Public reference: Bakin `storybook/public/lists/list-rows.stories.tsx` —
 `storybook/public/feedback/confirm-dialog.stories.tsx` (`FocusReturn`, `Busy`,
 `FailedConfirmation`).
 
-## Read-only plans
+## Editing a project
 
-Rendered plans use `MarkdownContent` from `@makinbakin/sdk/content`, including
-individual blocks annotated by Show changes. `MarkdownEditor` owns the editing
-canvas and the existing empty-plan placeholder; its document-height preview
-must not wrap each read-only block. That reserves 320px even for one heading.
-Change markers and the rendered/diff toggle retain their existing behavior.
+Title, owner, lifecycle status and plan form one staged draft. Save changes writes
+only edited fields with their expected server values; Discard returns all four
+fields to the latest server version. Agent updates merge into untouched fields.
+Overlapping edits stay visible until you choose Use latest or Keep mine. Keep mine
+is conditional on the value you reviewed, so another update can conflict again.
 
-Public reference: Bakin `storybook/public/content/markdown-content.stories.tsx`
-— `CanonicalUsage` and `ReadingAndCode`. Run `bun run test:ui:collections`
-with the installed real SDK to check changed, hints-hidden, and no-history plans
-at desktop and mobile widths. The plugin CI enrollment requires this fixture
-alongside the index fixture. After fonts and change markers are ready, it
-asserts actual gaps between rendered headings, paragraphs and lists, including
-unused space after the final block. A gap over 64px fails the canonical harness
-at both viewport widths. Unit tests use lightweight SDK stubs and therefore
-cannot validate real markdown layout by themselves.
+Checklist descriptions and new tasks are independent drafts. Failed actions keep
+the text and show local errors; other rows stay usable. Add and promotion retries
+use durable operation identities to avoid duplicates after a lost response.
+Deleting an item never lets an old retry recreate it or modify a reused display ID.
+Completed tasks are visible by default; Hide completed is saved per project.
+Checklist progress and project lifecycle are independent, including Completed
+projects with unchecked tasks.
 
-See [the Projects UI audit](UI-AUDIT.md) for control inventory, remaining
-usability findings, and verification evidence.
+Leaving offers Save all and leave, Discard, or Stay. Save All validates every draft,
+saves project fields, descriptions in item order, then the new task. Partial
+successes remain saved; retry only submits unfinished work. It never sends the
+brainstorm composer. Read and edit routes keep the same project component mounted.
+On mobile an empty brainstorm starts collapsed; existing conversation, active work
+or a restored composer draft keeps it open. Explicit disclosure changes retain the
+mounted conversation and draft. Desktop keeps the brainstorm expanded.
+
+## Read-only plans and history
+
+`MarkdownContent` receives the complete current plan and optional complete
+`compareTo` source. Managed sections, reference links, lists, tables and code retain
+full-document context. Changed blocks and deletion markers are accessible; precise
+line review remains in Diff. An exceeded comparison budget says unavailable rather
+than claiming no changes. History loading, missing history and failed/corrupt history
+are distinct. Restore confirms the exact snapshot reviewed and retains errors for retry.
+
+Public references: Bakin `content/markdown-content` — `Comparison` and
+`ManagedDocumentContext`; `forms/form-composition`, `forms/save-bar`,
+`forms/unsaved-changes-dialog`; `feedback/system-state`, `feedback/confirm-dialog`;
+`agents/agent-select`, `primitives/collapsible` and `conversation/panel-and-drawer`.
+The exact exports and evidence are listed in [UI-AUDIT.md](UI-AUDIT.md).
+
+With the installed real SDK, `bun run test:ui` checks the index and
+`bun run test:ui:collections` checks plan spacing, read/edit detail accessibility,
+route-state retention, overlaps, retry receipts, partial saves and mobile composer
+restoration. These are required in official-plugin CI; unit stubs alone do not
+certify layout or routing. Reports live under `test-results/bakin-ui-*`.
+
+## Host prerequisite and mutation storage
+
+Projects 0.11.0 requires the companion Bakin host's atomic scoped-storage replacement
+and matching SDK/CSS build. Install the host prerequisite before upgrading Projects.
+An SDK-only upgrade does not provide storage atomicity.
+
+Optional private `operations` frontmatter records durable add results and promotion
+reservations for the project's lifetime. Checklist `instanceId` separates stable
+identity from reusable display IDs. Promotion reserves a board-task ID and source
+provenance before creation; retries verify that task before linking. An uncertain
+create failure is reported honestly and resumed against the same ID. Records are
+omitted from browser detail responses and removed with the project.
+
+For rollback, roll Projects back before the companion host/SDK. Preserve project
+files and their operation metadata. Older plugin versions do not preserve those
+receipts when writing, so avoid resuming uncertain operations through older code.
+No release, installation, or production migration is performed by this change.
 
 ## Runtime Contract
 
@@ -65,15 +107,11 @@ traceability, not prompt-history replay.
 
 ## Brainstorm Storage
 
-Brainstorm messages are stored in the project markdown frontmatter alongside
-the project spec. The timeline can contain:
-
-- user messages
-- assistant messages
-- normalized `activity` rows for runtime status/tool calls
-
-Activity rows are streamed to the UI as they happen and persisted so reopening a
-project still shows what the agent did behind the scenes.
+Brainstorm messages use the project's `.brainstorm.json` sidecar in the same
+plugin-scoped directory as the Markdown project. It stores the conversation kit's
+user, assistant, tool, error and aborted rows, bounded to 300 rows. A separate
+`.brainstorm-seen.json` records attention state; `.history.json` holds up to 20 prior
+plan bodies. These files do not replace the composer's existing draft persistence.
 
 ## Project Storage
 

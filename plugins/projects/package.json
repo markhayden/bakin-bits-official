@@ -6,7 +6,7 @@
   "main": "./index.ts",
   "scripts": {
     "test:ui": "bakin-plugin-test-ui",
-    "test:ui:collections": "bakin-plugin-test-ui --config tests/plan.ui-test.ts"
+    "test:ui:collections": "bakin-plugin-test-ui --config tests/plan.ui-test.ts && bakin-plugin-test-ui --config tests/detail.ui-test.ts && PROJECTS_UI_SURFACE=edit bakin-plugin-test-ui --config tests/detail.ui-test.ts && bun tests/detail.browser-test.ts"
   },
   "peerDependencies": {
     "react": "^19.0.0",

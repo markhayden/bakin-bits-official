@@ -1,6 +1,6 @@
 import { AgentSelect, SaveBar } from '@makinbakin/sdk/patterns'
 import type { AgentSelectOption } from '@makinbakin/sdk/patterns'
-import { Alert, AlertDescription, AlertTitle, Button, Field, FieldLabel, Fieldset, FieldsetLegend, Form, Input, Radio, RadioGroup, Text } from '@makinbakin/sdk/ui'
+import { Alert, AlertDescription, AlertTitle, Button, Field, FieldLabel, Fieldset, FieldsetLegend, Form, Input, Radio, RadioGroup, Text, Textarea } from '@makinbakin/sdk/ui'
 import type { FormEvent } from 'react'
 import type { useProjectDraft } from '../hooks/use-project-draft'
 import { projectFields } from '../lib/project-draft'
@@ -40,8 +40,8 @@ export function ProjectDraftForm({ model, agents }: {
         <AlertTitle>{labels[field]} changed while you were editing</AlertTitle>
         <AlertDescription>
           <div className="grid min-w-0 gap-bakin-3">
-            <div><Text weight="medium">Your value</Text><div className="max-h-48 overflow-auto whitespace-pre-wrap break-words focus-visible:outline-2 focus-visible:outline-bakin-focus-ring focus-visible:-outline-offset-2" role="region" aria-label={`Your ${labels[field].toLowerCase()}`} tabIndex={0}>{conflict.local || '(empty)'}</div></div>
-            <div><Text weight="medium">Latest value</Text><div className="max-h-48 overflow-auto whitespace-pre-wrap break-words focus-visible:outline-2 focus-visible:outline-bakin-focus-ring focus-visible:-outline-offset-2" role="region" aria-label={`Latest ${labels[field].toLowerCase()}`} tabIndex={0}>{conflict.latest || '(empty)'}</div></div>
+            <div><Text weight="medium">Your value</Text><Textarea readOnly size="sm" rows={6} aria-label={`Your ${labels[field].toLowerCase()}`} value={conflict.local || '(empty)'} /></div>
+            <div><Text weight="medium">Latest value</Text><Textarea readOnly size="sm" rows={6} aria-label={`Latest ${labels[field].toLowerCase()}`} value={conflict.latest || '(empty)'} /></div>
             <div className="flex flex-wrap gap-bakin-2">
               <Button type="button" size="sm" variant="outline" disabled={model.saving} onClick={() => model.resolve(field, 'latest')}>Use latest {labels[field].toLowerCase()}</Button>
               <Button type="button" size="sm" variant="outline" disabled={model.saving} onClick={() => model.resolve(field, 'mine')}>Keep my {labels[field].toLowerCase()}</Button>
