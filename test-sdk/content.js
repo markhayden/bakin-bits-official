@@ -2,8 +2,8 @@ import React from 'react'
 
 // Focused rich-content stubs mirroring `@makinbakin/sdk/content`.
 
-export function MarkdownContent({ content, className }) {
-  return React.createElement('div', { 'data-testid': 'markdown-content', className }, content)
+export function MarkdownContent({ content, compareTo, className }) {
+  return React.createElement('div', { 'data-testid': 'markdown-content', 'data-compare-to': compareTo, className }, content)
 }
 
 export function MarkdownEditor({ content = '', editing, mode, onChange, placeholder, label, className }) {

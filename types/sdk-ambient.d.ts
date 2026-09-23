@@ -1631,6 +1631,7 @@ declare module '@makinbakin/sdk/content' {
     className?: string
   }
   export interface MarkdownContentProps {
+    compareTo?: string
     content: string
     className?: string
     /** Use the established host/plugin link for internal SPA navigation. */

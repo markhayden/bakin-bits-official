@@ -22,7 +22,7 @@ function PlanFixture() {
     let cancelled = false
     let started = false
     const check = () => {
-      if (started || !element.querySelector('[data-plan-changed-block]')) return
+      if (started || !element.querySelector('[data-md-changed-block]')) return
       started = true
       observer.disconnect()
       void document.fonts.ready.then(() => {

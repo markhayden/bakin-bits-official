@@ -1,6 +1,5 @@
 /**
- * ONE LCS diff walker for the plan views (#706) — line-diff and
- * block-diff both tokenize differently but share this table + backtrack.
+ * LCS table and backtrack for the precise plan line comparison.
  * O(n·m); callers bound their inputs.
  */
 export type LcsOp<T> = { type: 'same' | 'added' | 'removed'; item: T }

@@ -3,7 +3,7 @@ export function assertPlanSpacing(root: HTMLElement): void {
   for (const label of ['Latest changes', 'Changes hidden', 'No history']) {
     const region = root.querySelector<HTMLElement>(`section[aria-label="${label}"]`)
     if (!region) throw new Error(`Missing plan fixture: ${label}`)
-    const blocks = [...region.querySelectorAll<HTMLElement>('h1, h2, p, ul')]
+    const blocks = [...region.querySelectorAll<HTMLElement>('h1, h2, p:not([data-md-change-hint]), ul')]
     if (blocks.length !== 5) throw new Error(`${label}: expected five rendered Markdown blocks, got ${blocks.length}`)
 
     // Measure visible content, not component names/classes. A 320px editor

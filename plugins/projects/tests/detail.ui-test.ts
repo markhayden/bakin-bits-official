@@ -5,5 +5,5 @@ export default definePluginUiConformance({
   pluginId: 'projects',
   fixtureEntry: './tests/detail.fixture.tsx',
   reportDir: 'test-results/bakin-ui-detail',
-  readySelector: '[data-plan-changed-block]',
+  readySelector: '[data-md-changed-block]',
 })
