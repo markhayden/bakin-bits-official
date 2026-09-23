@@ -27,6 +27,7 @@ const navItems: NavItem[] = [
 interface PluginRouteProps {
   params?: Record<string, string>
   id?: string
+  pathname?: string
 }
 
 function ProjectsIndexRoute() {
@@ -47,43 +48,17 @@ function ProjectsNewRoute() {
   return null
 }
 
-function ProjectDetailRoute({ params, id }: PluginRouteProps) {
+export function ProjectDetailRoute({ params, id, pathname }: PluginRouteProps) {
   const router = useRouter()
   const projectId = id ?? params?.id
-
   if (!projectId) return <ProjectsNewRoute />
-
-  return (
-    <Suspense>
-      <ProjectDetail
-        projectId={projectId}
-        onBack={() => router.push('/projects')}
-        onEditChange={(editing: boolean) => {
-          if (editing) router.replace(`/projects/${projectId}/edit`)
-        }}
-      />
-    </Suspense>
-  )
-}
-
-function ProjectEditRoute({ params, id }: PluginRouteProps) {
-  const router = useRouter()
-  const projectId = id ?? params?.id
-
-  if (!projectId) return <ProjectsNewRoute />
-
-  return (
-    <Suspense>
-      <ProjectDetail
-        projectId={projectId}
-        onBack={() => router.push('/projects')}
-        initialEdit
-        onEditChange={(editing: boolean) => {
-          if (!editing) router.replace(`/projects/${projectId}`)
-        }}
-      />
-    </Suspense>
-  )
+  // Both declared paths share this component type. The host supplies the matched
+  // pathname; key only by project so mode changes retain all mounted state.
+  return <Suspense><ProjectDetail key={projectId} projectId={projectId}
+    initialEdit={pathname === `/projects/${projectId}/edit`}
+    onBack={() => router.push('/projects')}
+    onEditChange={editing => router.replace(`/projects/${projectId}${editing ? '/edit' : ''}`)} />
+  </Suspense>
 }
 
 registerPlugin({
@@ -93,7 +68,7 @@ registerPlugin({
     '/projects': ProjectsIndexRoute,
     '/projects/new': ProjectsNewRoute,
     '/projects/[id]': ProjectDetailRoute,
-    '/projects/[id]/edit': ProjectEditRoute,
+    '/projects/[id]/edit': ProjectDetailRoute,
   },
   slots: {
     'nav-badge-providers': BrainstormBadgeProvider,

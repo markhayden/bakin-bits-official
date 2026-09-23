@@ -16,7 +16,7 @@ export function ProjectDraftForm({ model, agents }: {
   const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void model.save() }
   return <Form aria-label="Edit project" busy={model.saving} onSubmit={submit}>
     <Field name="title">
-      <FieldLabel requirement="required">Title</FieldLabel>
+      <FieldLabel requirement="required">Project title</FieldLabel>
       <Input size="lg" variant="outlined" value={values.title} required aria-label="Project title"
         onChange={(event: React.ChangeEvent<HTMLInputElement>) => model.edit('title', event.target.value)} />
     </Field>
@@ -40,8 +40,8 @@ export function ProjectDraftForm({ model, agents }: {
         <AlertTitle>{labels[field]} changed while you were editing</AlertTitle>
         <AlertDescription>
           <div className="grid min-w-0 gap-bakin-3">
-            <div><Text weight="medium">Your value</Text><div className="max-h-48 overflow-auto whitespace-pre-wrap break-words" role="region" aria-label={`Your ${labels[field].toLowerCase()}`} tabIndex={0}>{conflict.local || '(empty)'}</div></div>
-            <div><Text weight="medium">Latest value</Text><div className="max-h-48 overflow-auto whitespace-pre-wrap break-words" role="region" aria-label={`Latest ${labels[field].toLowerCase()}`} tabIndex={0}>{conflict.latest || '(empty)'}</div></div>
+            <div><Text weight="medium">Your value</Text><div className="max-h-48 overflow-auto whitespace-pre-wrap break-words focus-visible:outline-2 focus-visible:outline-bakin-focus-ring focus-visible:-outline-offset-2" role="region" aria-label={`Your ${labels[field].toLowerCase()}`} tabIndex={0}>{conflict.local || '(empty)'}</div></div>
+            <div><Text weight="medium">Latest value</Text><div className="max-h-48 overflow-auto whitespace-pre-wrap break-words focus-visible:outline-2 focus-visible:outline-bakin-focus-ring focus-visible:-outline-offset-2" role="region" aria-label={`Latest ${labels[field].toLowerCase()}`} tabIndex={0}>{conflict.latest || '(empty)'}</div></div>
             <div className="flex flex-wrap gap-bakin-2">
               <Button type="button" size="sm" variant="outline" disabled={model.saving} onClick={() => model.resolve(field, 'latest')}>Use latest {labels[field].toLowerCase()}</Button>
               <Button type="button" size="sm" variant="outline" disabled={model.saving} onClick={() => model.resolve(field, 'mine')}>Keep my {labels[field].toLowerCase()}</Button>
