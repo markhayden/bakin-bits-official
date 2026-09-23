@@ -11,7 +11,7 @@ import {
   nextTaskItemId,
 } from './parser'
 import type { ChecklistPromotionOperation, Project, ProjectTask, ProjectStatus } from '../types'
-import { assertExpectedFields, ProjectMutationError, validateItemPatch, validateProjectPatch } from './project-mutations'
+import { assertItemIdentity, assertExpectedFields, ProjectMutationError, validateItemPatch, validateProjectPatch } from './project-mutations'
 
 const log = {
   info: (...args: unknown[]) => console.info('[projects]', ...args),
@@ -84,6 +84,7 @@ export interface ApplyProjectPlanResult {
 }
 
 export interface PromoteItemOpts {
+  expectedInstanceId?: string
   requestId?: string
   assignee?: string
   workflowId?: string
@@ -110,9 +111,9 @@ export interface ProjectService {
   restorePlanVersion(id: string, index: number, expectedTs?: string): Promise<{ changed: boolean }>
   deleteProject(id: string, agent?: string): Promise<void>
   addChecklistItem(projectId: string, title: string, requestId?: string): Promise<{ taskItemId: string; deleted?: boolean }>
-  markChecklistItem(projectId: string, taskItemId: string, checked: boolean): Promise<{ progress: number }>
-  updateChecklistItem(projectId: string, taskItemId: string, updates: { title?: string; description?: string }, expected?: { title?: string; description?: string }): Promise<void>
-  removeChecklistItem(projectId: string, taskItemId: string): Promise<void>
+  markChecklistItem(projectId: string, taskItemId: string, checked: boolean, expectedInstanceId?: string): Promise<{ progress: number }>
+  updateChecklistItem(projectId: string, taskItemId: string, updates: { title?: string; description?: string }, expected?: { title?: string; description?: string }, expectedInstanceId?: string): Promise<void>
+  removeChecklistItem(projectId: string, taskItemId: string, expectedInstanceId?: string): Promise<void>
   linkChecklistItem(projectId: string, taskItemId: string, boardTaskId: string): Promise<void>
   attachAsset(projectId: string, assetId: string, label?: string): Promise<void>
   relinkAsset(projectId: string, oldAssetId: string, newAssetId: string, label?: string): Promise<void>
@@ -322,12 +323,13 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     })
   }
 
-  async function markChecklistItem(projectId: string, taskItemId: string, checked: boolean): Promise<{ progress: number }> {
+  async function markChecklistItem(projectId: string, taskItemId: string, checked: boolean, expectedInstanceId?: string): Promise<{ progress: number }> {
     return withProjectLock(() => {
       const project = repo.readProject(projectId)
       if (!project) throw new Error(`Project not found: ${projectId}`)
       const item = project.tasks.find(t => t.id === taskItemId)
       if (!item) throw new Error(`Checklist item not found: ${taskItemId}`)
+      assertItemIdentity(item, expectedInstanceId)
       item.checked = checked
       project.updated = new Date().toISOString()
       project.progress = computeProgress(project.tasks)
@@ -337,13 +339,14 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     })
   }
 
-  async function updateChecklistItem(projectId: string, taskItemId: string, updates: { title?: string; description?: string }, expected?: { title?: string; description?: string }): Promise<void> {
+  async function updateChecklistItem(projectId: string, taskItemId: string, updates: { title?: string; description?: string }, expected?: { title?: string; description?: string }, expectedInstanceId?: string): Promise<void> {
     const patch = validateItemPatch(updates)
     return withProjectLock(() => {
       const project = repo.readProject(projectId)
       if (!project) throw new ProjectMutationError(`Project not found: ${projectId}`, 404, 'not_found')
       const item = project.tasks.find(t => t.id === taskItemId)
       if (!item) throw new ProjectMutationError(`Checklist item not found: ${taskItemId}`, 404, 'not_found')
+      assertItemIdentity(item, expectedInstanceId)
       assertExpectedFields(item, patch, expected)
       if (Object.entries(patch).every(([field, value]) => value === undefined || (item[field as 'title' | 'description'] ?? '') === value)) return
       if (patch.title !== undefined) item.title = patch.title
@@ -354,13 +357,14 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     })
   }
 
-  async function removeChecklistItem(projectId: string, taskItemId: string): Promise<void> {
+  async function removeChecklistItem(projectId: string, taskItemId: string, expectedInstanceId?: string): Promise<void> {
     return withProjectLock(() => {
       const project = repo.readProject(projectId)
       if (!project) throw new Error(`Project not found: ${projectId}`)
       const idx = project.tasks.findIndex(t => t.id === taskItemId)
       if (idx === -1) throw new Error(`Checklist item not found: ${taskItemId}`)
       const removed = project.tasks[idx]
+      assertItemIdentity(removed, expectedInstanceId)
       if (removed.taskId) getIndex().delete(removed.taskId)
       project.tasks.splice(idx, 1)
       project.updated = new Date().toISOString()
@@ -468,6 +472,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
         }
         return prior
       }
+      assertItemIdentity(item, opts.expectedInstanceId)
       if (item.taskId) throw new ProjectMutationError(`Item already linked to board task: ${item.taskId}`, 409, 'already_linked')
       item.instanceId ??= crypto.randomUUID()
       const operation: ChecklistPromotionOperation = {

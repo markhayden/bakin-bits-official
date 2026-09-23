@@ -41,3 +41,10 @@ export function assertExpectedFields(current: object, patch: object, expected: u
   }
   if (Object.keys(conflicts).length) throw new ProjectMutationError('Some fields changed while you were editing. Review the overlapping changes.', 409, 'field_conflict', conflicts)
 }
+
+
+export function assertItemIdentity(item: { instanceId?: string }, expected: unknown) {
+  if (expected === undefined) return
+  if (typeof expected !== 'string') throw new ProjectMutationError('Invalid checklist identity.', 400, 'invalid_precondition')
+  if ((item.instanceId ?? '') !== expected) throw new ProjectMutationError('This checklist item was replaced. Discard the old draft and refresh.', 409, 'item_replaced')
+}

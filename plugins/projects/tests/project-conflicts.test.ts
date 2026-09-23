@@ -66,3 +66,13 @@ describe('atomic expected-value updates', () => {
     await expect(service.updateChecklistItem(id, taskItemId, { description: 'Resurrect' }, { description: 'Agent draft' })).rejects.toMatchObject({ status: 404 })
   })
 })
+
+
+it('rejects an old description intent when a deleted display ID is reused', async () => {
+  const first = await service.addChecklistItem(id, 'First')
+  const instanceId = repo.readProject(id)!.tasks[0]!.instanceId!
+  await service.removeChecklistItem(id, first.taskItemId)
+  await service.addChecklistItem(id, 'Replacement')
+  await expect(service.updateChecklistItem(id, first.taskItemId, { description: 'Old draft' }, { description: '' }, instanceId)).rejects.toMatchObject({ status: 409 })
+  expect(repo.readProject(id)?.tasks[0]?.description).toBeUndefined()
+})

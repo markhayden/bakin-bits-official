@@ -506,30 +506,32 @@ const projectsPlugin: BakinPlugin = {
 
     // PUT /:projectId/checklist/:itemId/toggle — toggle checklist item
     const toggleHandler = async (req: Request) => {
-      const url = new URL(req.url, 'http://localhost')
-      const body = await readBody<{ projectId?: string; taskItemId?: string; checked: boolean }>(req)
-      const projectId = url.searchParams.get('projectId') || body.projectId
-      const taskItemId = url.searchParams.get('itemId') || body.taskItemId
-      if (!projectId || !taskItemId) return json({ error: 'Missing projectId or taskItemId' }, 400)
-      const result = await markChecklistItem(projectId, taskItemId, body.checked)
-      ctx.activity.audit('checklist.toggled', 'system', { projectId, checked: body.checked })
-      ctx.activity.log('system', 'Toggled checklist item in project', { taskId: projectId })
-      indexProject(projectId).catch(() => {})
-      return json({ ok: true, ...result })
+      try {
+        const url = new URL(req.url, 'http://localhost')
+        const body = await readBody<{ projectId?: string; taskItemId?: string; checked: boolean; expectedInstanceId?: string }>(req)
+        const projectId = url.searchParams.get('projectId') || body.projectId
+        const taskItemId = url.searchParams.get('itemId') || body.taskItemId
+        if (!projectId || !taskItemId) return json({ error: 'Missing projectId or taskItemId' }, 400)
+        const result = await markChecklistItem(projectId, taskItemId, body.checked, body.expectedInstanceId)
+        ctx.activity.audit('checklist.toggled', 'system', { projectId, checked: body.checked })
+        ctx.activity.log('system', 'Toggled checklist item in project', { taskId: projectId })
+        indexProject(projectId).catch(() => {})
+        return json({ ok: true, ...result })
+      } catch (error) { return mutationFailure(error) }
     }
     routeHandlers.set('PUT /:projectId/checklist/:itemId/toggle', toggleHandler)
 
     // PUT /:projectId/checklist/:itemId — update checklist item
     const updateItemHandler = async (req: Request) => {
       const url = new URL(req.url, 'http://localhost')
-      const body = await readBody<ChecklistPatch & { projectId?: string; taskItemId?: string; expected?: ChecklistPatch }>(req).catch(() => null)
+      const body = await readBody<ChecklistPatch & { projectId?: string; taskItemId?: string; expected?: ChecklistPatch; expectedInstanceId?: string }>(req).catch(() => null)
       if (!body || typeof body !== 'object' || Array.isArray(body)) return json({ error: 'Invalid checklist update' }, 400)
-      const { projectId: bodyProjectId, taskItemId: bodyItemId, expected, ...patch } = body
+      const { projectId: bodyProjectId, taskItemId: bodyItemId, expected, expectedInstanceId, ...patch } = body
       const projectId = url.searchParams.get('projectId') || bodyProjectId
       const taskItemId = url.searchParams.get('itemId') || bodyItemId
       if (!projectId || !taskItemId) return json({ error: 'Missing projectId or taskItemId' }, 400)
       try {
-        await updateChecklistItem(projectId, taskItemId, patch, expected)
+        await updateChecklistItem(projectId, taskItemId, patch, expected, expectedInstanceId)
         ctx.activity.audit('checklist.updated', 'system', { projectId })
         ctx.activity.log('system', 'Updated checklist item in project', { taskId: projectId })
         indexProject(projectId).catch(() => {})
@@ -542,16 +544,18 @@ const projectsPlugin: BakinPlugin = {
 
     // DELETE /:projectId/checklist/:itemId — remove checklist item
     const removeItemHandler = async (req: Request) => {
-      const url = new URL(req.url, 'http://localhost')
-      const body = await readBody<{ projectId?: string; taskItemId?: string }>(req).catch(() => ({} as { projectId?: string; taskItemId?: string }))
-      const projectId = url.searchParams.get('projectId') || body.projectId
-      const taskItemId = url.searchParams.get('itemId') || body.taskItemId
-      if (!projectId || !taskItemId) return json({ error: 'Missing projectId or taskItemId' }, 400)
-      await removeChecklistItem(projectId, taskItemId)
-      ctx.activity.audit('checklist.removed', 'system', { projectId })
-      ctx.activity.log('system', 'Removed checklist item from project', { taskId: projectId })
-      indexProject(projectId).catch(() => {})
-      return json({ ok: true })
+      try {
+        const url = new URL(req.url, 'http://localhost')
+        const body = await readBody<{ projectId?: string; taskItemId?: string; expectedInstanceId?: string }>(req).catch(() => ({} as { projectId?: string; taskItemId?: string; expectedInstanceId?: string }))
+        const projectId = url.searchParams.get('projectId') || body.projectId
+        const taskItemId = url.searchParams.get('itemId') || body.taskItemId
+        if (!projectId || !taskItemId) return json({ error: 'Missing projectId or taskItemId' }, 400)
+        await removeChecklistItem(projectId, taskItemId, body.expectedInstanceId)
+        ctx.activity.audit('checklist.removed', 'system', { projectId })
+        ctx.activity.log('system', 'Removed checklist item from project', { taskId: projectId })
+        indexProject(projectId).catch(() => {})
+        return json({ ok: true })
+      } catch (error) { return mutationFailure(error) }
     }
     routeHandlers.set('DELETE /:projectId/checklist/:itemId', removeItemHandler)
 
@@ -574,11 +578,11 @@ const projectsPlugin: BakinPlugin = {
     const promoteHandler = async (req: Request) => {
       try {
         const url = new URL(req.url, 'http://localhost')
-        const body = await readBody<{ projectId?: string; taskItemId?: string; assignee?: string; requestId?: string }>(req)
+        const body = await readBody<{ projectId?: string; taskItemId?: string; assignee?: string; requestId?: string; expectedInstanceId?: string }>(req)
         const projectId = url.searchParams.get('projectId') || body.projectId
         const taskItemId = url.searchParams.get('itemId') || body.taskItemId
         if (!projectId || !taskItemId) return json({ error: 'Missing projectId or taskItemId' }, 400)
-        const result = await promoteItemToTask(projectId, taskItemId, { assignee: body.assignee, requestId: body.requestId })
+        const result = await promoteItemToTask(projectId, taskItemId, { assignee: body.assignee, requestId: body.requestId, expectedInstanceId: body.expectedInstanceId })
         indexProject(projectId).catch(() => {})
         return json({ ok: true, ...result })
       } catch (err) { return mutationFailure(err) }
