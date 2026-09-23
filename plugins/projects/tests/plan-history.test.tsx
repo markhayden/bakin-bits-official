@@ -9,7 +9,19 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import React from 'react'
 
 import { diffLines } from '../../../plugins/projects/lib/line-diff'
-import { PlanHistoryPanel } from '../../../plugins/projects/components/plan-history'
+import { PlanHistoryPanel as HistoryPanel } from '../../../plugins/projects/components/plan-history'
+
+import type { ProjectHistory } from '../hooks/use-project-history'
+import { useProjectHistory } from '../hooks/use-project-history'
+import { RenderedPlan as Plan } from '../components/rendered-plan'
+function PlanHistoryPanel(props: { projectId: string; currentBody: string; onRestored: () => void }) {
+  const historyState = useProjectHistory(props.projectId, props.currentBody)
+  return <HistoryPanel {...props} historyState={historyState} />
+}
+function RenderedPlan(props: { projectId: string; body: string; hintsEnabled?: boolean }) {
+  const historyState = useProjectHistory(props.projectId, props.body)
+  return <Plan {...props} historyState={historyState} />
+}
 
 afterEach(() => {
   cleanup()
@@ -103,6 +115,16 @@ describe('PlanHistoryPanel', () => {
   })
 })
 
+describe('history failures', () => {
+  it('shows an actionable failure instead of pretending history is empty', async () => {
+    globalThis.fetch = (async () => Response.json({ error: 'History unavailable' }, { status: 503 })) as typeof fetch
+    render(<PlanHistoryPanel projectId="p1" currentBody="body" onRestored={() => {}} />)
+    await waitFor(() => expect(screen.getByText('History unavailable')).toBeDefined())
+    expect(screen.queryByText('No plan versions yet')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeDefined()
+  })
+})
+
 describe('block-level change hints (rendered view)', () => {
   it('splitBlocks separates on blank lines but keeps fenced code intact', async () => {
     const { splitBlocks } = await import('../../../plugins/projects/lib/block-diff')
@@ -157,7 +179,6 @@ describe('block-level change hints (rendered view)', () => {
   })
 
   it('RenderedPlan draws a green edge bar on the edited block only', async () => {
-    const { RenderedPlan } = await import('../../../plugins/projects/components/rendered-plan')
     globalThis.fetch = mock(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.endsWith('/history')) {
@@ -180,7 +201,6 @@ describe('block-level change hints (rendered view)', () => {
   })
 
   it('RenderedPlan draws a red tick where content was removed', async () => {
-    const { RenderedPlan } = await import('../../../plugins/projects/components/rendered-plan')
     globalThis.fetch = mock(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.endsWith('/history')) {
@@ -200,7 +220,6 @@ describe('block-level change hints (rendered view)', () => {
   })
 
   it('RenderedPlan renders plain when there is no history baseline', async () => {
-    const { RenderedPlan } = await import('../../../plugins/projects/components/rendered-plan')
     globalThis.fetch = mock(async () => ({ ok: true, json: async () => ({ history: [] }), text: async () => '' }) as Response) as unknown as typeof fetch
     const { container } = render(<RenderedPlan projectId="p1" body="# Plan" />)
     await waitFor(() => expect(screen.getByText('# Plan')).toBeDefined())
@@ -211,7 +230,6 @@ describe('block-level change hints (rendered view)', () => {
 
 describe('show-changes preference', () => {
   it('RenderedPlan renders plain (no hints, no history fetch dependence) when hints are disabled', async () => {
-    const { RenderedPlan } = await import('../../../plugins/projects/components/rendered-plan')
     globalThis.fetch = mock(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.endsWith('/history')) {
@@ -228,5 +246,39 @@ describe('show-changes preference', () => {
     await waitFor(() => expect(screen.getByText('new body')).toBeDefined())
     expect(container.querySelectorAll('[data-plan-changed-block]').length).toBe(0)
     expect(container.querySelectorAll('[data-plan-removed-marker]').length).toBe(0)
+  })
+})
+
+
+describe('restore intent', () => {
+  const old = { ts: '2026-09-01T00:00:00Z', author: 'agent' as const, body: 'Old body' }
+  const state = (history = [old]): ProjectHistory => ({ identity: 'p1', history, loading: false, error: null, refresh: async () => {} })
+  it('pins the confirmed snapshot when the history list shifts', async () => {
+    const requests: string[] = []
+    globalThis.fetch = (async (_url, init) => { requests.push(String(init?.body)); return Response.json({ ok: true }) }) as typeof fetch
+    const view = render(<HistoryPanel projectId="p1" currentBody="Current" onRestored={() => {}} historyState={state()} />)
+    fireEvent.click(screen.getByTestId('plan-history-restore'))
+    view.rerender(<HistoryPanel projectId="p1" currentBody="Current" onRestored={() => {}} historyState={state([{ ...old, ts: '2026-09-02T00:00:00Z' }])} />)
+    fireEvent.click(screen.getByTestId('plan-history-restore-confirm'))
+    await waitFor(() => expect(requests).toEqual([JSON.stringify({ expectedTs: old.ts })]))
+  })
+  it('keeps the confirmation open after failure and retries the same intent', async () => {
+    let fail = true
+    globalThis.fetch = (async () => { if (fail) throw new Error('offline'); return Response.json({ ok: true }) }) as typeof fetch
+    const restored = mock()
+    render(<HistoryPanel projectId="p1" currentBody="Current" onRestored={restored} historyState={state()} />)
+    fireEvent.click(screen.getByTestId('plan-history-restore'))
+    fireEvent.click(screen.getByTestId('plan-history-restore-confirm'))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Could not reach'))
+    expect(restored).not.toHaveBeenCalled()
+    fail = false
+    fireEvent.click(screen.getByTestId('plan-history-restore-confirm'))
+    await waitFor(() => expect(restored).toHaveBeenCalledTimes(1))
+  })
+  it('never calls an over-budget diff unchanged', () => {
+    render(<HistoryPanel projectId="p1" currentBody={'line\n'.repeat(5001)} onRestored={() => {}} historyState={state()} />)
+    expect(screen.getByText('Comparison unavailable')).toBeDefined()
+    expect(screen.queryByText('No changes')).toBeNull()
+    expect(screen.getByRole('region', { name: 'Plan line comparison' }).tabIndex).toBe(0)
   })
 })

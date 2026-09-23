@@ -9,36 +9,17 @@
  * (the same default the Diff view compares against); the exact
  * line-level review lives in the Diff toggle.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { MarkdownContent, MarkdownEditor } from '@makinbakin/sdk/content'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@makinbakin/sdk/ui'
-import type { PlanSnapshot } from '../types'
+import type { ProjectHistory } from '../hooks/use-project-history'
+import { HistoryFeedback } from './history-feedback'
 import { diffBlocks } from '../lib/block-diff'
 
 const CHANGED_BLOCK_HINT = 'Added or edited in the latest edit'
 
-export function RenderedPlan({ projectId, body, hintsEnabled = true }: { projectId: string; body: string; hintsEnabled?: boolean }) {
-  // null = no baseline (no history yet, or still loading) → plain render.
-  const [previousBody, setPreviousBody] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!projectId) return
-    let cancelled = false
-    const load = async () => {
-      const res = await fetch(`/api/plugins/projects/${projectId}/history`)
-      if (!res.ok) return
-      const data = (await res.json()) as { history?: PlanSnapshot[] }
-      const last = Array.isArray(data.history) ? data.history[data.history.length - 1] : undefined
-      if (!cancelled) setPreviousBody(last ? last.body : null)
-    }
-    void load()
-    return () => {
-      cancelled = true
-    }
-    // body is a dependency on purpose: a new edit writes a new snapshot, and
-    // the baseline must follow it so only the LATEST change stays marked.
-  }, [projectId, body])
-
+export function RenderedPlan({ historyState, body, hintsEnabled = true }: { historyState: ProjectHistory; body: string; hintsEnabled?: boolean }) {
+  const previousBody = historyState.loading || historyState.error ? null : historyState.history?.at(-1)?.body ?? null
   // Memoized: the detail page re-renders per streamed chunk.
   const entries = useMemo(
     () => (hintsEnabled && previousBody !== null ? diffBlocks(previousBody, body) : null),
@@ -46,7 +27,7 @@ export function RenderedPlan({ projectId, body, hintsEnabled = true }: { project
   )
   const hasChanges = entries?.some((entry) => entry.type === 'removed' || (entry.type === 'block' && entry.changed))
   if (!entries || !hasChanges) {
-    if (body.trim()) return <MarkdownContent content={body} />
+    if (body.trim()) return <><HistoryFeedback state={historyState} /><MarkdownContent content={body} /></>
     return <MarkdownEditor content={body} editing={false} onChange={() => {}} placeholder="Project details, goals, background..." format="markdown" />
   }
 

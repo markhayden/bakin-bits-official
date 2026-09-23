@@ -8,7 +8,7 @@
  * modal. Restore is never destructive — the server snapshots the current
  * body before applying (deliberately not a document-management system).
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from '@makinbakin/sdk/hooks'
 import { ConfirmDialog } from '@makinbakin/sdk/patterns'
 import {
@@ -26,68 +26,59 @@ import {
 import { formatDateTime } from '@makinbakin/sdk/utils'
 import type { PlanSnapshot } from '../types'
 import { diffLines } from '../lib/line-diff'
+import { projectRequest } from '../lib/project-api'
+import type { ProjectHistory } from '../hooks/use-project-history'
+import { HistoryFeedback } from './history-feedback'
 
 function snapshotLabel(snapshot: PlanSnapshot): string {
   return `${formatDateTime(snapshot.ts)} · ${snapshot.author === 'agent' ? 'agent edit' : 'your edit'}`
 }
 
-export function PlanHistoryPanel({ projectId, currentBody, onRestored }: {
+export function PlanHistoryPanel({ projectId, currentBody, onRestored, historyState }: {
   projectId: string
+  historyState: ProjectHistory
   /** The live plan body (diff target). */
   currentBody: string
   /** Fired after a successful restore so the host refetches the project. */
-  onRestored: () => void
+  onRestored: () => void | Promise<void>
 }) {
-  const [history, setHistory] = useState<PlanSnapshot[] | null>(null)
-  // Index into the STORED (oldest-first) array; default = newest snapshot.
-  const [selected, setSelected] = useState<number | null>(null)
-  const [confirmRestore, setConfirmRestore] = useState<number | null>(null)
+  const { history, loading, error, refresh } = historyState
+  const [selectedTs, setSelectedTs] = useState<string | null>(null)
+  const [confirmRestore, setConfirmRestore] = useState<{ projectId: string; index: number; snapshot: PlanSnapshot } | null>(null)
   const [restoring, setRestoring] = useState(false)
-
-  const load = useCallback(async () => {
-    const res = await fetch(`/api/plugins/projects/${projectId}/history`)
-    if (!res.ok) {
-      setHistory([])
-      return
-    }
-    const body = (await res.json()) as { history?: PlanSnapshot[] }
-    const list = Array.isArray(body.history) ? body.history : []
-    setHistory(list)
-    setSelected((prev) => (prev !== null && prev < list.length ? prev : list.length > 0 ? list.length - 1 : null))
-  }, [projectId])
-
+  const [restoreError, setRestoreError] = useState<string | null>(null)
+  const owner = useRef(projectId)
+  owner.current = projectId
   useEffect(() => {
-    void load()
-  }, [load])
+    owner.current = projectId
+    setSelectedTs(null); setConfirmRestore(null); setRestoreError(null); setRestoring(false)
+    return () => { owner.current = '' }
+  }, [projectId])
+  const selectedIndex = history?.findIndex(snapshot => snapshot.ts === selectedTs) ?? -1
+  const selected = history?.length ? (selectedIndex < 0 ? history.length - 1 : selectedIndex) : null
+  const snapshot = selected !== null ? history?.[selected] : undefined
 
-  const restore = async (index: number) => {
+  const restore = async () => {
+    const captured = confirmRestore
+    if (!captured || restoring || captured.projectId !== projectId) return
     setRestoring(true)
+    setRestoreError(null)
     try {
-      const res = await fetch(`/api/plugins/projects/${projectId}/history/${index}/restore`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // Pin the snapshot the confirm dialog NAMED — if history shifted
-        // underneath (agent edit, cap trim) the server 409s instead of
-        // silently restoring the wrong version.
-        body: JSON.stringify({ expectedTs: history?.[index]?.ts }),
-      })
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string }
-        toast(body.error ?? `restore failed (${res.status})`, 'error')
-        if (res.status === 409) await load()
-        return
-      }
-      const body = (await res.json().catch(() => ({}))) as { changed?: boolean }
+      const body = await projectRequest(`${encodeURIComponent(captured.projectId)}/history/${captured.index}/restore`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedTs: captured.snapshot.ts }),
+      }) as { changed?: boolean }
+      if (owner.current !== captured.projectId) return
       if (body.changed === false) toast('Plan already matches that version', 'info')
       setConfirmRestore(null)
-      onRestored()
-      await load()
+      await onRestored()
+      await refresh()
+    } catch (error) {
+      if (owner.current === captured.projectId) setRestoreError(error instanceof Error ? error.message : 'Restore failed. Try again.')
     } finally {
-      setRestoring(false)
+      if (owner.current === captured.projectId) setRestoring(false)
     }
   }
-
-  const snapshot = selected !== null ? history?.[selected] : undefined
 
   // Memoized: the parent re-renders per streamed chunk, and LCS is O(n·m).
   const DIFF_LINE_LIMIT = 5000
@@ -100,10 +91,8 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored }: {
   const diff = diffResult.diff
   const changed = diff.filter((l) => l.type !== 'same').length
 
-  if (history === null) {
-    return <SystemState kind="loading" scope="page" headingLevel={3} title="Loading history" />
-  }
-  if (history.length === 0) {
+  if (history === null) return <HistoryFeedback state={historyState} />
+  if (history.length === 0 && !error && !loading) {
     return (
       <SystemState
         kind="initial-empty"
@@ -117,13 +106,14 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored }: {
 
   return (
     <div data-testid="plan-history" className="grid gap-bakin-3">
+      <HistoryFeedback state={historyState} />
       <div className="flex flex-wrap items-end gap-bakin-3">
         <Field name="compareWith">
           <FieldLabel htmlFor="plan-history-picker">Compare current with</FieldLabel>
           <Select
             data-testid="plan-history-picker"
             value={String(selected ?? '')}
-            onValueChange={(value: string) => setSelected(Number(value))}
+            onValueChange={(value: string) => setSelectedTs(history[Number(value)]?.ts ?? null)}
           >
             <SelectTrigger id="plan-history-picker" size="sm" data-testid="plan-history-picker">
               <SelectValue />
@@ -140,17 +130,18 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored }: {
         {snapshot && (
           <Button
             variant="outline"
-            size="xs"
+            size="sm"
             data-testid="plan-history-restore"
-            onClick={() => setConfirmRestore(selected)}
+            disabled={loading || !!error || restoring}
+            onClick={() => { if (selected !== null && snapshot) { setRestoreError(null); setConfirmRestore({ projectId, index: selected, snapshot }) } }}
           >
             Restore this version
           </Button>
         )}
-        <Text size="meta" tone="muted">{changed === 0 ? 'No changes' : `${changed} changed ${changed === 1 ? 'line' : 'lines'}`}</Text>
+        <Text size="meta" tone="muted">{diffResult.tooLarge ? 'Comparison unavailable' : changed === 0 ? 'No changes' : `${changed} changed ${changed === 1 ? 'line' : 'lines'}`}</Text>
       </div>
 
-      <div data-testid="plan-history-diff" className="max-h-96 overflow-auto rounded-bakin-surface border border-bakin-border-subtle bg-bakin-surface-default/60 font-bakin-typography-family-mono text-bakin-typography-size-meta leading-5">
+      <div role="region" aria-label="Plan line comparison" tabIndex={0} data-testid="plan-history-diff" className="focus-visible:outline-2 focus-visible:outline-bakin-focus-ring focus-visible:-outline-offset-2 max-h-96 overflow-auto rounded-bakin-surface border border-bakin-border-subtle bg-bakin-surface-default/60 font-bakin-typography-family-mono text-bakin-typography-size-meta leading-5">
         {diffResult.tooLarge && (
           <Text as="p" size="meta" tone="muted" className="px-bakin-3 py-bakin-2">Diff too large to render inline (over {DIFF_LINE_LIMIT.toLocaleString()} lines) — restore still works.</Text>
         )}
@@ -160,7 +151,7 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored }: {
             data-diff-type={line.type}
             className={
               line.type === 'added'
-                ? 'bg-bakin-signal-success/10 px-bakin-3 text-bakin-signal-success'
+                ? 'bg-bakin-action-primary-background/10 px-bakin-3 text-bakin-action-primary-background'
                 : line.type === 'removed'
                   ? 'bg-bakin-signal-danger/10 px-bakin-3 text-bakin-signal-danger line-through decoration-bakin-signal-danger/40'
                   : 'px-bakin-3 text-bakin-text-muted'
@@ -173,16 +164,17 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored }: {
       </div>
 
       <ConfirmDialog
-        open={confirmRestore !== null && !!history[confirmRestore]}
+        open={confirmRestore !== null && confirmRestore.projectId === projectId}
         title="Restore this plan version?"
-        description={confirmRestore !== null && history[confirmRestore]
-          ? `The plan body returns to ${snapshotLabel(history[confirmRestore])}. Your current version is kept as a new snapshot, so nothing is lost.`
+        description={confirmRestore !== null
+          ? `The plan body returns to ${snapshotLabel(confirmRestore.snapshot)}. Your current version is kept as a new snapshot, so nothing is lost.`
           : ''}
         confirmLabel="Restore"
         busyLabel="Restoring…"
         busy={restoring}
+        error={restoreError}
         confirmTestId="plan-history-restore-confirm"
-        onConfirm={() => { if (confirmRestore !== null) void restore(confirmRestore) }}
+        onConfirm={() => { void restore() }}
         onCancel={() => { if (!restoring) setConfirmRestore(null) }}
       />
     </div>

@@ -3,8 +3,14 @@ import { useEffect, useRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import { DEFAULT_PLUGIN_UI_FIXTURE, PluginUiFixtureHost } from '@makinbakin/sdk/testing/ui'
 import { Stack } from '@makinbakin/sdk/layout'
-import { RenderedPlan } from '../components/rendered-plan'
+import { RenderedPlan as Plan } from '../components/rendered-plan'
 import { assertPlanSpacing } from './plan-layout-check'
+
+import { useProjectHistory } from '../hooks/use-project-history'
+function RenderedPlan(props: { projectId: string; body: string; hintsEnabled?: boolean }) {
+  const historyState = useProjectHistory(props.projectId, props.body)
+  return <Plan {...props} historyState={historyState} />
+}
 
 const previous = '# Weekend plan\n\n## Goal\n\nPlan a short walk.\n\n## Route\n\n- River trail\n- Visitor center'
 const current = previous.replace('Plan a short walk.', 'Plan a short walk and photograph the river.')

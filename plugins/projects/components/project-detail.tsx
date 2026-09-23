@@ -55,6 +55,7 @@ import { PlanHistoryPanel } from './plan-history'
 import { RenderedPlan } from './rendered-plan'
 import type { ProjectStatus, ResolvedProjectAsset as ResolvedAsset } from '../types'
 import { useProjectDetail } from '../hooks/use-project-detail'
+import { useProjectHistory } from '../hooks/use-project-history'
 import { formatAge, formatDateTime } from '@makinbakin/sdk/utils'
 
 // ---------------------------------------------------------------------------
@@ -177,6 +178,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
   const currentId = projectId || ''
   const mainAgentId = useMainAgentId() ?? ''
   const detail = useProjectDetail(currentId)
+  const historyState = useProjectHistory(currentId, detail.project?.body)
   const { project, loading, error: loadError, refresh } = detail
 
   // Draggable divider between the main plan column and the progress/tasks sidebar.
@@ -857,7 +859,8 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                 <PlanHistoryPanel
                   projectId={currentId ?? ''}
                   currentBody={project.body}
-                  onRestored={() => fetchProject()}
+                  historyState={historyState}
+                  onRestored={async () => { await fetchProject() }}
                 />
               ) : editing ? (
                 <ProjectEditor
@@ -866,7 +869,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                   onChange={setEditBody}
                 />
               ) : (
-                <RenderedPlan projectId={currentId ?? ''} body={project.body} hintsEnabled={showChangeHints} />
+                <RenderedPlan historyState={historyState} body={project.body} hintsEnabled={showChangeHints} />
               )}
             </div>
 
