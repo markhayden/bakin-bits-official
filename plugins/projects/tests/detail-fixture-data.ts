@@ -51,7 +51,7 @@ export function detailFixtureFetch(state: DetailFixtureState, fallback: typeof f
     }
     if (method === 'POST' && path.endsWith('/checklist')) {
       const old = state.receipts[body.requestId]
-      if (old) return Response.json({ ok: true, taskItemId: old })
+      if (old) return Response.json({ ok: true, taskItemId: old, deleted: !project.tasks.some(item => item.id === old) })
       const taskItemId = `t${project.tasks.length + 1}`
       project.tasks.push({ id: taskItemId, instanceId: crypto.randomUUID(), title: body.title, checked: false })
       state.receipts[body.requestId] = taskItemId

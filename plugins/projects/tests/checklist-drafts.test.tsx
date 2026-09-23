@@ -40,3 +40,30 @@ it('save all remembers partial successes and retries only pending drafts', async
   expect(urls.filter(url => url.endsWith('/t001'))).toHaveLength(1)
   expect(urls.filter(url => url.endsWith('/t002'))).toHaveLength(2)
 })
+
+it('keeps a deleted add receipt unresolved until explicitly discarded', async () => {
+  globalThis.fetch = (async () => Response.json({ ok: true, taskItemId: 't003', deleted: true })) as typeof fetch
+  const view = renderHook(() => useChecklistDrafts('p1', tasks, async () => null))
+  act(() => view.result.current.setNewTitle('Task removed after a lost response'))
+  await act(async () => { expect(await view.result.current.saveAll()).toBe(false) })
+  expect(view.result.current.newTitle).toBe('Task removed after a lost response')
+  expect(view.result.current.dirty).toBe(true)
+  expect(view.result.current.addIntent?.deleted).toBe(true)
+  act(() => view.result.current.setNewTitle('A newer task draft'))
+  act(() => view.result.current.discardAdd())
+  expect(view.result.current.addIntent).toBeUndefined()
+  expect(view.result.current.newTitle).toBe('A newer task draft')
+})
+
+it('does not transfer a legacy item draft to a reused display ID', async () => {
+  const legacy = { ...tasks[0]!, instanceId: undefined, description: '' }
+  let writes = 0
+  globalThis.fetch = (async () => { writes++; return Response.json({ ok: true }) }) as typeof fetch
+  const view = renderHook(({ items }) => useChecklistDrafts('p1', items, async () => null), { initialProps: { items: [legacy] as typeof tasks } })
+  act(() => view.result.current.editDescription(legacy, 'Old item draft'))
+  view.rerender({ items: [{ ...tasks[0]!, instanceId: 'replacement', description: '' }] })
+  expect(view.result.current.descriptions.t001?.removed).toBe(true)
+  await act(async () => { expect(await view.result.current.saveAll()).toBe(false) })
+  expect(writes).toBe(0)
+  expect(view.result.current.descriptions.t001?.value).toBe('Old item draft')
+})

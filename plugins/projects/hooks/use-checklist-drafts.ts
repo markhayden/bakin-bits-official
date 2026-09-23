@@ -12,7 +12,7 @@ export interface DescriptionDraft {
 }
 interface ChecklistState {
   newTitle: string
-  addIntent?: { requestId: string; title: string; raw: string }
+  addIntent?: { requestId: string; title: string; raw: string; deleted?: boolean }
   descriptions: Record<string, DescriptionDraft>
   errors: Record<string, string>
   busy: Record<string, boolean>
@@ -38,7 +38,7 @@ export function useChecklistDrafts(projectId: string, tasks: ProjectTask[], refr
     const descriptions = { ...current.current.descriptions }
     for (const [id, draft] of Object.entries(descriptions)) {
       const item = tasks.find(task => task.id === id)
-      if (!item || (draft.item.instanceId && item.instanceId !== draft.item.instanceId)) { descriptions[id] = { ...draft, removed: true }; continue }
+      if (!item || ((draft.item.instanceId ?? '') !== (item.instanceId ?? ''))) { descriptions[id] = { ...draft, removed: true }; continue }
       const latest = item.description ?? ''
       const clean = draft.value === draft.baseline || draft.value === latest
       descriptions[id] = { ...draft, item, latest, removed: false, baseline: clean ? latest : draft.baseline, value: clean ? latest : draft.value, conflict: !clean && latest !== draft.baseline }
@@ -96,13 +96,17 @@ export function useChecklistDrafts(projectId: string, tasks: ProjectTask[], refr
   }
   async function add() {
     if (!current.current.newTitle.trim() && !current.current.addIntent) return true
+    if (current.current.addIntent?.deleted) return false
     const intent = current.current.addIntent ?? { requestId: crypto.randomUUID(), title: current.current.newTitle.trim(), raw: current.current.newTitle }
     update({ addIntent: intent })
     return run('add', async () => {
       const result = await projectRequest(`${encodeURIComponent(projectId)}/checklist`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: intent.title, requestId: intent.requestId }) }) as { deleted?: boolean }
       if (owner.current !== projectId) return
+      if (result.deleted) {
+        update({ addIntent: { ...intent, deleted: true } })
+        throw new Error('This task was already added, then removed. Discard the removed task draft before adding another task.')
+      }
       update({ addIntent: undefined, newTitle: current.current.newTitle === intent.raw ? '' : current.current.newTitle })
-      if (result.deleted) failure('add', new Error('This task was already added, then removed. Refresh to review the checklist.'))
     })
   }
   const isDirty = () => Boolean(current.current.newTitle.trim() || current.current.addIntent || Object.values(current.current.descriptions).some(draft => draft.value !== draft.baseline))
@@ -134,6 +138,11 @@ export function useChecklistDrafts(projectId: string, tasks: ProjectTask[], refr
     ...state, editDescription, resolveDescription, saveDescription, add, mutate, validate, saveAll, isDirty,
     dirty: isDirty(), saving: Object.values(state.busy).some(Boolean),
     setNewTitle: (newTitle: string) => update({ newTitle }),
+    discardAdd: () => {
+      if (current.current.busy.add) return
+      update({ newTitle: current.current.newTitle === current.current.addIntent?.raw ? '' : current.current.newTitle, addIntent: undefined })
+      clearError('add')
+    },
     discardDescription: (id: string) => { if (current.current.busy[id]) return; const descriptions = { ...current.current.descriptions }; delete descriptions[id]; update({ descriptions }); clearError(id) },
     discardAll: () => { if (!Object.values(current.current.busy).some(Boolean)) { current.current = empty(); setState(current.current) } },
   }

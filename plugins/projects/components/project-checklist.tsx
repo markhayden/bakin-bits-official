@@ -78,16 +78,17 @@ export function ProjectChecklist({ projectId, tasks, resolvedTasks, model }: {
       : visible.length === 0 ? <Text size="meta" tone="muted">All completed tasks are hidden.</Text>
       : <ListRows variant="separated" size="sm" aria-label="Project tasks">{visible.map(item => <TaskItem key={item.instanceId ?? item.id} item={item} resolved={item.taskId ? resolvedTasks[item.taskId] : undefined} model={model} />)}</ListRows>}
     {Object.entries(model.descriptions).filter(([, draft]) => draft.removed && draft.value !== draft.baseline).map(([id, draft]) => <Alert key={id} tone="attention"><AlertDescription>
-      Details for “{draft.item.title}” remain unsaved because the item was removed.
+      Details for “{draft.item.title}” remain unsaved because the item was removed or replaced.
       <Button type="button" size="sm" variant="outline" onClick={() => model.discardDescription(id)}>Discard removed item draft</Button>
     </AlertDescription></Alert>)}
     <Form aria-label="Add checklist task" onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void model.add() }} busy={model.busy.add}>
       <InputGroup size="md" variant="outlined">
         <InputGroupInput value={model.newTitle} onChange={(event: React.ChangeEvent<HTMLInputElement>) => model.setNewTitle(event.target.value)} placeholder="Add task…" aria-label="Add task" />
-        <InputGroupAddon align="inline-end"><InputGroupButton type="submit" size="icon-xs" disabled={model.busy.add || (!model.newTitle.trim() && !model.addIntent)} aria-label="Add task to checklist"><Plus aria-hidden="true" /></InputGroupButton></InputGroupAddon>
+        <InputGroupAddon align="inline-end"><InputGroupButton type="submit" size="icon-xs" disabled={model.busy.add || model.addIntent?.deleted || (!model.newTitle.trim() && !model.addIntent)} aria-label="Add task to checklist"><Plus aria-hidden="true" /></InputGroupButton></InputGroupAddon>
       </InputGroup>
       {model.addIntent && model.addIntent.raw !== model.newTitle && <Text size="meta">Confirming the earlier add for “{model.addIntent.title}” first. Your newer draft is kept.</Text>}
       <ErrorNotice message={model.errors.add} />
+      {model.addIntent?.deleted && <Button type="button" size="sm" variant="outline" onClick={model.discardAdd}>Discard removed task draft</Button>}
     </Form>
   </Stack>
 }
