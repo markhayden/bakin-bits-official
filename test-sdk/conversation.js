@@ -261,15 +261,13 @@ export function visibleIdFromLocation(pathname, base, opts) {
   return opts?.exclude?.includes(id) ? '' : id
 }
 
-export function badgeFor(totalUnread, inflightCount) {
-  if (totalUnread > 0) return { count: totalUnread, tone: 'attention' }
-  if (inflightCount > 0) return { tone: 'info' }
+export function badgeFor(totalUnread) {
+  if (totalUnread > 0) return { count: totalUnread, tone: 'success' }
   return null
 }
 
 export function useConversationAttention(config) {
   const [unreadTotal, setUnreadTotal] = useState(0)
-  const [inflight, setInflight] = useState(new Set())
   const configRef = useRef(config)
   configRef.current = config
 
@@ -278,26 +276,17 @@ export function useConversationAttention(config) {
       const totals = await configRef.current.refreshTotals()
       if (!totals) return
       setUnreadTotal(totals.unreadTotal)
-      setInflight(new Set(totals.inflightKeys))
     } catch { /* hiccups never break the shell */ }
   }, [])
 
   useEffect(() => { void refreshTotals() }, [refreshTotals])
 
-  usePluginEvent(config.events.started ?? '__attention_noop_started', payload => {
-    const key = configRef.current.keyOf(payload)
-    setInflight(prev => (prev.has(key) ? prev : new Set(prev).add(key)))
-  })
-
-  usePluginEvent(config.events.chunk, payload => {
-    const key = configRef.current.keyOf(payload)
-    setInflight(prev => (prev.has(key) ? prev : new Set(prev).add(key)))
-  })
+  usePluginEvent('bakin.reconcile', () => { void refreshTotals() })
+  usePluginEvent(config.events.started ?? '__attention_noop_started', () => { void refreshTotals() })
 
   usePluginEvent(config.events.done, payload => {
     const cfg = configRef.current
     const key = cfg.keyOf(payload)
-    setInflight(prev => { const next = new Set(prev); next.delete(key); return next })
     const viewing = cfg.visibleKey() === key
     const settings = cfg.settings?.() ?? { sound: true, toasts: true }
     if (!payload.aborted && !viewing && settings.toasts) {
@@ -314,7 +303,6 @@ export function useConversationAttention(config) {
   usePluginEvent(config.events.error, payload => {
     const cfg = configRef.current
     const key = cfg.keyOf(payload)
-    setInflight(prev => { const next = new Set(prev); next.delete(key); return next })
     const settings = cfg.settings?.() ?? { sound: true, toasts: true }
     if (cfg.visibleKey() !== key && settings.toasts) {
       const message = cfg.errorToast?.(payload)
@@ -327,7 +315,7 @@ export function useConversationAttention(config) {
   usePluginEvent(refreshEvents[0] ?? `${config.pluginId}.__attention_noop_0`, () => { void refreshTotals() })
   usePluginEvent(refreshEvents[1] ?? `${config.pluginId}.__attention_noop_1`, () => { void refreshTotals() })
 
-  useNavBadge(config.pluginId, config.navItemId, badgeFor(unreadTotal, inflight.size))
+  useNavBadge(config.pluginId, config.navItemId, badgeFor(unreadTotal))
 }
 
 // Browser fixtures use the real SDK. This export keeps the workspace import

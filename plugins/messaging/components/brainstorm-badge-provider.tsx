@@ -3,8 +3,8 @@
 /**
  * BrainstormBadgeProvider — chat-parity attention for messaging brainstorm
  * turns (bakin#703), mounted alongside PlansBadgeProvider in the host's
- * `nav-badge-providers` slot. Working dot on the Brainstorm nav item while
- * a turn runs, unread count (sessions with unseen agent activity) from
+ * `nav-badge-providers` slot. Green unread-only dot on the Brainstorm nav item
+ * (sessions with unseen agent activity) from
  * GET /brainstorm/attention, toast + chime + OS notification when a reply
  * lands while the user is elsewhere. The brainstorm view marks sessions
  * seen (`?session=` query — the visible key lives in the query string).
@@ -35,7 +35,6 @@ export function BrainstormBadgeProvider() {
     navItemId: 'messaging-brainstorm',
     events: {
       started: 'messaging.brainstorm.started',
-      chunk: 'messaging.brainstorm.chunk',
       done: 'messaging.brainstorm.done',
       error: 'messaging.brainstorm.error',
       refresh: ['messaging.brainstorm.seen'],
@@ -45,8 +44,8 @@ export function BrainstormBadgeProvider() {
     refreshTotals: async () => {
       const res = await fetch('/api/plugins/messaging/brainstorm/attention')
       if (!res.ok) return null
-      const body = (await res.json()) as { unreadTotal?: number; inflight?: string[] }
-      return { unreadTotal: body.unreadTotal ?? 0, inflightKeys: body.inflight ?? [] }
+      const body = (await res.json()) as { unreadTotal?: number }
+      return { unreadTotal: body.unreadTotal ?? 0 }
     },
     renderToast: (done, dismiss) => (
       <ConversationReplyToast

@@ -72,17 +72,7 @@ mock.module('@/components/ui/skeleton', () => ({
   Skeleton: () => <div data-testid="skeleton" />,
 }))
 
-class FakeEventSource {
-  static instances: FakeEventSource[] = []
-  url: string
-  onmessage: ((ev: MessageEvent) => void) | null = null
-  constructor(url: string) {
-    this.url = url
-    FakeEventSource.instances.push(this)
-  }
-  close() {}
-}
-;(globalThis as unknown as { EventSource: typeof FakeEventSource }).EventSource = FakeEventSource
+import { emitPluginEvent } from '@makinbakin/sdk/hooks'
 
 import { PlanList } from '../../../plugins/messaging/components/plan-list'
 import { PlanWorkspace } from '../../../plugins/messaging/components/plan-workspace'
@@ -172,7 +162,6 @@ beforeEach(() => {
   deliverables = []
   listPlans = undefined
   listFails = false
-  FakeEventSource.instances = []
   deleteCalls = []
   deleteResponse = async () => Response.json({ ok: true })
   installFetchMock()
@@ -250,7 +239,7 @@ describe('Plan client UI', () => {
       if (String(input) === '/api/plugins/messaging/plans') return new Promise<Response>(resolve => { finishRefresh = resolve })
       return fetchBefore(input, init)
     }) as typeof fetch
-    act(() => FakeEventSource.instances[0].onmessage?.({ data: JSON.stringify({ file: 'messaging/plans/plan-1.json' }) } as MessageEvent))
+    act(() => emitPluginEvent({ event: 'bakin.file.changed', file: 'messaging/plans/plan-1.json' }))
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete plan' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     await act(async () => finishRefresh(Response.json({ plans: [PLAN] })))

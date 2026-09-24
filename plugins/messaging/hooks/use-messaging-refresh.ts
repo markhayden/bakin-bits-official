@@ -1,20 +1,10 @@
-'use client'
+import { usePluginEvent } from '@makinbakin/sdk/hooks'
 
-import { useEffect } from 'react'
-
+/** File invalidation and connection recovery share the host's single stream. */
 export function useMessagingContentRefresh(refresh: () => void, prefixes: string[]): void {
-  useEffect(() => {
-    if (typeof EventSource === 'undefined') return
-    const events = new EventSource('/api/events')
-    events.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data) as { file?: unknown }
-        const file = typeof data.file === 'string' ? data.file : ''
-        if (file && prefixes.some((prefix) => file.startsWith(prefix))) refresh()
-      } catch {
-        // Ignore malformed event payloads; the next explicit refresh will recover.
-      }
-    }
-    return () => events.close()
-  }, [prefixes, refresh])
+  usePluginEvent('bakin.file.changed', (event) => {
+    const file = typeof event.file === 'string' ? event.file : ''
+    if (prefixes.some((prefix) => file.startsWith(prefix))) refresh()
+  })
+  usePluginEvent('bakin.reconcile', refresh)
 }
