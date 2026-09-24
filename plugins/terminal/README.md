@@ -7,12 +7,12 @@ and normal permission prompts. Bakin does not disable CLI safety controls.
 
 ## Development Status
 
-This is a macOS-first implementation, not a published release. It requires the
-matching Bakin `feat/terminal-plugin` core/SDK changes: verified invocation
-context, local plugin storage, Git session-worktree hooks, and required uninstall
-preflight. The manifest's historical minimum version is not sufficient by
-itself; select the actual release minimum before publishing. Do not install it
-into an older production Bakin.
+This is a macOS-first implementation. It requires Bakin and `@makinbakin/sdk`
+`>=0.0.1-rc.35`, the current published release when this minimum was verified.
+That release includes verified invocation context, local plugin storage, Git
+session-worktree hooks, and required uninstall preflight. The version used to
+assemble SDK fixtures in CI is synthetic and does not define the production
+compatibility requirement.
 
 Prerequisites: Bun 1.3.13, tmux (tested with Homebrew tmux 3.7c), an active macOS
 GUI login, and the Bakin Git plugin. Install `claude` or `codex` separately and
@@ -21,8 +21,8 @@ or API billing.
 
 ## Setup and Access
 
-1. Run the matching core in your development Bakin instance and install this
-   plugin, or use `bakin plugins link <checkout>/plugins/terminal` for hot reload.
+1. Run Bakin `0.0.1-rc.35` or newer and install this plugin, or use
+   `bakin plugins link <checkout>/plugins/terminal` for hot reload.
    An existing dev instance can use its normal Bakin home; a disposable home is
    only needed for isolated testing.
 2. Open Terminal and choose **Set up service**. This explicitly installs a
