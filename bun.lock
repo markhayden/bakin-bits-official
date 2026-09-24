@@ -117,7 +117,7 @@
         "typescript": "^5.6.0",
       },
       "peerDependencies": {
-        "@makinbakin/sdk": ">=0.1.1-rc.1",
+        "@makinbakin/sdk": ">=0.0.1-rc.35",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
       },
@@ -433,9 +433,9 @@
 
     "@bakin-bits/_template/@makinbakin/sdk": ["@makinbakin/sdk@file:test-sdk", { "peerDependencies": { "react": "^19.0.0" } }],
 
-    "@bakin-bits/projects/@makinbakin/sdk": ["@makinbakin/sdk@file:test-sdk", { "peerDependencies": { "react": "^19.0.0" } }],
+    "@bakin-bits/messaging/@makinbakin/sdk": ["@makinbakin/sdk@file:test-sdk", { "peerDependencies": { "react": "^19.0.0" } }],
 
-    "@bakin-bits/terminal/@makinbakin/sdk": ["@makinbakin/sdk@file:test-sdk", { "peerDependencies": { "react": "^19.0.0" } }],
+    "@bakin-bits/projects/@makinbakin/sdk": ["@makinbakin/sdk@file:test-sdk", { "peerDependencies": { "react": "^19.0.0" } }],
 
     "@eslint-community/eslint-utils/eslint-visitor-keys": ["eslint-visitor-keys@3.4.3", "", {}, "sha512-wpc+LXeiyiisxPlEkUzU6svyS1frIO3Mgxj1fdy7Pm8Ygzguax2N3Fa/D/ag1WqbOprdI+uY6wMUl8/a2G+iag=="],
 

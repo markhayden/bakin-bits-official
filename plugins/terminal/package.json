@@ -1,6 +1,6 @@
 {
   "name": "@bakin-bits/terminal",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "main": "./index.ts",
@@ -18,7 +18,7 @@
     "lucide-react": "^0.577.0"
   },
   "peerDependencies": {
-    "@makinbakin/sdk": ">=0.1.1-rc.1",
+    "@makinbakin/sdk": ">=0.0.1-rc.35",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
