@@ -1536,13 +1536,12 @@ declare module '@makinbakin/sdk/conversation' {
 
   export interface ConversationAttentionTotals {
     unreadTotal: number
-    inflightKeys: string[]
   }
 
   export interface ConversationAttentionConfig {
     pluginId: string
     navItemId: string
-    events: { chunk: string; done: string; error: string; started?: string; refresh?: [string] | [string, string] }
+    events: { done: string; error: string; started?: string; refresh?: [string] | [string, string] }
     keyOf: (payload: Record<string, unknown>) => string
     visibleKey: () => string
     refreshTotals: () => Promise<ConversationAttentionTotals | null>

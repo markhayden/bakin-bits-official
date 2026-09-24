@@ -5,14 +5,6 @@ import { useRouter } from '@makinbakin/sdk/navigation'
 import { PlanList } from '../components/plan-list'
 import type { Plan } from '../types'
 
-// The live hook owns a native SSE connection, outside the SDK fetch fixture.
-// Keep that stream inert here; live SSE refresh is outside this layout fixture.
-class FixtureEventSource extends EventTarget {
-  onmessage: ((event: MessageEvent) => void) | null = null
-  close() {}
-}
-globalThis.EventSource = FixtureEventSource as unknown as typeof EventSource
-
 const base: Plan = {
   id: 'launch', title: 'Spring menu launch with cross-team editorial review and publication approval',
   brief: 'Coordinate copy, photography, and channel-specific production before the seasonal launch.',

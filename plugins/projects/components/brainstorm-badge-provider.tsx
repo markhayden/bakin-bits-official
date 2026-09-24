@@ -3,9 +3,8 @@
 /**
  * BrainstormBadgeProvider — mounted via the host's `nav-badge-providers`
  * slot (bakin#703), so it runs on every page. The kit's
- * useConversationAttention supplies chat-parity mechanics: working dot on
- * the Projects nav item while a brainstorm turn runs, unread count after
- * replies land unseen, toast + chime + OS notification when a reply
+ * useConversationAttention supplies a green unread-only dot on
+ * the Projects nav item after replies land unseen, toast + chime + OS notification when a reply
  * arrives while the user is elsewhere (viewing the project stays silent —
  * the detail page marks it seen).
  */
@@ -17,7 +16,6 @@ export function BrainstormBadgeProvider() {
     navItemId: 'projects',
     events: {
       started: 'projects.brainstorm.started',
-      chunk: 'projects.brainstorm.chunk',
       done: 'projects.brainstorm.done',
       error: 'projects.brainstorm.error',
       // Fires after a seen write lands — the authoritative moment to drop
@@ -39,8 +37,8 @@ export function BrainstormBadgeProvider() {
     refreshTotals: async () => {
       const res = await fetch('/api/plugins/projects/brainstorm/attention')
       if (!res.ok) return null
-      const body = (await res.json()) as { unreadTotal?: number; inflight?: string[] }
-      return { unreadTotal: body.unreadTotal ?? 0, inflightKeys: body.inflight ?? [] }
+      const body = (await res.json()) as { unreadTotal?: number }
+      return { unreadTotal: body.unreadTotal ?? 0 }
     },
     renderToast: (done, dismiss) => (
       <ConversationReplyToast

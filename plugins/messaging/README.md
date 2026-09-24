@@ -266,3 +266,11 @@ Relevant coverage includes storage and atomic writes, prompt building and SSE
 streaming, Plan preparation and activation, scheduled kickoff task creation,
 Deliverable review and publishing, workflow bridge behavior, default workflows,
 content-type refresh, calendar filters, Quick Post, and the Plan/brainstorm UI.
+
+### Navigation freshness
+
+Plans publishes a yellow review dot from its summary endpoint. The shell owns
+the SSE connection: `bakin.file.changed` (including deletes) invalidates Messaging
+snapshots, and `bakin.reconcile` recovers on reconnect, tab resume, or restored
+network access. Failed reads retain the last-known summary and retry with bounded
+backoff; late responses cannot overwrite a newer snapshot. Recovery is silent.
