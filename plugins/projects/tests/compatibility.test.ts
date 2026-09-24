@@ -3,7 +3,7 @@ import { semver } from 'bun'
 import manifest from '../bakin-plugin.json'
 import pkg from '../package.json'
 
-test('Terminal accepts the Bakin release it was verified against and later releases', () => {
+test('Projects accepts the Bakin release it was verified against and later releases', () => {
   const ranges = [manifest.bakin, pkg.peerDependencies['@makinbakin/sdk']]
   for (const range of ranges) {
     for (const version of ['0.0.1-rc.36', '0.0.1-rc.100', '0.0.1', '0.0.2', '0.1.0', '1.0.0']) {

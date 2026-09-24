@@ -8,7 +8,7 @@ and normal permission prompts. Bakin does not disable CLI safety controls.
 ## Development Status
 
 This is a macOS-first implementation. It requires Bakin and `@makinbakin/sdk`
-`>=0.0.1-rc.35`, the current published release when this minimum was verified.
+`>=0.0.1-rc.36`, the release its shared collection views were verified against.
 That release includes verified invocation context, local plugin storage, Git
 session-worktree hooks, and required uninstall preflight. The version used to
 assemble SDK fixtures in CI is synthetic and does not define the production
@@ -21,7 +21,7 @@ or API billing.
 
 ## Setup and Access
 
-1. Run Bakin `0.0.1-rc.35` or newer and install this plugin, or use
+1. Run Bakin `0.0.1-rc.36` or newer and install this plugin, or use
    `bakin plugins link <checkout>/plugins/terminal` for hot reload.
    An existing dev instance can use its normal Bakin home; a disposable home is
    only needed for isolated testing.
