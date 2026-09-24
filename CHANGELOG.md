@@ -8,6 +8,13 @@ on a per-plugin basis: each plugin tags its own releases as
 
 ## [Unreleased]
 
+### Changed
+- `projects` (0.11.1), `messaging` (0.11.6), `terminal` (0.1.3): require Bakin
+  and `@makinbakin/sdk` `>=0.0.1-rc.36` — the host release carrying the shared
+  table-first collections, form controls, and staged-editing contracts these
+  versions were verified against. Older hosts are refused at install with the
+  reason instead of loading a plugin built for kit contracts they lack.
+
 ### Added
 - Four capability packs, the official lane for markhayden/bakin#687: `github`
   (issues/PRs/CI runs through the `gh` CLI, optional token), `google-workspace`
