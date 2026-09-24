@@ -1,8 +1,8 @@
 {
   "id": "messaging",
   "name": "Messaging",
-  "version": "0.11.5",
-  "bakin": ">=0.0.1-rc.1",
+  "version": "0.11.6",
+  "bakin": ">=0.0.1-rc.36",
   "description": "Content messaging with scheduling, brainstorming, and multi-agent content pipeline",
   "contentFiles": [],
   "dependencies": [
