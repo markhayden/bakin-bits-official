@@ -79,9 +79,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: markhayden/bakin
-          # Projects audit contracts, atomic scoped writes, and canonical SDK/CSS.
+          # Navigation reconciliation and unread-only conversation indicators (#933).
           # Pin the reviewed prerequisite commit, not a moving branch.
-          ref: 351bd0e64291f40e1453e12081311871f69c58bf
+          ref: e670858c84320bba9f73483ae104684cbd835b8f
           path: .bakin-source
 
       # The playwright container image ships without unzip, which setup-bun

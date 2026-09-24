@@ -9,6 +9,11 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- `messaging` (0.11.7), `projects` (0.11.2): retain and reconcile navigation
+  state and use green unread-only conversation indicators. Require Bakin and
+  `@makinbakin/sdk` `>=0.0.1-rc.39`, the planned first release containing
+  markhayden/bakin#933; publish these plugin versions after that host release.
+  CI verifies against the merged prerequisite commit before it is released.
 - `projects` (0.11.1), `messaging` (0.11.6), `terminal` (0.1.3): require Bakin
   and `@makinbakin/sdk` `>=0.0.1-rc.36` — the host release carrying the shared
   table-first collections, form controls, and staged-editing contracts these
