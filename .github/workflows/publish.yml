@@ -28,6 +28,9 @@ on:
   push:
     tags:
       - '*-v*'
+      # Binary mirrors (mirror-tmux.yml) release under mirror/<tool>-v<ver>;
+      # they are not plugin releases and must never touch the plugin catalog.
+      - '!mirror/**'
 
 permissions:
   contents: write
