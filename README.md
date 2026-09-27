@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://github.com/markhayden/bakin-bits-official/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/markhayden/bakin-bits-official/ci.yml?branch=main&style=for-the-badge&label=build" alt="Build" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="License: MIT" /></a>
-  <img src="https://img.shields.io/badge/runtime-Bun%20%E2%89%A5%201.3.13-black?style=for-the-badge" alt="Bun ≥ 1.3.13" />
+  <img src="https://img.shields.io/badge/runtime-Bun%20%E2%89%A5%201.4.2-black?style=for-the-badge" alt="Bun ≥ 1.4.2" />
 </p>
 
 ---

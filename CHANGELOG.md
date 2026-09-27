@@ -9,6 +9,8 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- `terminal` (0.3.2): toolchain pin moves to bun 1.4.2 (`@types/bun ^1.4.2`,
+  `.bun-version`) in lockstep with Bakin; no behavior change.
 - `messaging` (0.11.8), `projects` (0.11.3), `terminal` (0.3.1): dependency
   sweep in lockstep with Bakin #760 — zod `~4.6.5` (the SDK's public types
   carry zod's minor, so the tilde pin must match the host), lucide-react 1.51
