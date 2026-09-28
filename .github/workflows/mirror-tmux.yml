@@ -102,17 +102,24 @@ jobs:
           mkdir -p "$OUT"
           lipo -create "$S/tmux-arm64/tmux" "$S/tmux-x86_64/tmux" -output "$OUT/tmux"
           file "$OUT/tmux" | tee /dev/stderr | grep -q 'arm64' && file "$OUT/tmux" | grep -q 'x86_64'
+          # Artifact downloads reset file modes. Restore execution before signing.
+          chmod 755 "$OUT/tmux"
           codesign --force -s - "$OUT/tmux"
-          if otool -L "$OUT/tmux" | tail -n +2 | grep -Ev '^\s+/usr/lib/'; then
-            echo "universal tmux links libraries outside /usr/lib" >&2; exit 1
-          fi
+          # A universal otool listing has one header per slice. Inspect each
+          # architecture separately so its header cannot look like a dependency.
+          for ARCH in arm64 x86_64; do
+            LIBRARIES=$(otool -arch "$ARCH" -L "$OUT/tmux")
+            if printf '%s\n' "$LIBRARIES" | tail -n +2 | grep -Ev '^[[:space:]]+/usr/lib/'; then
+              echo "$ARCH tmux links libraries outside /usr/lib" >&2; exit 1
+            fi
+          done
           "$OUT/tmux" -V | grep -Fx "tmux $VERSION"
           export TERM=xterm-256color
           SOCK="$RUNNER_TEMP/smoke.sock"
           "$OUT/tmux" -S "$SOCK" new-session -d -s smoke -x 80 -y 24
-          "$OUT/tmux" -S "$SOCK" send-keys -t smoke 'printf UNIVERSAL_OK\n' Enter
-          for _ in 1 2 3 4 5 6 7 8 9 10; do "$OUT/tmux" -S "$SOCK" capture-pane -p -t smoke | grep -q UNIVERSAL_OK && break; sleep 0.5; done
-          "$OUT/tmux" -S "$SOCK" capture-pane -p -t smoke | grep -q UNIVERSAL_OK
+          "$OUT/tmux" -S "$SOCK" send-keys -t smoke 'printf "%s\n" UNIVERSAL_OK' Enter
+          for _ in 1 2 3 4 5 6 7 8 9 10; do "$OUT/tmux" -S "$SOCK" capture-pane -p -t smoke | grep -Fx UNIVERSAL_OK && break; sleep 0.5; done
+          "$OUT/tmux" -S "$SOCK" capture-pane -p -t smoke | grep -Fx UNIVERSAL_OK
           "$OUT/tmux" -S "$SOCK" kill-server
           cmp "$S/tmux-arm64/LICENSE" "$S/tmux-x86_64/LICENSE"
           cp "$S/tmux-arm64/LICENSE" "$OUT/LICENSE"
