@@ -134,6 +134,44 @@ Pin a specific version with `@<tag>`:
 bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging@messaging-v0.2.0
 ```
 
+## Binary mirrors
+
+Some plugins need a binary Bakin must be able to download without Homebrew
+(the Terminal plugin's tmux). Those binaries are **mirrored** from pinned
+upstream sources by `.github/workflows/mirror-tmux.yml` and released under
+`mirror/<tool>-v<version>` tags — separate from plugin releases and **never
+marked latest**, so `releases/latest/download/whiskit-artifacts.json` keeps
+resolving to the plugin catalog. `publish.yml` excludes `mirror/**` tags.
+
+Bakin installs a mirrored binary through a plugin manifest's `requires.bins`
+(disclosed at consent, sha256-verified into `~/.bakin/bin`, removed with the
+plugin unless another owner still pins it — see Bakin's
+`.claude/knowledge/plugin-lifecycle.md`).
+
+### Cutting a tmux mirror
+
+1. Record the upstream tarball's sha256 under `tmux` in
+   `scripts/mirror/tmux-sources.json` (`curl -sL <url> | shasum -a 256`).
+   Dependency pins (libevent, ncurses, utf8proc) live in the same file.
+2. Merge that to `main` — GitHub only dispatches workflows that exist on the
+   default branch.
+3. `gh workflow run mirror-tmux.yml -f version=3.7c` and watch the run. Two
+   native build legs (`macos-14` arm64, `macos-15-intel` x86_64) each build
+   static libevent/ncurses/utf8proc + tmux, strip, ad-hoc sign, and pass a
+   headless smoke (`tmux -V`, detached server, window, `capture-pane`). The
+   package leg `lipo`s the slices, checks `otool -L` shows only `/usr/lib`,
+   re-signs, smokes the universal binary, and releases
+   `tmux-<v>-macos-universal.tar.gz` (+ `.sha256`, `BUILD.json`) as
+   `mirror/tmux-v<v>`, refusing if the tag exists (mirrors are immutable —
+   bump the version instead).
+4. Copy the manifest entry from the release notes (url, sha256, sizeBytes,
+   `archive.member: tmux`) into the plugin's `requires.bins` for BOTH
+   `darwin-arm64` and `darwin-x64`. `test/plugin-bins-contract.test.ts`
+   pins the shape.
+
+Licensing: only mirror tools whose license permits redistribution (tmux is
+ISC); the license file ships inside every tarball.
+
 ## Pre-release checklist
 
 - [ ] `bun run typecheck && bun run test && bun run lint` pass locally.

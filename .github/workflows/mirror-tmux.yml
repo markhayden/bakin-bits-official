@@ -1,0 +1,170 @@
+# Binary mirror: build a self-contained, universal macOS tmux from pinned
+# upstream sources and publish it as a `mirror/tmux-v<version>` release that
+# is NEVER marked latest (the plugin catalog at releases/latest must keep
+# resolving). The Terminal plugin pins the resulting tarball in its
+# `requires.bins`; Bakin downloads and sha256-verifies it into ~/.bakin/bin.
+#
+# Reproducible on purpose: every source (tmux, libevent, ncurses, utf8proc) is
+# pinned by sha256 in scripts/mirror/tmux-sources.json, both slices build
+# natively on runners of their own architecture, and BUILD.json records the
+# inputs. See RELEASE.md § Binary mirrors.
+name: Mirror tmux
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'tmux version to mirror (e.g. 3.7c) — must be recorded in scripts/mirror/tmux-sources.json'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mirror-tmux
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }} slice
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: macos-14
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Refuse a version that is not pinned
+        run: |
+          python3 - "${{ inputs.version }}" <<'PY'
+          import json, sys
+          v = sys.argv[1]
+          pins = json.load(open('scripts/mirror/tmux-sources.json'))['tmux']
+          if v not in pins:
+              sys.exit(f"tmux {v} is not recorded in scripts/mirror/tmux-sources.json — add its sha256 first")
+          PY
+
+      - name: Build, strip, sign and smoke the slice
+        run: |
+          [ "$(uname -m)" = "${{ matrix.arch }}" ] || { echo "runner is $(uname -m), expected ${{ matrix.arch }}"; exit 1; }
+          bash scripts/mirror/build-tmux.sh "${{ inputs.version }}" "$RUNNER_TEMP/slice"
+
+      - name: Upload slice
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmux-${{ matrix.arch }}
+          path: ${{ runner.temp }}/slice
+          if-no-files-found: error
+          retention-days: 7
+
+  package:
+    name: Package universal binary and release
+    needs: build
+    runs-on: macos-14
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ inputs.version }}
+      TAG: mirror/tmux-v${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Refuse to overwrite an existing mirror release
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists — mirrors are immutable; bump the version instead" >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "tag $TAG already exists" >&2
+            exit 1
+          fi
+
+      - name: Download slices
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/slices
+
+      - name: Lipo, verify, sign, smoke
+        run: |
+          set -euo pipefail
+          S="$RUNNER_TEMP/slices"
+          OUT="$RUNNER_TEMP/universal"
+          mkdir -p "$OUT"
+          lipo -create "$S/tmux-arm64/tmux" "$S/tmux-x86_64/tmux" -output "$OUT/tmux"
+          file "$OUT/tmux" | tee /dev/stderr | grep -q 'arm64' && file "$OUT/tmux" | grep -q 'x86_64'
+          codesign --force -s - "$OUT/tmux"
+          if otool -L "$OUT/tmux" | tail -n +2 | grep -Ev '^\s+/usr/lib/'; then
+            echo "universal tmux links libraries outside /usr/lib" >&2; exit 1
+          fi
+          "$OUT/tmux" -V | grep -Fx "tmux $VERSION"
+          export TERM=xterm-256color
+          SOCK="$RUNNER_TEMP/smoke.sock"
+          "$OUT/tmux" -S "$SOCK" new-session -d -s smoke -x 80 -y 24
+          "$OUT/tmux" -S "$SOCK" send-keys -t smoke 'printf UNIVERSAL_OK\n' Enter
+          for _ in 1 2 3 4 5 6 7 8 9 10; do "$OUT/tmux" -S "$SOCK" capture-pane -p -t smoke | grep -q UNIVERSAL_OK && break; sleep 0.5; done
+          "$OUT/tmux" -S "$SOCK" capture-pane -p -t smoke | grep -q UNIVERSAL_OK
+          "$OUT/tmux" -S "$SOCK" kill-server
+          cmp "$S/tmux-arm64/LICENSE" "$S/tmux-x86_64/LICENSE"
+          cp "$S/tmux-arm64/LICENSE" "$OUT/LICENSE"
+
+      - name: Write BUILD.json and package the tarball
+        run: |
+          set -euo pipefail
+          S="$RUNNER_TEMP/slices"; OUT="$RUNNER_TEMP/universal"; DIST="$RUNNER_TEMP/dist"
+          mkdir -p "$DIST"
+          ASSET="tmux-${VERSION}-macos-universal.tar.gz"
+          python3 - "$S/tmux-arm64/slice.json" "$S/tmux-x86_64/slice.json" "$OUT/BUILD.json" "$VERSION" <<'PY'
+          import json, sys
+          arm, x64, out, version = sys.argv[1:]
+          a, b = json.load(open(arm)), json.load(open(x64))
+          assert a['tmux'] == b['tmux'] and a['deps'] == b['deps'] and a['flags'] == b['flags'], 'slices were built from different inputs'
+          json.dump({
+            'name': 'tmux', 'version': version, 'source': f'https://github.com/tmux/tmux/releases/download/{version}/tmux-{version}.tar.gz',
+            'sourceSha256': a['tmux']['sourceSha256'], 'license': 'ISC (LICENSE in this tarball)',
+            'universal': ['arm64', 'x86_64'], 'runners': {'arm64': 'macos-14', 'x86_64': 'macos-15-intel'},
+            'macos': {'arm64': a['macos'], 'x86_64': b['macos']}, 'deploymentTarget': a['deploymentTarget'],
+            'deps': a['deps'], 'flags': a['flags'], 'signing': 'ad-hoc (codesign -s -)',
+            'workflow': 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}',
+          }, open(out, 'w'), indent=2)
+          PY
+          tar -C "$OUT" -czf "$DIST/$ASSET" tmux LICENSE BUILD.json
+          ( cd "$DIST" && shasum -a 256 "$ASSET" > "$ASSET.sha256" )
+          SIZE=$(stat -f%z "$DIST/$ASSET")
+          SHA=$(cut -d' ' -f1 "$DIST/$ASSET.sha256")
+          python3 - "$OUT/BUILD.json" "$DIST/BUILD.json" "$ASSET" "$SHA" "$SIZE" <<'PY'
+          import json, sys
+          src, out, asset, sha, size = sys.argv[1:]
+          d = json.load(open(src)); d['asset'] = {'name': asset, 'sha256': sha, 'sizeBytes': int(size)}
+          json.dump(d, open(out, 'w'), indent=2)
+          PY
+          {
+            echo "Binary mirror of [tmux $VERSION](https://github.com/tmux/tmux/releases/tag/$VERSION) (ISC, LICENSE in the tarball) — macOS universal (arm64 + x86_64), self-contained (static libevent, ncurses, utf8proc), ad-hoc signed. Pinned by the Terminal plugin's \`requires.bins\`."
+            echo
+            echo "Manifest entry (both \`darwin-arm64\` and \`darwin-x64\`):"
+            echo
+            echo '```json'
+            echo "{ \"url\": \"https://github.com/${{ github.repository }}/releases/download/$TAG/$ASSET\", \"sha256\": \"$SHA\", \"sizeBytes\": $SIZE, \"archive\": { \"format\": \"tar.gz\", \"member\": \"tmux\" } }"
+            echo '```'
+            echo
+            echo "Built by [this run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}); inputs in BUILD.json. Not a plugin release — never marked latest."
+          } > "$DIST/notes.md"
+          echo "sha256=$SHA size=$SIZE"
+
+      - name: Create the mirror release (not latest)
+        run: |
+          gh release create "$TAG" --target "$GITHUB_SHA" --latest=false \
+            --title "tmux $VERSION (binary mirror)" --notes-file "$RUNNER_TEMP/dist/notes.md" \
+            "$RUNNER_TEMP/dist/tmux-${VERSION}-macos-universal.tar.gz" \
+            "$RUNNER_TEMP/dist/tmux-${VERSION}-macos-universal.tar.gz.sha256" \
+            "$RUNNER_TEMP/dist/BUILD.json"
+          gh release view "$TAG" --json tagName,isPrerelease,assets --jq '"\(.tagName): \([.assets[].name]|join(", "))"'

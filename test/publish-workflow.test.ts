@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import yaml from 'js-yaml'
 
 const workflow = yaml.load(readFileSync(join(import.meta.dir, '../.github/workflows/publish.yml'), 'utf8')) as {
+  on: { push: { tags: string[] } }
   jobs: { publish: { steps: Array<{ name: string; if?: string; run?: string }> } }
 }
 const steps = workflow.jobs.publish.steps
@@ -40,5 +41,12 @@ describe('publish workflow SDK stylesheet sources', () => {
     expect(realpathSync(join(runnerTemp, 'bakin-bits-official/plugins/projects'))).toBe(
       realpathSync(join(workspace, 'plugins/projects')),
     )
+  })
+})
+
+describe('publish workflow tag trigger', () => {
+  it('fires for <id>-v<semver> tags and never for binary mirrors (mirror/**)', () => {
+    expect(workflow.on.push.tags).toContain('*-v*')
+    expect(workflow.on.push.tags).toContain('!mirror/**')
   })
 })
