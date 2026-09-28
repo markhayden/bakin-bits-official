@@ -40,7 +40,7 @@ browserTest('managed tmux serves a real shell across reconnect and mobile resizi
         const endpoint = new URL('/api/plugins/terminal/session', process.env.TERMINAL_PREVIEW_URL!).href
         const headers = { 'X-Bakin-Terminal-Client': 'managed-tmux-release-smoke' }
         const taken = await page.request.post(endpoint, { headers, data: { id, operation: 'take' } })
-        if (!taken.ok()) throw new Error('Could not take control for smoke-test cleanup')
+        expect(taken.ok(), 'Could not take control for smoke-test cleanup').toBe(true)
         const session = await taken.json()
         const finished = await page.request.post(endpoint, { headers, data: { id, operation: 'terminate', generation: session.generation } })
         expect(finished.ok()).toBe(true)
