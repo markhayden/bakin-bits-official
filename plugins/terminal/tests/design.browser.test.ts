@@ -37,6 +37,8 @@ browserTest('HTTP browsers load terminals and empty and error states own the ful
     await page.getByRole('button', { name: 'Retry', exact: true }).click()
     await page.getByRole('button', { name: 'Set up service', exact: true }).waitFor()
     expect(await page.getByText('Connection interrupted', { exact: true }).count()).toBe(0)
+    expect(await page.getByText(/Bakin installs tmux with this plugin/).count()).toBe(1)
+    expect(await page.getByText(/bakin install plugin-assets/).count()).toBe(1)
     await page.setViewportSize({ width: 320, height: 740 })
     const activity = page.getByTestId('mobile-live-activity-button')
     if (await activity.isVisible() && await activity.getAttribute('aria-pressed') === 'true') {
@@ -192,3 +194,20 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     await page.keyboard.press('Escape')
   } finally { await browser.close() }
 }, 30000)
+
+
+browserTest('service migration remains visible and explains why live sessions block setup', async () => {
+  const browser = await launchChromium()
+  const page = await browser.newPage({ viewport: { width: 320, height: 740 } })
+  try {
+    await page.route('**/api/plugins/terminal/sessions', route => route.fulfill({ json: { sessions: [], serviceReady: true, serviceMigrationRequired: true } }))
+    await page.route('**/api/plugins/terminal/service', route => route.fulfill({ status: 409, json: { error: "Terminal still has 2 live terminal panes. End them and press Set up service again to switch to Bakin's tmux." } }))
+    await page.goto(process.env.TERMINAL_PREVIEW_URL!)
+    await page.getByText('Terminal service update available', { exact: true }).waitFor()
+    await page.getByRole('button', { name: 'Set up service', exact: true }).click()
+    await page.getByText(/2 live terminal panes/).waitFor()
+    expect(await page.getByText('Terminal service update available', { exact: true }).count()).toBe(1)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await page.screenshot({ path: join(import.meta.dir, '../test-results/design/migration-mobile.png') })
+  } finally { await browser.close() }
+}, 15000)

@@ -5,7 +5,7 @@ import { DEFAULT_PLUGIN_UI_FIXTURE, PluginUiFixtureHost } from '@makinbakin/sdk/
 import { terminalRegistration } from '../client-registration'
 
 const liveFetch = globalThis.fetch.bind(globalThis)
-const fixture = { ...DEFAULT_PLUGIN_UI_FIXTURE, route: '/terminal', network: [] }
+const fixture = { ...DEFAULT_PLUGIN_UI_FIXTURE, route: (window.location.pathname === '/' ? '/terminal' : window.location.pathname) + window.location.search, network: [] }
 function LiveFixture() {
   // This opt-in local integration fixture targets its own isolated backend.
   // Restore real fetch after the child fixture installs its deterministic shell.

@@ -30,7 +30,7 @@ const route = (path: string, method: 'GET' | 'POST', summary: string, handler: (
 })
 
 export default definePlugin({
-  id: 'terminal', name: 'Terminal', version: '0.1.0',
+  id: 'terminal', name: 'Terminal', version: '0.2.0',
   routes: [
     route('/options', 'GET', 'Get terminal form defaults and available agents and tasks', async (request) => {
       const principal = human(request)
@@ -41,7 +41,7 @@ export default definePlugin({
       const principal = human(request)
       const serviceReady = await service?.ready()
       if (serviceReady) await sessions().refreshStates()
-      return Response.json({ sessions: sessions().list(principal), serviceReady })
+      return Response.json({ sessions: sessions().list(principal), serviceReady, serviceMigrationRequired: await service?.migrationRequired() })
     }),
     route('/sessions', 'POST', 'Create a terminal session', async (request) => { const principal = human(request); return Response.json(await sessions().create(await request.json(), principal)) }),
     route('/session', 'POST', 'Operate a terminal session', async (request) => { const principal = human(request); return Response.json(await command(sessions(), await request.json(), principal)) }),

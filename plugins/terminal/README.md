@@ -8,30 +8,44 @@ and normal permission prompts. Bakin does not disable CLI safety controls.
 ## Development Status
 
 This is a macOS-first implementation. It requires Bakin and `@makinbakin/sdk`
-`>=0.0.1-rc.36`, the release its shared collection views were verified against.
+`>=0.0.1-rc.40`, which adds consent, verified downloads, and repair for
+plugin-managed binaries.
 That release includes verified invocation context, local plugin storage, Git
 session-worktree hooks, and required uninstall preflight. The version used to
 assemble SDK fixtures in CI is synthetic and does not define the production
 compatibility requirement.
 
-Prerequisites: Bun 1.3.13, tmux (tested with Homebrew tmux 3.7c), an active macOS
-GUI login, and the Bakin Git plugin. Install `claude` or `codex` separately and
+Prerequisites: an active macOS GUI login and the Bakin Git plugin. Bakin installs
+a pinned, SHA256-verified tmux 3.7c into its managed bin directory during plugin
+installation or upgrade, with the download disclosed for consent. The universal
+binary supports Apple Silicon and Intel Macs; Homebrew is not required.
+Install `claude` or `codex` separately and
 complete their normal authentication. The plugin does not manage subscriptions
 or API billing.
 
 ## Setup and Access
 
-1. Run Bakin `0.0.1-rc.36` or newer and install this plugin, or use
+1. Run Bakin `0.0.1-rc.40` or newer and install this plugin, or use
    `bakin plugins link <checkout>/plugins/terminal` for hot reload.
    An existing dev instance can use its normal Bakin home; a disposable home is
    only needed for isolated testing.
 2. Open Terminal and choose **Set up service**. This explicitly installs a
-   plugin-private launchd LaunchAgent. No service starts merely by importing the
-   plugin. Linux service installation is not implemented.
+   plugin-private launchd LaunchAgent using the managed tmux first. No service
+   starts merely by importing the plugin. Linux service installation is not implemented.
 3. Enable each allowed agent under plugin settings (`enabledAgents`, a list of
    `{ "id": "patch" }` entries). The default is no agent access.
 4. Create a session. Coding CLIs default to an isolated Git worktree; **Existing
    checkout** is explicit. Shell sessions use the supplied working directory.
+
+If tmux is missing or damaged, open Health and run the plugin assets repair, or
+run `bakin install plugin-assets`. Terminal picks up the repaired executable
+without a Bakin restart. A manually installed tmux is a fallback.
+
+Upgrading an existing Homebrew-backed service shows **Terminal service update
+available**. End its live sessions, then choose **Set up service** to switch its
+LaunchAgent to the managed binary. Setup refuses to restart live sessions or a
+service whose process state cannot be verified. Output and worktree records are
+retained. Linux is not supported by this release.
 
 New Terminal loads the runtime agent roster and active tasks, plus named project
 choices when Projects is installed. Disabled agents remain visible but cannot
