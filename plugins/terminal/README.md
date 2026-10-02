@@ -195,3 +195,7 @@ Client markers use cryptographic random bytes
 available on HTTP LAN/Tailscale origins, not secure-context-only `randomUUID`.
 Request failures never imply that the terminal service needs installation.
 No design-system exception or public UI extension is used.
+
+## Accelerated rendering
+
+Terminal automatically uses xterm's WebGL renderer when available. GPU startup failure or context loss falls back to the normal renderer; reconnecting creates a fresh renderer. No setting or separate transport is needed.

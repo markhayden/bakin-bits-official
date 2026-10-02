@@ -7,6 +7,7 @@ import { test } from 'bun:test'
 export const browserTest = process.env.TERMINAL_PREVIEW_URL ? test : test.skip
 
 export async function launchChromium() {
-  const { chromium } = await import('playwright')
-  return chromium.launch({ headless: true })
+  const { chromium, webkit } = await import('playwright')
+  const engine = process.env.TERMINAL_BROWSER === 'webkit' ? webkit : chromium
+  return engine.launch({ headless: true })
 }

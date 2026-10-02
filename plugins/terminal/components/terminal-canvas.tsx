@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { BoundedOverflow } from '@makinbakin/sdk/layout'
 import type { Session } from '../lib/contracts'
 import { terminalFetch } from './api'
+import { enableWebgl } from './terminal-renderer'
 import '@xterm/xterm/css/xterm.css'
 
 export function TerminalCanvas({ session, writable, captureTab, attempt, onStatus, onInput, onClaim, onSession, onResize }: {
@@ -59,6 +60,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, onStatu
     fit.current = new FitAddon()
     term.loadAddon(fit.current)
     term.open(element.current!)
+    const disposeRenderer = enableWebgl(term)
     term.attachCustomKeyEventHandler((event) => event.key !== 'Tab' || callbacks.current.captureTab)
     // Watching + typing claims the session (claim-on-type); the page decides
     // whether to confirm. Drop control keys so a stray Ctrl-key can't claim.
@@ -100,7 +102,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, onStatu
       } catch (error) { if (!abort.signal.aborted) setStatus(error instanceof Error ? error.message : 'Disconnected') }
     }
     void connect()
-    return () => { abort.abort(); term.dispose(); terminal.current = null }
+    return () => { abort.abort(); disposeRenderer(); term.dispose(); terminal.current = null }
   }, [session.id, attempt])
   useEffect(() => { terminal.current?.resize(session.cols, session.rows); fitFontToPane() }, [session.cols, session.rows])
   useEffect(() => {
