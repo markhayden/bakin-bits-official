@@ -9,7 +9,7 @@ const session = {
   state: 'running', createdAt: 0, lastActivityAt: 0,
 }
 const fixture = {
-  ...DEFAULT_PLUGIN_UI_FIXTURE, route: '/terminal', randomSeed: 'terminal-ui',
+  ...DEFAULT_PLUGIN_UI_FIXTURE, route: '/terminal/demo', randomSeed: 'terminal-ui',
   network: [
     { path: '/api/plugins/terminal/options', status: 200, json: { agents: [{ id: 'patch', name: 'Patch', enabled: true }, { id: 'chef', name: 'Chef', enabled: false }], tasks: [{ id: 'task-1', title: 'Terminal development', agentId: 'patch', projectId: 'project-1' }], defaults: { cwd: '/workspace/bakin', agentId: 'patch' } } },
     { path: '/api/plugins/projects/', status: 200, json: { projects: [{ id: 'project-1', title: 'Bakin' }] } },
@@ -17,4 +17,4 @@ const fixture = {
     { path: '/api/plugins/terminal/stream?id=demo', status: 200, headers: { 'Content-Type': 'text/event-stream' }, body: `data: ${JSON.stringify({ type: 'snapshot', session, cursor: 0, data: btoa('$ git status\r\nOn branch feat/terminal-plugin\r\n\r\nWorking tree clean\r\n$ ') })}\n\n` },
   ],
 } as const
-createRoot(document.getElementById('root')!).render(<PluginUiFixtureHost fixture={fixture} registrations={[terminalRegistration]} />)
+createRoot(document.getElementById('root')!).render(<PluginUiFixtureHost className="fixed inset-x-0 bottom-0 top-(--bakin-shell-top) [&>[data-bakin-plugin-fixture-page]]:h-full" fixture={fixture} registrations={[terminalRegistration]} />)

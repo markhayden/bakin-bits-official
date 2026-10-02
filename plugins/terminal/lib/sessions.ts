@@ -159,7 +159,7 @@ export class Sessions {
       const session = this.get(id, principal)
       authorize(session, principal, this.enabled(), true, generation)
       if (session.state !== 'running') throw new TerminalError('Session has exited')
-      if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 20 || cols > 400 || rows < 5 || rows > 150) throw new TerminalError('Invalid terminal dimensions', 400)
+      if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 20 || cols > 400 || rows < 1 || rows > 150) throw new TerminalError('Invalid terminal dimensions', 400)
       await this.driver.resize(id, cols, rows)
       this.screens.get(id)?.resize(cols, rows)
       session.cols = cols; session.rows = rows

@@ -10,6 +10,6 @@ function LiveFixture() {
   // This opt-in local integration fixture targets its own isolated backend.
   // Restore real fetch after the child fixture installs its deterministic shell.
   useLayoutEffect(() => { globalThis.fetch = liveFetch }, [])
-  return <PluginUiFixtureHost fixture={fixture} registrations={[terminalRegistration]} />
+  return <PluginUiFixtureHost className="fixed inset-x-0 bottom-0 top-(--bakin-shell-top) [&>[data-bakin-plugin-fixture-page]]:h-full" fixture={fixture} registrations={[terminalRegistration]} />
 }
 createRoot(document.getElementById('root')!).render(<LiveFixture />)

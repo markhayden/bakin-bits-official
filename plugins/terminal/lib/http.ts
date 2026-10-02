@@ -20,7 +20,7 @@ export const commandSchema = z.object({
   data: z.string().max(65536).optional(),
   agentId: z.string().min(1).max(100).optional(),
   cols: z.number().int().min(20).max(400).optional(),
-  rows: z.number().int().min(5).max(150).optional(),
+  rows: z.number().int().min(1).max(150).optional(),
 })
 
 export async function command(manager: Sessions, raw: unknown, principal: Principal): Promise<unknown> {
