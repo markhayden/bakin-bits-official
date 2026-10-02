@@ -199,9 +199,9 @@ No design-system exception is used; the shared workspace extension is defined in
 
 ## Mobile input and rendering
 
-Terminal automatically uses xterm's WebGL renderer when available. GPU startup failure or context loss falls back to the normal renderer; reconnecting creates a fresh renderer. No setting or separate transport is needed.
+Terminal automatically uses xterm's WebGL renderer when available. GPU startup failure, context loss, or inconsistent browser pixel-scale measurements fall back to the normal renderer; reconnecting creates a fresh renderer. No setting or separate transport is needed.
 
-Phones and touch-capable tablets keep Esc, Tab, one-shot Ctrl, and arrow keys below the output, above the software keyboard. More reveals Enter, Backspace, Delete, Shift+Tab, Home/End, Page Up/Down, and Ctrl+C/D/Z/R/L/A/E/U/K/W. Tap Ctrl again to cancel it. The next key consumes it; paste, composition, disconnection, ownership changes, and leaving the interaction cancel it. Ordinary terminal resizing preserves an armed Ctrl. Explicit combinations always send their named keys. Pointer taps preserve existing editor focus and do not open the keyboard when it is closed.
+Phones and touch-capable tablets keep a centered strip of Esc, Tab, one-shot Ctrl, and arrow keys below the output, above the software keyboard. Wrapped rows and expanded keys stay centered. More reveals Enter, Backspace, Delete, Shift+Tab, Home/End, Page Up/Down, and Ctrl+C/D/Z/R/L/A/E/U/K/W. Tap Ctrl again to cancel it. The next key consumes it; paste, composition, disconnection, ownership changes, and leaving the interaction cancel it. Ordinary terminal resizing preserves an armed Ctrl. Explicit combinations always send their named keys. Pointer taps preserve existing editor focus and do not open the keyboard when it is closed.
 
 Keys are disabled while watching, disconnected, or changing ownership; use Take over to drive. Ended sessions and deleted output have no key strip. Normal/application cursor modes use the current xterm mode. All keys pass through the existing ordered input queue. Automatic resize may shrink a live, human-owned grid to one row on short viewports; watchers never resize its PTY. Physical Tab follows Capture Tab while input is available.
 
