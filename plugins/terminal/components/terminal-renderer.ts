@@ -9,7 +9,10 @@ export function enableWebgl(
   let addon: WebglAddon | undefined
   let contextLoss: { dispose(): void } | undefined
   let pixels: ResizeObserver | undefined
+  let removeScaleListener: (() => void) | undefined
   const dispose = () => {
+    removeScaleListener?.()
+    removeScaleListener = undefined
     pixels?.disconnect()
     pixels = undefined
     const current = addon
@@ -37,7 +40,18 @@ export function enableWebgl(
         if (Math.abs(device.inlineSize - entry.contentRect.width * dpr) > 1
           || Math.abs(device.blockSize - entry.contentRect.height * dpr) > 1) dispose()
       })
-      pixels.observe(element)
+      const watchScale = () => {
+        removeScaleListener?.()
+        const query = browser.matchMedia(`(resolution: ${browser.devicePixelRatio}dppx)`)
+        query.addEventListener('change', watchScale)
+        removeScaleListener = () => query.removeEventListener('change', watchScale)
+        // DPR can change without a CSS resize. Re-observe to obtain fresh
+        // physical pixels; comparing a cached entry would reject valid DPR
+        // changes when moving between real displays.
+        pixels?.unobserve(element)
+        pixels?.observe(element)
+      }
+      watchScale()
     }
   } catch {
     // Unsupported/blocked GPU contexts must not prevent a shell from opening.

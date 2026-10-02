@@ -55,9 +55,11 @@ it('falls back once when browser pixel measurements disagree with the display sc
   const element = {
     ownerDocument: { defaultView: {
       devicePixelRatio: 3,
+      matchMedia: () => new EventTarget(),
       ResizeObserver: class {
         constructor(callback: ResizeObserverCallback) { notify = callback }
         observe() {}
+        unobserve() {}
         disconnect() { disconnected++ }
       },
     } },
@@ -82,4 +84,52 @@ it('falls back once when browser pixel measurements disagree with the display sc
   cleanup()
   expect(disposed).toBe(1)
   expect(disconnected).toBe(1)
+})
+
+it('remeasures DPR changes without rejecting a real display change and releases the scale listener', async () => {
+  let notify: ResizeObserverCallback
+  let physicalScale = 1
+  let observing = false
+  let disposed = 0
+  const queries: EventTarget[] = []
+  const browser = {
+    devicePixelRatio: 1,
+    matchMedia() { const query = new EventTarget(); queries.push(query); return query },
+    ResizeObserver: class {
+      constructor(callback: ResizeObserverCallback) { notify = callback }
+      observe() {
+        observing = true
+        queueMicrotask(() => {
+          if (observing) notify([{
+            target: element,
+            contentRect: { width: 390, height: 500 },
+            devicePixelContentBoxSize: [{ inlineSize: 390 * physicalScale, blockSize: 500 * physicalScale }],
+          } as unknown as ResizeObserverEntry], {} as ResizeObserver)
+        })
+      }
+      unobserve() { observing = false }
+      disconnect() { observing = false }
+    },
+  }
+  const element = { ownerDocument: { defaultView: browser } } as unknown as HTMLElement
+  const cleanup = enableWebgl({ element, loadAddon() {} } as unknown as Terminal, () => ({
+    onContextLoss: () => ({ dispose() {} }),
+    dispose: () => { disposed++ },
+  }) as unknown as WebglAddon)
+  await Promise.resolve()
+  physicalScale = browser.devicePixelRatio = 2
+  queries.at(-1)!.dispatchEvent(new Event('change'))
+  await Promise.resolve()
+  expect(disposed).toBe(0)
+  // Emulation changes DPR while the reported physical pixels stay at scale 2.
+  browser.devicePixelRatio = 3
+  queries.at(-1)!.dispatchEvent(new Event('change'))
+  await Promise.resolve()
+  expect(disposed).toBe(1)
+  cleanup()
+  const count = queries.length
+  queries.at(-1)!.dispatchEvent(new Event('change'))
+  await Promise.resolve()
+  expect(queries).toHaveLength(count)
+  expect(disposed).toBe(1)
 })

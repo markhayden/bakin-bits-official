@@ -3,13 +3,15 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { browserTest, launchChromium } from './browser'
 
-for (const renderer of ['webgl', 'blocked', 'lost', 'scaled'] as const) {
+for (const renderer of ['webgl', 'blocked', 'lost', 'scaled', 'rescaled'] as const) {
+  // Changing DPR on an already-open page requires Chromium's DevTools API.
+  if (renderer === 'rescaled' && process.env.TERMINAL_BROWSER === 'webkit') continue
   browserTest(`terminal paints and accepts input with renderer ${renderer}`, async () => {
     const browser = await launchChromium()
     // Keep the GPU cases at the host scale; the scaled case deliberately
     // exercises Chromium's conflicting emulated pixel measurements.
-    const page = await browser.newPage(renderer === 'scaled'
-      ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, hasTouch: true, isMobile: true }
+    const page = await browser.newPage(renderer === 'scaled' || renderer === 'rescaled'
+      ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: renderer === 'scaled' ? 3 : 1, hasTouch: true, isMobile: true }
       : { viewport: { width: 1024, height: 768 }, deviceScaleFactor: 1 })
     page.setDefaultTimeout(10000)
     const errors: string[] = []
@@ -32,7 +34,15 @@ for (const renderer of ['webgl', 'blocked', 'lost', 'scaled'] as const) {
       const input = page.locator('.xterm-helper-textarea')
       await input.waitFor()
       await page.locator('[data-archetype="workspace"]').evaluate(el => { el.scrollTop = el.scrollHeight })
-      if (renderer === 'webgl' || renderer === 'lost') await page.locator('.xterm-screen canvas:not(.xterm-link-layer)').waitFor()
+      if (renderer === 'webgl' || renderer === 'lost' || renderer === 'rescaled') await page.locator('.xterm-screen canvas:not(.xterm-link-layer)').waitFor()
+      if (renderer === 'rescaled') {
+        // Preserve CSS dimensions: a content-box resize observer alone will
+        // miss this change and leave WebGL painting a clipped, blank canvas.
+        const cdp = await page.context().newCDPSession(page)
+        await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 3, mobile: true })
+        await page.waitForFunction(() => !document.querySelector('.xterm-screen canvas:not(.xterm-link-layer)'))
+        await cdp.detach()
+      }
       if (renderer === 'lost') {
         expect(await page.locator('.xterm-screen canvas:not(.xterm-link-layer)').evaluate(canvas => {
           const gl = (canvas as HTMLCanvasElement).getContext('webgl2')
