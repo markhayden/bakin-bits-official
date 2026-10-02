@@ -140,3 +140,11 @@ test('completed work is rechecked immediately after merge without a 30-day delay
   await manager.sweep()
   expect(manager.get(session.id, human).worktreePath).toBeUndefined()
 })
+
+test('short viewports resize to one row while ownership and dimension limits still apply', async () => {
+  const { manager } = fixture()
+  const session = await manager.create({ title: 'Short viewport', cwd: '/tmp' }, human)
+  expect((await manager.resize(session.id, human, session.generation, 20, 1)).rows).toBe(1)
+  for (const rows of [0, 151, 1.5]) await expect(manager.resize(session.id, human, session.generation, 20, rows)).rejects.toThrow('dimensions')
+  await expect(manager.resize(session.id, agent, session.generation, 20, 1)).rejects.toThrow()
+})

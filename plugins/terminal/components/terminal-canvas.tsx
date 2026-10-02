@@ -1,17 +1,20 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { BoundedOverflow } from '@makinbakin/sdk/layout'
 import type { Session } from '../lib/contracts'
 import { terminalFetch } from './api'
+import { enableWebgl } from './terminal-renderer'
+import { consumeControl, encodeTerminalKey, type TerminalInputHandle } from './terminal-input'
 import '@xterm/xterm/css/xterm.css'
 
-export function TerminalCanvas({ session, writable, captureTab, attempt, onStatus, onInput, onClaim, onSession, onResize }: {
+export function TerminalCanvas({ session, writable, captureTab, attempt, inputEnabled, inputHandle, onCtrlChange, onStatus, onInput, onClaim, onSession, onResize }: {
+  inputEnabled: boolean; inputHandle: RefObject<TerminalInputHandle | null>; onCtrlChange(armed: boolean): void;
   session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string): void; onClaim(data: string): void; onSession(session: Session): void; onResize(cols: number, rows: number): Promise<boolean | undefined>
 }) {
   const element = useRef<HTMLDivElement>(null)
-  const callbacks = useRef({ onInput, onClaim, onSession, onResize, writable, captureTab: false })
-  callbacks.current = { onInput, onClaim, onSession, onResize, writable, captureTab }
+  const callbacks = useRef({ onInput, onClaim, onSession, onResize, writable, inputEnabled, onCtrlChange, captureTab: false })
+  callbacks.current = { onInput, onClaim, onSession, onResize, writable, inputEnabled, onCtrlChange, captureTab }
   const [status, setStatus] = useState('Connecting')
   const [truncated, setTruncated] = useState(false)
   useEffect(() => { onStatus(`${status}${truncated ? ' / Earlier output truncated' : ''}`) }, [status, truncated, onStatus])
@@ -19,6 +22,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, onStatu
   const fit = useRef<FitAddon | null>(null)
   const resizing = useRef(false)
   const resizeAgain = useRef(false)
+  const ctrl = useRef(false)
+  const ready = useRef(false)
   const BASE_FONT = 13
   // Watching a session we don't own: we must not resize the shared PTY, so
   // instead scale the font up/down so the agent's fixed grid fills the pane.
@@ -42,7 +47,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, onStatu
     const size = fit.current?.proposeDimensions()
     if (!size || !term || !callbacks.current.writable) return
     const cols = Math.min(400, Math.max(20, size.cols))
-    const rows = Math.min(150, Math.max(5, size.rows))
+    const rows = Math.min(150, Math.max(1, size.rows))
     if (term.cols === cols && term.rows === rows) return
     resizing.current = true
     try { await callbacks.current.onResize(cols, rows) }
@@ -53,17 +58,49 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, onStatu
   }
   useEffect(() => {
     const abort = new AbortController()
+    ready.current = false
+    const setCtrl = (armed: boolean) => { ctrl.current = armed; callbacks.current.onCtrlChange(armed) }
+    const reset = () => setCtrl(false)
+    reset()
     const background = getComputedStyle(element.current!.parentElement!).backgroundColor
     const term = new Terminal({ cols: session.cols, rows: session.rows, scrollback: 2000, fontSize: 13, screenReaderMode: true, convertEol: false, theme: { background } })
     terminal.current = term
     fit.current = new FitAddon()
     term.loadAddon(fit.current)
     term.open(element.current!)
-    term.attachCustomKeyEventHandler((event) => event.key !== 'Tab' || callbacks.current.captureTab)
+    const disposeRenderer = enableWebgl(term)
+    inputHandle.current = {
+      key(key) {
+        if (!ready.current || !callbacks.current.inputEnabled) { reset(); return }
+        const data = encodeTerminalKey(key, term.modes.applicationCursorKeysMode, ctrl.current)
+        reset()
+        term.input(data, true)
+      },
+      toggleCtrl() { if (ready.current && callbacks.current.inputEnabled) setCtrl(!ctrl.current) },
+      reset,
+    }
+    const leave = (event: Event) => {
+      const target = event.target
+      if (!(target instanceof Element) || !target.closest('.terminal-xterm, .terminal-input-controls')) reset()
+    }
+    const hide = () => { if (document.hidden) reset() }
+    const textarea = term.textarea!
+    textarea.addEventListener('paste', reset, true)
+    textarea.addEventListener('compositionstart', reset, true)
+    document.addEventListener('focusin', leave)
+    document.addEventListener('pointerdown', leave)
+    document.addEventListener('visibilitychange', hide)
+    window.addEventListener('blur', reset)
+    term.attachCustomKeyEventHandler((event) => event.key !== 'Tab' || (callbacks.current.inputEnabled && callbacks.current.captureTab))
     // Watching + typing claims the session (claim-on-type); the page decides
     // whether to confirm. Drop control keys so a stray Ctrl-key can't claim.
     term.onData((data) => {
-      if (callbacks.current.writable) callbacks.current.onInput(data)
+      if (callbacks.current.writable) {
+        if (!ready.current || !callbacks.current.inputEnabled) { reset(); return }
+        const next = consumeControl(data, ctrl.current)
+        reset()
+        callbacks.current.onInput(next.data)
+      }
       else if (data && data.charCodeAt(0) >= 0x20) callbacks.current.onClaim(data)
     })
     async function connect() {
@@ -92,16 +129,28 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, onStatu
               if (data.truncated) setTruncated(true)
               const bytes = Uint8Array.from(atob(data.data ?? ''), (value) => value.charCodeAt(0))
               await new Promise<void>((resolve) => term.write(bytes, resolve))
+              ready.current = data.session?.state !== 'completed'
               setStatus(data.session?.state === 'completed' ? 'Completed' : 'Connected')
             }
           }
-          if (!abort.signal.aborted) setStatus('Disconnected')
+          if (!abort.signal.aborted) { ready.current = false; reset(); setStatus('Disconnected') }
         } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
-      } catch (error) { if (!abort.signal.aborted) setStatus(error instanceof Error ? error.message : 'Disconnected') }
+      } catch (error) { if (!abort.signal.aborted) { ready.current = false; reset(); setStatus(error instanceof Error ? error.message : 'Disconnected') } }
     }
     void connect()
-    return () => { abort.abort(); term.dispose(); terminal.current = null }
+    return () => {
+      ready.current = false
+      inputHandle.current = null
+      textarea.removeEventListener('paste', reset, true)
+      textarea.removeEventListener('compositionstart', reset, true)
+      document.removeEventListener('focusin', leave)
+      document.removeEventListener('pointerdown', leave)
+      document.removeEventListener('visibilitychange', hide)
+      window.removeEventListener('blur', reset)
+      abort.abort(); disposeRenderer(); term.dispose(); terminal.current = null
+    }
   }, [session.id, attempt])
+  useLayoutEffect(() => { inputHandle.current?.reset() }, [inputEnabled, session.generation, session.id, attempt])
   useEffect(() => { terminal.current?.resize(session.cols, session.rows); fitFontToPane() }, [session.cols, session.rows])
   useEffect(() => {
     if (!element.current) return
@@ -127,7 +176,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, onStatu
     schedule()
     return () => { disposed = true; clearTimeout(timer); observer.disconnect() }
   }, [session.id, writable, attempt])
-  return <BoundedOverflow label="Terminal output" className="min-h-[calc(var(--bakin-layout-space-8)*5)] flex-1 bg-bakin-canvas-default p-bakin-4">
+  return <BoundedOverflow label="Terminal output" className="min-h-0 flex-1 bg-bakin-canvas-default p-bakin-4">
       <div ref={element} className="terminal-xterm h-full min-w-0" />
     </BoundedOverflow>
 }

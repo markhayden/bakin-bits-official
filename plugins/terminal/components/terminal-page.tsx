@@ -8,6 +8,8 @@ import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, In
 import type { Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
 import { api } from './api'
+import { TerminalControls } from './terminal-controls'
+import type { TerminalInputHandle } from './terminal-input'
 import { TerminalCanvas } from './terminal-canvas'
 import { NewSession } from './new-session'
 import { TerminalTool as Tool } from './terminal-tool'
@@ -36,6 +38,8 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const [creating, setCreating] = useState(false)
   const [assignment, setAssignment] = useState('')
   const [captureTab, setCaptureTab] = useState(true)
+  const inputHandle = useRef<TerminalInputHandle | null>(null)
+  const [ctrl, setCtrl] = useState(false)
   const [attempt, setAttempt] = useState(0)
   const [streamStatus, setStreamStatus] = useState('Connecting')
   useEffect(() => { setCaptureTab(true); setAttempt(0); setStreamStatus('Connecting') }, [sessionId])
@@ -124,6 +128,9 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   // green while you drive a live session, muted when ended, amber when the
   // stream is not yet connected.
   const connected = streamStatus.startsWith('Connected') || streamStatus === 'Completed'
+  const inputEnabled = writable && connected && serviceReady && !busy && !loadError
+  // Invalidate stale writes before newly enabled controls can accept input.
+  useLayoutEffect(() => { epoch.current++ }, [sessionId, session?.generation, connected, serviceReady])
   const chipTone = session?.historyDeleted || ended ? 'neutral' : !connected ? 'attention' : writable ? 'success' : 'neutral'
   const chipLabel = session?.historyDeleted ? 'Output deleted' : ended ? 'Ended' : !connected ? streamStatus.split(' / ')[0] : writable ? "You're driving" : ownerAgentName ? `You're watching ${ownerAgentName}` : "You're watching"
   const statusChip = session && <Badge size="xs" variant="solid" tone={chipTone} role="status" title={status}>{chipLabel}</Badge>
@@ -131,24 +138,24 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   async function operate(operation: string, extra: Record<string, unknown> = {}, targetId = sessionId) {
     const target = current.current.find((item) => item.id === targetId)
     if (!target) return
-    setBusy(true); setError('')
-    if (operation !== 'resize') epoch.current++
+    if (operation !== 'resize') { setBusy(true); epoch.current++; inputHandle.current?.reset() }
+    setError('')
     try {
       const result = await api<Session>('/session', { id: target.id, operation, generation: target.generation, ...extra })
       if (result.id) update(result)
       await refresh()
       return true
     } catch (error) { setError(error instanceof Error ? error.message : 'Terminal operation failed'); return false }
-    finally { setBusy(false) }
+    finally { if (operation !== 'resize') setBusy(false) }
   }
   function input(data: string) {
-    if (!session || !writable) return
+    if (!session || !inputEnabled) return
     markActivity()
     const id = session.id, generation = session.generation, batch = epoch.current
     queue.current = queue.current.then(async () => {
       if (batch !== epoch.current) return
-      const latest = current.current.find((entry) => entry.id === id)!
-      if (latest.generation !== generation) return
+      const latest = current.current.find((entry) => entry.id === id)
+      if (!latest || latest.generation !== generation || latest.owner.kind !== 'human' || latest.state !== 'running') return
       const updated = await api<Session>('/session', { id, operation: 'write', generation, sequence: latest.inputSequence + 1, data })
       update(updated)
     }).catch((error) => { epoch.current++; setError(error.message); void refresh() })
@@ -322,12 +329,14 @@ function Workspace({ sessionId }: { sessionId?: string }) {
       />}
       </Stack>}
     </PageBody>
-  </Page> : <WorkspacePage mode="immersive" className="terminal-page" data-terminal-ui-ready={!loading ? '' : undefined}>
+  </Page> : <WorkspacePage mode="immersive" viewport="visual" className="terminal-page" data-terminal-ui-ready={!loading ? '' : undefined}>
     <WorkspacePageHeader>
         <PageHeader navigation={back} eyebrow="Terminal" title={session?.title ?? 'Terminal'} meta={statusChip} actions={controls} />
     </WorkspacePageHeader>
     <WorkspacePageCompactHeader navigation={back} title={<Inline gap="dense" wrap={false} className="min-w-0 items-center"><span className="truncate">{session?.title ?? 'Terminal'}</span>{statusChip}</Inline>} action={controls} />
-    <WorkspacePageBody>
+    <WorkspacePageBody inputAccessory={session && !ended && !session.historyDeleted
+      ? <TerminalControls key={session.id} disabled={!inputEnabled} ctrl={ctrl} onCtrl={() => inputHandle.current?.toggleCtrl()} onKey={key => inputHandle.current?.key(key)} />
+      : undefined}>
       <Stack as="section" gap="none" className="min-h-0 flex-1 overflow-y-auto" aria-label="Selected terminal">
         {(loadError && all.length > 0 || error) && <Stack gap="item" className="shrink-0 p-bakin-4">
           {feedback}
@@ -339,7 +348,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
           {session.cleanupReason && <Alert tone="attention"><AlertDescription>{session.cleanupReason}</AlertDescription></Alert>}
           </Stack>}
           <Separator />
-          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} captureTab={captureTab} attempt={attempt} onStatus={setStreamStatus} onInput={input} onClaim={handleClaim} onSession={update} onResize={(cols, rows) => operate('resize', { cols, rows })} />}
+          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} inputEnabled={Boolean(inputEnabled)} inputHandle={inputHandle} onCtrlChange={setCtrl} captureTab={captureTab} attempt={attempt} onStatus={setStreamStatus} onInput={input} onClaim={handleClaim} onSession={update} onResize={(cols, rows) => operate('resize', { cols, rows })} />}
         </>)}
       </Stack>
     </WorkspacePageBody>

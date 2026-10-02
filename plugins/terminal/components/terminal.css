@@ -10,3 +10,11 @@
   outline: 2px solid var(--bakin-color-focus-ring);
   outline-offset: -2px;
 }
+
+/* Compact input follows the public TerminalInput recipe on phones and tablets. */
+@media (min-width: 48rem) {
+  [data-bakin-plugin="terminal"] .terminal-input-controls { display: none; }
+}
+@media (any-pointer: coarse) {
+  [data-bakin-plugin="terminal"] .terminal-input-controls { display: flex; }
+}

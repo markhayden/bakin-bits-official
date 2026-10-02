@@ -38,8 +38,8 @@ export const PageTimeline = ({ children, live, label, labelledBy, ...props }) =>
 )
 export const PageComposer = component('div')
 
-export const WorkspacePage = component('div')
-export const WorkspacePageBody = component('div')
+export const WorkspacePage = ({ viewport, children, ...props }) => React.createElement('div', props, children)
+export const WorkspacePageBody = ({ inputAccessory, children, ...props }) => React.createElement('div', props, children, inputAccessory)
 export const WorkspacePageHeader = component('div')
 export const WorkspacePageCompactHeader = component('div')
 export const StatusBadge = ({ children, tone = 'neutral', ...props }) => React.createElement(

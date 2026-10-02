@@ -190,8 +190,21 @@ not restart the shell) and the kit toggle Capture Tab, on by default. While on,
 Tab reaches the shell for completion; turn it off to let Tab move focus out of
 the terminal.
 The composition uses `overlays/dropdown-menu.stories.tsx` / `Actions` and
-`layout/bounded-overflow.stories.tsx` / `CanonicalUsage` without a kit extension.
+`layout/bounded-overflow.stories.tsx` / `CanonicalUsage` with the approved keyboard-aware WorkspacePage extension.
 Client markers use cryptographic random bytes
 available on HTTP LAN/Tailscale origins, not secure-context-only `randomUUID`.
 Request failures never imply that the terminal service needs installation.
-No design-system exception or public UI extension is used.
+No design-system exception is used; the shared workspace extension is defined in public Storybook.
+
+
+## Mobile input and rendering
+
+Terminal automatically uses xterm's WebGL renderer when available. GPU startup failure, context loss, or inconsistent browser pixel-scale measurements fall back to the normal renderer; reconnecting creates a fresh renderer. Pixel measurements are refreshed when display density changes, including mobile emulation changes that leave the pane the same size. No setting or separate transport is needed.
+
+Phones and touch-capable tablets keep a centered strip of Esc, Tab, one-shot Ctrl, and arrow keys below the output, above the software keyboard. Wrapped rows and expanded keys stay centered. More reveals Enter, Backspace, Delete, Shift+Tab, Home/End, Page Up/Down, and Ctrl+C/D/Z/R/L/A/E/U/K/W. Tap Ctrl again to cancel it. The next key consumes it; paste, composition, disconnection, ownership changes, and leaving the interaction cancel it. Ordinary terminal resizing preserves an armed Ctrl. Explicit combinations always send their named keys. Pointer taps preserve existing editor focus and do not open the keyboard when it is closed.
+
+Keys are disabled while watching, disconnected, or changing ownership; use Take over to drive. Ended sessions and deleted output have no key strip. Normal/application cursor modes use the current xterm mode. All keys pass through the existing ordered input queue. Automatic resize may shrink a live, human-owned grid to one row on short viewports; watchers never resize its PTY. Physical Tab follows Capture Tab while input is available.
+
+The shared references are `pages/workspace-page.stories.tsx — KeyboardAwareInput` and `recipes/terminal-input.stories.tsx — CompactAndExpanded`. The kit owns viewport measurement and the reserved accessory slot; the plugin owns key encoding, Ctrl state, and ownership.
+
+Browser checks against a disposable preview: `TERMINAL_PREVIEW_URL=<url> bun test tests/mobile-input.browser.test.ts tests/renderer.browser.test.ts --isolate`. Set `TERMINAL_BROWSER=webkit` to repeat with WebKit. The installed-SDK UI fixture now exercises session detail and disabled keys. A physical iPhone Safari and Android Chrome keyboard check is still required; desktop emulation does not prove native keyboard behavior.
