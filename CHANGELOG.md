@@ -9,6 +9,15 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- `messaging` (0.11.8), `projects` (0.11.3), `terminal` (0.3.1): dependency
+  sweep in lockstep with Bakin #760 — zod `~4.6.5` (the SDK's public types
+  carry zod's minor, so the tilde pin must match the host), lucide-react 1.51
+  (canonical icon names; lucide 1.x dropped the Twitter/Instagram/Slack brand
+  glyphs, so messaging's channel icons are now generic), js-yaml 5 (named
+  imports, `quoteStyle` replaces `quotingType`, empty frontmatter no longer
+  throws), TypeScript 6 (`types: ["bun"]` + ambient `*.css` module in the
+  template and terminal), ESLint 10, Playwright 1.63 with the matching CI
+  image. No behavior change beyond the icon glyphs.
 - `messaging` (0.11.7), `projects` (0.11.2): retain and reconcile navigation
   state and use green unread-only conversation indicators. Require Bakin and
   `@makinbakin/sdk` `>=0.0.1-rc.39`, the planned first release containing

@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, type CSSProperties } from 'react'
 import { emitPluginEvent, toast, useHorizontalResize, usePluginEvent } from '@makinbakin/sdk/hooks'
-import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, Pencil, Trash2, Link2 } from 'lucide-react'
+import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, Pencil, Trash, Link2 } from 'lucide-react'
 import { useAgentList, useMainAgentId } from "@makinbakin/sdk/hooks"
 import { PluginLink, useRouter, useUnsavedChangesGuard } from "@makinbakin/sdk/navigation"
 import { ConversationEmptyState, useConversationThread } from "@makinbakin/sdk/conversation"
@@ -632,7 +632,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
         overflowActionsLabel="Project actions"
         overflowActions={(
           <DropdownMenuItem variant="danger" onClick={() => { setDeleteError(null); setDeleteDialogOpen(true) }}>
-            <Trash2 aria-hidden="true" />
+            <Trash aria-hidden="true" />
             Delete
           </DropdownMenuItem>
         )}

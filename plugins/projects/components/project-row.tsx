@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, type ReactNode } from 'react'
-import { MoreHorizontal, Trash2 } from 'lucide-react'
+import { Ellipsis, Trash } from 'lucide-react'
 import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Progress, Text } from '@makinbakin/sdk/ui'
 import { Inline, Stack } from '@makinbakin/sdk/layout'
 import { ListRow, ListRowActions, StatusMarker } from '@makinbakin/sdk/patterns'
@@ -36,11 +36,11 @@ export function ProjectRow({ project, onClick, onDelete, scoreOverlay }: {
             <ListRowActions>
               <DropdownMenu>
                 <DropdownMenuTrigger ref={actionsRef} render={<Button size="icon-xs" variant="ghost" />} aria-label={`More actions for ${title}`}>
-                  <MoreHorizontal aria-hidden="true" />
+                  <Ellipsis aria-hidden="true" />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
                   <DropdownMenuItem variant="danger" onClick={() => onDelete(actionsRef.current)}>
-                    <Trash2 aria-hidden="true" />
+                    <Trash aria-hidden="true" />
                     Delete project
                   </DropdownMenuItem>
                 </DropdownMenuContent>

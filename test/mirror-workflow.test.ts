@@ -6,10 +6,10 @@
 import { describe, expect, it } from 'bun:test'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import yaml from 'js-yaml'
+import { load } from 'js-yaml'
 
 const root = join(import.meta.dir, '..')
-const workflow = yaml.load(readFileSync(join(root, '.github/workflows/mirror-tmux.yml'), 'utf8')) as {
+const workflow = load(readFileSync(join(root, '.github/workflows/mirror-tmux.yml'), 'utf8')) as {
   on: { workflow_dispatch: { inputs: Record<string, { required?: boolean }> } }
   jobs: Record<string, { needs?: string; 'runs-on'?: string; strategy?: { matrix: { include: Array<{ runner: string; arch: string }> } }; steps: Array<{ name: string; run?: string; uses?: string }> }>
 }

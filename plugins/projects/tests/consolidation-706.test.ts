@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterAll, mock } from 'bun:test'
 import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import yaml from 'js-yaml'
+import { dump } from 'js-yaml'
 import { activatePlugin, findRoute, callRoute, MarkdownStorageAdapter } from '../test-helpers'
 import type { ActivatedPlugin } from '../test-helpers'
 import type { RuntimeChatChunk as ChatChunk, RuntimeMessageArgs as MessageArgs } from '@makinbakin/sdk/types'
@@ -45,7 +45,7 @@ function writeProjectFixture(id: string, title = `Project ${id}`) {
   const now = new Date().toISOString()
   const fm = { id, title, status: 'active', created: now, updated: now, owner: 'main', tasks: [] }
   mkdirSync(projectsDir, { recursive: true })
-  writeFileSync(join(projectsDir, `${id}.md`), `---\n${yaml.dump(fm, { lineWidth: -1 }).trim()}\n---\n\n# ${title}\n`, 'utf-8')
+  writeFileSync(join(projectsDir, `${id}.md`), `---\n${dump(fm, { lineWidth: -1 }).trim()}\n---\n\n# ${title}\n`, 'utf-8')
 }
 
 function writeBrainstormFixture(id: string, rows: Array<Record<string, unknown>>) {

@@ -26,7 +26,7 @@ import {
   TooltipTrigger,
 } from "@makinbakin/sdk/ui"
 import { formatDateTime } from "@makinbakin/sdk/utils"
-import { AlertCircle, CalendarDays, Check, Clock, ImageIcon, RefreshCcw, RotateCcw, Trash2, Video, X } from 'lucide-react'
+import { CircleAlert, CalendarDays, Check, Clock, ImageIcon, RefreshCcw, RotateCcw, Trash, Video, X } from 'lucide-react'
 import type { AssetRequirement, ContentTypeOption, Deliverable, DeliverableFailureStage } from '../types'
 import { getContentTypeLabel, useContentTypes } from '../hooks/use-content-types'
 import { DeliverableStatusBadge } from './deliverable-status-badge'
@@ -318,7 +318,7 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
               setConfirmingDelete(true)
             }}
           >
-            <Trash2 data-icon="inline-start" aria-hidden="true" />
+            <Trash data-icon="inline-start" aria-hidden="true" />
             Delete
           </Button>
         </div>
@@ -332,14 +332,14 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
 
         {actionError && (
           <Alert tone="danger">
-            <AlertCircle className="size-bakin-4" />
+            <CircleAlert className="size-bakin-4" />
             <AlertDescription>{actionError}</AlertDescription>
           </Alert>
         )}
 
         {missingRequirement && (
           <Alert tone="attention">
-            <AlertCircle className="size-bakin-4" />
+            <CircleAlert className="size-bakin-4" />
             <AlertDescription>{missingRequirement}</AlertDescription>
           </Alert>
         )}

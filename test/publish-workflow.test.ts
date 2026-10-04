@@ -3,9 +3,9 @@ import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import yaml from 'js-yaml'
+import { load } from 'js-yaml'
 
-const workflow = yaml.load(readFileSync(join(import.meta.dir, '../.github/workflows/publish.yml'), 'utf8')) as {
+const workflow = load(readFileSync(join(import.meta.dir, '../.github/workflows/publish.yml'), 'utf8')) as {
   on: { push: { tags: string[] } }
   jobs: { publish: { steps: Array<{ name: string; if?: string; run?: string }> } }
 }

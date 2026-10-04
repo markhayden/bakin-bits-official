@@ -36,7 +36,8 @@ import {
   TabsTrigger,
   Text,
 } from "@makinbakin/sdk/ui"
-import { ArrowLeft, CalendarDays, ExternalLink, FileText, Globe2, Info, Instagram, MessageCircle, MessageSquareText, Music2, Rocket, Slack, Trash2, Twitter, type LucideIcon } from 'lucide-react'
+// lucide 1.x dropped brand icons (Twitter/Instagram/Slack); channels use generic glyphs.
+import { ArrowLeft, AtSign, CalendarDays, Camera, ExternalLink, FileText, Earth, Hash, Info, MessageCircle, MessageSquareText, Music2, Rocket, Trash, type LucideIcon } from 'lucide-react'
 import type { BrainstormSession, ContentTypeOption, Deliverable, Plan, PlanChannel, PlanStatus } from '../types'
 import { PLAN_STATUS_TONE } from '../constants'
 import { sessionMessageToConversation } from '../lib/session-to-conversation'
@@ -97,12 +98,12 @@ const PLAN_WORKSPACE_TABS: Array<{ id: PlanWorkspaceTab; label: string }> = [
 ]
 const DISTRIBUTION_CHANNEL_ICONS: Record<string, LucideIcon> = {
   blog: FileText,
-  x: Twitter,
-  instagram: Instagram,
+  x: AtSign,
+  instagram: Camera,
   tiktok: Music2,
-  meta: Globe2,
+  meta: Earth,
   discord: MessageCircle,
-  slack: Slack,
+  slack: Hash,
   reddit: MessageSquareText,
   custom: FileText,
 }
@@ -644,7 +645,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
               setDeleteOpen(true)
             }}
           >
-            <Trash2 aria-hidden="true" />
+            <Trash aria-hidden="true" />
             Delete
           </DropdownMenuItem>
         )}
@@ -741,7 +742,7 @@ export function PlanWorkspace({ planId, onBack, onDeleted }: PlanWorkspaceProps)
                                   setChannelPendingDelete(channel)
                                 }}
                               >
-                                <Trash2 className="size-3.5" aria-hidden="true" />
+                                <Trash className="size-3.5" aria-hidden="true" />
                               </Button>
                             </ListRow>
                           ))}
