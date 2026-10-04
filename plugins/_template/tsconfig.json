@@ -9,8 +9,18 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "preserveSymlinks": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "types": [
+      "bun"
+    ]
   },
-  "include": ["**/*.ts", "**/*.tsx"],
-  "exclude": ["dist", "node_modules", "test-results"]
+  "include": [
+    "**/*.ts",
+    "**/*.tsx"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules",
+    "test-results"
+  ]
 }

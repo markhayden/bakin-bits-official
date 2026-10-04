@@ -69,7 +69,7 @@ import {
   Text,
   Textarea,
 } from "@makinbakin/sdk/ui"
-import { ArrowLeft, Check, ClipboardList, Columns2, Plus, SquareStack, Trash2, X } from 'lucide-react'
+import { ArrowLeft, Check, ClipboardList, Columns2, Plus, SquareStack, Trash, X } from 'lucide-react'
 import type { BrainstormSession, PlanProposal } from '../types'
 import { sessionMessageToConversation } from '../lib/session-to-conversation'
 import { BRAINSTORM_SORT_FIELDS, parseBrainstormSort, sortBrainstorms } from '../lib/brainstorm-sort'
@@ -1174,7 +1174,7 @@ export function BrainstormView() {
                 variant="danger"
                 onClick={() => setDeleteSessionId(activeSession.id)}
               >
-                <Trash2 aria-hidden="true" />
+                <Trash aria-hidden="true" />
                 Delete
               </DropdownMenuItem>
             )}

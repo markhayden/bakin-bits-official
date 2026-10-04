@@ -1,5 +1,5 @@
 {
-  "id": "terminal", "name": "Terminal", "version": "0.3.0", "bakin": ">=0.0.1-rc.40",
+  "id": "terminal", "name": "Terminal", "version": "0.3.1", "bakin": ">=0.0.1-rc.40",
   "description": "Persistent shared terminals with per-agent access and retained coding worktrees.",
   "requires": {
     "bins": [

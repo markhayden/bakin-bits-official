@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { Plus, Trash2, Link2, ChevronRight } from 'lucide-react'
+import { Plus, Trash, Link2, ChevronRight } from 'lucide-react'
 import { Alert, AlertDescription, Button, Checkbox, Field, FieldLabel, Form, InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput, Switch, SystemState, Text, Textarea } from '@makinbakin/sdk/ui'
 import { Stack } from '@makinbakin/sdk/layout'
 import { ListRow, ListRowActions, ListRows, StatusBadge } from '@makinbakin/sdk/patterns'
@@ -30,7 +30,7 @@ function TaskItem({ item, resolved, model }: { item: ProjectTask; resolved: { co
       {item.taskId && resolved === null && <StatusBadge tone="attention" size="xs">Board task missing</StatusBadge>}
       <ListRowActions reveal="always">
         {!item.taskId && <Button type="button" variant="ghost" size="icon-xs" disabled={busy} onClick={() => { void model.mutate(item, 'promote') }} aria-label={`Create board task for ${item.title}`}><Link2 aria-hidden="true" /></Button>}
-        <Button type="button" variant="ghost" size="icon-xs" disabled={busy || (draft && draft.value !== draft.baseline)} onClick={() => { void model.mutate(item, 'remove') }} aria-label={`Remove ${item.title}`}><Trash2 aria-hidden="true" /></Button>
+        <Button type="button" variant="ghost" size="icon-xs" disabled={busy || (draft && draft.value !== draft.baseline)} onClick={() => { void model.mutate(item, 'remove') }} aria-label={`Remove ${item.title}`}><Trash aria-hidden="true" /></Button>
       </ListRowActions>
     </div>
     <ErrorNotice message={model.errors[item.id]} />

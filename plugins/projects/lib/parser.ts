@@ -5,7 +5,7 @@
  * Pure functions where possible — no side effects.
  */
 import type { StorageAdapter } from '@makinbakin/sdk/types'
-import yaml from 'js-yaml'
+import { dump, load } from 'js-yaml'
 import { z } from 'zod'
 import type { PlanSnapshot, Project, ProjectFrontmatter, ProjectTask, ProjectAsset, ProjectBrainstormMessage, ProjectSummary } from '../types'
 
@@ -89,7 +89,8 @@ export function parseProject(content: string): Project {
     throw new Error('Invalid project file: missing YAML frontmatter')
   }
 
-  const raw = yaml.load(match[1]) as Record<string, unknown>
+  // js-yaml 5 throws on empty input; an empty frontmatter block is a valid, empty project header.
+  const raw = (match[1].trim() === '' ? {} : load(match[1])) as Record<string, unknown>
   const body = match[2] || ''
 
   const tasks: ProjectTask[] = Array.isArray(raw.tasks)
@@ -149,9 +150,9 @@ export function serializeProject(project: Project): string {
   const fmData = { ...fm, tasks: cleanTasks, assets: cleanAssets }
   if (!cleanAssets) delete (fmData as Record<string, unknown>).assets
 
-  const frontmatter = yaml.dump(
+  const frontmatter = dump(
     fmData,
-    { lineWidth: -1, quotingType: '"', forceQuotes: false },
+    { lineWidth: -1, quoteStyle: 'double', forceQuotes: false },
   ).trim()
 
   return `---\n${frontmatter}\n---\n\n${body}\n`

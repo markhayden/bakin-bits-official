@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterAll, mock } from 'bun:test'
 import { mkdirSync, rmSync, writeFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import yaml from 'js-yaml'
+import { dump } from 'js-yaml'
 import {
   activatePlugin,
   findRoute,
@@ -88,7 +88,7 @@ function writeProjectFixture(
   }
   if (assets.length > 0) fm.assets = assets
 
-  const content = `---\n${yaml.dump(fm, { lineWidth: -1 }).trim()}\n---\n\n${body}\n`
+  const content = `---\n${dump(fm, { lineWidth: -1 }).trim()}\n---\n\n${body}\n`
   if (!existsSync(projectsDir)) mkdirSync(projectsDir, { recursive: true })
   writeFileSync(join(projectsDir, `${id}.md`), content, 'utf-8')
 }

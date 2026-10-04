@@ -67,7 +67,7 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     container:
-      image: mcr.microsoft.com/playwright:v1.60.0-noble
+      image: mcr.microsoft.com/playwright:v1.63.0-noble
       options: --init --ipc=host
     permissions:
       contents: read
@@ -79,12 +79,12 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: markhayden/bakin
-          # Keyboard-aware workspace input controls (bakin #943): the terminal
-          # plugin's mobile controls use the --bakin-workspace-viewport-height
-          # token, and the SDK stylesheet identity check compares against the
-          # canonical artifact at this commit. Pin the reviewed prerequisite
-          # commit, not a moving branch.
-          ref: 477eab9d9f0bb16f7e3947edde361c9ee5e6bce9
+          # Dependency sweep (bakin #760, PRs #947–#963): the SDK is now built
+          # with zod ~4.6.5, TypeScript 6, lucide 1.x and js-yaml 5 — the same
+          # versions these plugins declare — and the SDK stylesheet identity
+          # check compares against the canonical artifact at this commit. Pin
+          # the reviewed prerequisite commit, not a moving branch.
+          ref: 31607fd5e
           path: .bakin-source
 
       # The playwright container image ships without unzip, which setup-bun

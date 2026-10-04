@@ -27,7 +27,7 @@ describe('official Bits plugin UI conformance enrollment', () => {
 
   it('runs the installed-package harness in pinned Playwright CI', () => {
     const workflow = readFileSync(join(import.meta.dir, '../.github/workflows/ci.yml'), 'utf8')
-    expect(workflow).toContain('mcr.microsoft.com/playwright:v1.60.0-noble')
+    expect(workflow).toContain('mcr.microsoft.com/playwright:v1.63.0-noble')
     expect(workflow).toContain('BAKIN_SDK_PACKAGE_DIR: ${{ runner.temp }}/sdk-package')
     expect(workflow).toContain('run: bun run ui:conformance')
     expect(workflow).toContain('path: test-results/plugin-ui-conformance')

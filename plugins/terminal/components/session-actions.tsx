@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Button, DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@makinbakin/sdk/ui'
-import { Check, Ellipsis, Hand, Trash2 } from 'lucide-react'
+import { Check, Ellipsis, Hand, Trash } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import { TerminalTool } from './terminal-tool'
 
@@ -25,9 +25,9 @@ export function SessionActions({ session, busy, label = 'Session actions', onOpe
       {children}
       {allowTake && <DropdownMenuItem disabled={busy || driving || !running} onClick={() => onOperate('take', session.id)}><Hand size={16} />Drive</DropdownMenuItem>}
       {session.state === 'exited' && <DropdownMenuItem disabled={busy} onClick={() => onOperate('complete', session.id)}><Check size={16} />Mark ended</DropdownMenuItem>}
-      <DropdownMenuItem variant="danger" disabled={busy || !running} onClick={() => onConfirm({ id: session.id, operation: 'terminate' })}><Trash2 size={16} />Terminate</DropdownMenuItem>
-      <DropdownMenuItem variant="danger" disabled={busy || running} onClick={() => onConfirm({ id: session.id, operation: 'delete' })}><Trash2 size={16} />Delete session</DropdownMenuItem>
-      <DropdownMenuItem variant="danger" disabled={busy || session.state !== 'completed' || session.historyDeleted} onClick={() => onConfirm({ id: session.id, operation: 'delete-history' })}><Trash2 size={16} />Delete output only</DropdownMenuItem>
+      <DropdownMenuItem variant="danger" disabled={busy || !running} onClick={() => onConfirm({ id: session.id, operation: 'terminate' })}><Trash size={16} />Terminate</DropdownMenuItem>
+      <DropdownMenuItem variant="danger" disabled={busy || running} onClick={() => onConfirm({ id: session.id, operation: 'delete' })}><Trash size={16} />Delete session</DropdownMenuItem>
+      <DropdownMenuItem variant="danger" disabled={busy || session.state !== 'completed' || session.historyDeleted} onClick={() => onConfirm({ id: session.id, operation: 'delete-history' })}><Trash size={16} />Delete output only</DropdownMenuItem>
     </DropdownMenuContent>
   </DropdownMenu>
 }

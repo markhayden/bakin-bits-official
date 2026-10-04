@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import type { PluginContext, WorkflowDefinitionInput } from '@makinbakin/sdk/types'
-import yaml from 'js-yaml'
+import { load } from 'js-yaml'
 import { z } from 'zod'
 
 export interface RegisterMessagingDefaultWorkflowsResult {
@@ -133,7 +133,7 @@ export function loadMessagingDefaultWorkflowDefinitions(
       const id = file.replace(/\.(yaml|yml)$/, '')
       try {
         const raw = readFileSync(join(workflowsDir, file), 'utf-8')
-        const loaded = yaml.load(raw)
+        const loaded = load(raw)
         const parsed = messagingWorkflowDefinitionSchema.parse(loaded)
         const definition: WorkflowDefinitionInput = { ...parsed, id }
         return { id, definition, errors: validateMessagingWorkflowDefinition(definition, id) }
