@@ -84,7 +84,7 @@ jobs:
           # versions these plugins declare — and the SDK stylesheet identity
           # check compares against the canonical artifact at this commit. Pin
           # the reviewed prerequisite commit, not a moving branch.
-          ref: 31607fd5e
+          ref: 31607fd5e93cfcd590e95f021b3134915e4fdcf3
           path: .bakin-source
 
       # The playwright container image ships without unzip, which setup-bun
