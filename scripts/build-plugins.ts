@@ -40,7 +40,7 @@ const CLIENT_EXTERNAL = [
   '@makinbakin/sdk/patterns', '@makinbakin/sdk/navigation', '@makinbakin/sdk/hooks',
   '@makinbakin/sdk/slots',
   '@makinbakin/sdk/types', '@makinbakin/sdk/utils',
-  '@makinbakin/sdk/metadata', '@makinbakin/sdk/routing',
+  '@makinbakin/sdk/routing',
 ]
 
 const SERVER_EXTERNAL = [
@@ -65,7 +65,6 @@ const SDK_ENTRYPOINTS: Record<string, string> = {
   '@makinbakin/sdk/slots': join(BUILD_SDK_ROOT, 'slots', 'index.js'),
   '@makinbakin/sdk/types': join(BUILD_SDK_ROOT, 'types', 'index.js'),
   '@makinbakin/sdk/utils': join(BUILD_SDK_ROOT, 'utils', 'index.js'),
-  '@makinbakin/sdk/metadata': join(BUILD_SDK_ROOT, 'metadata', 'index.js'),
   '@makinbakin/sdk/routing': join(BUILD_SDK_ROOT, 'routing', 'index.js'),
 }
 
