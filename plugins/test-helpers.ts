@@ -500,13 +500,13 @@ export function findTool(tools: ExecToolDefinition[], name: string): ExecToolDef
   return tools.find(tool => tool.name === name)
 }
 
-export function makeRequest(path: string, opts: { method?: string; body?: unknown; searchParams?: Record<string, string> } = {}): Request {
+export function makeRequest(path: string, opts: { method?: string; body?: unknown; searchParams?: Record<string, string>; headers?: Record<string, string> } = {}): Request {
   const url = new URL(`http://localhost${path}`)
   for (const [key, value] of Object.entries(opts.searchParams ?? {})) url.searchParams.set(key, value)
-  const init: RequestInit = { method: opts.method ?? 'GET' }
+  const init: RequestInit = { method: opts.method ?? 'GET', headers: { ...opts.headers } }
   if (opts.body !== undefined) {
     init.body = JSON.stringify(opts.body)
-    init.headers = { 'Content-Type': 'application/json' }
+    init.headers = { 'Content-Type': 'application/json', ...opts.headers }
   }
   return new Request(url, init)
 }
@@ -514,12 +514,13 @@ export function makeRequest(path: string, opts: { method?: string; body?: unknow
 export async function callRoute(
   route: APIRoute,
   ctx: PluginContext,
-  opts: { path?: string; body?: unknown; searchParams?: Record<string, string>; rawResponse?: boolean } = {},
+  opts: { path?: string; body?: unknown; searchParams?: Record<string, string>; headers?: Record<string, string>; rawResponse?: boolean } = {},
 ): Promise<{ status: number; body: Record<string, unknown>; response: Response }> {
   const req = makeRequest(opts.path ?? route.path, {
     method: route.method,
     body: opts.body,
     searchParams: opts.searchParams,
+    headers: opts.headers,
   })
   // Third handler arg mirrors the host registry's parsed input: `:key`
   // segments of the declared path matched against the actual path.

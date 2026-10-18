@@ -234,7 +234,10 @@ Plan and Deliverable tools:
 
 Agent-facing activation and approval tools are blocked by default. Enable
 `agentPlanActivationPolicy = allowed` or
-`agentDeliverableApprovalPolicy = allowed` only for trusted agents.
+`agentDeliverableApprovalPolicy = allowed` only for trusted agents. Even then,
+an agent can decide only bare-task Deliverables: a workflow-backed Deliverable
+waits at a workflow gate, which Bakin lets only the operator decide (an
+agent's attempt is refused and changes nothing).
 
 ## Workflows
 
@@ -249,7 +252,10 @@ prep tasks with
 `ctx.tasks.create({ workflowId, skipWorkflowReason, availableAt, dueAt, source })`,
 listens for `workflow.gate_reached`
 and `workflow.complete`, and resolves gates through
-`ctx.hooks.invoke('workflows.approveGate' | 'workflows.rejectGate', ...)`.
+`ctx.hooks.invoke('workflows.approveGate' | 'workflows.rejectGate', ...)`,
+passing the provenance of the request it serves
+(`approvalProvenanceFromRequest(req)` from `@makinbakin/sdk/routing`) and
+checking the hook's `success` — a refusal restores the Deliverable.
 Recovery also goes through hooks: workflow-backed prep repair calls
 `ctx.hooks.invoke('workflows.reopenFromStep', ...)`; Messaging never edits
 workflow instance files directly.

@@ -25,7 +25,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@makinbakin/sdk/ui"
-import { formatDateTime } from "@makinbakin/sdk/utils"
+import { OPERATOR_DECLARATION_HEADERS, formatDateTime } from "@makinbakin/sdk/utils"
 import { CircleAlert, CalendarDays, Check, Clock, ImageIcon, RefreshCcw, RotateCcw, Trash, Video, X } from 'lucide-react'
 import type { AssetRequirement, ContentTypeOption, Deliverable, DeliverableFailureStage } from '../types'
 import { getContentTypeLabel, useContentTypes } from '../hooks/use-content-types'
@@ -147,7 +147,7 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
       const path = canApproveAndPublishNow ? 'approve-and-publish-now' : 'approve'
       const response = await fetch(`/api/plugins/messaging/deliverables/${encoded}/${path}?id=${encoded}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...OPERATOR_DECLARATION_HEADERS },
       })
       if (!response.ok) {
         setActionError(await readErrorMessage(response, 'Could not approve this content piece.'))
@@ -170,7 +170,7 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
       const encoded = encodeURIComponent(deliverable.id)
       const response = await fetch(`/api/plugins/messaging/deliverables/${encoded}/reject?id=${encoded}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...OPERATOR_DECLARATION_HEADERS },
         body: JSON.stringify({ note: rejectionNote }),
       })
       if (!response.ok) {
@@ -216,7 +216,7 @@ export function DeliverableDrawer({ deliverable, open, onClose, onUpdated }: Del
       const encoded = encodeURIComponent(deliverable.id)
       const response = await fetch(`/api/plugins/messaging/deliverables/${encoded}/${recoveryAction.route}?id=${encoded}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...OPERATOR_DECLARATION_HEADERS },
       })
       if (!response.ok) {
         setActionError(await readErrorMessage(response, `Could not ${recoveryAction.label.toLowerCase()}.`))

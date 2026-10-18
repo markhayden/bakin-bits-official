@@ -2,6 +2,8 @@ export function cn(...args) {
   return args.filter(Boolean).join(' ')
 }
 
+export const OPERATOR_DECLARATION_HEADERS = Object.freeze({ 'X-Bakin-Operator': 'declared' })
+
 export function formatAge(value) {
   return String(value)
 }

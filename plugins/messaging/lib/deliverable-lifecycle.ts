@@ -6,8 +6,9 @@ import { recomputePlanStatus } from './plan-status'
 import { buildFilesFromDraft, publishDeliverableNow } from './publish'
 import {
   approveWorkflowGateForDeliverable,
+  provenanceActorId,
   rejectWorkflowGateForDeliverable,
-  type ApprovalActor,
+  type ApprovalProvenance,
 } from './workflow-bridge'
 import type { DeliverableFailureStage } from '../types'
 
@@ -17,7 +18,6 @@ export type DeliverableLifecycleResult =
 
 type DeliverableLifecycleFailure = Extract<DeliverableLifecycleResult, { ok: false }>
 
-const DEFAULT_APPROVER: ApprovalActor = { id: 'mark', source: 'web' }
 const PUBLISH_BLOCKED_STATUSES = new Set(['published', 'cancelled', 'failed'])
 const REOPENABLE_FAILURE_STAGES = new Set<DeliverableFailureStage>(['validation', 'workflow_handoff', 'workflow'])
 
@@ -88,15 +88,15 @@ async function validateAssets(
   }
 }
 
-async function requeueTaskForChanges(ctx: PluginContext, deliverable: Deliverable, note: string, approver: ApprovalActor): Promise<void> {
+async function requeueTaskForChanges(ctx: PluginContext, deliverable: Deliverable, note: string, provenance: ApprovalProvenance): Promise<void> {
   if (!deliverable.taskId) return
   try {
     await ctx.tasks.update(deliverable.taskId, { column: 'inProgress' })
     await ctx.tasks.appendLog(deliverable.taskId, {
       timestamp: new Date().toISOString(),
-      author: approver.id,
+      author: provenanceActorId(provenance),
       message: `Changes requested: ${note || 'No note provided.'}`,
-      data: { deliverableId: deliverable.id, source: approver.source },
+      data: { deliverableId: deliverable.id, provenance },
     })
   } catch {
     // Task requeue is best-effort; Deliverable status remains the source of truth.
@@ -107,7 +107,7 @@ async function requeueBareTaskForRecovery(
   ctx: PluginContext,
   deliverable: Deliverable,
   reason: string,
-  approver: ApprovalActor,
+  provenance: ApprovalProvenance,
 ): Promise<string | undefined> {
   if (deliverable.taskId) {
     try {
@@ -116,9 +116,9 @@ async function requeueBareTaskForRecovery(
         await ctx.tasks.update(deliverable.taskId, { column: 'inProgress' })
         await ctx.tasks.appendLog(deliverable.taskId, {
           timestamp: new Date().toISOString(),
-          author: approver.id,
+          author: provenanceActorId(provenance),
           message: `Recovery requested: ${reason}`,
-          data: { deliverableId: deliverable.id, source: approver.source },
+          data: { deliverableId: deliverable.id, provenance },
         })
         return deliverable.taskId
       }
@@ -146,9 +146,9 @@ async function requeueBareTaskForRecovery(
   })
   await ctx.tasks.appendLog(task.id, {
     timestamp: new Date().toISOString(),
-    author: approver.id,
+    author: provenanceActorId(provenance),
     message: `Recovery requested: ${reason}`,
-    data: { deliverableId: deliverable.id, source: approver.source },
+    data: { deliverableId: deliverable.id, provenance },
   })
   return task.id
 }
@@ -206,7 +206,7 @@ export async function approveDeliverable(
   ctx: PluginContext,
   settings: MessagingSettings,
   deliverableId: string,
-  approver: ApprovalActor = DEFAULT_APPROVER,
+  provenance: ApprovalProvenance,
 ): Promise<DeliverableLifecycleResult> {
   const deliverable = getDeliverableOrNotFound(store, deliverableId)
   if (isLifecycleFailure(deliverable)) return deliverable
@@ -219,7 +219,7 @@ export async function approveDeliverable(
     if (unavailable) return unavailable
     const assets = await validateAssets(store, ctx, settings, deliverable)
     if (!assets.ok) return assets
-    const result = await approveWorkflowGateForDeliverable(store, ctx, deliverable.id, approver)
+    const result = await approveWorkflowGateForDeliverable(store, ctx, deliverable.id, provenance)
     return result.ok ? { ok: true, deliverable: result.deliverable } : result
   }
 
@@ -231,7 +231,7 @@ export async function approveDeliverable(
 
   const updated = store.updateDeliverable(deliverable.id, { status: 'approved' })
   recomputeLinkedPlan(store, updated)
-  ctx.activity.audit('deliverable.approved', approver.id, { deliverableId: updated.id })
+  ctx.activity.audit('deliverable.approved', provenanceActorId(provenance), { deliverableId: updated.id, provenance })
   ctx.activity.log(updated.agent, `Approved "${updated.title}"`)
   return { ok: true, deliverable: updated }
 }
@@ -241,7 +241,7 @@ export async function rejectDeliverable(
   ctx: PluginContext,
   deliverableId: string,
   note: string,
-  approver: ApprovalActor = DEFAULT_APPROVER,
+  provenance: ApprovalProvenance,
 ): Promise<DeliverableLifecycleResult> {
   const deliverable = getDeliverableOrNotFound(store, deliverableId)
   if (isLifecycleFailure(deliverable)) return deliverable
@@ -252,7 +252,7 @@ export async function rejectDeliverable(
     }
     const unavailable = gateUnavailable(deliverable)
     if (unavailable) return unavailable
-    const result = await rejectWorkflowGateForDeliverable(store, ctx, deliverable.id, note, approver)
+    const result = await rejectWorkflowGateForDeliverable(store, ctx, deliverable.id, note, provenance)
     return result.ok ? { ok: true, deliverable: result.deliverable } : result
   }
 
@@ -264,8 +264,8 @@ export async function rejectDeliverable(
     rejectionNote: note,
   })
   recomputeLinkedPlan(store, updated)
-  await requeueTaskForChanges(ctx, updated, note, approver)
-  ctx.activity.audit('deliverable.rejected', approver.id, { deliverableId: updated.id, note })
+  await requeueTaskForChanges(ctx, updated, note, provenance)
+  ctx.activity.audit('deliverable.rejected', provenanceActorId(provenance), { deliverableId: updated.id, note, provenance })
   ctx.activity.log(updated.agent, `Changes requested for "${updated.title}"`)
   return { ok: true, deliverable: updated }
 }
@@ -275,7 +275,7 @@ export async function approveAndPublishDeliverableNow(
   ctx: PluginContext,
   settings: MessagingSettings,
   deliverableId: string,
-  approver: ApprovalActor = DEFAULT_APPROVER,
+  provenance: ApprovalProvenance,
 ): Promise<DeliverableLifecycleResult> {
   const deliverable = getDeliverableOrNotFound(store, deliverableId)
   if (isLifecycleFailure(deliverable)) return deliverable
@@ -293,7 +293,7 @@ export async function approveAndPublishDeliverableNow(
 
   const approved = store.updateDeliverable(deliverable.id, { status: 'approved' })
   recomputeLinkedPlan(store, approved)
-  ctx.activity.audit('deliverable.approved', approver.id, { deliverableId: approved.id, publishNow: true })
+  ctx.activity.audit('deliverable.approved', provenanceActorId(provenance), { deliverableId: approved.id, publishNow: true, provenance })
   const contentType = contentTypeFor(settings, approved.contentType)
   const result = await publishDeliverableNow(store, approved, contentType, ctx)
   recomputeLinkedPlan(store, result.deliverable)
@@ -307,7 +307,7 @@ export async function restoreDeliverableApproval(
   ctx: PluginContext,
   settings: MessagingSettings,
   deliverableId: string,
-  approver: ApprovalActor = DEFAULT_APPROVER,
+  provenance: ApprovalProvenance,
 ): Promise<DeliverableLifecycleResult> {
   const deliverable = getDeliverableOrNotFound(store, deliverableId)
   if (isLifecycleFailure(deliverable)) return deliverable
@@ -338,10 +338,10 @@ export async function restoreDeliverableApproval(
     ...clearFailurePatch(),
   })
   recomputeLinkedPlan(store, updated)
-  ctx.activity.audit('deliverable.failure_recovered', approver.id, {
+  ctx.activity.audit('deliverable.failure_recovered', provenanceActorId(provenance), {
     deliverableId: updated.id,
     action: 'restore_approval',
-    source: approver.source,
+    provenance,
   })
   ctx.activity.log(updated.agent, `Restored approval for "${updated.title}"`, { category: 'messaging' })
   return { ok: true, deliverable: updated }
@@ -351,7 +351,7 @@ export async function reopenDeliverablePrep(
   store: MessagingContentStorage,
   ctx: PluginContext,
   deliverableId: string,
-  approver: ApprovalActor = DEFAULT_APPROVER,
+  provenance: ApprovalProvenance,
 ): Promise<DeliverableLifecycleResult> {
   const deliverable = getDeliverableOrNotFound(store, deliverableId)
   if (isLifecycleFailure(deliverable)) return deliverable
@@ -371,7 +371,7 @@ export async function reopenDeliverablePrep(
       instanceId: deliverable.workflowInstanceId,
       stepId: deliverable.failedStep ?? deliverable.pendingGateStepId,
       reason,
-      actor: approver,
+      provenance,
       metadata: { deliverableId: deliverable.id, planId: deliverable.planId },
     })
     if (!reopened || reopened.success !== true) {
@@ -379,7 +379,7 @@ export async function reopenDeliverablePrep(
       return { ok: false, status: 409, error: errors, deliverable }
     }
   } else {
-    taskId = await requeueBareTaskForRecovery(ctx, deliverable, reason, approver)
+    taskId = await requeueBareTaskForRecovery(ctx, deliverable, reason, provenance)
   }
 
   const updated = store.updateDeliverable(deliverable.id, {
@@ -390,10 +390,10 @@ export async function reopenDeliverablePrep(
     ...clearFailurePatch(),
   })
   recomputeLinkedPlan(store, updated)
-  ctx.activity.audit('deliverable.failure_recovered', approver.id, {
+  ctx.activity.audit('deliverable.failure_recovered', provenanceActorId(provenance), {
     deliverableId: updated.id,
     action: 'reopen_prep',
-    source: approver.source,
+    provenance,
     taskId,
   })
   ctx.activity.log(updated.agent, `Reopened prep for "${updated.title}": ${reason}`, { category: 'messaging' })
@@ -405,7 +405,7 @@ export async function retryDeliverableDelivery(
   ctx: PluginContext,
   settings: MessagingSettings,
   deliverableId: string,
-  approver: ApprovalActor = DEFAULT_APPROVER,
+  provenance: ApprovalProvenance,
 ): Promise<DeliverableLifecycleResult> {
   const deliverable = getDeliverableOrNotFound(store, deliverableId)
   if (isLifecycleFailure(deliverable)) return deliverable
@@ -416,10 +416,10 @@ export async function retryDeliverableDelivery(
   const contentType = contentTypeFor(settings, deliverable.contentType)
   const result = await publishDeliverableNow(store, deliverable, contentType, ctx)
   recomputeLinkedPlan(store, result.deliverable)
-  ctx.activity.audit('deliverable.failure_recovered', approver.id, {
+  ctx.activity.audit('deliverable.failure_recovered', provenanceActorId(provenance), {
     deliverableId: result.deliverable.id,
     action: 'retry_delivery',
-    source: approver.source,
+    provenance,
     success: result.ok,
   })
   if (result.ok) return { ok: true, deliverable: result.deliverable, published: true }

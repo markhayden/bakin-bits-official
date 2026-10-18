@@ -9,6 +9,16 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- `messaging` (0.12.0): workflow gate decisions carry honest provenance
+  (markhayden/bakin#898 H). Routes pass `approvalProvenanceFromRequest(req)`
+  to `workflows.approveGate`/`rejectGate` (no more `'mark'` default approver;
+  the drawer declares the operator), agent tools pass an agent provenance,
+  and the bridge checks the hook's `success` — a refused decision restores
+  the Deliverable and plan. Agents can no longer approve or reject
+  workflow-backed Deliverables even under `agentDeliverableApprovalPolicy:
+  allowed` (bare-task Deliverables unchanged). Gate events are read from
+  `provenance`. Requires Bakin and `@makinbakin/sdk` `>=0.0.1-rc.41`, the
+  planned first release containing the Bakin change; publish after it.
 - `messaging` (0.11.8), `projects` (0.11.3), `terminal` (0.3.1): dependency
   sweep in lockstep with Bakin #760 — zod `~4.6.5` (the SDK's public types
   carry zod's minor, so the tilde pin must match the host), lucide-react 1.51

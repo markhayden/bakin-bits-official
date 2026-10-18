@@ -5,6 +5,7 @@
 import { z } from 'zod'
 import { defineRoute } from '@makinbakin/sdk'
 import type { BakinPlugin, PluginContext, PluginLogger } from '@makinbakin/sdk/types'
+import { approvalProvenanceFromRequest } from '@makinbakin/sdk/routing'
 import { conversationThreadId } from '@makinbakin/sdk/utils'
 import type {
   BrainstormSession,
@@ -44,7 +45,7 @@ import { materializeApprovedProposals } from './lib/materialize'
 import type { MessagingContentStorage } from './lib/content-storage'
 import { recomputePlanStatus } from './lib/plan-status'
 import { activatePlan } from './lib/plan-activation'
-import { registerMessagingWorkflowBridge, type ApprovalActor } from './lib/workflow-bridge'
+import { registerMessagingWorkflowBridge, type ApprovalProvenance } from './lib/workflow-bridge'
 import { generateId } from './lib/ids'
 import { getDistributionChannelDefinition } from './lib/distribution-channels'
 
@@ -94,8 +95,9 @@ function agentDeliverableApprovalAllowed(settings: MessagingSettings): boolean {
   return settings.agentDeliverableApprovalPolicy === 'allowed'
 }
 
-function execApprovalActor(agent: string): ApprovalActor {
-  return { id: agent || 'unknown-agent', source: 'mcp' }
+/** An agent's MCP tool call — core refuses it for any workflow gate (#898). */
+function execApprovalProvenance(agent: string): ApprovalProvenance {
+  return { channel: 'mcp', actor: { kind: 'agent', id: agent || 'unknown-agent' }, evidence: 'runtime-context' }
 }
 
 function agentCanCreateDeliverableWithStatus(status: DeliverableStatus | undefined): boolean {
@@ -768,7 +770,7 @@ const messagingPlugin: BakinPlugin = {
         key: 'agentDeliverableApprovalPolicy',
         type: 'select',
         label: 'Agent deliverable approval',
-        description: 'Controls whether MCP agents can approve or reject Deliverables.',
+        description: 'Controls whether MCP agents can approve or reject bare-task Deliverables. Workflow-backed Deliverables wait at a workflow gate, which only you can decide.',
         options: [
           { value: 'blocked', label: 'Require human approval' },
           { value: 'allowed', label: 'Allow trusted agents' },
@@ -1724,7 +1726,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
-        const result = await approveDeliverable(contentStore, ctx, ctx.getSettings<MessagingSettings>(), id)
+        const result = await approveDeliverable(contentStore, ctx, ctx.getSettings<MessagingSettings>(), id, approvalProvenanceFromRequest(req))
         if (!result.ok) return json({ error: result.error, deliverable: result.deliverable }, result.status)
         return json({ ok: true, deliverable: result.deliverable })
       })
@@ -1734,7 +1736,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const body = await readBody<{ id?: string; note?: string; reason?: string }>(req).catch(() => ({} as { id?: string; note?: string; reason?: string }))
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
-        const result = await rejectDeliverable(contentStore, ctx, id, body.note ?? body.reason ?? '')
+        const result = await rejectDeliverable(contentStore, ctx, id, body.note ?? body.reason ?? '', approvalProvenanceFromRequest(req))
         if (!result.ok) return json({ error: result.error, deliverable: result.deliverable }, result.status)
         return json({ ok: true, deliverable: result.deliverable })
       })
@@ -1744,7 +1746,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
-        const result = await approveAndPublishDeliverableNow(contentStore, ctx, ctx.getSettings<MessagingSettings>(), id)
+        const result = await approveAndPublishDeliverableNow(contentStore, ctx, ctx.getSettings<MessagingSettings>(), id, approvalProvenanceFromRequest(req))
         if (!result.ok) return json({ error: result.error, deliverable: result.deliverable }, result.status)
         return json({ ok: true, deliverable: result.deliverable, published: result.published })
       })
@@ -1754,7 +1756,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
-        const result = await restoreDeliverableApproval(contentStore, ctx, ctx.getSettings<MessagingSettings>(), id)
+        const result = await restoreDeliverableApproval(contentStore, ctx, ctx.getSettings<MessagingSettings>(), id, approvalProvenanceFromRequest(req))
         const plan = result.deliverable?.planId ? contentStore.getPlan(result.deliverable.planId) : null
         if (!result.ok) return json({ error: result.error, deliverable: result.deliverable, plan }, result.status)
         return json({ ok: true, deliverable: result.deliverable, plan })
@@ -1765,7 +1767,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
-        const result = await reopenDeliverablePrep(contentStore, ctx, id)
+        const result = await reopenDeliverablePrep(contentStore, ctx, id, approvalProvenanceFromRequest(req))
         const plan = result.deliverable?.planId ? contentStore.getPlan(result.deliverable.planId) : null
         if (!result.ok) return json({ error: result.error, deliverable: result.deliverable, plan }, result.status)
         return json({ ok: true, deliverable: result.deliverable, plan })
@@ -1776,7 +1778,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const body = await readBody<{ id?: string }>(req).catch((): { id?: string } => ({}))
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
-        const result = await retryDeliverableDelivery(contentStore, ctx, ctx.getSettings<MessagingSettings>(), id)
+        const result = await retryDeliverableDelivery(contentStore, ctx, ctx.getSettings<MessagingSettings>(), id, approvalProvenanceFromRequest(req))
         const plan = result.deliverable?.planId ? contentStore.getPlan(result.deliverable.planId) : null
         if (!result.ok) return json({ error: result.error, deliverable: result.deliverable, plan }, result.status)
         return json({ ok: true, deliverable: result.deliverable, plan, published: result.published })
@@ -2112,7 +2114,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         if (!agentDeliverableApprovalAllowed(settings)) {
           return { ok: false, status: 403, error: AGENT_DELIVERABLE_APPROVAL_ERROR }
         }
-        const result = await approveDeliverable(contentStore, ctx, settings, params.deliverableId as string, execApprovalActor(agent))
+        const result = await approveDeliverable(contentStore, ctx, settings, params.deliverableId as string, execApprovalProvenance(agent))
         return result.ok ? { ok: true, deliverable: result.deliverable } : { ok: false, error: result.error, status: result.status, deliverable: result.deliverable }
       },
     })
@@ -2132,7 +2134,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         if (!agentDeliverableApprovalAllowed(settings)) {
           return { ok: false, status: 403, error: AGENT_DELIVERABLE_APPROVAL_ERROR }
         }
-        const result = await rejectDeliverable(contentStore, ctx, params.deliverableId as string, (params.note as string | undefined) ?? '', execApprovalActor(agent))
+        const result = await rejectDeliverable(contentStore, ctx, params.deliverableId as string, (params.note as string | undefined) ?? '', execApprovalProvenance(agent))
         return result.ok ? { ok: true, deliverable: result.deliverable } : { ok: false, error: result.error, status: result.status, deliverable: result.deliverable }
       },
     })
