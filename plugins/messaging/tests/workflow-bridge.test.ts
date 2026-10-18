@@ -1,4 +1,8 @@
 import { describe, expect, it, mock } from 'bun:test'
+import type { ApprovalProvenance } from '@makinbakin/sdk/routing'
+
+const UI_OPERATOR: ApprovalProvenance = { channel: 'ui', actor: { kind: 'operator-declared' }, evidence: 'declared' }
+const AGENT: ApprovalProvenance = { channel: 'mcp', actor: { kind: 'agent', id: 'writer' }, evidence: 'runtime-context' }
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -105,7 +109,7 @@ describe('messaging workflow bridge', () => {
     ctx.events.emit('workflow.gate_approved', {
       taskId: 'task-1',
       stepId: 'review-copy',
-      approver: { id: 'roscoe', source: 'web', displayName: 'roscoe' },
+      provenance: UI_OPERATOR,
     })
     await flushEvents()
 
@@ -133,7 +137,7 @@ describe('messaging workflow bridge', () => {
       taskId: 'task-1',
       stepId: 'review-copy',
       reason: 'Make the opening stronger.',
-      approver: { id: 'roscoe', source: 'web' },
+      provenance: UI_OPERATOR,
     })
 
     const saved = store.getDeliverable('deliverable-1')!
@@ -152,7 +156,7 @@ describe('messaging workflow bridge', () => {
     await handleWorkflowGateApproved(store, ctx, {
       taskId: 'task-1',
       stepId: 'other-review',
-      approver: { id: 'roscoe', source: 'web' },
+      provenance: UI_OPERATOR,
     })
 
     expect(store.getDeliverable('deliverable-1')?.status).toBe('in_review')
@@ -230,55 +234,85 @@ describe('messaging workflow bridge', () => {
     }))
   }))
 
-  it('approves workflow gates after setting messaging-side status', async () => withStore(async (store, ctx) => {
+  it('approves through core; the gate event (before workflow.complete) moves the Deliverable', async () => withStore(async (store, ctx) => {
     seedWorkflowDeliverable(store, {
       status: 'in_review',
       pendingGateStepId: 'review-copy',
     })
-    ctx.hooks.invoke = mock(async () => ({ ok: true })) as typeof ctx.hooks.invoke
+    registerMessagingWorkflowBridge(store, ctx, () => settings, { warn: mock(), error: mock() })
+    // Like core: the gate emits gate_approved, then (last gate) workflow.complete, then answers.
+    ctx.hooks.invoke = mock(async () => {
+      ctx.events.emit('workflow.gate_approved', { taskId: 'task-1', stepId: 'review-copy', provenance: UI_OPERATOR })
+      return { success: true, approvalId: 'approval-1' }
+    }) as typeof ctx.hooks.invoke
 
-    const result = await approveWorkflowGateForDeliverable(store, ctx, 'deliverable-1', { id: 'mark', source: 'web' })
+    const result = await approveWorkflowGateForDeliverable(store, ctx, 'deliverable-1', UI_OPERATOR)
 
     expect(result.ok).toBe(true)
     expect(ctx.hooks.invoke).toHaveBeenCalledWith('workflows.approveGate', {
       taskId: 'task-1',
       stepId: 'review-copy',
-      approver: { id: 'mark', source: 'web' },
+      provenance: UI_OPERATOR,
     })
     expect(store.getDeliverable('deliverable-1')?.status).toBe('approved')
     expect(store.getPlan('plan-1')?.status).toBe('scheduled')
   }))
 
-  it('rolls approval status back when approveGate fails', async () => withStore(async (store, ctx) => {
+  it('a throwing approveGate changes nothing', async () => withStore(async (store, ctx) => {
     seedWorkflowDeliverable(store, {
       status: 'in_review',
       pendingGateStepId: 'review-copy',
     })
+    const planBefore = store.getPlan('plan-1')?.status
     ctx.hooks.invoke = mock(async () => { throw new Error('gate unavailable') }) as typeof ctx.hooks.invoke
 
-    const result = await approveWorkflowGateForDeliverable(store, ctx, 'deliverable-1', { id: 'mark', source: 'web' })
+    const result = await approveWorkflowGateForDeliverable(store, ctx, 'deliverable-1', UI_OPERATOR)
 
     expect(result.ok).toBe(false)
     expect(!result.ok && result.status).toBe(502)
     expect(store.getDeliverable('deliverable-1')?.status).toBe('in_review')
-    expect(store.getPlan('plan-1')?.status).toBe('in_review')
+    expect(store.getPlan('plan-1')?.status).toBe(planBefore)
   }))
 
-  it('rejects workflow gates through rejectGate', async () => withStore(async (store, ctx) => {
+  it('a refused gate decision (agent or undeclared) writes nothing — not even transiently — and keeps the code', async () => withStore(async (store, ctx) => {
+    seedWorkflowDeliverable(store, { status: 'in_review', pendingGateStepId: 'review-copy' })
+    ctx.hooks.invoke = mock(async () => ({ success: false, status: 403, code: 'agent_actor', errors: ['Approvals are decided by the operator, not agents'] })) as typeof ctx.hooks.invoke
+    const writes: unknown[] = []
+    const update = store.updateDeliverable.bind(store)
+    store.updateDeliverable = ((...args: Parameters<typeof update>) => { writes.push(args); return update(...args) }) as typeof store.updateDeliverable
+
+    const planBefore = store.getPlan('plan-1')?.status
+    const approved = await approveWorkflowGateForDeliverable(store, ctx, 'deliverable-1', AGENT)
+    expect(approved).toMatchObject({ ok: false, status: 403, code: 'agent_actor', error: 'Approvals are decided by the operator, not agents' })
+    expect(store.getDeliverable('deliverable-1')?.status).toBe('in_review')
+    expect(store.getPlan('plan-1')?.status).toBe(planBefore)
+
+    const rejected = await rejectWorkflowGateForDeliverable(store, ctx, 'deliverable-1', 'nope', AGENT)
+    expect(rejected).toMatchObject({ ok: false, status: 403, code: 'agent_actor' })
+    expect(store.getDeliverable('deliverable-1')?.status).toBe('in_review')
+    expect(store.getDeliverable('deliverable-1')?.rejectionNote).toBeUndefined()
+    expect(writes).toEqual([])
+  }))
+
+  it('rejects workflow gates through rejectGate; the gate event records the note', async () => withStore(async (store, ctx) => {
     seedWorkflowDeliverable(store, {
       status: 'in_review',
       pendingGateStepId: 'review-copy',
     })
-    ctx.hooks.invoke = mock(async () => ({ ok: true })) as typeof ctx.hooks.invoke
+    registerMessagingWorkflowBridge(store, ctx, () => settings, { warn: mock(), error: mock() })
+    ctx.hooks.invoke = mock(async () => {
+      ctx.events.emit('workflow.gate_rejected', { taskId: 'task-1', stepId: 'review-copy', reason: 'Tighten the opening.', provenance: UI_OPERATOR })
+      return { success: true, approvalId: 'approval-1' }
+    }) as typeof ctx.hooks.invoke
 
-    const result = await rejectWorkflowGateForDeliverable(store, ctx, 'deliverable-1', 'Tighten the opening.', { id: 'mark', source: 'web' })
+    const result = await rejectWorkflowGateForDeliverable(store, ctx, 'deliverable-1', 'Tighten the opening.', UI_OPERATOR)
 
     expect(result.ok).toBe(true)
     expect(ctx.hooks.invoke).toHaveBeenCalledWith('workflows.rejectGate', {
       taskId: 'task-1',
       stepId: 'review-copy',
       reason: 'Tighten the opening.',
-      approver: { id: 'mark', source: 'web' },
+      provenance: UI_OPERATOR,
     })
     const saved = store.getDeliverable('deliverable-1')!
     expect(saved.status).toBe('changes_requested')
@@ -286,19 +320,21 @@ describe('messaging workflow bridge', () => {
     expect(store.getPlan('plan-1')?.status).toBe('in_prep')
   }))
 
-  it('restores prior status when rejectGate fails', async () => withStore(async (store, ctx) => {
+  it('a throwing rejectGate changes nothing', async () => withStore(async (store, ctx) => {
     seedWorkflowDeliverable(store, {
       status: 'in_review',
       pendingGateStepId: 'review-copy',
     })
+    const planBefore = store.getPlan('plan-1')?.status
     ctx.hooks.invoke = mock(async () => { throw new Error('gate unavailable') }) as typeof ctx.hooks.invoke
 
-    const result = await rejectWorkflowGateForDeliverable(store, ctx, 'deliverable-1', 'Try again.', { id: 'mark', source: 'web' })
+    const result = await rejectWorkflowGateForDeliverable(store, ctx, 'deliverable-1', 'Try again.', UI_OPERATOR)
 
     expect(result.ok).toBe(false)
     expect(!result.ok && result.status).toBe(502)
     expect(store.getDeliverable('deliverable-1')?.status).toBe('in_review')
-    expect(store.getPlan('plan-1')?.status).toBe('in_review')
+    expect(store.getDeliverable('deliverable-1')?.rejectionNote).toBeUndefined()
+    expect(store.getPlan('plan-1')?.status).toBe(planBefore)
   }))
 
   it('disables event subscriptions when workflow gate hooks are absent', () => withStore((store, ctx) => {

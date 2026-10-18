@@ -231,6 +231,48 @@ describe('Deliverable routes', () => {
     expect(plugin.ctx.runtime.channels.deliverContent).not.toHaveBeenCalled()
   })
 
+  it('the approve route passes the request\'s own provenance to the gate hook, and a refusal changes nothing', async () => {
+    const store = createMessagingContentStorage(plugin.ctx.storage)
+    const seed = (id: string) => store.createDeliverable({
+      id,
+      planId: null,
+      channel: 'general',
+      contentType: 'blog',
+      tone: 'conversational',
+      agent: 'basil',
+      title: 'Workflow blog',
+      brief: 'Write it.',
+      publishAt: '2026-05-25T16:00:00Z',
+      prepStartAt: '2026-05-25T12:00:00Z',
+      status: 'in_review',
+      taskId: `task-${id}`,
+      workflowInstanceId: `workflow-instance-${id}`,
+      pendingGateStepId: 'review',
+      draft: { caption: 'Ready.' },
+    })
+    const deliverable = seed('gate-1')
+    plugin.ctx.hooks.has = mock((name: string) => name === 'workflows.approveGate') as typeof plugin.ctx.hooks.has
+    plugin.ctx.hooks.invoke = mock(async () => ({ success: true, approvalId: 'a-1' })) as typeof plugin.ctx.hooks.invoke
+    const route = findRoute(plugin.routes, 'POST', '/deliverables/:id/approve')!
+
+    const ok = await callRoute(route, plugin.ctx, { searchParams: { id: deliverable.id }, headers: { 'X-Bakin-Operator': 'declared' } })
+    expect(ok.status).toBe(200)
+    expect(plugin.ctx.hooks.invoke).toHaveBeenCalledWith('workflows.approveGate', {
+      taskId: 'task-gate-1',
+      stepId: 'review',
+      provenance: { channel: 'ui', actor: { kind: 'operator-declared' }, evidence: 'declared' },
+    })
+
+    const second = seed('gate-2')
+    plugin.ctx.hooks.invoke = mock(async () => ({ success: false, status: 403, code: 'undeclared', errors: ['Approval decisions need an explicit operator declaration from the Bakin UI.'] })) as typeof plugin.ctx.hooks.invoke
+    const refused = await callRoute(route, plugin.ctx, { searchParams: { id: second.id } })
+    expect(refused.status).toBe(403)
+    expect(plugin.ctx.hooks.invoke).toHaveBeenCalledWith('workflows.approveGate', expect.objectContaining({
+      provenance: { channel: 'ui', actor: { kind: 'unknown' }, evidence: 'declared' },
+    }))
+    expect(store.getDeliverable(second.id)?.status).toBe('in_review')
+  })
+
   it('marks approve-and-publish-now failures on the Deliverable', async () => {
     const deliverable = await createDeliverable({
       status: 'overdue',
@@ -552,6 +594,7 @@ describe('Deliverable exec tools', () => {
     expect(plugin.ctx.activity.audit).toHaveBeenCalledWith('deliverable.rejected', 'main', {
       deliverableId,
       note: 'Try a stronger opener.',
+      provenance: { channel: 'mcp', actor: { kind: 'agent', id: 'main' }, evidence: 'runtime-context' },
     })
 
     const readyAgain = await callTool(ready, { deliverableId })
@@ -560,7 +603,7 @@ describe('Deliverable exec tools', () => {
     const approve = findTool(plugin.execTools, 'bakin_exec_messaging_deliverable_approve')!
     const approved = await callTool(approve, { deliverableId }, 'main')
     expect((approved.deliverable as Record<string, unknown>).status).toBe('approved')
-    expect(plugin.ctx.activity.audit).toHaveBeenCalledWith('deliverable.approved', 'main', { deliverableId })
+    expect(plugin.ctx.activity.audit).toHaveBeenCalledWith('deliverable.approved', 'main', { deliverableId, provenance: { channel: 'mcp', actor: { kind: 'agent', id: 'main' }, evidence: 'runtime-context' } })
   })
 
   it('blocks agent Deliverable approval and rejection by default', async () => {

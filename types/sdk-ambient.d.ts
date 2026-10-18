@@ -1788,6 +1788,8 @@ declare module '@makinbakin/sdk/utils' {
   import type { ConversationMessage } from '@makinbakin/sdk/conversation'
 
   export function cn(...args: Array<string | undefined | null | false>): string
+  /** Headers a browser decision client sends with an approval decision (operator-declared). */
+  export const OPERATOR_DECLARATION_HEADERS: Readonly<Record<string, string>>
   export function formatAge(date: Date | string): string
   export function formatSize(bytes: number): string
   export function pluginFetch(
@@ -1826,4 +1828,15 @@ declare module '@makinbakin/sdk/testing/ui' {
 
 declare module '@makinbakin/sdk/testing/ui/conformance' {
   export function definePluginUiConformance<T extends Record<string, unknown>>(config: T): T
+}
+
+declare module '@makinbakin/sdk/routing' {
+  /** Who decided an approval and how Bakin knows — built by the transport, never from request JSON. */
+  export interface ApprovalProvenance {
+    channel: 'ui' | 'cli' | 'discord' | 'mcp' | 'runtime' | 'hook'
+    actor: { kind: 'operator-declared' | 'agent' | 'channel-user' | 'unknown'; id?: string; displayName?: string }
+    evidence: 'declared' | 'runtime-context' | 'provider'
+  }
+  /** Provenance of an approval decision on a plugin route, from its transport only — pass it to the gate hooks. */
+  export function approvalProvenanceFromRequest(req: Request, opts?: { formDeclaration?: string | null }): ApprovalProvenance
 }
