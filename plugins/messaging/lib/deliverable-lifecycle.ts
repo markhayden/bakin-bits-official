@@ -14,7 +14,7 @@ import type { DeliverableFailureStage } from '../types'
 
 export type DeliverableLifecycleResult =
   | { ok: true; deliverable: Deliverable; published?: boolean }
-  | { ok: false; status: number; error: string; deliverable?: Deliverable }
+  | { ok: false; status: number; error: string; code?: string; deliverable?: Deliverable }
 
 type DeliverableLifecycleFailure = Extract<DeliverableLifecycleResult, { ok: false }>
 

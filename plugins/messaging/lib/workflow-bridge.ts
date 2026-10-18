@@ -24,7 +24,7 @@ interface GateHookResult {
 
 export type WorkflowGateResolutionResult =
   | { ok: true; deliverable: Deliverable }
-  | { ok: false; error: string; status: number; deliverable?: Deliverable }
+  | { ok: false; error: string; status: number; code?: string; deliverable?: Deliverable }
 
 type WorkflowGateResolutionFailure = Extract<WorkflowGateResolutionResult, { ok: false }>
 
@@ -327,40 +327,31 @@ export async function approveWorkflowGateForDeliverable(
   const gate = workflowGateFields(deliverable)
   if ('ok' in gate) return gate
 
-  // Marked approved BEFORE the gate decides: approving the last gate can
-  // complete the workflow inside the hook, and workflow.complete publishes
-  // only an approved Deliverable. Any refusal below restores it.
-  const approved = store.updateDeliverable(deliverable.id, { status: 'approved' })
-  recomputeDeliverablePlan(store, approved)
-
+  // Nothing is written before core decides: a refused decision (an agent,
+  // an undeclared caller) must change nothing here. On success the gate's
+  // own `workflow.gate_approved` event — emitted before `workflow.complete`
+  // — moves the Deliverable (handleWorkflowGateApproved), so a gate that
+  // completes the workflow still publishes an approved Deliverable.
   try {
     const result = await ctx.hooks.invoke<GateHookResult>('workflows.approveGate', {
       taskId: gate.taskId,
       stepId: gate.stepId,
       provenance,
     })
-    if (!result?.success) {
-      // Core refused (an agent, an undeclared caller) or the gate moved on:
-      // nothing changed there, so nothing stays changed here.
-      const reverted = store.updateDeliverable(deliverable.id, { status: deliverable.status })
-      recomputeDeliverablePlan(store, reverted)
-      return { ok: false, status: result?.status ?? 409, error: result?.errors?.[0] ?? 'The workflow gate was not approved', deliverable: reverted }
-    }
+    if (!result?.success) return gateRefused(result, 'The workflow gate was not approved', deliverable)
     ctx.activity.audit('deliverable.workflow_gate_approved', provenanceActorId(provenance), {
-      deliverableId: approved.id,
+      deliverableId: deliverable.id,
       taskId: gate.taskId,
       stepId: gate.stepId,
       provenance,
     })
-    return { ok: true, deliverable: store.getDeliverable(deliverable.id) ?? approved }
+    return { ok: true, deliverable: store.getDeliverable(deliverable.id) ?? deliverable }
   } catch (err) {
-    const reverted = store.updateDeliverable(deliverable.id, { status: deliverable.status })
-    recomputeDeliverablePlan(store, reverted)
     return {
       ok: false,
       status: 502,
       error: `Failed to approve workflow gate: ${err instanceof Error ? err.message : String(err)}`,
-      deliverable: reverted,
+      deliverable: store.getDeliverable(deliverable.id) ?? deliverable,
     }
   }
 }
@@ -379,12 +370,8 @@ export async function rejectWorkflowGateForDeliverable(
   const gate = workflowGateFields(deliverable)
   if ('ok' in gate) return gate
 
-  const rejected = store.updateDeliverable(deliverable.id, {
-    status: 'changes_requested',
-    rejectionNote: reason,
-  })
-  recomputeDeliverablePlan(store, rejected)
-
+  // As with approval: core decides first; the `workflow.gate_rejected` event
+  // records changes_requested + the note (handleWorkflowGateRejected).
   try {
     const result = await ctx.hooks.invoke<GateHookResult>('workflows.rejectGate', {
       taskId: gate.taskId,
@@ -392,26 +379,31 @@ export async function rejectWorkflowGateForDeliverable(
       reason,
       provenance,
     })
-    if (!result?.success) {
-      const reverted = store.updateDeliverable(deliverable.id, { status: deliverable.status, rejectionNote: deliverable.rejectionNote ?? (null as never) })
-      recomputeDeliverablePlan(store, reverted)
-      return { ok: false, status: result?.status ?? 409, error: result?.errors?.[0] ?? 'The workflow gate was not rejected', deliverable: reverted }
-    }
+    if (!result?.success) return gateRefused(result, 'The workflow gate was not rejected', deliverable)
     ctx.activity.audit('deliverable.workflow_gate_rejected', provenanceActorId(provenance), {
-      deliverableId: rejected.id,
+      deliverableId: deliverable.id,
       taskId: gate.taskId,
       stepId: gate.stepId,
       provenance,
     })
-    return { ok: true, deliverable: store.getDeliverable(deliverable.id) ?? rejected }
+    return { ok: true, deliverable: store.getDeliverable(deliverable.id) ?? deliverable }
   } catch (err) {
-    const reverted = store.updateDeliverable(deliverable.id, { status: deliverable.status })
-    recomputeDeliverablePlan(store, reverted)
     return {
       ok: false,
       status: 502,
       error: `Failed to reject workflow gate: ${err instanceof Error ? err.message : String(err)}`,
-      deliverable: reverted,
+      deliverable: store.getDeliverable(deliverable.id) ?? deliverable,
     }
+  }
+}
+
+/** The hook's refusal, unchanged: its status and machine-readable code (#898). */
+function gateRefused(result: GateHookResult | undefined, fallback: string, deliverable: Deliverable): WorkflowGateResolutionFailure {
+  return {
+    ok: false,
+    status: result?.status ?? 409,
+    error: result?.errors?.[0] ?? fallback,
+    ...(result?.code ? { code: result.code } : {}),
+    deliverable,
   }
 }

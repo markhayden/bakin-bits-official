@@ -1727,7 +1727,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
         const result = await approveDeliverable(contentStore, ctx, ctx.getSettings<MessagingSettings>(), id, approvalProvenanceFromRequest(req))
-        if (!result.ok) return json({ error: result.error, deliverable: result.deliverable }, result.status)
+        if (!result.ok) return json({ error: result.error, ...(result.code ? { code: result.code } : {}), deliverable: result.deliverable }, result.status)
         return json({ ok: true, deliverable: result.deliverable })
       })
 
@@ -1737,7 +1737,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
         const result = await rejectDeliverable(contentStore, ctx, id, body.note ?? body.reason ?? '', approvalProvenanceFromRequest(req))
-        if (!result.ok) return json({ error: result.error, deliverable: result.deliverable }, result.status)
+        if (!result.ok) return json({ error: result.error, ...(result.code ? { code: result.code } : {}), deliverable: result.deliverable }, result.status)
         return json({ ok: true, deliverable: result.deliverable })
       })
 
@@ -1747,7 +1747,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const id = url.searchParams.get('id') || body.id
         if (!id) return json({ error: 'id required' }, 400)
         const result = await approveAndPublishDeliverableNow(contentStore, ctx, ctx.getSettings<MessagingSettings>(), id, approvalProvenanceFromRequest(req))
-        if (!result.ok) return json({ error: result.error, deliverable: result.deliverable }, result.status)
+        if (!result.ok) return json({ error: result.error, ...(result.code ? { code: result.code } : {}), deliverable: result.deliverable }, result.status)
         return json({ ok: true, deliverable: result.deliverable, published: result.published })
       })
 
@@ -2096,7 +2096,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
       handler: async (params: Record<string, unknown>) => {
         if (!params.deliverableId) return { ok: false, error: 'deliverableId required' }
         const result = await markDeliverableReadyForReview(contentStore, ctx, ctx.getSettings<MessagingSettings>(), params.deliverableId as string)
-        return result.ok ? { ok: true, deliverable: result.deliverable } : { ok: false, error: result.error, status: result.status, deliverable: result.deliverable }
+        return result.ok ? { ok: true, deliverable: result.deliverable } : { ok: false, error: result.error, status: result.status, ...(result.code ? { code: result.code } : {}), deliverable: result.deliverable }
       },
     })
 
@@ -2115,7 +2115,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
           return { ok: false, status: 403, error: AGENT_DELIVERABLE_APPROVAL_ERROR }
         }
         const result = await approveDeliverable(contentStore, ctx, settings, params.deliverableId as string, execApprovalProvenance(agent))
-        return result.ok ? { ok: true, deliverable: result.deliverable } : { ok: false, error: result.error, status: result.status, deliverable: result.deliverable }
+        return result.ok ? { ok: true, deliverable: result.deliverable } : { ok: false, error: result.error, status: result.status, ...(result.code ? { code: result.code } : {}), deliverable: result.deliverable }
       },
     })
 
@@ -2135,7 +2135,7 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
           return { ok: false, status: 403, error: AGENT_DELIVERABLE_APPROVAL_ERROR }
         }
         const result = await rejectDeliverable(contentStore, ctx, params.deliverableId as string, (params.note as string | undefined) ?? '', execApprovalProvenance(agent))
-        return result.ok ? { ok: true, deliverable: result.deliverable } : { ok: false, error: result.error, status: result.status, deliverable: result.deliverable }
+        return result.ok ? { ok: true, deliverable: result.deliverable } : { ok: false, error: result.error, status: result.status, ...(result.code ? { code: result.code } : {}), deliverable: result.deliverable }
       },
     })
 
