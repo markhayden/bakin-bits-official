@@ -19,7 +19,7 @@
     "lucide-react": "^1.51.0"
   },
   "peerDependencies": {
-    "@makinbakin/sdk": ">=0.0.1-rc.40",
+    "@makinbakin/sdk": ">=0.0.1-rc.41",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

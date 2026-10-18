@@ -9,6 +9,14 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- `projects` (0.11.4), `terminal` (0.3.2): rebuilt for Bakin rc.41's plugin
+  artifact contract (`react19-sdk-focused-v1`, markhayden/bakin#971). The
+  previous artifacts were built for `react19-sdk-makinbakin-v2`, which rc.41
+  reports as "needs a compatible update". Require Bakin and `@makinbakin/sdk`
+  `>=0.0.1-rc.41`. Projects carries the unreleased dependency sweep (0.11.3);
+  Terminal also ships its unreleased mobile controls and accelerated rendering
+  (0.3.0, #114, which needs rc.41's keyboard-aware workspace inputs) and the
+  sweep (0.3.1).
 - `messaging` (0.12.0): workflow gate decisions carry honest provenance
   (markhayden/bakin#898 H). Routes pass `approvalProvenanceFromRequest(req)`
   to `workflows.approveGate`/`rejectGate` (no more `'mark'` default approver;
