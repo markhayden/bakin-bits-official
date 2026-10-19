@@ -148,7 +148,7 @@ jobs:
           ( cd "$DIST" && shasum -a 256 "$ASSET" > "$ASSET.sha256" )
           SIZE=$(stat -f%z "$DIST/$ASSET")
           SHA=$(cut -d' ' -f1 "$DIST/$ASSET.sha256")
-          # The extracted pin: what Bakin hashes on disk before every use (markhayden/bakin#898 D).
+          # The extracted pin: Bakin checks the extracted tmux against it before running or installing it, and in every readiness/Health scan (markhayden/bakin#898 D).
           MEMBER_SHA=$(shasum -a 256 "$OUT/tmux" | cut -d' ' -f1)
           python3 - "$OUT/BUILD.json" "$DIST/BUILD.json" "$ASSET" "$SHA" "$SIZE" <<'PY'
           import json, sys

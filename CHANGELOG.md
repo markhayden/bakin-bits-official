@@ -12,8 +12,10 @@ on a per-plugin basis: each plugin tags its own releases as
 - `terminal` (0.3.3), `ocr` (0.1.1), `transcribe` (1.0.1): archive-shipped
   binaries pin their extracted member with `archive.extractedSha256`
   (tmux, ocrit, parakeet-cpp-transcribe), computed from freshly downloaded,
-  archive-verified releases. Bakin will verify the binary on disk against
-  this pin before every use, not just the download (markhayden/bakin#898 D);
+  archive-verified releases. Bakin will check the extracted binary against
+  this pin before running or installing it, and the binary on disk against
+  it in every readiness and Health scan — not just the download
+  (markhayden/bakin#898 D);
   until then the field is ignored, so these install on current Bakin.
   Reinstall all three before running a Bakin build with the strict check.
   The tmux mirror workflow now prints the extracted pin in its manifest
