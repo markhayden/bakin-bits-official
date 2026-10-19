@@ -1,5 +1,5 @@
 {
-  "id": "terminal", "name": "Terminal", "version": "0.3.2", "bakin": ">=0.0.1-rc.41",
+  "id": "terminal", "name": "Terminal", "version": "0.3.3", "bakin": ">=0.0.1-rc.41",
   "description": "Persistent shared terminals with per-agent access and retained coding worktrees.",
   "requires": {
     "bins": [
@@ -13,7 +13,8 @@
             "sizeBytes": 1215221,
             "archive": {
               "format": "tar.gz",
-              "member": "tmux"
+              "member": "tmux",
+              "extractedSha256": "3fd7892c969c63f901f063cb5ad58f2a91827e3965e93a0ee13bf75a83b09806"
             }
           },
           "darwin-x64": {
@@ -22,7 +23,8 @@
             "sizeBytes": 1215221,
             "archive": {
               "format": "tar.gz",
-              "member": "tmux"
+              "member": "tmux",
+              "extractedSha256": "3fd7892c969c63f901f063cb5ad58f2a91827e3965e93a0ee13bf75a83b09806"
             }
           }
         },

@@ -9,6 +9,15 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- `terminal` (0.3.3), `ocr` (0.1.1), `transcribe` (1.0.1): archive-shipped
+  binaries pin their extracted member with `archive.extractedSha256`
+  (tmux, ocrit, parakeet-cpp-transcribe), computed from freshly downloaded,
+  archive-verified releases. Bakin will verify the binary on disk against
+  this pin before every use, not just the download (markhayden/bakin#898 D);
+  until then the field is ignored, so these install on current Bakin.
+  Reinstall all three before running a Bakin build with the strict check.
+  The tmux mirror workflow now prints the extracted pin in its manifest
+  snippet, and both contract tests require it for every archive download.
 - `projects` (0.11.4), `terminal` (0.3.2): rebuilt for Bakin rc.41's plugin
   artifact contract (`react19-sdk-focused-v1`, markhayden/bakin#971). The
   previous artifacts were built for `react19-sdk-makinbakin-v2`, which rc.41

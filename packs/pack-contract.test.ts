@@ -35,7 +35,7 @@ const STATIC_FIRST_PARTY_SLOTS: Record<string, string> = {
 interface BinDownload {
   url?: string
   sha256?: string
-  archive?: { format?: string; member?: string }
+  archive?: { format?: string; member?: string; extractedSha256?: string }
 }
 
 interface PackManifest {
@@ -119,7 +119,7 @@ describe('pack contracts', () => {
         }
       })
 
-      it('pins every downloadable binary to https + a sha256', () => {
+      it('pins every downloadable binary to https + a sha256 (and archives to their extracted member)', () => {
         for (const bin of manifest.requires?.bins ?? []) {
           expect(bin.name).toBeTruthy()
           expect(bin.version).toBeTruthy()
@@ -131,6 +131,11 @@ describe('pack contracts', () => {
             // An unpinned download is an unreviewed download — the sha256 is
             // what makes a pack install reproducible.
             expect(download.sha256, `${packId}: ${bin.name}/${platform} has no sha256`).toMatch(/^[a-f0-9]{64}$/)
+            // The archive pin proves the download; only the extracted pin
+            // proves the binary that actually runs (markhayden/bakin#898 D).
+            if (download.archive) {
+              expect(download.archive.extractedSha256, `${packId}: ${bin.name}/${platform} archive has no extractedSha256`).toMatch(/^[a-f0-9]{64}$/)
+            }
           }
         }
       })
