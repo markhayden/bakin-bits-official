@@ -18,7 +18,7 @@
  *
  * Run with: bun run build
  */
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 const REPO_ROOT = resolve(import.meta.dir, '..')
@@ -41,7 +41,19 @@ const CLIENT_EXTERNAL = [
   '@makinbakin/sdk/slots',
   '@makinbakin/sdk/types', '@makinbakin/sdk/utils',
   '@makinbakin/sdk/routing',
+  // bakin #948 (externals contract react19-sdk-focused-v2): the host serves
+  // ONE zod behind its import map (/vendor/zod.js) — a client that bundles
+  // its own carries ~400 KB the browser already has. Bare `zod` only; the
+  // map resolves no sub-path, and bakin's own build refuses one.
+  'zod',
 ]
+
+/**
+ * zod 4's schema internals. A client bundle that contains this string
+ * inlined its own zod instead of leaving the bare import for the host
+ * import map (bakin #948) — one copy per page is the whole point.
+ */
+const INLINED_ZOD_MARKER = '_zod.def'
 
 const SERVER_EXTERNAL = [
   'react', 'react-dom', 'react-dom/client',
@@ -68,6 +80,18 @@ const SDK_ENTRYPOINTS: Record<string, string> = {
   '@makinbakin/sdk/routing': join(BUILD_SDK_ROOT, 'routing', 'index.js'),
 }
 
+/**
+ * The SDK's published JS leaves its peers bare (react family, router — kept
+ * external here — and, since bakin #948, zod). An assembled SDK package dir
+ * (CI's `publish-sdk.ts --dry-run`) has no node_modules, so a bare `zod`
+ * inside it cannot resolve from there: the consumer supplies the peer. Map
+ * it to THIS repo's zod — the same package every plugin declares (`~4.6.5`,
+ * the SDK's peer line) — so the server bundle carries one zod.
+ */
+const SDK_PEER_RESOLUTIONS: Record<string, string> = {
+  zod: Bun.resolveSync('zod', REPO_ROOT),
+}
+
 const sdkResolverPlugin = {
   name: 'makinbakin-sdk-resolver',
   setup(build: { onResolve: (filter: { filter: RegExp }, callback: (args: { path: string }) => { path: string } | undefined) => void }) {
@@ -76,6 +100,7 @@ const sdkResolverPlugin = {
       if (!target) return
       return { path: target }
     })
+    build.onResolve({ filter: /^zod$/ }, (args) => ({ path: SDK_PEER_RESOLUTIONS[args.path]! }))
   },
 }
 
@@ -130,6 +155,14 @@ async function buildPlugin(pluginDir: string): Promise<void> {
     })
     if (!result.success) {
       throw new Error(`client build failed for ${name}:\n${result.logs.join('\n')}`)
+    }
+    const client = readFileSync(join(distDir, 'client.js'), 'utf-8')
+    if (client.includes(INLINED_ZOD_MARKER)) {
+      rmSync(join(distDir, 'client.js'), { force: true })
+      throw new Error(
+        `client bundle for ${name} inlines its own zod (found "${INLINED_ZOD_MARKER}"). ` +
+        `The host provides zod through its import map (bakin #948); keep 'zod' in CLIENT_EXTERNAL and import the bare package.`,
+      )
     }
   }
 }
