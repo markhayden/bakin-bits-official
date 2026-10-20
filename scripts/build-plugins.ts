@@ -18,8 +18,10 @@
  *
  * Run with: bun run build
  */
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { semver } from 'bun'
+import { CLIENT_EXTERNAL, clientBundleProblem } from './client-externals'
 
 const REPO_ROOT = resolve(import.meta.dir, '..')
 const PLUGINS_ROOT = join(REPO_ROOT, 'plugins')
@@ -32,16 +34,8 @@ const BUILD_SDK_ROOT = process.env.BAKIN_SDK_DIR
   ? resolve(process.env.BAKIN_SDK_DIR)
   : join(REPO_ROOT, '.build-sdk', 'node_modules', '@makinbakin', 'sdk')
 
-const CLIENT_EXTERNAL = [
-  'react', 'react-dom', 'react-dom/client',
-  'react/jsx-runtime', 'react/jsx-dev-runtime',
-  '@tanstack/react-router',
-  '@makinbakin/sdk', '@makinbakin/sdk/ui', '@makinbakin/sdk/layout',
-  '@makinbakin/sdk/patterns', '@makinbakin/sdk/navigation', '@makinbakin/sdk/hooks',
-  '@makinbakin/sdk/slots',
-  '@makinbakin/sdk/types', '@makinbakin/sdk/utils',
-  '@makinbakin/sdk/routing',
-]
+// The host-provided browser externals + the loadability guard live in
+// ./client-externals.ts (kept in lockstep with bakin's externals contract).
 
 const SERVER_EXTERNAL = [
   'react', 'react-dom', 'react-dom/client',
@@ -68,6 +62,18 @@ const SDK_ENTRYPOINTS: Record<string, string> = {
   '@makinbakin/sdk/routing': join(BUILD_SDK_ROOT, 'routing', 'index.js'),
 }
 
+/**
+ * The SDK's published JS leaves its peers bare (react family, router — kept
+ * external here — and, since bakin #948, zod). An assembled SDK package dir
+ * (CI's `publish-sdk.ts --dry-run`) has no node_modules, so a bare `zod`
+ * inside it cannot resolve from there: the consumer supplies the peer. Map
+ * it to THIS repo's zod — the same package every plugin declares (`~4.6.5`,
+ * the SDK's peer line) — so the server bundle carries one zod.
+ */
+const SDK_PEER_RESOLUTIONS: Record<string, string> = {
+  zod: Bun.resolveSync('zod', REPO_ROOT),
+}
+
 const sdkResolverPlugin = {
   name: 'makinbakin-sdk-resolver',
   setup(build: { onResolve: (filter: { filter: RegExp }, callback: (args: { path: string }) => { path: string } | undefined) => void }) {
@@ -76,6 +82,7 @@ const sdkResolverPlugin = {
       if (!target) return
       return { path: target }
     })
+    build.onResolve({ filter: /^zod$/ }, (args) => ({ path: SDK_PEER_RESOLUTIONS[args.path]! }))
   },
 }
 
@@ -90,8 +97,27 @@ function assertBuildSdkPresent(): void {
   }
 }
 
+/** The zod the server bundles carry (the SDK's bare peer resolved from this repo's install). */
+const RESOLVED_ZOD_VERSION = (JSON.parse(readFileSync(join(Bun.resolveSync('zod/package.json', REPO_ROOT)), 'utf-8')) as { version: string }).version
+
+/**
+ * The server-build resolver points EVERY `zod` import at this repo's install,
+ * the plugin's own included. That is only honest while the plugin's declared
+ * range admits that version — refuse a silent override.
+ */
+function assertZodRangeAgrees(pluginDir: string, name: string): void {
+  const pkgPath = join(pluginDir, 'package.json')
+  if (!existsSync(pkgPath)) return
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { dependencies?: Record<string, string>; peerDependencies?: Record<string, string> }
+  const range = pkg.dependencies?.zod ?? pkg.peerDependencies?.zod
+  if (range && !semver.satisfies(RESOLVED_ZOD_VERSION, range)) {
+    throw new Error(`${name} declares zod ${range}, but server bundles resolve zod ${RESOLVED_ZOD_VERSION} from this repo (the SDK's peer line); align the range.`)
+  }
+}
+
 async function buildPlugin(pluginDir: string): Promise<void> {
   const name = pluginDir.split('/').pop()
+  assertZodRangeAgrees(pluginDir, String(name))
   const serverEntry = join(pluginDir, 'index.ts')
   const clientEntry = join(pluginDir, 'client.tsx')
   const distDir = join(pluginDir, 'dist')
@@ -130,6 +156,11 @@ async function buildPlugin(pluginDir: string): Promise<void> {
     })
     if (!result.success) {
       throw new Error(`client build failed for ${name}:\n${result.logs.join('\n')}`)
+    }
+    const problem = clientBundleProblem(String(name), readFileSync(join(distDir, 'client.js'), 'utf-8'))
+    if (problem) {
+      rmSync(join(distDir, 'client.js'), { force: true })
+      throw new Error(problem)
     }
   }
 }

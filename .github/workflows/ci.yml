@@ -12,10 +12,11 @@ concurrency:
 
 env:
   # The ONE compatible Bakin SDK source both jobs build and verify against.
-  # Approval provenance (bakin #991, #898 H): the merge commit whose SDK
-  # exports approvalProvenanceFromRequest / OPERATOR_DECLARATION_HEADERS that
-  # messaging 0.12.0 uses. Pin a reviewed commit, never a moving branch.
-  BAKIN_SDK_REF: 508e070b94ae402306e59e688633fec3adaf4f61
+  # zod externalization (bakin #948, PR #1015): the merge commit whose SDK
+  # makes zod a bare ~4.6.5 peer and whose host serves /vendor/zod.js — the
+  # contract this repo's CLIENT_EXTERNAL now matches (react19-sdk-focused-v2).
+  # Pin a reviewed commit, never a moving branch.
+  BAKIN_SDK_REF: dbef5b5812ba80835d15c20264f89ae8d9765092
 
 jobs:
   check:
@@ -74,6 +75,15 @@ jobs:
         env:
           BAKIN_SDK_DIR: ${{ runner.temp }}/sdk-package
         run: bun run build
+
+      # The client externals list must be exactly bakin's import-map contract
+      # at the pinned ref (bakin #948); this runs while the checkout exists
+      # and REQUIRES it, so the comparison can never be skipped here.
+      - name: Client externals match the pinned Bakin contract
+        env:
+          BAKIN_SOURCE_DIR: ${{ github.workspace }}/.bakin-source
+          BAKIN_REQUIRE_SOURCE: '1'
+        run: bun test test/client-externals-contract.test.ts --isolate --preload ./test/setup-dom.ts
 
       # The tests below scan this repo; the Bakin checkout (and the sibling
       # symlink back into this repo) must not be discovered as test roots.
