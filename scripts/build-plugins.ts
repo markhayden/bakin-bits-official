@@ -20,6 +20,8 @@
  */
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { semver } from 'bun'
+import { CLIENT_EXTERNAL, clientBundleProblem } from './client-externals'
 
 const REPO_ROOT = resolve(import.meta.dir, '..')
 const PLUGINS_ROOT = join(REPO_ROOT, 'plugins')
@@ -32,28 +34,8 @@ const BUILD_SDK_ROOT = process.env.BAKIN_SDK_DIR
   ? resolve(process.env.BAKIN_SDK_DIR)
   : join(REPO_ROOT, '.build-sdk', 'node_modules', '@makinbakin', 'sdk')
 
-const CLIENT_EXTERNAL = [
-  'react', 'react-dom', 'react-dom/client',
-  'react/jsx-runtime', 'react/jsx-dev-runtime',
-  '@tanstack/react-router',
-  '@makinbakin/sdk', '@makinbakin/sdk/ui', '@makinbakin/sdk/layout',
-  '@makinbakin/sdk/patterns', '@makinbakin/sdk/navigation', '@makinbakin/sdk/hooks',
-  '@makinbakin/sdk/slots',
-  '@makinbakin/sdk/types', '@makinbakin/sdk/utils',
-  '@makinbakin/sdk/routing',
-  // bakin #948 (externals contract react19-sdk-focused-v2): the host serves
-  // ONE zod behind its import map (/vendor/zod.js) — a client that bundles
-  // its own carries ~400 KB the browser already has. Bare `zod` only; the
-  // map resolves no sub-path, and bakin's own build refuses one.
-  'zod',
-]
-
-/**
- * zod 4's schema internals. A client bundle that contains this string
- * inlined its own zod instead of leaving the bare import for the host
- * import map (bakin #948) — one copy per page is the whole point.
- */
-const INLINED_ZOD_MARKER = '_zod.def'
+// The host-provided browser externals + the loadability guard live in
+// ./client-externals.ts (kept in lockstep with bakin's externals contract).
 
 const SERVER_EXTERNAL = [
   'react', 'react-dom', 'react-dom/client',
@@ -115,8 +97,27 @@ function assertBuildSdkPresent(): void {
   }
 }
 
+/** The zod the server bundles carry (the SDK's bare peer resolved from this repo's install). */
+const RESOLVED_ZOD_VERSION = (JSON.parse(readFileSync(join(Bun.resolveSync('zod/package.json', REPO_ROOT)), 'utf-8')) as { version: string }).version
+
+/**
+ * The server-build resolver points EVERY `zod` import at this repo's install,
+ * the plugin's own included. That is only honest while the plugin's declared
+ * range admits that version — refuse a silent override.
+ */
+function assertZodRangeAgrees(pluginDir: string, name: string): void {
+  const pkgPath = join(pluginDir, 'package.json')
+  if (!existsSync(pkgPath)) return
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { dependencies?: Record<string, string>; peerDependencies?: Record<string, string> }
+  const range = pkg.dependencies?.zod ?? pkg.peerDependencies?.zod
+  if (range && !semver.satisfies(RESOLVED_ZOD_VERSION, range)) {
+    throw new Error(`${name} declares zod ${range}, but server bundles resolve zod ${RESOLVED_ZOD_VERSION} from this repo (the SDK's peer line); align the range.`)
+  }
+}
+
 async function buildPlugin(pluginDir: string): Promise<void> {
   const name = pluginDir.split('/').pop()
+  assertZodRangeAgrees(pluginDir, String(name))
   const serverEntry = join(pluginDir, 'index.ts')
   const clientEntry = join(pluginDir, 'client.tsx')
   const distDir = join(pluginDir, 'dist')
@@ -156,13 +157,10 @@ async function buildPlugin(pluginDir: string): Promise<void> {
     if (!result.success) {
       throw new Error(`client build failed for ${name}:\n${result.logs.join('\n')}`)
     }
-    const client = readFileSync(join(distDir, 'client.js'), 'utf-8')
-    if (client.includes(INLINED_ZOD_MARKER)) {
+    const problem = clientBundleProblem(String(name), readFileSync(join(distDir, 'client.js'), 'utf-8'))
+    if (problem) {
       rmSync(join(distDir, 'client.js'), { force: true })
-      throw new Error(
-        `client bundle for ${name} inlines its own zod (found "${INLINED_ZOD_MARKER}"). ` +
-        `The host provides zod through its import map (bakin #948); keep 'zod' in CLIENT_EXTERNAL and import the bare package.`,
-      )
+      throw new Error(problem)
     }
   }
 }
