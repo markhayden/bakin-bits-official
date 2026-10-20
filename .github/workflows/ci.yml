@@ -76,6 +76,15 @@ jobs:
           BAKIN_SDK_DIR: ${{ runner.temp }}/sdk-package
         run: bun run build
 
+      # The client externals list must be exactly bakin's import-map contract
+      # at the pinned ref (bakin #948); this runs while the checkout exists
+      # and REQUIRES it, so the comparison can never be skipped here.
+      - name: Client externals match the pinned Bakin contract
+        env:
+          BAKIN_SOURCE_DIR: ${{ github.workspace }}/.bakin-source
+          BAKIN_REQUIRE_SOURCE: '1'
+        run: bun test test/client-externals-contract.test.ts --isolate --preload ./test/setup-dom.ts
+
       # The tests below scan this repo; the Bakin checkout (and the sibling
       # symlink back into this repo) must not be discovered as test roots.
       # The assembled SDK lives in RUNNER_TEMP and is all the build needed.

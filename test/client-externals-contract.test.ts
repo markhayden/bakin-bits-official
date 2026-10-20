@@ -22,11 +22,26 @@ function bakinClientExternals(): string[] | null {
 
 describe('lockstep with bakin', () => {
   const expected = bakinClientExternals()
-  test.if(expected !== null)('CLIENT_EXTERNAL is exactly bakin\'s PLUGIN_CLIENT_EXTERNALS at the pinned ref', () => {
+  // CI runs this file with BAKIN_REQUIRE_SOURCE=1 while .bakin-source exists
+  // (before the checkout is removed for the coverage run), so the comparison
+  // is never silently skipped there; locally it skips without a checkout.
+  const required = process.env.BAKIN_REQUIRE_SOURCE === '1'
+  test.if(expected !== null || required)('CLIENT_EXTERNAL is exactly bakin\'s PLUGIN_CLIENT_EXTERNALS at the pinned ref', () => {
+    expect(expected).not.toBeNull()
     expect([...CLIENT_EXTERNAL].sort()).toEqual([...expected!].sort())
   })
-  test.if(expected === null)('no Bakin checkout at .bakin-source (set BAKIN_SOURCE_DIR to compare locally)', () => {
+  test.if(expected === null && !required)('no Bakin checkout at .bakin-source (set BAKIN_SOURCE_DIR to compare locally)', () => {
     expect(expected).toBeNull()
+  })
+
+  test('CI compares against the pinned checkout BEFORE removing it', () => {
+    const workflow = readFileSync(join(import.meta.dir, '..', '.github', 'workflows', 'ci.yml'), 'utf8')
+    const compare = workflow.indexOf('Client externals match the pinned Bakin contract')
+    const remove = workflow.indexOf('Remove the Bakin SDK source')
+    expect(compare).toBeGreaterThan(-1)
+    expect(remove).toBeGreaterThan(compare)
+    expect(workflow.slice(compare, remove)).toContain("BAKIN_REQUIRE_SOURCE: '1'")
+    expect(workflow.slice(compare, remove)).toContain('bun test test/client-externals-contract.test.ts')
   })
 })
 
