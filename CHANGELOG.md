@@ -9,7 +9,7 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
-- `messaging` (0.12.1), `terminal` (0.3.3): require Bakin `>=0.0.1-rc.42`.
+- `messaging` (0.12.2), `terminal` (0.3.4): require Bakin `>=0.0.1-rc.42`.
   Both client bundles are built for the `react19-sdk-focused-v2` contract
   (zod host-provided, markhayden/bakin#948), which rc.41 does not serve;
   rc.41 hosts keep messaging 0.12.0 / terminal 0.3.2 through the artifact
