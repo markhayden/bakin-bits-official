@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-type Download = { url: string; sha256: string; sizeBytes?: number; archive?: { format: string; member: string } }
+type Download = { url: string; sha256: string; sizeBytes?: number; archive?: { format: string; member: string; extractedSha256?: string } }
 type Manifest = { id: string; requires?: { bins?: { name: string; version: string; install?: Record<string, Download>; verifyArgs?: string[] }[] } }
 const plugins = join(import.meta.dir, '../plugins')
 const manifests = readdirSync(plugins, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry =>
@@ -24,6 +24,8 @@ test('plugin binary downloads pin secure immutable artifacts', () => {
       if (download.archive) {
         expect(download.archive.format).toBe('tar.gz')
         expect(download.archive.member).not.toMatch(/(^\/|(^|\/)\.\.($|\/))/)
+        // Pins the binary that actually runs, not just the download (markhayden/bakin#898 D).
+        expect(download.archive.extractedSha256).toMatch(/^[0-9a-f]{64}$/)
       }
     }
   }
@@ -38,4 +40,5 @@ test('Terminal installs the same pinned tmux on Apple Silicon and Intel Macs', (
   expect(Object.keys(tmux!.install!).sort()).toEqual(['darwin-arm64', 'darwin-x64'])
   expect(tmux!.install!['darwin-arm64']).toEqual(tmux!.install!['darwin-x64'])
   expect(tmux!.install!['darwin-arm64'].archive?.member).toBe('tmux')
+  expect(tmux!.install!['darwin-arm64'].archive?.extractedSha256).toBe('3fd7892c969c63f901f063cb5ad58f2a91827e3965e93a0ee13bf75a83b09806')
 })

@@ -148,6 +148,8 @@ jobs:
           ( cd "$DIST" && shasum -a 256 "$ASSET" > "$ASSET.sha256" )
           SIZE=$(stat -f%z "$DIST/$ASSET")
           SHA=$(cut -d' ' -f1 "$DIST/$ASSET.sha256")
+          # The extracted pin: Bakin checks the extracted tmux against it before running or installing it, and in every readiness/Health scan (markhayden/bakin#898 D).
+          MEMBER_SHA=$(shasum -a 256 "$OUT/tmux" | cut -d' ' -f1)
           python3 - "$OUT/BUILD.json" "$DIST/BUILD.json" "$ASSET" "$SHA" "$SIZE" <<'PY'
           import json, sys
           src, out, asset, sha, size = sys.argv[1:]
@@ -160,12 +162,12 @@ jobs:
             echo "Manifest entry (both \`darwin-arm64\` and \`darwin-x64\`):"
             echo
             echo '```json'
-            echo "{ \"url\": \"https://github.com/${{ github.repository }}/releases/download/$TAG/$ASSET\", \"sha256\": \"$SHA\", \"sizeBytes\": $SIZE, \"archive\": { \"format\": \"tar.gz\", \"member\": \"tmux\" } }"
+            echo "{ \"url\": \"https://github.com/${{ github.repository }}/releases/download/$TAG/$ASSET\", \"sha256\": \"$SHA\", \"sizeBytes\": $SIZE, \"archive\": { \"format\": \"tar.gz\", \"member\": \"tmux\", \"extractedSha256\": \"$MEMBER_SHA\" } }"
             echo '```'
             echo
             echo "Built by [this run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}); inputs in BUILD.json. Not a plugin release — never marked latest."
           } > "$DIST/notes.md"
-          echo "sha256=$SHA size=$SIZE"
+          echo "sha256=$SHA size=$SIZE extractedSha256=$MEMBER_SHA"
 
       - name: Create the mirror release (not latest)
         run: |

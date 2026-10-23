@@ -13,7 +13,8 @@
             "sizeBytes": 1215221,
             "archive": {
               "format": "tar.gz",
-              "member": "tmux"
+              "member": "tmux",
+              "extractedSha256": "3fd7892c969c63f901f063cb5ad58f2a91827e3965e93a0ee13bf75a83b09806"
             }
           },
           "darwin-x64": {
@@ -22,7 +23,8 @@
             "sizeBytes": 1215221,
             "archive": {
               "format": "tar.gz",
-              "member": "tmux"
+              "member": "tmux",
+              "extractedSha256": "3fd7892c969c63f901f063cb5ad58f2a91827e3965e93a0ee13bf75a83b09806"
             }
           }
         },
