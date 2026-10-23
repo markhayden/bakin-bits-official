@@ -9,6 +9,11 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- `messaging` (0.12.2), `terminal` (0.3.4): require Bakin `>=0.0.1-rc.42`.
+  Both client bundles are built for the `react19-sdk-focused-v2` contract
+  (zod host-provided, markhayden/bakin#948), which rc.41 does not serve;
+  rc.41 hosts keep messaging 0.12.0 / terminal 0.3.2 through the artifact
+  index's contract check.
 - `terminal` (0.3.3), `ocr` (0.1.1), `transcribe` (1.0.1): archive-shipped
   binaries pin their extracted member with `archive.extractedSha256`
   (tmux, ocrit, parakeet-cpp-transcribe), computed from freshly downloaded,
