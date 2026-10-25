@@ -702,10 +702,32 @@ declare module '@makinbakin/sdk/types' {
     icon?: string
   }
 
+  // Three outcomes (Bakin self-healing PR 1, bakin#1026): every incident is a
+  // repair Bakin runs or a human need with the control it lands on; every
+  // check declares its finite incident families up front.
+  export type HealthSubjectKind =
+    | 'plugin' | 'package' | 'hub-skill' | 'service' | 'agent' | 'table' | 'runtime' | 'channel' | 'setting' | 'record' | 'task' | 'system'
+  export interface HealthSubject { kind: HealthSubjectKind; id: string; label?: string }
+  export type HealthHumanNeed = 'credential' | 'payment' | 'decision' | 'external-install'
+  export type HealthIncidentRequirement = 'always' | 'never' | 'owner-decides'
+  export type HealthIncidentDeclarationResolution =
+    | { type: 'repair'; actionId: string }
+    | { type: 'human'; needs: HealthHumanNeed }
+  export interface HealthIncidentDeclaration {
+    id: string
+    subjectKind: HealthSubjectKind
+    resolution: HealthIncidentDeclarationResolution
+    required: HealthIncidentRequirement
+  }
+  export type HealthResolutionInput =
+    | { key: string; type: 'repair'; label: string; actionId: string }
+    | { key: string; type: 'human'; label: string; needs: HealthHumanNeed; href: string; field?: string; handoff?: { command: string; cwd?: string } }
+
   export interface HealthObservationInput {
     key: string
     status: 'healthy' | 'warning' | 'error' | 'unknown'
     summary: string
+    detail?: string
     evidence?: Record<string, unknown>
     incident?: {
       key: string
@@ -713,7 +735,11 @@ declare module '@makinbakin/sdk/types' {
       impact: string
       class?: string
       disposition: 'advisory' | 'watch' | 'action_required'
-      resolution: { key: string; type: 'navigate'; label: string; href: string }
+      subject: HealthSubject
+      declarationId: string
+      /** Mandatory for an `owner-decides` family. */
+      required?: boolean
+      resolution: HealthResolutionInput
     }
   }
 
@@ -726,6 +752,8 @@ declare module '@makinbakin/sdk/types' {
     name: string
     description: string
     group: { key: string; label: string }
+    /** The finite incident families this check may emit — an empty list when it raises none; validated at activation. */
+    incidents: HealthIncidentDeclaration[]
     run: () => Promise<HealthCheckRunInput>
     autoFix?: boolean
   }
