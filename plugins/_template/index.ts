@@ -59,6 +59,8 @@ const plugin = definePlugin({
       name: 'Template plugin reachability',
       description: 'Checks that the starter plugin activated and can serve its example API.',
       group: { key: '_template', label: 'Plugin Template' },
+      // Every check declares its finite incident families up front — an empty list when it raises none.
+      incidents: [],
       run: async () => healthObserved([healthHealthy({
         key: 'reachability',
         summary: 'The template plugin is loaded and responding.',
