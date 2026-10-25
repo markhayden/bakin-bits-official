@@ -16,7 +16,7 @@ env:
   # makes zod a bare ~4.6.5 peer and whose host serves /vendor/zod.js — the
   # contract this repo's CLIENT_EXTERNAL now matches (react19-sdk-focused-v2).
   # Pin a reviewed commit, never a moving branch.
-  BAKIN_SDK_REF: dbef5b5812ba80835d15c20264f89ae8d9765092
+  BAKIN_SDK_REF: a88603c4eea9352afcb507f050c54c2a38b6becd
 
 jobs:
   check:

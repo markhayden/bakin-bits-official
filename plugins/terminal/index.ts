@@ -85,10 +85,18 @@ export default definePlugin({
     }
     await maintenancePass()
     maintenance = setInterval(() => { void maintenancePass() }, 60 * 60 * 1000)
+    // Three outcomes (Bakin self-healing PR 1): every family is declared up front and every
+    // instance names its subject — the Terminal page is the operator's control for all three.
+    const TERMINAL_SUBJECT = { kind: 'plugin', id: 'terminal', label: 'Terminal' } as const
     ctx.registerHealthCheck({
       id: 'service', name: 'Terminal service and retention',
       description: 'Checks persistent terminal availability and retained work needing review.',
       group: { key: 'terminal', label: 'Terminal' },
+      incidents: [
+        { id: 'service', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
+        { id: 'maintenance', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
+        { id: 'retention', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
+      ],
       run: async () => {
         const ready = await service?.ready()
         const retained = sessions().list({ kind: 'human', id: 'health' }).filter((session) => session.cleanupReason)
@@ -99,12 +107,13 @@ export default definePlugin({
           ['retention', `${retained.length} terminal worktrees need review`, retained.length > 0],
         ] as const) {
           if (problem) observations.push({ key, status: 'warning', summary, incident: {
-            key, title: summary, impact: key === 'retention' ? 'Unfinished work is retained and may block new worktrees.' : 'Terminal operations or cleanup may be unavailable.',
+            key, declarationId: key, subject: TERMINAL_SUBJECT, title: summary,
+            impact: key === 'retention' ? 'Unfinished work is retained and may block new worktrees.' : 'Terminal operations or cleanup may be unavailable.',
             class: key === 'retention' ? 'cleanup_backlog' : 'service_failure', disposition: 'watch',
-            resolution: { key: 'review', type: 'navigate', label: 'Open Terminal', href: '/terminal' },
+            resolution: { key: 'review', type: 'human', needs: 'decision', label: 'Open Terminal', href: '/terminal' },
           } })
         }
-        return { outcome: 'observed', observations: observations.length ? [observations[0]!, ...observations.slice(1)] : [{ key: 'service', status: 'healthy', summary: 'Terminal service and retention checks passed' }] }
+        return { outcome: 'observed', observations: observations.length ? [observations[0]!, ...observations.slice(1)] : [{ key: 'service', status: 'healthy', summary: 'Terminal service and retention are healthy.' }] }
       },
     })
     ctx.hooks.register('tasks.statusChanged', async (raw) => {
