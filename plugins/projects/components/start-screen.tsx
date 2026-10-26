@@ -9,15 +9,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { ArrowLeft, TriangleAlert } from 'lucide-react'
 import { Alert, AlertDescription, Button } from '@makinbakin/sdk/ui'
-import {
-  AgentSelect,
-  PageBody,
-  PageComposer,
-  PageHeader,
-  WorkspacePage,
-  WorkspacePageBody,
-  WorkspacePageHeader,
-} from '@makinbakin/sdk/patterns'
+import { AgentSelect, Page, PageBody, PageComposer, PageHeader } from '@makinbakin/sdk/patterns'
 import { Composer, ConversationEmptyState, type ComposerHandle } from '@makinbakin/sdk/conversation'
 import { useAgentList, useMainAgentId } from '@makinbakin/sdk/hooks'
 import { useRouter } from '@makinbakin/sdk/navigation'
@@ -70,64 +62,61 @@ export function StartScreen({ onBack }: { onBack?: () => void }) {
   }
 
   return (
-    <WorkspacePage data-projects-start="">
-      <WorkspacePageHeader>
-        <PageHeader
-          title="New project"
-          navigation={onBack ? (
-            <Button type="button" variant="ghost" size="icon-sm" onClick={onBack} aria-label="Back to projects">
-              <ArrowLeft aria-hidden="true" />
-            </Button>
-          ) : undefined}
-        />
-      </WorkspacePageHeader>
-      <WorkspacePageBody>
-        <PageBody gap="content">
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-bakin-6">
-              <ConversationEmptyState
-                title="What kind of project is on your mind?"
-                description="A rough idea is enough — we'll shape it together."
-                suggestions={STARTER_PROMPTS.map(starter => starter.label)}
-                onSuggestion={(label: string) => {
-                  const starter = STARTER_PROMPTS.find(entry => entry.label === label)
-                  if (!starter) return
-                  composer.current?.setText(starter.prompt)
-                  composer.current?.focus()
-                }}
-              />
-            </div>
-            {error ? (
-              <div className="px-bakin-4 pb-bakin-2">
-                <Alert tone="danger">
-                  <TriangleAlert aria-hidden="true" />
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              </div>
-            ) : null}
-            <PageComposer padding="flush">
-              <Composer
-                storageKey="projects:new"
-                placeholder="Describe your project…"
-                inputLabel="Describe your project"
-                busy={creating}
-                onSend={(content: string) => { void create(content) }}
-                handleRef={composer}
-                leadingSlot={(
-                  <AgentSelect
-                    value={leadId}
-                    onValueChange={setLead}
-                    agents={agents}
-                    ariaLabel="Lead agent"
-                    size="sm"
-                    variant="filled"
-                  />
-                )}
-              />
-            </PageComposer>
+    <Page scroll="contained" data-projects-start="">
+      <PageHeader
+        title="New project"
+        navigation={onBack ? (
+          <Button type="button" variant="ghost" size="icon-sm" onClick={onBack} aria-label="Back to projects">
+            <ArrowLeft aria-hidden="true" />
+          </Button>
+        ) : undefined}
+      />
+      <PageBody gap="content">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-bakin-6">
+            <ConversationEmptyState
+              headingLevel={2}
+              title="What kind of project is on your mind?"
+              description="A rough idea is enough — we'll shape it together."
+              suggestions={STARTER_PROMPTS.map(starter => starter.label)}
+              onSuggestion={(label: string) => {
+                const starter = STARTER_PROMPTS.find(entry => entry.label === label)
+                if (!starter) return
+                composer.current?.setText(starter.prompt)
+                composer.current?.focus()
+              }}
+            />
           </div>
-        </PageBody>
-      </WorkspacePageBody>
-    </WorkspacePage>
+          {error ? (
+            <div className="px-bakin-4 pb-bakin-2">
+              <Alert tone="danger">
+                <TriangleAlert aria-hidden="true" />
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            </div>
+          ) : null}
+          <PageComposer padding="flush">
+            <Composer
+              storageKey="projects:new"
+              placeholder="Describe your project…"
+              inputLabel="Describe your project"
+              busy={creating}
+              onSend={(content: string) => { void create(content) }}
+              handleRef={composer}
+              leadingSlot={(
+                <AgentSelect
+                  value={leadId}
+                  onValueChange={setLead}
+                  agents={agents}
+                  ariaLabel="Lead agent"
+                  size="sm"
+                  variant="filled"
+                />
+              )}
+            />
+          </PageComposer>
+        </div>
+      </PageBody>
+    </Page>
   )
 }

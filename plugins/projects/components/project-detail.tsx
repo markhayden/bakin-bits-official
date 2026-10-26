@@ -18,11 +18,9 @@ import type { ConversationAgent } from '@makinbakin/sdk/conversation'
 import {
   AgentSelect,
   ConfirmDialog,
+  Page,
   PageBody,
   StatusMarker,
-  WorkspacePage,
-  WorkspacePageBody,
-  WorkspacePageHeader,
   useCollapsedAside,
 } from '@makinbakin/sdk/patterns'
 import { Button, Checkbox, Field, FieldLabel, Skeleton, SystemState, Tabs, TabsList, TabsTrigger, Text } from '@makinbakin/sdk/ui'
@@ -249,46 +247,42 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
 
   if (loading && !project) {
     return (
-      <WorkspacePage>
-        <WorkspacePageBody>
-          <PageBody>
-            <Button variant="ghost" onClick={onBack}>Back to projects</Button>
-            <SystemState
-              kind="loading"
-              scope="section"
-              title="Loading project"
-              description="Project details will appear here."
-              preview={(
-                <div className="flex flex-col gap-bakin-3">
-                  <Skeleton className="h-bakin-6 w-60" />
-                  <Skeleton className="h-bakin-4 w-40" />
-                  <Skeleton className="h-40 w-full" />
-                </div>
-              )}
-            />
-          </PageBody>
-        </WorkspacePageBody>
-      </WorkspacePage>
+      <Page>
+        <PageBody>
+          <Button variant="ghost" onClick={onBack}>Back to projects</Button>
+          <SystemState
+            kind="loading"
+            scope="section"
+            title="Loading project"
+            description="Project details will appear here."
+            preview={(
+              <div className="flex flex-col gap-bakin-3">
+                <Skeleton className="h-bakin-6 w-60" />
+                <Skeleton className="h-bakin-4 w-40" />
+                <Skeleton className="h-40 w-full" />
+              </div>
+            )}
+          />
+        </PageBody>
+      </Page>
     )
   }
   if (!project) {
     const missing = loadError?.status === 404
     return (
-      <WorkspacePage>
-        <WorkspacePageBody>
-          <PageBody>
-            <Button variant="ghost" onClick={onBack}>Back to projects</Button>
-            <SystemState
-              kind="error"
-              recovery={missing ? 'unavailable' : 'available'}
-              scope="section"
-              title={missing ? 'Project not found' : 'Project could not be loaded'}
-              description={missing ? 'This project may have been deleted or its file moved.' : loadError?.message ?? 'Try loading this project again.'}
-              action={missing ? undefined : <Button variant="outline" onClick={() => { void refresh() }}>Try again</Button>}
-            />
-          </PageBody>
-        </WorkspacePageBody>
-      </WorkspacePage>
+      <Page>
+        <PageBody>
+          <Button variant="ghost" onClick={onBack}>Back to projects</Button>
+          <SystemState
+            kind="error"
+            recovery={missing ? 'unavailable' : 'available'}
+            scope="section"
+            title={missing ? 'Project not found' : 'Project could not be loaded'}
+            description={missing ? 'This project may have been deleted or its file moved.' : loadError?.message ?? 'Try loading this project again.'}
+            action={missing ? undefined : <Button variant="outline" onClick={() => { void refresh() }}>Try again</Button>}
+          />
+        </PageBody>
+      </Page>
     )
   }
 
@@ -321,6 +315,7 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
       placeholder={`Message ${leadAgent.name}…`}
       emptyState={(
         <ConversationEmptyState
+          headingLevel={2}
           title={`Shape this project with ${leadAgent.name}`}
           description="Talk it through — your lead asks one question at a time, pokes holes, and drafts the plan once it is clear."
         />
@@ -362,69 +357,67 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
   ) : null
 
   return (
-    <WorkspacePage data-slot="project-detail">
-      <WorkspacePageHeader>
-        {loadError ? (
-          <SystemState kind="error" recovery="available" scope="inline" title="Project could not be refreshed" description={loadError.message} action={<Button variant="outline" size="sm" onClick={() => { void refresh() }}>Try again</Button>} />
-        ) : null}
-        {exitGuard.dialog}
-        <ProjectHeader
-          project={project}
-          agents={agents}
-          onBack={exitGuard.requestExit}
-          onChanged={refresh}
-          onDelete={() => { setDeleteError(null); setDeleteOpen(true) }}
-        />
-      </WorkspacePageHeader>
-      <WorkspacePageBody>
-        <PageBody gap="content">
-          <div className="flex min-h-0 min-w-0 flex-1">
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-              <Tabs value={tab} onValueChange={selectTab}>
-                <TabsList variant="underline" aria-label="Project sections">
-                  {PROJECT_TABS.map(entry => (
-                    <TabsTrigger key={entry.id} value={entry.id} id={`project-tab-${entry.id}`} aria-controls={`project-panel-${entry.id}`}>
-                      {entry.label}
-                      {entry.id === 'plan' && planUnseen ? <StatusMarker tone="accent" label="updated" /> : null}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-              </Tabs>
-              <div
-                role="tabpanel"
-                id={`project-panel-${tab}`}
-                aria-labelledby={`project-tab-${tab}`}
-                data-slot="project-tab-panel"
-                tabIndex={tab === 'conversation' ? -1 : 0}
-                className={tab === 'conversation'
-                  ? 'flex min-h-0 flex-1 flex-col'
-                  : 'flex min-h-0 flex-1 flex-col overflow-y-auto py-bakin-4 focus-visible:outline-2 focus-visible:outline-bakin-focus-ring focus-visible:-outline-offset-2 lg:pr-bakin-4'}
-              >
-                {tab === 'conversation' ? conversation : content}
-                {!desktop && tab !== 'conversation' ? (
-                  <div className="sticky bottom-0 flex justify-end bg-bakin-canvas-default pt-bakin-3">
-                    <Button type="button" onClick={() => selectTab('conversation')}>
-                      <MessageSquare aria-hidden="true" />
-                      Ask {leadAgent.name}
-                    </Button>
-                  </div>
-                ) : null}
-              </div>
+    <Page scroll="contained" data-slot="project-detail">
+      {loadError ? (
+        <SystemState kind="error" recovery="available" scope="inline" title="Project could not be refreshed" description={loadError.message} action={<Button variant="outline" size="sm" onClick={() => { void refresh() }}>Try again</Button>} />
+      ) : null}
+      {exitGuard.dialog}
+      <ProjectHeader
+        project={project}
+        agents={agents}
+        onBack={exitGuard.requestExit}
+        onChanged={refresh}
+        onDelete={() => { setDeleteError(null); setDeleteOpen(true) }}
+      />
+      <PageBody gap="content">
+        <div className="flex min-h-0 min-w-0 flex-1">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <Tabs value={tab} onValueChange={selectTab}>
+              <TabsList variant="underline" aria-label="Project sections">
+                {PROJECT_TABS.map(entry => (
+                  <TabsTrigger key={entry.id} value={entry.id} id={`project-tab-${entry.id}`} aria-controls={`project-panel-${entry.id}`}>
+                    {entry.label}
+                    {entry.id === 'plan' && planUnseen ? <StatusMarker tone="accent" label="updated" /> : null}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+            <div
+              role="tabpanel"
+              id={`project-panel-${tab}`}
+              aria-labelledby={`project-tab-${tab}`}
+              data-slot="project-tab-panel"
+              // Content tabs scroll here, so the panel takes keyboard focus;
+              // the conversation tab's panel owns its own scroll and controls.
+              {...(tab === 'conversation' ? {} : { tabIndex: 0 })}
+              className={tab === 'conversation'
+                ? 'flex min-h-0 flex-1 flex-col'
+                : 'flex min-h-0 flex-1 flex-col overflow-y-auto py-bakin-4 focus-visible:outline-2 focus-visible:outline-bakin-focus-ring focus-visible:-outline-offset-2 lg:pr-bakin-4'}
+            >
+              {tab === 'conversation' ? conversation : content}
+              {!desktop && tab !== 'conversation' ? (
+                <div className="sticky bottom-0 flex justify-end bg-bakin-canvas-default pt-bakin-3">
+                  <Button type="button" onClick={() => selectTab('conversation')}>
+                    <MessageSquare aria-hidden="true" />
+                    Ask {leadAgent.name}
+                  </Button>
+                </div>
+              ) : null}
             </div>
-            {showDock ? (
-              <ChatDock
-                agent={leadAgent}
-                collapsed={dockCollapsed}
-                onCollapsedChange={setDockCollapsed}
-                working={thread.streaming}
-                unread={unread}
-              >
-                {dockCollapsed ? null : conversation}
-              </ChatDock>
-            ) : null}
           </div>
-        </PageBody>
-      </WorkspacePageBody>
+          {showDock ? (
+            <ChatDock
+              agent={leadAgent}
+              collapsed={dockCollapsed}
+              onCollapsedChange={setDockCollapsed}
+              working={thread.streaming}
+              unread={unread}
+            >
+              {dockCollapsed ? null : conversation}
+            </ChatDock>
+          ) : null}
+        </div>
+      </PageBody>
 
       <ConfirmDialog
         open={deleteOpen}
@@ -454,6 +447,6 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
           </div>
         )}
       </ConfirmDialog>
-    </WorkspacePage>
+    </Page>
   )
 }

@@ -29,13 +29,13 @@ it('shows progress and each linked step\'s board state in words', () => {
   renderSteps(tasks)
   expect(screen.getByText('1 of 3 steps done')).toBeDefined()
   expect(screen.getByText('In progress · Main')).toBeDefined()
-  expect(screen.getByRole('link', { name: 'Open task for Unsubscribe from lists' }).getAttribute('href')).toBe('/tasks?taskId=board-1')
+  expect(screen.getByRole('link', { name: 'Open task: Unsubscribe from lists' }).getAttribute('href')).toBe('/tasks?taskId=board-1')
 })
 
 it('standalone steps offer Send to board; linked ones do not', () => {
   renderSteps(tasks)
-  expect(screen.getByRole('button', { name: 'Send Archive old mail to the board' })).toBeDefined()
-  expect(screen.queryByRole('button', { name: 'Send Unsubscribe from lists to the board' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Send to board: Archive old mail' })).toBeDefined()
+  expect(screen.queryByRole('button', { name: 'Send to board: Unsubscribe from lists' })).toBeNull()
 })
 
 it('a linked step\'s checkbox is read-only — it completes from its board task', () => {

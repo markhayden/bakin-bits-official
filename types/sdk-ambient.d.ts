@@ -1704,6 +1704,7 @@ declare module '@makinbakin/sdk/conversation' {
 
   export const ConversationEmptyState: ComponentType<{
     title?: ReactNode
+    headingLevel?: 2 | 3 | 4
     description?: ReactNode
     icon?: ReactNode
     suggestions?: readonly string[]
