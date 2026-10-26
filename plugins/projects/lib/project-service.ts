@@ -10,7 +10,7 @@ import {
   computeProgress,
   nextTaskItemId,
 } from './parser'
-import type { ChecklistPromotionOperation, MutationCaller, Project, ProjectKickoff, ProjectTask, ProjectStatus, TitleSource } from '../types'
+import type { ChecklistPromotionOperation, MutationCaller, Project, ProjectKickoff, ProjectTask, ProjectStatus, ResolvedBoardTask, TitleSource } from '../types'
 import { assertItemIdentity, assertExpectedFields, ProjectMutationError, validateItemPatch, validateProjectPatch } from './project-mutations'
 
 const log = {
@@ -108,7 +108,7 @@ export interface ResolvedAsset {
 const DONE_COLUMNS = new Set(['done', 'archived'])
 
 /** Linked board tasks by id: the evidence `deriveChecklist` reads. */
-export type BoardTaskIndex = ReadonlyMap<string, { column: string; title: string }>
+export type BoardTaskIndex = ReadonlyMap<string, ResolvedBoardTask>
 
 /**
  * THE single source of `checked` and `progress` for every projection (D16a):
@@ -153,7 +153,7 @@ export interface ProjectService {
   promoteItemToTask(projectId: string, taskItemId: string, opts?: PromoteItemOpts): Promise<{ taskId: string }>
   autoUnlinkTask(boardTaskId: string): Promise<void>
   resolveLinkedTaskStatuses(project: Project): Promise<Project & {
-    resolvedTasks: Record<string, { column: string; title: string } | null>
+    resolvedTasks: Record<string, ResolvedBoardTask | null>
     resolvedAssets: ResolvedAsset[]
   }>
 }
@@ -205,7 +205,11 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
 
   async function boardIndex(): Promise<BoardTaskIndex> {
     const tasks = await ctx.tasks.list()
-    return new Map(tasks.map(task => [task.id, { column: String(task.column).toLowerCase(), title: task.title }]))
+    return new Map(tasks.map(task => [task.id, {
+      column: task.column,
+      title: task.title,
+      ...(task.agent ? { agent: task.agent } : {}),
+    }]))
   }
 
   async function derive<P extends Project>(project: P): Promise<P> {
@@ -676,11 +680,11 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
   }
 
   async function resolveLinkedTaskStatuses(project: Project): Promise<Project & {
-    resolvedTasks: Record<string, { column: string; title: string } | null>
+    resolvedTasks: Record<string, ResolvedBoardTask | null>
     resolvedAssets: ResolvedAsset[]
   }> {
     const board = await boardIndex()
-    const resolved: Record<string, { column: string; title: string } | null> = {}
+    const resolved: Record<string, ResolvedBoardTask | null> = {}
     for (const item of project.tasks) {
       if (item.taskId) resolved[item.taskId] = board.get(item.taskId) ?? null
     }

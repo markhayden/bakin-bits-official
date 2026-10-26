@@ -113,6 +113,14 @@ export interface ProjectSummary {
 }
 
 
+/** A linked step's board task as the detail projection shows it. */
+export interface ResolvedBoardTask {
+  column: string
+  title: string
+  /** The assignee, when the task has one. */
+  agent?: string
+}
+
 export interface ResolvedProjectAsset extends ProjectAsset {
   type: string
   description?: string
@@ -124,7 +132,7 @@ export interface ResolvedProjectAsset extends ProjectAsset {
 export interface ProjectDetailData extends Project {
   /** The plan revision the user last viewed (D15). */
   planSeenRevision?: number
-  resolvedTasks: Record<string, { column: string; title: string } | null>
+  resolvedTasks: Record<string, ResolvedBoardTask | null>
   resolvedAssets: ResolvedProjectAsset[]
   brainstormMessages?: ProjectBrainstormMessage[]
 }

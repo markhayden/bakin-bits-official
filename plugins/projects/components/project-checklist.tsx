@@ -1,17 +1,23 @@
 import { useState, type FormEvent } from 'react'
-import { Plus, Trash, Link2, ChevronRight } from 'lucide-react'
-import { Alert, AlertDescription, Button, Checkbox, Field, FieldLabel, Form, InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput, Switch, SystemState, Text, Textarea } from '@makinbakin/sdk/ui'
+import { Plus, Trash, ChevronRight, Send } from 'lucide-react'
+import { Alert, AlertDescription, Button, Checkbox, Field, FieldLabel, Form, InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput, Progress, Switch, SystemState, Text, Textarea, buttonVariants } from '@makinbakin/sdk/ui'
 import { Stack } from '@makinbakin/sdk/layout'
 import { ListRow, ListRowActions, ListRows, StatusBadge } from '@makinbakin/sdk/patterns'
 import { PluginLink } from '@makinbakin/sdk/navigation'
-import type { ProjectTask } from '../types'
+import { useAgentList } from '@makinbakin/sdk/hooks'
+import type { ProjectTask, ResolvedBoardTask } from '../types'
 import type { ChecklistModel } from '../hooks/use-checklist-drafts'
 
 const columns: Record<string, string> = { backlog: 'Backlog', todo: 'To do', inProgress: 'In progress', review: 'In review', done: 'Done', archived: 'Archived', blocked: 'Blocked' }
 function ErrorNotice({ message }: { message?: string }) {
   return message ? <Alert tone="danger"><AlertDescription>{message}</AlertDescription></Alert> : null
 }
-function TaskItem({ item, resolved, model }: { item: ProjectTask; resolved: { column: string; title: string } | null | undefined; model: ChecklistModel }) {
+/** Board state in words (D16): "In progress · Roscoe", "Done · board". */
+export function boardStateLabel(resolved: ResolvedBoardTask, agentName?: string): string {
+  return `${columns[resolved.column] ?? resolved.column} · ${agentName ?? 'board'}`
+}
+
+function TaskItem({ item, resolved, model, agentNames }: { item: ProjectTask; resolved: ResolvedBoardTask | null | undefined; model: ChecklistModel; agentNames: ReadonlyMap<string, string> }) {
   const [expanded, setExpanded] = useState(false)
   const [editing, setEditing] = useState(false)
   const draft = model.descriptions[item.id]
@@ -26,10 +32,13 @@ function TaskItem({ item, resolved, model }: { item: ProjectTask; resolved: { co
         <ChevronRight aria-hidden="true" className={`shrink-0 ${expanded ? 'rotate-90' : ''}`} />
         <Text size="meta" tone={item.checked ? 'muted' : 'default'} className={`min-w-0 whitespace-normal break-words ${item.checked ? 'line-through' : ''}`}>{item.title}</Text>
       </Button>
-      {item.taskId && resolved && <PluginLink to={`/tasks?taskId=${encodeURIComponent(item.taskId)}`} aria-label={`Open board task ${resolved.title}`}><StatusBadge tone={resolved.column === 'done' ? 'success' : 'neutral'} size="xs">{columns[resolved.column] ?? resolved.column}</StatusBadge></PluginLink>}
+      {item.taskId && resolved && <Text size="meta" tone="muted">{boardStateLabel(resolved, resolved.agent ? agentNames.get(resolved.agent) ?? resolved.agent : undefined)}</Text>}
       {item.taskId && resolved === null && <StatusBadge tone="attention" size="xs">Board task missing</StatusBadge>}
       <ListRowActions reveal="always">
-        {!item.taskId && <Button type="button" variant="ghost" size="icon-xs" disabled={busy} onClick={() => { void model.mutate(item, 'promote') }} aria-label={`Create board task for ${item.title}`}><Link2 aria-hidden="true" /></Button>}
+        {item.taskId && resolved ? (
+          <PluginLink to={`/tasks?taskId=${encodeURIComponent(item.taskId)}`} aria-label={`Open task for ${item.title}`} className={buttonVariants({ variant: 'ghost', size: 'xs' })}>Open task</PluginLink>
+        ) : null}
+        {!item.taskId && <Button type="button" variant="ghost" size="xs" disabled={busy} onClick={() => { void model.mutate(item, 'promote') }} aria-label={`Send ${item.title} to the board`}><Send aria-hidden="true" />Send to board</Button>}
         <Button type="button" variant="ghost" size="icon-xs" disabled={busy || (draft && draft.value !== draft.baseline)} onClick={() => { void model.mutate(item, 'remove') }} aria-label={`Remove ${item.title}`}><Trash aria-hidden="true" /></Button>
       </ListRowActions>
     </div>
@@ -61,34 +70,40 @@ function TaskItem({ item, resolved, model }: { item: ProjectTask; resolved: { co
 export function ProjectChecklist({ projectId, tasks, resolvedTasks, model }: {
   projectId: string
   tasks: ProjectTask[]
-  resolvedTasks: Record<string, { column: string; title: string } | null>
+  resolvedTasks: Record<string, ResolvedBoardTask | null>
   model: ChecklistModel
 }) {
+  const agentList = useAgentList()
+  const agentNames = new Map(agentList.map(agent => [agent.id, agent.name ?? agent.id]))
   const preference = `projects-hide-completed:${projectId}`
   const [hideCompleted, setHideCompleted] = useState(() => { try { return localStorage.getItem(preference) === 'true' } catch { return false } })
   const completed = tasks.filter(task => task.checked).length
   const visible = tasks.filter(task => !hideCompleted || !task.checked || model.descriptions[task.id])
+  const percent = tasks.length ? Math.round((completed / tasks.length) * 100) : 0
   return <Stack gap="item">
     <div className="flex flex-wrap items-center justify-between gap-bakin-3">
-      <h2>Tasks</h2>
-      {completed > 0 && <Field orientation="horizontal" name="hide-completed"><Switch size="sm" checked={hideCompleted} onCheckedChange={(value: boolean) => { setHideCompleted(value); try { localStorage.setItem(preference, String(value)) } catch { /* private mode */ } }} /><FieldLabel>Hide completed ({completed})</FieldLabel></Field>}
+      <h2>Steps</h2>
+      {completed > 0 && <Field orientation="horizontal" name="hide-completed"><Switch size="sm" checked={hideCompleted} onCheckedChange={(value: boolean) => { setHideCompleted(value); try { localStorage.setItem(preference, String(value)) } catch { /* private mode */ } }} /><FieldLabel>Hide done ({completed})</FieldLabel></Field>}
     </div>
-    <Text size="meta" tone="muted">{completed} of {tasks.length} tasks completed</Text>
-    {tasks.length === 0 ? <SystemState kind="initial-empty" scope="inline" headingLevel={3} title="No tasks yet" />
-      : visible.length === 0 ? <Text size="meta" tone="muted">All completed tasks are hidden.</Text>
-      : <ListRows variant="separated" size="sm" aria-label="Project tasks">{visible.map(item => <TaskItem key={item.instanceId ?? item.id} item={item} resolved={item.taskId ? resolvedTasks[item.taskId] : undefined} model={model} />)}</ListRows>}
+    {tasks.length > 0 && <div className="flex flex-col gap-bakin-1">
+      <Progress value={percent} aria-label="Steps progress" />
+      <Text size="meta" tone="muted">{completed} of {tasks.length} steps done</Text>
+    </div>}
+    {tasks.length === 0 ? <SystemState kind="initial-empty" scope="inline" headingLevel={3} title="No steps yet" description="Steps appear once the plan takes shape — or add one." />
+      : visible.length === 0 ? <Text size="meta" tone="muted">All done steps are hidden.</Text>
+      : <ListRows variant="separated" size="sm" aria-label="Project steps">{visible.map(item => <TaskItem key={item.instanceId ?? item.id} item={item} resolved={item.taskId ? resolvedTasks[item.taskId] : undefined} model={model} agentNames={agentNames} />)}</ListRows>}
     {Object.entries(model.descriptions).filter(([, draft]) => draft.removed && draft.value !== draft.baseline).map(([id, draft]) => <Alert key={id} tone="attention"><AlertDescription>
       Details for “{draft.item.title}” remain unsaved because the item was removed or replaced.
       <Button type="button" size="sm" variant="outline" onClick={() => model.discardDescription(id)}>Discard removed item draft</Button>
     </AlertDescription></Alert>)}
-    <Form aria-label="Add checklist task" onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void model.add() }} busy={model.busy.add}>
+    <Form aria-label="Add a step" onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void model.add() }} busy={model.busy.add}>
       <InputGroup size="md" variant="outlined">
-        <InputGroupInput value={model.newTitle} onChange={(event: React.ChangeEvent<HTMLInputElement>) => model.setNewTitle(event.target.value)} placeholder="Add task…" aria-label="Add task" />
-        <InputGroupAddon align="inline-end"><InputGroupButton type="submit" size="icon-xs" disabled={model.busy.add || model.addIntent?.deleted || (!model.newTitle.trim() && !model.addIntent)} aria-label="Add task to checklist"><Plus aria-hidden="true" /></InputGroupButton></InputGroupAddon>
+        <InputGroupInput value={model.newTitle} onChange={(event: React.ChangeEvent<HTMLInputElement>) => model.setNewTitle(event.target.value)} placeholder="Add a step…" aria-label="Add a step" />
+        <InputGroupAddon align="inline-end"><InputGroupButton type="submit" size="icon-xs" disabled={model.busy.add || model.addIntent?.deleted || (!model.newTitle.trim() && !model.addIntent)} aria-label="Add step"><Plus aria-hidden="true" /></InputGroupButton></InputGroupAddon>
       </InputGroup>
       {model.addIntent && model.addIntent.raw !== model.newTitle && <Text size="meta">Confirming the earlier add for “{model.addIntent.title}” first. Your newer draft is kept.</Text>}
       <ErrorNotice message={model.errors.add} />
-      {model.addIntent?.deleted && <Button type="button" size="sm" variant="outline" onClick={model.discardAdd}>Discard removed task draft</Button>}
+      {model.addIntent?.deleted && <Button type="button" size="sm" variant="outline" onClick={model.discardAdd}>Discard removed step draft</Button>}
     </Form>
   </Stack>
 }

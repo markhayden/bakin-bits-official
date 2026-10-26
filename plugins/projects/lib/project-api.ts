@@ -41,7 +41,7 @@ function validProject(value: unknown): value is ProjectDetailData {
     && typeof value.progress === 'number' && Number.isFinite(value.progress) && value.progress >= 0 && value.progress <= 100
     && Array.isArray(value.tasks) && value.tasks.every(task => record(task) && string(task.id) && string(task.title) && typeof task.checked === 'boolean' && optionalString(task.description) && optionalString(task.taskId))
     && Array.isArray(value.assets) && value.assets.every(asset => record(asset) && string(asset.assetId) && optionalString(asset.label))
-    && record(value.resolvedTasks) && Object.values(value.resolvedTasks).every(task => task === null || (record(task) && string(task.column) && string(task.title)))
+    && record(value.resolvedTasks) && Object.values(value.resolvedTasks).every(task => task === null || (record(task) && string(task.column) && string(task.title) && optionalString(task.agent)))
     && Array.isArray(value.resolvedAssets) && value.resolvedAssets.every(asset => record(asset) && string(asset.assetId) && string(asset.type) && optionalString(asset.label) && optionalString(asset.description) && (asset.missing === undefined || typeof asset.missing === 'boolean') && (asset.tags === undefined || (Array.isArray(asset.tags) && asset.tags.every(string))))
     && (value.brainstormMessages === undefined || (Array.isArray(value.brainstormMessages) && value.brainstormMessages.every(row => record(row) && ['user', 'assistant', 'tool', 'error', 'aborted', 'done'].includes(String(row.kind)))))
 }
