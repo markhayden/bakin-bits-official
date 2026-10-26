@@ -48,7 +48,9 @@ export interface DecideOptions {
 export function decideStewardRun(project: Project, digest: StewardDigest, opts: DecideOptions): StewardDecision {
   const ineligible = stewardEligibility(project)
   if (ineligible) return { run: false, reason: ineligible }
-  if (opts.force) return { run: true, reason: 'forced' }
+  if (opts.force || project.steward?.runNext === 'handoff') return { run: true, reason: 'forced' }
+  // A sign-off decision always earns a follow-up look, whatever it changed.
+  if (project.steward?.runNext === 'decision') return { run: true, reason: 'changed' }
   if (digest.signals.length === 0) return { run: false, reason: 'no_signals' }
   const steward = project.steward
   if (digest.fingerprint !== steward?.lastFingerprint) return { run: true, reason: 'changed' }

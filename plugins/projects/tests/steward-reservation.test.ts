@@ -260,7 +260,7 @@ describe('review round 1 regressions', () => {
     expect(await loop.scan('p1')).toEqual({ created: expect.any(String) })
   })
 
-  it('a create that lands after its reservation was cancelled is archived, not orphaned', async () => {
+  it('a create that lands after its reservation was cancelled is removed, not orphaned', async () => {
     writeProject()
     await addWork('blocked')
     let release!: () => void
@@ -274,7 +274,7 @@ describe('review round 1 regressions', () => {
     repo.writeProject({ ...repo.readProject('p1')!, status: 'completed', steward: {} })
     release()
     expect(await scanning).toEqual({ skipped: 'create_failed' })
-    expect((await ctx.tasks.get(reservedId))?.column).toBe('archived')
+    expect(await ctx.tasks.get(reservedId)).toBeNull()
   })
 
   it('a scan in flight at shutdown never reserves afterwards', async () => {
@@ -292,5 +292,50 @@ describe('review round 1 regressions', () => {
     expect(await followUp).toEqual({ skipped: 'stopped' })
     expect(stewardState()?.openTaskId).toBeUndefined()
     expect(await loop.scan('p1')).toEqual({ skipped: 'stopped' })
+  })
+})
+
+describe('review round 2 regressions', () => {
+  it('a hand-off whose first attempt fails is retried by the next scan', async () => {
+    writeProject({ tasks: [] })
+    await loop.requestRun('p1', 'handoff')
+    const realList = ctx.tasks.list
+    ctx.tasks.list = async () => { throw new Error('board offline') }
+    await expect(loop.scan('p1')).rejects.toThrow('board offline')
+    ctx.tasks.list = realList
+    const outcome = await loop.scan('p1')
+    expect(outcome).toEqual({ created: expect.any(String) })
+    expect((await stewardTasks())[0]!.description).toContain('no steps yet')
+    expect(stewardState()?.runNext).toBeUndefined()
+  })
+
+  it('stop() during reservation recovery creates nothing', async () => {
+    writeProject({ steward: { openTaskId: 'task-reserved', phase: 'reserved', frozen: { title: 'Check in: Launch', assignee: 'pixel', description: 'brief' } } })
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const realGet = ctx.tasks.get
+    ctx.tasks.get = async (id) => { await held; return realGet(id) }
+    const reconciling = loop.reconcile('p1')
+    loop.stop()
+    release()
+    await reconciling
+    ctx.tasks.get = realGet
+    expect(await ctx.tasks.get('task-reserved')).toBeNull()
+    expect(stewardState()?.phase).toBe('reserved')
+  })
+})
+
+describe('capBytes', () => {
+  it('stays within the cap including its marker, on code-point boundaries', async () => {
+    const { capBytes } = await import('../lib/steward/prompt')
+    const bytes = (s: string) => new TextEncoder().encode(s).length
+    for (const [text, max] of [['x'.repeat(2000), 1024], ['😀'.repeat(5000), 12_000]] as const) {
+      const out = capBytes(text, max, 'context')
+      expect(bytes(out)).toBeLessThanOrEqual(max)
+      expect(out).toContain('truncated')
+      expect(out).not.toContain('�')
+      expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(out)).toBe(false)
+    }
+    expect(capBytes('short', 100, 'x')).toBe('short')
   })
 })

@@ -119,7 +119,8 @@ describe('complete gate', () => {
     expect(res.status).toBe(200)
     expect(plugin.ctx.approvals.get(COMPLETE_ID)?.status).toBe('cancelled')
     expect(read().gates?.['complete:project']?.state).toBe('cancelled')
-    expect(await column(STEWARD_TASK)).toBe('archived')
+    // Removed, not archived: deleting the task is what aborts a running check-in.
+    expect(await plugin.ctx.tasks.get(STEWARD_TASK)).toBeNull()
     await expect(plugin.approvals.resolve(COMPLETE_ID, 'approve')).rejects.toThrow('No pending approval')
   })
 })
@@ -169,7 +170,11 @@ describe('gate owner state', () => {
     expect(await gates.ownerState(gate)).toBe('live')
     repo.writeProject({ ...read(), gates: { 'complete:project': { approvalId: 'projects:p1:complete:project:2', generation: 2, state: 'pending' } } })
     expect(await gates.ownerState(gate)).toBe('orphaned')
+    // A completed project keeps its pending completion decidable (a retry resumes a half-failed approval)…
     repo.writeProject({ ...read(), status: 'completed', gates: { 'complete:project': { approvalId: COMPLETE_ID, generation: 1, state: 'pending' } } })
+    expect(await gates.ownerState(gate)).toBe('live')
+    // …an archived one does not.
+    repo.writeProject({ ...read(), status: 'archived' })
     expect(await gates.ownerState(gate)).toBe('orphaned')
     repo.deleteProjectFile('p1')
     expect(await gates.ownerState(gate)).toBe('orphaned')
@@ -254,5 +259,91 @@ describe('review round 1 regressions', () => {
     await plugin.approvals.resolve(approvalId as string, 'reject', 'Too long')
     const row = repo.readBrainstormMessages('p1').find(r => r.kind === 'assistant')
     expect(row).toEqual(expect.objectContaining({ agentId: 'pixel', turnId: `steward:${STEWARD_TASK}` }))
+  })
+})
+
+describe('review round 2 regressions', () => {
+  beforeEach(setup)
+
+  const hold = () => {
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    return { held, release }
+  }
+  const complete = () => callRoute(findRoute(plugin.routes, 'PUT', '/:projectId')!, plugin.ctx, {
+    path: '/p1', searchParams: { projectId: 'p1' }, body: { status: 'completed' }, headers: OPERATOR,
+  })
+
+  it('a decision in progress finishes before completion cleanup runs; cleanup never cancels it', async () => {
+    const { approvalId } = await signoff({ gateKind: 'signoff', subjectTaskId: 'work-1', summary: 'Copy is ready' })
+    const gate = hold()
+    const realGet = plugin.ctx.tasks.get
+    let first = true
+    plugin.ctx.tasks.get = async (id) => {
+      if (first && id === 'work-1') { first = false; await gate.held }
+      return realGet(id)
+    }
+    const deciding = plugin.approvals.resolve(approvalId as string, 'approve')
+    await new Promise(resolve => setTimeout(resolve, 5))
+    const completing = complete()
+    gate.release()
+    expect((await deciding).status).toBe('approved')
+    expect((await completing).status).toBe(200)
+    expect(await column('work-1')).toBe('done')
+    expect(read().gates?.['signoff:work-1']?.state).toBe('approved')
+  })
+
+  it('a sign-off request that loses the race to completion undoes its board moves and publishes nothing', async () => {
+    const gate = hold()
+    const realMove = plugin.ctx.tasks.move
+    plugin.ctx.tasks.move = async (id, col) => { await gate.held; return realMove(id, col) }
+    const requesting = signoff({ gateKind: 'signoff', subjectTaskId: 'work-1', summary: 'Copy is ready' })
+    await new Promise(resolve => setTimeout(resolve, 5))
+    const completing = complete()
+    gate.release()
+    expect(await requesting).toEqual(expect.objectContaining({ ok: false, code: 'not_steward' }))
+    expect((await completing).status).toBe(200)
+    expect(plugin.ctx.approvals.listPending()).toEqual([])
+    expect(await column('work-1')).toBe('inProgress')
+    expect(await plugin.ctx.tasks.get(STEWARD_TASK)).toBeNull()
+  })
+
+  it('a replayed decision (effects landed, host record did not) is accepted without repeating effects', async () => {
+    const { approvalId } = await signoff({ gateKind: 'signoff', subjectTaskId: 'work-1', summary: 'Copy is ready' })
+    repo.writeProject({ ...read(), gates: { 'signoff:work-1': { ...read().gates!['signoff:work-1']!, state: 'rejected' } } })
+    const resolved = await plugin.approvals.resolve(approvalId as string, 'reject', 'Too long')
+    expect(resolved.status).toBe('rejected')
+    expect((await plugin.ctx.tasks.get('work-1'))!.description).toBe('Draft the page copy.')
+    await expect(plugin.approvals.resolve(approvalId as string, 'approve')).rejects.toThrow('No pending approval')
+  })
+
+  it('a decided gate refuses the opposite decision', async () => {
+    const { approvalId } = await signoff({ gateKind: 'signoff', subjectTaskId: 'work-1', summary: 'Copy is ready' })
+    repo.writeProject({ ...read(), gates: { 'signoff:work-1': { ...read().gates!['signoff:work-1']!, state: 'approved' } } })
+    await expect(plugin.approvals.resolve(approvalId as string, 'reject', 'No')).rejects.toThrow('already decided')
+  })
+
+  it('deleting a project removes its check-in and cancels its sign-offs, even keeping work tasks', async () => {
+    const { approvalId } = await signoff({ gateKind: 'signoff', subjectTaskId: 'work-1', summary: 'Copy is ready' })
+    const res = await callRoute(findRoute(plugin.routes, 'DELETE', '/:projectId')!, plugin.ctx, { path: '/p1', searchParams: { projectId: 'p1' }, body: {}, headers: OPERATOR })
+    expect(res.status).toBe(200)
+    expect(plugin.ctx.approvals.get(approvalId as string)?.status).toBe('cancelled')
+    expect(await plugin.ctx.tasks.get(STEWARD_TASK)).toBeNull()
+    expect(await plugin.ctx.tasks.get('work-1')).not.toBeNull()
+  })
+
+  it('a decision earns the lead a follow-up run, even though the asking check-in was finalized', async () => {
+    const { approvalId } = await signoff({ gateKind: 'signoff', subjectTaskId: 'work-1', summary: 'Copy is ready' })
+    await plugin.approvals.resolve(approvalId as string, 'approve')
+    expect(read().steward?.runNext).toBe('decision')
+  })
+
+  it('a pending gate whose host record went away is settled from the host on the next look', async () => {
+    const { syncGateStates } = await import('../lib/steward/gates')
+    await signoff()
+    await plugin.ctx.approvals.cancel(COMPLETE_ID, 'rehydration')
+    await syncGateStates(plugin.ctx, repo, 'p1')
+    expect(read().gates?.['complete:project']?.state).toBe('cancelled')
+    expect(stewardEligibility(read())).not.toBe('completion_pending')
   })
 })

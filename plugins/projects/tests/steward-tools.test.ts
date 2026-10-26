@@ -285,3 +285,28 @@ describe('review round 1 regressions', () => {
     await waitUntil(() => read().waitingOn === undefined, 'gate withdrawn')
   })
 })
+
+describe('review round 2 regressions', () => {
+  it('boot withdraws a question whose card never reached the transcript', async () => {
+    await setup({ waitingOn: { kind: 'input', questionId: 'q_aaaaaaaaaaaaaaaa', question: 'Lost?', since: '2026-10-26T00:00:00Z' } })
+    await waitUntil(() => read().waitingOn === undefined, 'lost question withdrawn')
+  })
+
+  it('a card landing while the engine admits the reply is ended by that reply', async () => {
+    await setup()
+    const realList = plugin.ctx.runtime.agents.list
+    let calls = 0
+    plugin.ctx.runtime.agents.list = (async () => {
+      // Call 1 is /ask choosing the agent (before the question is sampled);
+      // call 2 is the engine's resolveThread at admission — after it.
+      if (++calls === 2) await asSteward(tool('bakin_exec_projects_request_input'), question)
+      return realList()
+    }) as typeof plugin.ctx.runtime.agents.list
+    const turn = holdTurns()
+    expect((await ask('my reply')).status).toBe(202)
+    expect(read().waitingOn).toBeUndefined()
+    expect(read().replyPending).toBeDefined()
+    turn.release()
+    await waitUntil(() => read().replyPending === undefined, 'gate cleared')
+  })
+})

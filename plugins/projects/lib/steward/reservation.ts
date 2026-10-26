@@ -15,6 +15,7 @@ import type { ProjectRepository } from '../parser'
 import { withProjectLock } from '../project-service'
 import type { Project, ProjectStewardState } from '../../types'
 import { buildStewardDigest, isStewardTask, STEWARD_ENTITY_TYPE } from './digest'
+import { syncGateStates } from './gates'
 import { buildStewardDescription } from './prompt'
 import { decideStewardRun, stewardEligibility, type StewardSkipReason } from './scan'
 
@@ -68,6 +69,8 @@ export interface StewardLoop {
   scan(projectId: string, opts?: { force?: boolean }): Promise<StewardScanOutcome>
   scanAll(): Promise<void>
   reconcile(projectId: string): Promise<void>
+  /** Durably ask for one run regardless of the fingerprint (Start's hand-off). */
+  requestRun(projectId: string, kind: 'handoff' | 'decision'): Promise<void>
   /** The tasks.statusChanged handler: debounced scans for work-task transitions. */
   onTaskStatusChanged(payload: unknown): void
   start(): void
@@ -113,6 +116,9 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
 
   /** Create the reserved task from its frozen inputs; an existing id means an earlier attempt landed. */
   async function createReserved(projectId: string, reservation: Reservation): Promise<boolean> {
+    // After stop() nothing new reaches the board; the durable reservation is
+    // recovered by the next loop's reconcile.
+    if (stopped) return false
     try {
       await ctx.tasks.create({
         id: reservation.openTaskId,
@@ -140,9 +146,10 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
     // finalized while this create was in flight: nothing tracks the task
     // any more, so it must not linger on the board.
     if (repo.readProject(projectId)?.steward?.openTaskId !== reservation.openTaskId) {
-      const task = await ctx.tasks.get(reservation.openTaskId)
-      if (task && !OPEN_EXCLUDED.has(task.column)) await ctx.tasks.move(reservation.openTaskId, 'archived')
-      ctx.activity.audit('steward.orphan_archived', 'system', { projectId, taskId: reservation.openTaskId })
+      // Removed, not archived: deleting a task is what aborts a dispatch
+      // turn that may already have picked it up.
+      await ctx.tasks.remove(reservation.openTaskId)
+      ctx.activity.audit('steward.orphan_removed', 'system', { projectId, taskId: reservation.openTaskId })
       return false
     }
     return true
@@ -168,6 +175,8 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
       current.steward = {
         ...(steward.runs ? { runs: steward.runs } : {}),
         ...(steward.capNotedOn ? { capNotedOn: steward.capNotedOn } : {}),
+        // A decision that landed while this run was open still earns its follow-up.
+        ...(steward.runNext ? { runNext: steward.runNext } : {}),
         // A foreign task never ran for this project: nothing was handled.
         ...(how === 'foreign'
           ? { ...(steward.lastFingerprint ? { lastFingerprint: steward.lastFingerprint } : {}), ...(steward.lastStewardAt ? { lastStewardAt: steward.lastStewardAt } : {}) }
@@ -181,10 +190,13 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
   }
 
   async function reconcile(projectId: string): Promise<void> {
+    if (stopped) return
+    await syncGateStates(ctx, repo, projectId)
     const steward = repo.readProject(projectId)?.steward
     const taskId = steward?.openTaskId
     if (!taskId) return
     const task: Task | null = await ctx.tasks.get(taskId)
+    if (stopped) return
     if (!task) {
       if (steward.phase === 'reserved' && steward.frozen) {
         await createReserved(projectId, { openTaskId: taskId, frozen: steward.frozen })
@@ -252,8 +264,9 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
           kickoff: decision.reason === 'forced',
         }),
       }
+      const { runNext: _consumed, ...prior } = current.steward ?? {}
       current.steward = {
-        ...current.steward,
+        ...prior,
         openTaskId,
         phase: 'reserved',
         frozen,
@@ -310,7 +323,7 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
     const data = payload as { to?: unknown; task?: Task } | null
     const task = data?.task
     const projectId = task?.projectId
-    if (!projectId || !task || typeof data.to !== 'string') return
+    if (stopped || !projectId || !task || typeof data.to !== 'string') return
     // A finished check-in is finalized at once (what it handled is the board
     // NOW), but never triggers a scan — that is how a run can't feed itself.
     if (isStewardTask(task)) {
@@ -331,6 +344,12 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
     scan,
     scanAll,
     reconcile,
+    async requestRun(projectId, kind) {
+      await writeSteward(projectId, project => {
+        project.steward = { ...project.steward, runNext: kind }
+        return true
+      })
+    },
     onTaskStatusChanged,
     start() {
       stopped = false

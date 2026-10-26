@@ -23,7 +23,7 @@
  * compare-and-set.
  */
 import { z } from 'zod'
-import type { ConversationTurnService, PluginApproval, PluginApprovalDecision, PluginContext, Task } from '@makinbakin/sdk/types'
+import type { ConversationTurnService, ExecToolResult, PluginApproval, PluginApprovalDecision, PluginContext, Task } from '@makinbakin/sdk/types'
 import type { ProjectRepository } from '../parser'
 import { withProjectLock, type ProjectService } from '../project-service'
 import type { Project, ProjectGateState } from '../../types'
@@ -61,20 +61,65 @@ export interface StewardGatesDeps {
   projectService: Pick<ProjectService, 'updateProject'>
 }
 
+/**
+ * Pending gates follow the host's record: a decision, cancellation or
+ * expiry the plugin did not see (rehydration, a restart mid-resolve) lands
+ * in frontmatter, so no project waits on an approval that is gone.
+ */
+export async function syncGateStates(ctx: PluginContext, repo: ProjectRepository, projectId: string): Promise<void> {
+  const pending = Object.entries(repo.readProject(projectId)?.gates ?? {}).filter(([, gate]) => gate.state === 'pending')
+  if (!pending.length) return
+  const settled = new Map<string, ProjectGateState['state']>()
+  for (const [key, gate] of pending) {
+    const record = ctx.approvals.get(gate.approvalId)
+    if (record?.status === 'pending') continue
+    settled.set(key, record?.status === 'approved' || record?.status === 'rejected' ? record.status : 'cancelled')
+  }
+  if (!settled.size) return
+  await withProjectLock(() => {
+    const project = repo.readProject(projectId)
+    if (!project?.gates) return
+    for (const [key, state] of settled) {
+      if (project.gates[key]?.state === 'pending') project.gates[key] = { ...project.gates[key]!, state }
+    }
+    repo.writeProject(project)
+  })
+}
+
 export function createStewardGates({ ctx, repo, turns, projectService }: StewardGatesDeps) {
   const turnCtx = { runtime: ctx.runtime, events: ctx.events }
   const changed = (projectId: string) => ctx.events.emit('projects.changed', { projectId, action: 'steward.gate' })
 
-  function writeGate(projectId: string, key: string, approvalId: string, state: ProjectGateState['state']): Promise<boolean> {
+  /**
+   * ONE gate operation per project at a time — request, resolve and cleanup
+   * serialize here, so a decision can never interleave with completion
+   * cleanup or a late request. Held across task APIs; the global project
+   * lock is only ever taken INSIDE it, never the other way round.
+   */
+  const gateQueues = new Map<string, Promise<unknown>>()
+  function withGateLock<T>(projectId: string, fn: () => Promise<T>): Promise<T> {
+    const prior = gateQueues.get(projectId) ?? Promise.resolve()
+    const next = prior.then(fn, fn)
+    const tail = next.then(() => {}, () => {})
+    gateQueues.set(projectId, tail)
+    void tail.then(() => { if (gateQueues.get(projectId) === tail) gateQueues.delete(projectId) })
+    return next
+  }
+
+  /** Write the gate's terminal state (and anything riding with it) — last, after every effect landed. */
+  function settleGate(projectId: string, key: string, approvalId: string, state: ProjectGateState['state'], extra?: (project: Project) => void): Promise<boolean> {
     return withProjectLock(() => {
       const project = repo.readProject(projectId)
       const gate = project?.gates?.[key]
-      if (!project || gate?.approvalId !== approvalId || gate.state === state) return false
+      if (!project || gate?.approvalId !== approvalId) return false
       gate.state = state
+      extra?.(project)
       repo.writeProject(project)
       return true
     })
   }
+
+  const followUp = (project: Project) => { project.steward = { ...project.steward, runNext: 'decision' } }
 
   /**
    * Move a task. A task that is gone, or already there, is fine; any other
@@ -101,21 +146,30 @@ export function createStewardGates({ ctx, repo, turns, projectService }: Steward
   }
 
   /**
-   * End the loop for a project that completed or was archived: every other
-   * pending sign-off → cancelled; open steward task → done (when it anchors
-   * the resolving completion) or archived; input gate cleared. Failures
+   * End the loop for a project that completed, was archived or is being
+   * deleted: every other STILL-PENDING sign-off → cancelled (a gate already
+   * settled here is resolving on the host — cancelling it would fail that
+   * decision); the open check-in → done when it anchors the resolving
+   * completion, otherwise REMOVED (deleting a task is what aborts a running
+   * dispatch turn); input gate and pending follow-ups cleared. Failures
    * throw BEFORE the bookkeeping is cleared, so a retry converges.
    */
-  async function cleanup(projectId: string, opts: { resolvingApprovalId?: string; reason: string }): Promise<void> {
+  async function cleanupLocked(projectId: string, opts: { resolvingApprovalId?: string; reason: string }): Promise<void> {
+    const gates = Object.values(repo.readProject(projectId)?.gates ?? {})
     for (const approval of ctx.approvals.listPending({ entityId: projectId })) {
       if (approval.approvalId === opts.resolvingApprovalId) continue
+      const gate = gates.find(candidate => candidate.approvalId === approval.approvalId)
+      if (gate && gate.state !== 'pending') continue
       await ctx.approvals.cancel(approval.approvalId, opts.reason)
     }
     const openTaskId = repo.readProject(projectId)?.steward?.openTaskId
     const resolvingAnchor = opts.resolvingApprovalId ? ctx.approvals.get(opts.resolvingApprovalId)?.taskId : undefined
     if (openTaskId) {
       const task = await ctx.tasks.get(openTaskId)
-      if (task && isStewardTask(task, projectId)) await moveTask(openTaskId, openTaskId === resolvingAnchor ? 'done' : 'archived')
+      if (task && isStewardTask(task, projectId)) {
+        if (openTaskId === resolvingAnchor) await moveTask(openTaskId, 'done')
+        else await ctx.tasks.remove(openTaskId)
+      }
     }
     await withProjectLock(() => {
       const project = repo.readProject(projectId)
@@ -124,7 +178,7 @@ export function createStewardGates({ ctx, repo, turns, projectService }: Steward
         if (gate.state === 'pending' && gate.approvalId !== opts.resolvingApprovalId) project.gates![key] = { ...gate, state: 'cancelled' }
       }
       if (project.steward) {
-        const { openTaskId: _open, phase: _phase, frozen: _frozen, reservedAt: _reserved, fingerprint: _fp, ...kept } = project.steward
+        const { openTaskId: _open, phase: _phase, frozen: _frozen, reservedAt: _reserved, fingerprint: _fp, runNext: _next, ...kept } = project.steward
         project.steward = kept
       }
       delete project.waitingOn
@@ -132,6 +186,10 @@ export function createStewardGates({ ctx, repo, turns, projectService }: Steward
       repo.writeProject(project)
     })
     changed(projectId)
+  }
+
+  function cleanup(projectId: string, opts: { reason: string }): Promise<void> {
+    return withGateLock(projectId, () => cleanupLocked(projectId, opts))
   }
 
   async function ownerState(approval: PluginApproval): Promise<'live' | 'orphaned' | 'unknown'> {
@@ -143,75 +201,90 @@ export function createStewardGates({ ctx, repo, turns, projectService }: Steward
     } catch {
       return 'unknown'
     }
-    if (!project || project.status !== 'active') return 'orphaned'
-    // A newer generation (or none) supersedes this one. A pending `complete`
-    // whose anchor task is already done stays valid: the approval is the truth.
-    return project.gates?.[gateKey(parsed.gateKind, parsed.subject)]?.approvalId === approval.approvalId ? 'live' : 'orphaned'
+    // A newer generation (or none) supersedes this one.
+    if (!project || project.gates?.[gateKey(parsed.gateKind, parsed.subject)]?.approvalId !== approval.approvalId) return 'orphaned'
+    if (project.status === 'active') return 'live'
+    // An approved completion that failed half-way (status already completed)
+    // stays decidable, so the operator's retry resumes its cleanup.
+    return project.status === 'completed' && parsed.gateKind === 'complete' ? 'live' : 'orphaned'
   }
 
   /**
-   * The decision applies only to the CURRENT, still-pending generation —
-   * the host does not ask ownerState at resolve time, so the gate fences it.
+   * The decision applies only to the CURRENT generation, still pending on
+   * the host. A gate already settled to THIS decision is a replay (the
+   * effects landed but the host's record write did not): a no-op, so the
+   * host can commit it.
    */
-  function currentGate(approval: PluginApproval): { project: Project; key: string; gate: ProjectGateState } {
+  function currentGate(approval: PluginApproval, decision: PluginApprovalDecision): { project: Project; key: string; gate: ProjectGateState; replay: boolean } {
     const parsed = parseGateApprovalId(approval.approvalId)
     const project = parsed ? repo.readProject(parsed.projectId) : null
     if (!parsed || !project) throw ctx.approvals.refusal('This project no longer exists.', 409)
+    if (ctx.approvals.get(approval.approvalId)?.status !== 'pending') throw ctx.approvals.refusal('This sign-off is no longer pending.', 409)
     const key = gateKey(parsed.gateKind, parsed.subject)
     const gate = project.gates?.[key]
-    if (gate?.approvalId !== approval.approvalId || gate.state !== 'pending') {
-      throw ctx.approvals.refusal('This sign-off was replaced by a newer request.', 409)
-    }
-    return { project, key, gate }
+    if (gate?.approvalId !== approval.approvalId) throw ctx.approvals.refusal('This sign-off was replaced by a newer request.', 409)
+    if (gate.state === 'pending') return { project, key, gate, replay: false }
+    if (gate.state === (decision.option === 'approve' ? 'approved' : 'rejected')) return { project, key, gate, replay: true }
+    throw ctx.approvals.refusal('This sign-off was already decided.', 409)
   }
 
-  async function resolveComplete(approval: PluginApproval, decision: PluginApprovalDecision): Promise<void> {
-    const { project, key, gate } = currentGate(approval)
-    if (decision.option === 'approve') {
-      // A retry after a partial failure finds the project already completed
-      // by THIS approval (its gate is still pending): resume, don't refuse.
-      if (project.status === 'active') await projectService.updateProject(project.id, { status: 'completed' }, { kind: 'user' })
-      else if (project.status !== 'completed') throw ctx.approvals.refusal('This project is no longer active.', 409)
-      await moveTask(approval.taskId, 'done')
-      await cleanup(project.id, { resolvingApprovalId: approval.approvalId, reason: 'Project completed' })
-      await writeGate(project.id, key, approval.approvalId, 'approved')
-      ctx.activity.audit('steward.completed', 'system', { projectId: project.id, approvalId: approval.approvalId, decidedBy: decision.decidedBy })
-      return
-    }
-    if (project.status !== 'active') throw ctx.approvals.refusal('This project is no longer active.', 409)
-    await moveTask(approval.taskId, 'done')
-    await note(project, gate, `You held off on completing the project${decision.comment ? `: “${decision.comment}”` : '.'} I'll pick it back up at the next check-in.`)
-    // Last: until every effect landed, the gate (and the approval) stay pending.
-    await writeGate(project.id, key, approval.approvalId, 'rejected')
-    changed(project.id)
-  }
-
-  async function resolveSignoff(approval: PluginApproval, decision: PluginApprovalDecision): Promise<void> {
-    const { project, key, gate } = currentGate(approval)
-    if (project.status !== 'active') throw ctx.approvals.refusal('This project is no longer active.', 409)
-    const subject = parseGateApprovalId(approval.approvalId)!.subject
-    const deliverable = await ctx.tasks.get(subject)
-    if (decision.option === 'approve') {
-      await moveTask(subject, 'done')
-    } else {
-      const reason = decision.comment?.trim() || 'No reason given.'
-      const declined = `Sign-off declined: ${reason}`
-      // Idempotent on retry: the reason lands once.
-      if (deliverable && !deliverable.description?.includes(declined)) {
-        await ctx.tasks.appendLog(subject, { timestamp: new Date().toISOString(), author: 'operator', message: declined })
-        await ctx.tasks.update(subject, {
-          column: 'todo',
-          description: [deliverable.description?.trim(), declined].filter(Boolean).join('\n\n'),
-        })
-      } else if (deliverable) {
-        await moveTask(subject, 'todo')
+  function resolveComplete(approval: PluginApproval, decision: PluginApprovalDecision): Promise<void> {
+    const projectId = parseGateApprovalId(approval.approvalId)?.projectId ?? ''
+    return withGateLock(projectId, async () => {
+      const { project, key, gate, replay } = currentGate(approval, decision)
+      if (replay) return
+      if (decision.option === 'approve') {
+        // A retry after a partial failure finds the project already completed
+        // by THIS approval (its gate is still pending): resume, don't refuse.
+        if (project.status === 'active') await projectService.updateProject(project.id, { status: 'completed' }, { kind: 'user' })
+        else if (project.status !== 'completed') throw ctx.approvals.refusal('This project is no longer active.', 409)
+        await moveTask(approval.taskId, 'done')
+        await cleanupLocked(project.id, { resolvingApprovalId: approval.approvalId, reason: 'Project completed' })
+        await settleGate(project.id, key, approval.approvalId, 'approved')
+        ctx.activity.audit('steward.completed', 'system', { projectId: project.id, approvalId: approval.approvalId, decidedBy: decision.decidedBy })
+        return
       }
-      await note(project, gate, `You sent “${deliverable?.title ?? subject}” back: “${reason}”`)
-    }
-    // The check-in that asked is over once the decision is made.
-    await moveTask(gate.stewardTaskId, 'done')
-    await writeGate(project.id, key, approval.approvalId, decision.option === 'approve' ? 'approved' : 'rejected')
-    changed(project.id)
+      if (project.status !== 'active') throw ctx.approvals.refusal('This project is no longer active.', 409)
+      await moveTask(approval.taskId, 'done')
+      await note(project, gate, `You held off on completing the project${decision.comment ? `: “${decision.comment}”` : '.'} I'll pick it back up at the next check-in.`)
+      // Last: until every effect landed, the gate (and the approval) stay pending.
+      await settleGate(project.id, key, approval.approvalId, 'rejected', followUp)
+      changed(project.id)
+    })
+  }
+
+  function resolveSignoff(approval: PluginApproval, decision: PluginApprovalDecision): Promise<void> {
+    const projectId = parseGateApprovalId(approval.approvalId)?.projectId ?? ''
+    return withGateLock(projectId, async () => {
+      const { project, key, gate, replay } = currentGate(approval, decision)
+      if (replay) return
+      if (project.status !== 'active') throw ctx.approvals.refusal('This project is no longer active.', 409)
+      const subject = parseGateApprovalId(approval.approvalId)!.subject
+      const deliverable = await ctx.tasks.get(subject)
+      if (decision.option === 'approve') {
+        await moveTask(subject, 'done')
+      } else {
+        const reason = decision.comment?.trim() || 'No reason given.'
+        const declined = `Sign-off declined: ${reason}`
+        // Idempotent on retry: the reason lands once.
+        if (deliverable && !deliverable.description?.includes(declined)) {
+          await ctx.tasks.appendLog(subject, { timestamp: new Date().toISOString(), author: 'operator', message: declined })
+          await ctx.tasks.update(subject, {
+            column: 'todo',
+            description: [deliverable.description?.trim(), declined].filter(Boolean).join('\n\n'),
+          })
+        } else if (deliverable) {
+          await moveTask(subject, 'todo')
+        }
+        await note(project, gate, `You sent “${deliverable?.title ?? subject}” back: “${reason}”`)
+      }
+      // The check-in that asked is over once the decision is made; the
+      // decision itself earns the lead a follow-up look (runNext), so
+      // finalizing that check-in never swallows it.
+      await settleGate(project.id, key, approval.approvalId, decision.option === 'approve' ? 'approved' : 'rejected', followUp)
+      await moveTask(gate.stewardTaskId, 'done')
+      changed(project.id)
+    })
   }
 
   function registerGates(): void {
@@ -235,68 +308,88 @@ export function createStewardGates({ ctx, repo, turns, projectService }: Steward
       handler: async (params: Record<string, unknown>, agent?: string) => {
         const steward = await resolveSteward(params.projectId, params.taskId, agent)
         if (!steward.ok) return { ok: false, error: steward.error, code: steward.code }
-        const { project, taskId } = steward.identity
+        const { project, taskId, agentId } = steward.identity
         const gateKind = params.gateKind
         if (gateKind !== 'complete' && gateKind !== 'signoff') return { ok: false, error: 'gateKind must be "complete" or "signoff"', code: 'invalid_request' }
         const summary = typeof params.summary === 'string' ? params.summary.trim().slice(0, SUMMARY_MAX) : ''
         if (!summary) return { ok: false, error: 'summary is required', code: 'invalid_request' }
-
-        let subject = 'project'
-        let deliverable: Task | null = null
-        if (gateKind === 'signoff') {
-          deliverable = typeof params.subjectTaskId === 'string' ? await ctx.tasks.get(params.subjectTaskId) : null
-          if (!deliverable || deliverable.projectId !== project.id || isStewardTask(deliverable)) {
-            return { ok: false, error: 'subjectTaskId must be one of this project\'s board tasks', code: 'invalid_subject' }
-          }
-          subject = deliverable.id
-        }
-        const anchor = gateKind === 'complete' ? taskId : subject
-        const key = gateKey(gateKind, subject)
-        /** A request that would return an existing record: pending, or a deliverable already signed off and done. */
-        const reuse = (prior: ProjectGateState | undefined) => prior?.state === 'pending'
-          || (prior?.state === 'approved' && gateKind === 'signoff' && deliverable?.column === 'done')
-
-        const known = repo.readProject(project.id)?.gates?.[key]
-        if (reuse(known)) return { ok: true, approvalId: known!.approvalId, state: known!.state, message: 'Already asked. Finish this check-in now.' }
-        // The board's Review column carries the "Needs approval" signal —
-        // moved BEFORE the approval exists, so a fast decision can never be
-        // undone by a late move back to review.
-        try {
-          await moveTask(taskId, 'review')
-          if (gateKind === 'signoff') await moveTask(subject, 'review')
-        } catch (err) {
-          return { ok: false, error: `Could not move the task to review: ${err instanceof Error ? err.message : String(err)}`, code: 'board_unavailable' }
-        }
-
-        const outcome = await withProjectLock(() => {
-          const current = repo.readProject(project.id)
-          if (!current) return { error: 'not_found' as const }
-          const prior = current.gates?.[key]
-          if (reuse(prior)) return { approvalId: prior!.approvalId, state: prior!.state, created: false }
-          // Rejected, cancelled, or approved in an earlier lifecycle (a
-          // reopened project, a reworked deliverable): a new generation.
-          const generation = (prior?.generation ?? 0) + 1
-          const approvalId = gateApprovalId(project.id, gateKind, subject, generation)
-          ctx.approvals.request({
-            approvalId,
-            gateKind,
-            entityId: project.id,
-            taskId: anchor,
-            title: gateKind === 'complete' ? `Complete “${current.title}”?` : `Sign off “${deliverable!.title}”?`,
-            summary,
-          })
-          current.gates = { ...current.gates, [key]: { approvalId, generation, state: 'pending', stewardTaskId: taskId, stewardAgentId: steward.identity.agentId } }
-          repo.writeProject(current)
-          return { approvalId, state: 'pending' as const, created: true }
-        })
-        if ('error' in outcome) return { ok: false, error: `Project not found: ${project.id}`, code: 'not_found' }
-        if (outcome.created) {
-          ctx.activity.audit('steward.request_signoff', steward.identity.agentId, { projectId: project.id, taskId, gateKind, approvalId: outcome.approvalId })
-          changed(project.id)
-        }
-        return { ok: true, approvalId: outcome.approvalId, state: outcome.state, message: 'The user decides on the board. Finish this check-in now.' }
+        return withGateLock(project.id, () => request({ projectId: project.id, taskId, agentId, gateKind, summary, subjectTaskId: params.subjectTaskId }))
       },
     })
+  }
+
+  async function request(input: { projectId: string; taskId: string; agentId: string; gateKind: GateKind; summary: string; subjectTaskId: unknown }): Promise<ExecToolResult> {
+    const { projectId, taskId, agentId, gateKind, summary } = input
+    /** Still the open check-in of an active project — re-checked after every await. */
+    const stillOurs = () => {
+      const current = repo.readProject(projectId)
+      return current?.status === 'active' && current.steward?.openTaskId === taskId ? current : null
+    }
+    if (!stillOurs()) return { ok: false, error: 'This check-in is no longer open on an active project.', code: 'not_steward' }
+
+    let subject = 'project'
+    let deliverable: Task | null = null
+    if (gateKind === 'signoff') {
+      deliverable = typeof input.subjectTaskId === 'string' ? await ctx.tasks.get(input.subjectTaskId) : null
+      if (!deliverable || deliverable.projectId !== projectId || isStewardTask(deliverable)) {
+        return { ok: false, error: 'subjectTaskId must be one of this project\'s board tasks', code: 'invalid_subject' }
+      }
+      subject = deliverable.id
+    }
+    const key = gateKey(gateKind, subject)
+    /** A request that returns an existing record: pending, or a deliverable already signed off and done. */
+    const reuse = (prior: ProjectGateState | undefined) => prior?.state === 'pending'
+      || (prior?.state === 'approved' && gateKind === 'signoff' && deliverable?.column === 'done')
+    const known = repo.readProject(projectId)?.gates?.[key]
+    if (reuse(known)) return { ok: true, approvalId: known!.approvalId, state: known!.state, message: 'Already asked. Finish this check-in now.' }
+
+    // The board's Review column carries the "Needs approval" signal — moved
+    // BEFORE the approval exists, so a fast decision can never be undone by
+    // a late move back to review. Prior columns are kept to compensate.
+    const moved: Array<[string, Task['column']]> = []
+    try {
+      for (const id of gateKind === 'signoff' ? [taskId, subject] : [taskId]) {
+        const task = await ctx.tasks.get(id)
+        if (task && task.column !== 'review') {
+          await ctx.tasks.move(id, 'review')
+          moved.push([id, task.column])
+        }
+      }
+    } catch (err) {
+      return { ok: false, error: `Could not move the task to review: ${err instanceof Error ? err.message : String(err)}`, code: 'board_unavailable' }
+    }
+
+    const outcome = await withProjectLock(() => {
+      const current = stillOurs()
+      if (!current) return { error: 'not_steward' as const }
+      const prior = current.gates?.[key]
+      if (reuse(prior)) return { approvalId: prior!.approvalId, state: prior!.state, created: false }
+      // Rejected, cancelled, or approved in an earlier lifecycle (a
+      // reopened project, a reworked deliverable): a new generation.
+      const generation = (prior?.generation ?? 0) + 1
+      const approvalId = gateApprovalId(projectId, gateKind, subject, generation)
+      ctx.approvals.request({
+        approvalId,
+        gateKind,
+        entityId: projectId,
+        taskId: gateKind === 'complete' ? taskId : subject,
+        title: gateKind === 'complete' ? `Complete “${current.title}”?` : `Sign off “${deliverable!.title}”?`,
+        summary,
+      })
+      current.gates = { ...current.gates, [key]: { approvalId, generation, state: 'pending', stewardTaskId: taskId, stewardAgentId: agentId } }
+      repo.writeProject(current)
+      return { approvalId, state: 'pending' as const, created: true }
+    })
+    if ('error' in outcome) {
+      // The project moved on while the board was being moved: put it back.
+      for (const [id, column] of moved) await moveTask(id, column).catch(err => log.warn('could not undo a review move', { id, err }))
+      return { ok: false, error: 'This check-in is no longer open on an active project.', code: 'not_steward' }
+    }
+    if (outcome.created) {
+      ctx.activity.audit('steward.request_signoff', agentId, { projectId, taskId, gateKind, approvalId: outcome.approvalId })
+      changed(projectId)
+    }
+    return { ok: true, approvalId: outcome.approvalId, state: outcome.state, message: 'The user decides on the board. Finish this check-in now.' }
   }
 
   return { registerGates, registerTool, cleanup, ownerState }

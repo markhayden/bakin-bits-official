@@ -64,6 +64,12 @@ export interface ProjectStewardState {
   runs?: { date: string; count: number }
   /** The day a cap skip was last audited (one audit event per day). */
   capNotedOn?: string
+  /**
+   * The next eligible scan runs regardless of the fingerprint: Start's
+   * hand-off, or a sign-off decision the lead must follow up on. Durable, so
+   * a failed or crashed attempt retries; cleared when a run is reserved.
+   */
+  runNext?: 'handoff' | 'decision'
 }
 
 /** The steward asked the user something (D25); scans pause until they reply. */

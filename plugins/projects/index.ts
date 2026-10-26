@@ -440,6 +440,12 @@ const projectsPlugin: BakinPlugin = {
     try {
       for (const project of readAllProjects()) {
         if (project.replyPending) void inputGate.settleReply(project.id)
+        // A question whose card never reached the transcript (its queued
+        // batch died with the process) must not hold the project (D25).
+        const questionId = project.waitingOn?.questionId
+        if (questionId && !readBrainstormMessages(project.id).some(row => row.kind === 'tool' && (row.metadata?.bakinQuestion as { id?: unknown } | undefined)?.id === questionId)) {
+          void inputGate.withdraw(project.id, questionId)
+        }
         const rows = readBrainstormMessages(project.id)
         const last = rows[rows.length - 1]
         if (last?.kind !== 'user') continue
@@ -561,12 +567,15 @@ const projectsPlugin: BakinPlugin = {
       if (!id) return json({ error: 'Missing id' }, 400)
       try {
         const before = readProject(id)?.status
+        const handoff = before === 'draft' && patch.status === 'active'
+        // Start is the hand-off (D27): the lead's first check-in runs past the
+        // fingerprint gate — with no steps it breaks the plan down. Recorded
+        // durably BEFORE the status flips, so a failed or crashed first
+        // attempt is retried by the next scan (a Start that then fails leaves
+        // a harmless flag on a draft).
+        if (handoff) await steward.requestRun(id, 'handoff')
         await updateProject(id, patch, callerFromRequest(req), expected)
-        // Start is the hand-off (D27): the lead's first check-in is reserved
-        // now, past the fingerprint gate — with no steps it breaks the plan down.
-        if (before === 'draft' && patch.status === 'active') {
-          steward.scan(id, { force: true }).catch(err => log.error('steward hand-off failed', err, { projectId: id }))
-        }
+        if (handoff) steward.scan(id).catch(err => log.error('steward hand-off failed; the next scan retries', err, { projectId: id }))
         // Completing or archiving ends the steward loop: open check-ins and
         // pending sign-offs go with it (D28).
         if (patch.status === 'completed' || patch.status === 'archived') {
@@ -596,6 +605,10 @@ const projectsPlugin: BakinPlugin = {
       // billing and resurrects the transcript sidecar (review I2).
       brainstormTurns.abort(id)
       try {
+        // The steward goes first: its open check-in is removed (aborting a
+        // running turn) and pending sign-offs are cancelled — independently
+        // of whether the work tasks are kept.
+        await stewardGates.cleanup(id, { reason: 'Project deleted' })
         if (body.deleteLinkedTasks) {
           const project = readProject(id)
           if (project) {
@@ -855,10 +868,20 @@ const projectsPlugin: BakinPlugin = {
       })
       if (result === 'not_found') return json({ error: 'Project not found' }, 404)
       if (result === 'busy') return json({ error: 'A brainstorm turn is already running for this project' }, 409)
-      if (pendingQuestion) {
-        await inputGate.admitReply(projectId, pendingQuestion.questionId)
-        // The turn may have settled before the flip landed: nothing would clear it.
-        if (!brainstormTurns.isInFlight(projectId)) await inputGate.settleReply(projectId)
+      // The gate ends with THIS message when its card precedes it in the
+      // transcript (D25) — including a card that landed after the context was
+      // sampled, while the engine was admitting the turn.
+      const waiting = readProject(projectId)?.waitingOn
+      if (waiting) {
+        const rows = readBrainstormMessages(projectId)
+        let lastUser = -1
+        for (let i = rows.length - 1; i >= 0; i--) if (rows[i]!.kind === 'user') { lastUser = i; break }
+        const card = rows.findIndex(row => row.kind === 'tool' && (row.metadata?.bakinQuestion as { id?: unknown } | undefined)?.id === waiting.questionId)
+        if (waiting.questionId === pendingQuestion?.questionId || (card !== -1 && card < lastUser)) {
+          await inputGate.admitReply(projectId, waiting.questionId)
+          // The turn may have settled before the flip landed: nothing would clear it.
+          if (!brainstormTurns.isInFlight(projectId)) await inputGate.settleReply(projectId)
+        }
       }
       return json({ ok: true, streaming: true }, 202)
     })

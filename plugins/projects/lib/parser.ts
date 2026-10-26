@@ -102,6 +102,7 @@ const stewardSchema = z.object({
   lastStewardAt: z.string().optional(),
   runs: z.object({ date: z.string(), count: z.number().int().min(0) }).strict().optional(),
   capNotedOn: z.string().optional(),
+  runNext: z.enum(['handoff', 'decision']).optional(),
 }).strict()
 
 const waitingOnSchema = z.object({

@@ -16,13 +16,27 @@ export const STEWARD_DESCRIPTION_MAX_BYTES = 12_000
 const encoder = new TextEncoder()
 const byteLength = (text: string) => encoder.encode(text).length
 
-/** Cut to at most `max` bytes on a character boundary, with a marker naming what was left out. */
+/**
+ * Cut to at most `max` bytes INCLUDING the marker that names what was left
+ * out, on a code-point boundary (never half a surrogate pair).
+ */
 export function capBytes(text: string, max: number, what: string): string {
   const total = byteLength(text)
   if (total <= max) return text
-  let cut = text.slice(0, max)
-  while (byteLength(cut) > max) cut = cut.slice(0, -1)
-  return `${cut}\n[… ${what} truncated — ${total - byteLength(cut)} more bytes]`
+  const points = Array.from(text)
+  // The omitted count only shrinks as the kept part grows, so a marker sized
+  // for the worst case (everything omitted) always fits.
+  const budget = max - byteLength(`\n[… ${what} truncated — ${total} more bytes]`)
+  let kept = 0
+  let bytes = 0
+  while (kept < points.length) {
+    const next = byteLength(points[kept]!)
+    if (bytes + next > budget) break
+    bytes += next
+    kept += 1
+  }
+  const cut = points.slice(0, kept).join('')
+  return `${cut}\n[… ${what} truncated — ${total - bytes} more bytes]`
 }
 
 const SIGNAL_LINES: Record<StewardSignal['kind'], (refs: string) => string> = {
