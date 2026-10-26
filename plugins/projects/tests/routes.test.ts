@@ -454,6 +454,31 @@ describe('Routes', () => {
   // -------------------------------------------------------------------------
   // PUT /:projectId/checklist/:itemId/toggle — toggle item
   // -------------------------------------------------------------------------
+  describe('GET / resume signals (D18)', () => {
+    const question = { v: 1, id: 'q_0123456789abcdef', question: 'Which inbox?', options: [{ label: 'A' }, { label: 'B' }], allowOther: true }
+    const writeTranscript = (id: string, rows: unknown[]) => writeFileSync(join(projectsDir, `${id}.brainstorm.json`), JSON.stringify(rows))
+
+    it('reports an unanswered question, an unseen agent plan revision and derived done counts', async () => {
+      writeProjectFixture('proj-waiting', {
+        title: 'Waiting', tasks: [{ id: 't001', title: 'a', checked: true }, { id: 't002', title: 'b', checked: false }],
+        extra: { planRevision: 2, planUpdatedBy: 'agent' },
+      })
+      writeTranscript('proj-waiting', [
+        { kind: 'user', ts: '2026-10-25T00:00:00.000Z', content: 'help' },
+        { kind: 'tool', ts: '2026-10-25T00:00:01.000Z', toolName: 'bakin_exec_ask_user', status: 'completed', metadata: { bakinQuestion: question } },
+      ])
+      writeProjectFixture('proj-answered', { title: 'Answered' })
+      writeTranscript('proj-answered', [
+        { kind: 'tool', ts: '2026-10-25T00:00:01.000Z', toolName: 'bakin_exec_ask_user', status: 'completed', metadata: { bakinQuestion: question } },
+        { kind: 'user', ts: '2026-10-25T00:00:02.000Z', content: '**Which inbox?** → A' },
+      ])
+      const { body } = await callRoute(findRoute(plugin.routes, 'GET', '/')!, plugin.ctx, {})
+      const byId = Object.fromEntries((body.projects as Record<string, unknown>[]).map(p => [p.id, p]))
+      expect(byId['proj-waiting']).toMatchObject({ waitingForYou: true, planUpdated: true, doneCount: 1, taskCount: 2 })
+      expect(byId['proj-answered']).toMatchObject({ waitingForYou: false, planUpdated: false })
+    })
+  })
+
   describe('GET /:projectId/files (D17)', () => {
     it('derives produced files from linked and project tasks — deduped, nothing stored', async () => {
       writeProjectFixture('proj-files', {

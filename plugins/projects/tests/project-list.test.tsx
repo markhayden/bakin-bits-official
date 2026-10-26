@@ -145,6 +145,7 @@ const fixtureProjects = [
   {
     id: 'p1',
     title: 'Alpha Launch',
+    owner: 'main',
     status: 'active',
     progress: 50,
     taskCount: 3,
@@ -155,6 +156,7 @@ const fixtureProjects = [
   {
     id: 'p2',
     title: 'Beta Roadmap',
+    owner: 'scout',
     status: 'active',
     progress: 25,
     taskCount: 2,
@@ -164,9 +166,11 @@ const fixtureProjects = [
   {
     id: 'p3',
     title: 'Gamma Cleanup',
+    owner: 'main',
     status: 'draft',
     progress: 10,
     taskCount: 1,
+    doneCount: 0,
     updated: '2026-04-08T00:00:00Z',
   },
 ]
@@ -363,17 +367,26 @@ describe('ProjectList', () => {
     expect(fetchCalls.some(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toBe(false)
   })
 
-  it('preserves progress, item counts, and live brainstorm attention in each row', async () => {
+  it('All leaves archived projects out', async () => {
+    fixtureProjects.push({ id: 'p4', title: 'Old Archive', owner: 'main', status: 'archived', progress: 0, taskCount: 0, updated: '2026-01-01T00:00:00Z' } as typeof fixtureProjects[number])
+    try {
+      render(<ProjectList />)
+      const rows = within(await screen.findByRole('list', { name: 'Projects' })).getAllByRole('listitem')
+      expect(rows).toHaveLength(3)
+      expect(screen.queryByText('Old Archive')).toBeNull()
+    } finally {
+      fixtureProjects.pop()
+    }
+  })
+
+  it('each row shows ONE resume signal by priority', async () => {
     render(<ProjectList />)
     const rows = within(await screen.findByRole('list', { name: 'Projects' })).getAllByRole('listitem')
-    expect(within(rows[0]).getByRole('progressbar', { name: 'Alpha Launch progress' }).getAttribute('value')).toBe('50')
-    expect(within(rows[0]).getByText('50% complete')).toBeDefined()
-    expect(within(rows[0]).getByText('3 items')).toBeDefined()
-    expect(within(rows[0]).getByText(/^Updated /)).toBeDefined()
-    expect(within(rows[0]).getByRole('img', { name: 'Brainstorm reply in progress' })).toBeDefined()
-    expect(within(rows[0]).queryByRole('img', { name: 'Unseen brainstorm reply' })).toBeNull()
-    expect(within(rows[1]).getByRole('img', { name: 'Unseen brainstorm reply' })).toBeDefined()
-    expect(within(rows[2]).queryByRole('img')).toBeNull()
+    // Working outranks the unseen reply on the same project.
+    expect(within(rows[0]!).getByText('Main is working')).toBeDefined()
+    expect(within(rows[0]!).queryByText(/New reply/)).toBeNull()
+    expect(within(rows[1]!).getByText('New reply from Scout')).toBeDefined()
+    expect(within(rows[2]!).getByText('0 of 1 steps done')).toBeDefined()
   })
 
   it('shows row-shaped loading placeholders until the request finishes', () => {

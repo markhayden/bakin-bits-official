@@ -18,7 +18,7 @@ import {
 } from "@makinbakin/sdk/patterns"
 import { useQueryState, useRouter } from "@makinbakin/sdk/navigation"
 import { useSearch } from "@makinbakin/sdk/hooks"
-import { useDebug, usePluginEvent } from "@makinbakin/sdk/hooks"
+import { useAgentList, useDebug, usePluginEvent } from "@makinbakin/sdk/hooks"
 import { ProjectRow } from './project-row'
 import { StartScreen } from './start-screen'
 import type { ProjectSummary, ProjectStatus } from '../types'
@@ -28,6 +28,7 @@ interface ScoreInfo {
   indexScores?: Record<string, number>
 }
 
+// "All" leaves archived projects out; they have their own filter (D18).
 const STATUS_TABS: { label: string; value: ProjectStatus | 'all' }[] = [
   { label: 'All', value: 'all' },
   { label: 'Draft', value: 'draft' },
@@ -41,6 +42,10 @@ export function ProjectList() {
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // Every project the server returned, archived included — zero means none at all.
+  const [total, setTotal] = useState(0)
+  const agentList = useAgentList()
+  const agentNames = useMemo(() => new Map(agentList.map(agent => [agent.id, agent.name ?? agent.id])), [agentList])
   const [deleteTarget, setDeleteTarget] = useState<ProjectSummary | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -63,7 +68,8 @@ export function ProjectList() {
       const data = await res.json()
       if (!Array.isArray(data.projects)) throw new Error('The project list response was invalid. Please retry.')
       if (requestVersion === listRequestVersion.current) {
-        setProjects(data.projects)
+        setProjects(status === 'all' ? data.projects.filter((project: ProjectSummary) => project.status !== 'archived') : data.projects)
+        setTotal(data.projects.length)
         setLoadError(null)
       }
     } catch (err) {
@@ -87,6 +93,8 @@ export function ProjectList() {
   usePluginEvent('projects.brainstorm.done', () => { void fetchProjects() })
   usePluginEvent('projects.brainstorm.error', () => { void fetchProjects() })
   usePluginEvent('projects.brainstorm.seen', () => { void fetchProjects() })
+  // Plan revisions and board-driven step changes move the resume signal.
+  usePluginEvent('projects.changed', () => { void fetchProjects() })
   usePluginEvent('projects.brainstorm.chunk', (payload) => {
     const id = String(payload.projectId ?? '')
     if (id && !projects.some(p => p.id === id && p.brainstormStreaming)) void fetchProjects()
@@ -140,6 +148,7 @@ export function ProjectList() {
       listRequestVersion.current += 1
       setLoading(false)
       setProjects(current => current.filter(project => project.id !== deleteTarget.id))
+      setTotal(current => Math.max(0, current - 1))
       setDeleteTarget(null)
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : 'Could not delete project. Please try again.')
@@ -149,7 +158,7 @@ export function ProjectList() {
   }
 
   // No projects at all: the list IS the start screen (D18).
-  if (!loading && !loadError && status === 'all' && !search && projects.length === 0) {
+  if (!loading && !loadError && status === 'all' && !search && total === 0) {
     return <StartScreen />
   }
 
@@ -231,8 +240,8 @@ export function ProjectList() {
             <SystemState
               kind="initial-empty"
               scope="section"
-              title={status === 'all' ? 'No projects yet' : `No ${status} projects`}
-              description={status === 'all' ? 'Create one to get started.' : 'Projects with this status will appear here.'}
+              title={status === 'all' ? 'Nothing in progress' : `No ${status} projects`}
+              description={status === 'all' ? 'Only archived projects remain. Start something new, or look under Archived.' : 'Projects with this status will appear here.'}
               action={status === 'all' ? (
                 <Button onClick={handleNew}>
                   <Plus className="size-bakin-4" />
@@ -250,6 +259,7 @@ export function ProjectList() {
                 <ProjectRow
                   key={p.id}
                   project={p}
+                  leadName={agentNames.get(p.owner) ?? (p.owner || 'The lead')}
                   onClick={() => router.push(`/projects/${p.id}`)}
                   onDelete={(trigger) => {
                     deleteTriggerRef.current = trigger

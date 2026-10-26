@@ -399,6 +399,9 @@ const projectsPlugin: BakinPlugin = {
           ...projectToSummary(p),
           brainstormUnread: hasUnseenBrainstormReply(p.id),
           brainstormStreaming: inflight.has(p.id),
+          doneCount: p.tasks.filter(task => task.checked).length,
+          waitingForYou: repo.readWaitingForUser(p.id),
+          planUpdated: p.planUpdatedBy === 'agent' && p.planRevision > repo.readSeen(p.id).planSeenRevision,
         })),
       })
     }

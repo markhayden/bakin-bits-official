@@ -6,6 +6,7 @@
  */
 import type { StorageAdapter } from '@makinbakin/sdk/types'
 import { dump, load } from 'js-yaml'
+import { parseBakinQuestion } from '@makinbakin/sdk/utils'
 import { z } from 'zod'
 import { TITLE_SOURCES, type PlanSnapshot, type Project, type ProjectFrontmatter, type ProjectTask, type ProjectAsset, type ProjectBrainstormMessage, type ProjectSeen, type ProjectSummary, type TitleSource } from '../types'
 
@@ -185,6 +186,8 @@ export interface ProjectRepository {
   /** Merge fields into the seen sidecar — brainstorm and plan views share it. */
   updateSeen(id: string, patch: Partial<ProjectSeen>): void
   readLastAgentActivityTs(id: string): string | null
+  /** The transcript ends on an open question card (no user reply after it). */
+  readWaitingForUser(id: string): boolean
   readPlanHistory(id: string): PlanSnapshot[]
   /** Append one snapshot; retention keeps the newest PLAN_HISTORY_CAP plus the seen baseline. */
   appendPlanSnapshot(id: string, snapshot: PlanSnapshot): void
@@ -205,7 +208,7 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
   // The attention endpoint polls every project's transcript for its last
   // agent-activity timestamp — cache it against the sidecar's mtime+size so
   // steady-state polls never re-read/re-parse full transcripts (bakin#706).
-  const lastAgentTsCache = new Map<string, { mtimeMs: number; size: number; ts: string | null }>()
+  const lastAgentTsCache = new Map<string, { mtimeMs: number; size: number; ts: string | null; waiting: boolean }>()
 
   // Local so sibling methods can call them after destructuring (no `this`).
   function readBrainstormMessages(id: string): ProjectBrainstormMessage[] {
@@ -220,6 +223,26 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
     } catch {
       return []
     }
+  }
+
+  /** Attention facts from one transcript read, cached against mtime+size. */
+  function transcriptSignals(id: string): { ts: string | null; waiting: boolean } {
+    const path = projectBrainstormPath(id)
+    const stat = storage.stat?.(path)
+    if (!stat) {
+      lastAgentTsCache.delete(id)
+      return { ts: null, waiting: false }
+    }
+    const cached = lastAgentTsCache.get(id)
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached
+    const rows = readBrainstormMessages(id)
+    const ts = [...rows].reverse().find(r => r.kind === 'assistant' || r.kind === 'error')?.ts ?? null
+    let lastUser = -1
+    for (let i = rows.length - 1; i >= 0; i--) if (rows[i]!.kind === 'user') { lastUser = i; break }
+    const waiting = rows.slice(lastUser + 1).some(row => row.kind === 'tool' && parseBakinQuestion(row.metadata?.bakinQuestion) !== null)
+    const entry = { mtimeMs: stat.mtimeMs, size: stat.size, ts, waiting }
+    lastAgentTsCache.set(id, entry)
+    return entry
   }
 
   function readSeen(id: string): ProjectSeen {
@@ -292,18 +315,11 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
 
     /** Timestamp of the last assistant/error row, mtime-cached. */
     readLastAgentActivityTs(id: string): string | null {
-      const path = projectBrainstormPath(id)
-      const stat = storage.stat?.(path)
-      if (!stat) {
-        lastAgentTsCache.delete(id)
-        return null
-      }
-      const cached = lastAgentTsCache.get(id)
-      if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.ts
-      const rows = readBrainstormMessages(id)
-      const ts = [...rows].reverse().find(r => r.kind === 'assistant' || r.kind === 'error')?.ts ?? null
-      lastAgentTsCache.set(id, { mtimeMs: stat.mtimeMs, size: stat.size, ts })
-      return ts
+      return transcriptSignals(id).ts
+    },
+
+    readWaitingForUser(id: string): boolean {
+      return transcriptSignals(id).waiting
     },
 
     readPlanHistory,

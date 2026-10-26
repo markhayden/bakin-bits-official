@@ -110,6 +110,12 @@ export interface ProjectSummary {
   /** Brainstorm attention (bakin#703): unseen agent reply / turn running. */
   brainstormUnread?: boolean
   brainstormStreaming?: boolean
+  /** Resume signals (D18). */
+  doneCount?: number
+  /** The lead asked a question the user has not answered. */
+  waitingForYou?: boolean
+  /** An agent revised the plan since the user last looked. */
+  planUpdated?: boolean
 }
 
 

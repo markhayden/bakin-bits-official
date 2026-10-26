@@ -2,21 +2,39 @@
 
 import { useRef, type ReactNode } from 'react'
 import { Ellipsis, Trash } from 'lucide-react'
-import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Progress, Text } from '@makinbakin/sdk/ui'
+import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Text } from '@makinbakin/sdk/ui'
 import { Inline, Stack } from '@makinbakin/sdk/layout'
 import { ListRow, ListRowActions, StatusMarker } from '@makinbakin/sdk/patterns'
 import { formatAge } from '@makinbakin/sdk/utils'
 import { ProjectStatusBadge } from './project-status-badge'
 import type { ProjectSummary } from '../types'
 
-export function ProjectRow({ project, onClick, onDelete, scoreOverlay }: {
+type Tone = 'neutral' | 'accent' | 'attention'
+
+/**
+ * The ONE resume signal a row shows (D18), by priority: the lead is waiting
+ * on you › the lead is working › a new reply › the plan changed › progress.
+ */
+export function resumeSignal(project: ProjectSummary, leadName: string): { text: string; tone: Tone; pulse?: boolean } {
+  if (project.waitingForYou) return { text: 'Waiting for you', tone: 'attention' }
+  if (project.brainstormStreaming) return { text: `${leadName} is working`, tone: 'accent', pulse: true }
+  if (project.brainstormUnread) return { text: `New reply from ${leadName}`, tone: 'attention' }
+  if (project.planUpdated) return { text: 'Plan updated', tone: 'accent' }
+  if (!project.taskCount) return { text: 'No steps yet', tone: 'neutral' }
+  return { text: `${project.doneCount ?? 0} of ${project.taskCount} steps done`, tone: 'neutral' }
+}
+
+export function ProjectRow({ project, leadName, onClick, onDelete, scoreOverlay }: {
   project: ProjectSummary
+  /** The lead agent's display name. */
+  leadName: string
   onClick: () => void
   onDelete: (trigger: HTMLButtonElement | null) => void
   scoreOverlay?: ReactNode
 }) {
   const title = project.title || 'Untitled project'
   const actionsRef = useRef<HTMLButtonElement>(null)
+  const signal = resumeSignal(project, leadName)
   return (
     <ListRow
       interactive={{ label: `Open project: ${title}`, onActivate: onClick }}
@@ -27,11 +45,6 @@ export function ProjectRow({ project, onClick, onDelete, scoreOverlay }: {
             {title}
           </Text>
           <Inline gap="dense" wrap={false} className="shrink-0">
-            {project.brainstormStreaming ? (
-              <StatusMarker tone="accent" label="Brainstorm reply in progress" className="animate-pulse motion-reduce:animate-none" />
-            ) : project.brainstormUnread ? (
-              <StatusMarker tone="attention" label="Unseen brainstorm reply" />
-            ) : null}
             <ProjectStatusBadge status={project.status} />
             <ListRowActions>
               <DropdownMenu>
@@ -49,10 +62,11 @@ export function ProjectRow({ project, onClick, onDelete, scoreOverlay }: {
           </Inline>
         </Inline>
         <Inline gap="item">
-          <Text size="meta" tone="muted">{project.taskCount} items</Text>
-          <Inline gap="dense" wrap={false}>
-            <Progress value={project.progress} aria-label={`${title} progress`} className="w-[calc(var(--bakin-layout-space-8)*3)]" />
-            <Text size="meta" tone="muted">{project.progress}% complete</Text>
+          <Inline gap="dense" wrap={false} data-resume-signal="">
+            {signal.tone !== 'neutral' ? (
+              <StatusMarker tone={signal.tone} className={signal.pulse ? 'animate-pulse motion-reduce:animate-none' : undefined} />
+            ) : null}
+            <Text size="meta" tone={signal.tone === 'neutral' ? 'muted' : 'default'}>{signal.text}</Text>
           </Inline>
           <Text size="meta" tone="muted">Updated {formatAge(project.updated)}</Text>
         </Inline>
