@@ -1,23 +1,27 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { transformPluginCss } from '@makinbakin/sdk/testing/ui/conformance'
 import { TerminalService, terminalEnvironment } from '../lib/service'
+import { tmuxConfig } from '../lib/tmux-config'
 import { TmuxProcesses } from '../lib/processes'
 import { Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
 import { command, failure, human, stream } from '../lib/http'
 
 const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-preview-'))
+// Terminal runs only the managed tmux: give the disposable home one
+// (TERMINAL_TMUX, else the tmux on PATH) and the generated configuration.
+const managed = process.env.TERMINAL_TMUX ?? Bun.which('tmux')
+if (!managed) throw new Error('tmux is required for the local Terminal preview (set TERMINAL_TMUX)')
+process.env.BAKIN_HOME = join(root, 'home')
+mkdirSync(join(root, 'home', 'bin'), { recursive: true })
+symlinkSync(managed, join(root, 'home', 'bin', 'tmux'))
 const service = new TerminalService(root)
-if (!service.tmux) throw new Error('tmux is required for the local Terminal preview')
-const tmux = Bun.spawn([service.tmux, '-D', '-S', service.socket, '-f', '/dev/null'], { env: terminalEnvironment(), stdout: 'ignore', stderr: 'ignore' })
+writeFileSync(join(root, 'tmux.conf'), tmuxConfig())
+const tmux = Bun.spawn([service.tmux!, '-D', '-S', service.socket, '-f', join(root, 'tmux.conf')], { env: terminalEnvironment(), stdout: 'ignore', stderr: 'ignore' })
 for (let i = 0; i < 40 && !await service.ready(); i++) await Bun.sleep(50)
 if (!await service.ready()) { tmux.kill(); await tmux.exited; throw new Error('Preview tmux service failed to start') }
-await service.command(['set-option', '-g', 'exit-empty', 'off'])
-await service.command(['set-option', '-g', 'remain-on-exit', 'on'])
-await service.command(['set-option', '-g', 'status', 'off'])
-await service.command(['set-option', '-g', 'prefix', 'None'])
 const manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProcesses(service), {
   settings: () => ({ enabledAgents: [{ id: 'patch' }] }),
   prepare: async () => ({ ok: false, error: 'Preview has no Git plugin. Use an existing checkout.' }),

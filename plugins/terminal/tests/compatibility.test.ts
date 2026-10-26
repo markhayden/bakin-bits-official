@@ -19,6 +19,6 @@ test('Terminal requires the Bakin release with the host-provided zod contract (r
 
 test('the manifest, package.json and the plugin definition carry one version', async () => {
   const { default: plugin } = await import('../index')
-  expect(pkg.version).toBe(manifest.version)
-  expect(plugin.version).toBe(manifest.version)
+  const versions: string[] = [pkg.version, plugin.version]
+  expect(versions).toEqual([manifest.version, manifest.version])
 })
