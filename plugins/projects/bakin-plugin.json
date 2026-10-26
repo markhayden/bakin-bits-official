@@ -1,7 +1,7 @@
 {
   "id": "projects",
   "name": "Projects",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "bakin": ">=0.0.1-rc.45",
   "description": "Project management with specs, checklists, task linking, and agent access via MCP tools",
   "contentFiles": [],
@@ -52,10 +52,6 @@
       {
         "path": "/projects/[id]",
         "summary": "Project detail"
-      },
-      {
-        "path": "/projects/[id]/edit",
-        "summary": "Edit project"
       }
     ],
     "clientRoutes": [
