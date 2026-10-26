@@ -1,6 +1,6 @@
 import { mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
-import { definePlugin, defineRoute } from '@makinbakin/sdk'
+import { definePlugin, defineRoute, defineSocketRoute } from '@makinbakin/sdk'
 import type { PluginContext, PluginToolContext, HealthObservationInput } from '@makinbakin/sdk/types'
 import { z } from 'zod'
 import { Store } from './lib/store'
@@ -10,6 +10,7 @@ import { Sessions } from './lib/sessions'
 import { TerminalError, terminalSettings, type Principal } from './lib/contracts'
 import { command, failure, human, stream } from './lib/http'
 import { sessionOptions } from './lib/session-options'
+import { TerminalViewer } from './lib/socket'
 
 let manager: Sessions | undefined
 let service: TerminalService | undefined
@@ -53,6 +54,17 @@ export default definePlugin({
       return Response.json(sessions().output(url.searchParams.get('id') ?? '', principal, cursor))
     }),
     route('/service', 'POST', 'Set up the persistent terminal service', async (request) => { human(request); await sessions().setupService(() => service!.install()); return Response.json({ ready: true }) }),
+  ],
+  socketRoutes: [
+    defineSocketRoute({
+      path: '/socket',
+      summary: 'Live terminal output and input for one viewer',
+      admit: (request) => {
+        const id = new URL(request.url).searchParams.get('id') ?? ''
+        if (!manager?.store.sessions().some((session) => session.id === id)) return Response.json({ error: 'Session not found' }, { status: 404 })
+      },
+      open: (socket, request) => { new TerminalViewer(sessions(), socket, new URL(request.url).searchParams.get('id')!) },
+    }),
   ],
   settingsSchema: { fields: [
     { key: 'enabledAgents', label: 'Enable terminal access', description: 'Enabled agents can open and operate terminal sessions. A session is a real shell running as your user, so an enabled agent can read any file you can — including stored API keys and credentials. Enable only agents you trust with full access to this machine.', type: 'agent-toggles', default: ['main'] },

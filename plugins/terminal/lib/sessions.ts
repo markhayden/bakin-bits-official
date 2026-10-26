@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
 import { relative, isAbsolute } from 'node:path'
-import { authorize, createSchema, DAY, TerminalError, type CreateInput, type Principal, type Session, type TerminalSettings } from './contracts'
+import { authorize, createSchema, DAY, DeliveryUncertainError, TerminalError, type CreateInput, type Principal, type Session, type TerminalSettings } from './contracts'
 import type { ProcessDriver } from './processes'
 import { Screen } from './screen'
 import { Store } from './store'
@@ -19,9 +19,24 @@ export class Sessions {
   private pending: Promise<unknown> = Promise.resolve()
   private screens = new Map<string, Screen>()
   private outputListeners = new Map<string, Set<() => void>>()
+  private sessionListeners = new Map<string, Set<(session: Session) => void>>()
   private closed = false
   constructor(readonly store: Store, private driver: ProcessDriver, private options: SessionOptions) {}
   private now(): number { return this.options.now?.() ?? Date.now() }
+  /** Persist and tell live viewers (ownership, size and state reach them at once). */
+  private save(session: Session): void {
+    this.store.save(session)
+    for (const listener of this.sessionListeners.get(session.id) ?? []) listener(session)
+  }
+  onSessionChange(id: string, listener: (session: Session) => void): () => void {
+    let listeners = this.sessionListeners.get(id)
+    if (!listeners) this.sessionListeners.set(id, listeners = new Set())
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+      if (!listeners.size) this.sessionListeners.delete(id)
+    }
+  }
   private enabled(): string[] { return (this.options.settings().enabledAgents ?? []).map((agent) => agent.id) }
   private run<T>(work: () => Promise<T>): Promise<T> {
     const next = this.pending.then(() => { if (this.closed) throw new TerminalError('Terminal manager is shutting down', 503); return work() })
@@ -78,7 +93,7 @@ export class Sessions {
       for (const session of this.store.sessions()) {
         if (session.state === 'running' && !await this.driver.alive(session.id)) {
           session.state = 'exited'
-          this.store.save(session)
+          this.save(session)
         }
       }
     })
@@ -143,10 +158,10 @@ export class Sessions {
       }
       // Persist ownership before spawning so failed launches retain discoverable work.
       session.state = 'exited'
-      this.store.save(session)
+      this.save(session)
       await this.driver.create(session)
       session.state = 'running'
-      this.store.save(session)
+      this.save(session)
       this.attach(session)
       return session
     })
@@ -167,24 +182,37 @@ export class Sessions {
       session.generation++
       session.inputSequence = 0
       session.lastActivityAt = this.now()
-      this.store.save(session)
+      this.save(session)
       return session
     })
   }
   write(id: string, principal: Principal, generation: number, sequence: number, data: string): Promise<Session> {
-    return this.run(async () => {
-      const session = this.get(id, principal)
-      authorize(session, principal, this.enabled(), true, generation)
-      if (session.state !== 'running') throw new TerminalError('Session has exited')
-      if (sequence !== session.inputSequence + 1) throw new TerminalError('Input sequence is stale or out of order; do not retry ambiguous input')
-      if (Buffer.byteLength(data) > 65536) throw new TerminalError('Input exceeds 64 KiB', 413)
-      // Consume the sequence before delivery. A transport failure is never auto-retried.
-      session.inputSequence = sequence
-      session.lastActivityAt = this.now()
-      this.store.save(session)
+    return this.run(() => this.writeUnlocked(id, principal, generation, sequence, data))
+  }
+  /**
+   * Viewer input: the server assigns the next sequence inside the queue, so
+   * several writable viewers never collide on it. Agents keep `write`'s
+   * explicit sequence.
+   */
+  writeNext(id: string, principal: Principal, generation: number, data: string): Promise<Session> {
+    return this.run(() => this.writeUnlocked(id, principal, generation, this.get(id, principal).inputSequence + 1, data))
+  }
+  private async writeUnlocked(id: string, principal: Principal, generation: number, sequence: number, data: string): Promise<Session> {
+    const session = this.get(id, principal)
+    authorize(session, principal, this.enabled(), true, generation)
+    if (session.state !== 'running') throw new TerminalError('Session has exited')
+    if (sequence !== session.inputSequence + 1) throw new TerminalError('Input sequence is stale or out of order; do not retry ambiguous input')
+    if (Buffer.byteLength(data) > 65536) throw new TerminalError('Input exceeds 64 KiB', 413)
+    // Consume the sequence before delivery. A transport failure is never auto-retried.
+    session.inputSequence = sequence
+    session.lastActivityAt = this.now()
+    this.save(session)
+    try {
       await this.driver.write(id, data)
-      return session
-    })
+    } catch (error) {
+      throw new DeliveryUncertainError(error instanceof Error ? error.message : String(error))
+    }
+    return session
   }
   resize(id: string, principal: Principal, generation: number, cols: number, rows: number): Promise<Session> {
     return this.run(async () => {
@@ -195,7 +223,7 @@ export class Sessions {
       await this.driver.resize(id, cols, rows)
       this.screens.get(id)?.resize(cols, rows)
       session.cols = cols; session.rows = rows
-      this.store.save(session)
+      this.save(session)
       return session
     })
   }
@@ -213,7 +241,7 @@ export class Sessions {
       await this.stopScreen(id)
       session.state = 'completed'
       session.completedAt = this.now()
-      this.store.save(session)
+      this.save(session)
       await this.clean(session)
       return session
     })
@@ -230,11 +258,15 @@ export class Sessions {
     this.get(id, principal)
     return text
   }
-  output(id: string, principal: Principal, cursor: number) {
+  /** One bounded page of stored output after `cursor`, as bytes (at least one stored chunk, else at most `limit` bytes). */
+  outputPage(id: string, principal: Principal, cursor: number, limit?: number): { session: Session; cursor: number; data: Buffer; truncated: boolean } {
     const session = this.get(id, principal)
     if (session.state === 'running' && (!this.driver.connected(id) || this.screens.get(id)?.failed)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
-    const output = this.store.output(id, cursor)
-    return { session, ...output, data: output.data.toString('base64') }
+    return { session, ...this.store.output(id, cursor, limit) }
+  }
+  output(id: string, principal: Principal, cursor: number) {
+    const page = this.outputPage(id, principal, cursor)
+    return { ...page, data: page.data.toString('base64') }
   }
   deleteHistory(id: string, principal: Principal): Promise<void> {
     return this.run(() => this.deleteHistoryUnlocked(id, principal))
@@ -246,7 +278,7 @@ export class Sessions {
     await this.stopScreen(id)
     this.store.deleteOutput(id)
     session.historyDeleted = true
-    this.store.save(session)
+    this.save(session)
   }
   deleteSession(id: string, principal: Principal): Promise<void> {
     return this.run(async () => {
@@ -276,7 +308,7 @@ export class Sessions {
       if (result?.ok) { delete session.worktreePath; delete session.cleanupReason }
       else session.cleanupReason = result?.error ?? 'Git cleanup could not be verified'
     }
-    this.store.save(session)
+    this.save(session)
   }
   private async sweepUnlocked(): Promise<void> {
     for (const session of this.store.sessions()) {
@@ -286,7 +318,7 @@ export class Sessions {
           await this.stopScreen(session.id)
           session.state = 'completed'
           session.completedAt = this.now()
-          this.store.save(session)
+          this.save(session)
         }
       }
       if (session.state === 'completed') await this.clean(session)
@@ -306,7 +338,7 @@ export class Sessions {
         if (await this.driver.alive(session.id)) {
           await this.driver.title(session)
           this.attach(session)
-        } else { session.state = 'exited'; this.store.save(session) }
+        } else { session.state = 'exited'; this.save(session) }
       }
     })
   }

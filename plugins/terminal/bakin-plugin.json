@@ -47,6 +47,7 @@
       { "method": "GET", "path": "/history", "summary": "Read bounded terminal history" },
       { "method": "POST", "path": "/service", "summary": "Set up the terminal service" }
     ],
+    "socketRoutes": [{ "path": "/socket", "summary": "Live terminal output and input for one viewer" }],
     "routes": [{ "path": "/terminal", "summary": "Terminal workspace" }, { "path": "/terminal/[sessionId]", "summary": "Terminal session" }],
     "clientRoutes": [{ "path": "/terminal", "summary": "Terminal workspace" }, { "path": "/terminal/[sessionId]", "summary": "Terminal session" }],
     "nav": [{ "id": "terminal", "label": "Terminal", "icon": "Terminal", "href": "/terminal", "order": 210, "section": "create" }],

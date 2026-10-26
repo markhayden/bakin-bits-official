@@ -956,6 +956,25 @@ declare module '@makinbakin/sdk/types' {
     contentFiles?: ContentFile[]
     /** Declarative HTTP routes, registered before activate() (host #642). */
     routes?: APIRoute[]
+    /** Declarative WebSocket routes (bakin #1029), registered like `routes`. */
+    socketRoutes?: SocketRoute[]
+  }
+
+  /** One accepted plugin WebSocket connection (bakin #1029). No host send bound: acknowledge at the protocol level. */
+  export interface PluginSocket {
+    /** `false` once the connection is closed. */
+    send(data: string | Uint8Array): boolean
+    onMessage(listener: (data: string | Uint8Array) => void): void
+    onClose(listener: (code: number, reason: string) => void): void
+    close(code?: number, reason?: string): void
+  }
+  export interface SocketRoute {
+    /** Plugin-relative; served at /api/plugins/{pluginId}{path}. */
+    path: string
+    summary: string
+    /** After the host's same-origin check; return a Response to refuse the upgrade. */
+    admit?(request: Request): Response | void | Promise<Response | void>
+    open(socket: PluginSocket, request: Request): void | Promise<void>
   }
 }
 
@@ -981,6 +1000,8 @@ declare module '@makinbakin/sdk' {
   export function defineRoute<R extends import('@makinbakin/sdk/types').APIRoute>(route: R): R
   /** Plugin author helper preserving per-route inference — identity at runtime. */
   export function definePlugin<P extends import('@makinbakin/sdk/types').BakinPlugin>(plugin: P): P
+  /** Declare a plugin WebSocket route (bakin #1029) — identity at runtime. */
+  export function defineSocketRoute(route: import('@makinbakin/sdk/types').SocketRoute): import('@makinbakin/sdk/types').SocketRoute
   export function unregisterPlugin(id: string): void
   export function getAllNavItems(): NavItem[]
   /** Set or clear a runtime badge on a plugin-owned nav item (bakin #265). */

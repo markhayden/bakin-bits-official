@@ -51,6 +51,10 @@ export function defineRoute(route) {
   return route
 }
 
+export function defineSocketRoute(route) {
+  return route
+}
+
 export function definePlugin(plugin) {
   return plugin
 }
