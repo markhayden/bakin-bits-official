@@ -83,6 +83,13 @@ describe('ControlClient', () => {
     expect(client.isClosed).toBe(true)
   })
 
+  it('closes a connection whose attach is never answered', async () => {
+    const { transport } = fakeTransport()
+    const client = new ControlClient(transport, () => {}, 20)
+    await expect(client.ready).rejects.toThrow('closed')
+    expect(client.isClosed).toBe(true)
+  })
+
   it('rejects a failed command with tmux\'s message', async () => {
     const { transport } = fakeTransport()
     const client = new ControlClient(transport, () => {})

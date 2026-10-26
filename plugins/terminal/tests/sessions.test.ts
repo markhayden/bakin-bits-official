@@ -567,3 +567,44 @@ test('a confirm whose admission pass fails is refused, not left waiting', async 
   driver.setReadonly = async () => { throw new Error('server busy') }
   await expect(manager.confirmAttach(reserved.token, 951)).rejects.toThrow('Could not admit this terminal: server busy')
 })
+
+test('the admitted app is sized even when another client fails in the same pass', async () => {
+  const { manager, natives, nativeAttach, tmuxSizes } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  const confirmed = manager.confirmAttach(reserved.token, 961)
+  await manager.idle()
+  const driver = (manager as unknown as { driver: { detachClient(name: string): Promise<void> } }).driver
+  driver.detachClient = async () => { throw new Error('server busy') }
+  natives.set(session.id, [{ ...ghostty(962, 80, 24, false), control: true, name: 'stuck' }])
+  await nativeAttach(session.id, ghostty(961, 120, 40))
+  await confirmed
+  expect(tmuxSizes.get(session.id)).toEqual({ cols: 120, rows: 40 })
+  expect([manager.get(session.id, human).cols, manager.get(session.id, human).rows]).toEqual([120, 40])
+})
+
+test('an admission whose size claim cannot be saved is revoked: detached and refused', async () => {
+  const { manager, natives, detachedClients } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  natives.set(session.id, [ghostty(971)])
+  const store = manager.store as unknown as { save(session: unknown): void }
+  const save = store.save.bind(store)
+  store.save = () => { throw new Error('disk full') }
+  await expect(manager.confirmAttach(reserved.token, 971)).rejects.toThrow('Could not admit this terminal: disk full')
+  store.save = save
+  expect(manager.nativeClients(session.id)).toEqual([])
+  expect(detachedClients).toEqual(['/dev/ttys001'])
+})
+
+test('a viewer listener that throws does not stop an admission', async () => {
+  const { manager, natives } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  manager.onSessionChange(session.id, () => { throw new Error('viewer gone') })
+  manager.onNatives(session.id, () => { throw new Error('viewer gone') })
+  const reserved = await manager.reserveAttach(session.id, operator)
+  natives.set(session.id, [ghostty(981)])
+  await manager.confirmAttach(reserved.token, 981)
+  expect(manager.nativeClients(session.id).map((client) => client.pid)).toEqual([981])
+  expect(manager.get(session.id, human).sizeAuthority).toEqual({ viewer: 'native:981', kind: 'native' })
+})

@@ -20,6 +20,12 @@ interface Reservation {
   settle?: { resolve(): void; reject(error: Error): void }
 }
 const nativeViewer = (pid: number) => `native:${pid}`
+/** Tell every listener; one that throws never stops the rest or the caller's bookkeeping. */
+function notify<T>(listeners: Iterable<T> | undefined, call: (listener: T) => void): void {
+  for (const listener of listeners ?? []) {
+    try { call(listener) } catch { /* a viewer's failure is its own (it resyncs) */ }
+  }
+}
 /** The creating screen's grid and what kind of screen it is (it holds the size claim). */
 export type StartSize = { cols: number; rows: number } & SizeClaimant
 
@@ -48,7 +54,7 @@ export class Sessions {
   /** Persist and tell live viewers (ownership, size and state reach them at once). */
   private save(session: Session): void {
     this.store.save(session)
-    for (const listener of this.sessionListeners.get(session.id) ?? []) listener(session)
+    notify(this.sessionListeners.get(session.id), (listener) => listener(session))
   }
   onSessionChange(id: string, listener: (session: Session) => void): () => void {
     let listeners = this.sessionListeners.get(id)
@@ -432,48 +438,56 @@ export class Sessions {
     const present = await this.driver.clients(id)
     // Admitted clients still attached stay admitted whatever happens below.
     const next = new Map(present.filter((client) => admitted.has(client.pid)).map((client) => [client.pid, client]))
-    const spent: string[] = []
-    let newest: NativeClient | undefined
-    try {
-      for (const client of present) {
-        if (admitted.has(client.pid)) continue
+    const fresh: Array<{ client: NativeClient; token: string }> = []
+    // One client failing never stops the others (or the sizing below); the first failure is rethrown at the end.
+    let failure: unknown
+    for (const client of present) {
+      if (admitted.has(client.pid)) continue
+      try {
         const match = client.control ? undefined : [...this.reservations].find(([, reservation]) => reservation.sessionId === id && reservation.pid === client.pid && reservation.generation === session.generation)
         if (match && session.owner.kind === 'human') {
           // Launched read-only; admitted, it types.
           if (!await this.onClient(id, client, () => this.driver.setReadonly(id, client, false))) continue
           next.set(client.pid, { ...client, readonly: false })
-          newest = client
-          spent.push(match[0])
+          fresh.push({ client, token: match[0] })
           continue
         }
         const pending = [...this.reservations.values()].some((reservation) => reservation.sessionId === id && reservation.pid === undefined)
         // A confirm is on its way: hold the terminal client, unable to type, until then.
         if (pending && !client.control) await this.onClient(id, client, () => this.driver.setReadonly(id, client, true))
         else await this.onClient(id, client, () => this.driver.detachClient(client.name))
-      }
-    } finally {
-      // Commit whatever was admitted (even if a later client failed), with
-      // its size claim, before telling the confirms and the viewers.
-      this.natives.set(id, next)
-      // The newest admitted app claims the size.
-      if (newest) {
+      } catch (error) { failure ??= error }
+    }
+    // The newest admitted app claims the size. The claim must persist, or those admissions are revoked.
+    const newest = fresh.at(-1)?.client
+    if (newest) {
+      try {
         Object.assign(session, claimSize(session, nativeViewer(newest.pid), { kind: 'native' }))
         this.save(session)
+      } catch (error) {
+        failure ??= error
+        for (const { client, token } of fresh.splice(0)) {
+          next.delete(client.pid)
+          await this.driver.detachClient(client.name).catch(() => undefined)
+          this.dropReservation(token, `Could not admit this terminal: ${error instanceof Error ? error.message : String(error)}`)
+        }
       }
-      for (const token of spent) this.dropReservation(token)
-      const changed = next.size !== admitted.size || [...next].some(([pid, client]) => {
-        const before = admitted.get(pid)
-        return !before || before.cols !== client.cols || before.rows !== client.rows
-      })
-      if (changed) for (const listener of this.nativeListeners.get(id) ?? []) listener()
     }
+    this.natives.set(id, next)
+    for (const { token } of fresh) this.dropReservation(token)
     // The app holding the claim is followed.
     const authority = session.sizeAuthority
     const sizer = authority?.kind === 'native' ? [...next.values()].find((client) => nativeViewer(client.pid) === authority.viewer) : undefined
     if (sizer) {
       const size = clampSize(sizer.cols, sizer.rows)
-      await this.applySize(session, size.cols, size.rows)
+      try { await this.applySize(session, size.cols, size.rows) } catch (error) { failure ??= error }
     }
+    const changed = next.size !== admitted.size || [...next].some(([pid, client]) => {
+      const before = admitted.get(pid)
+      return !before || before.cols !== client.cols || before.rows !== client.rows
+    })
+    if (changed) notify(this.nativeListeners.get(id), (listener) => listener())
+    if (failure !== undefined) throw failure
   }
   /** Act on one client; false when it left meanwhile (tmux no longer lists it). Anything else is a real failure. */
   private async onClient(id: string, client: NativeClient, action: () => Promise<void>): Promise<boolean> {
@@ -513,7 +527,7 @@ export class Sessions {
     this.dropReservations(id, 'The session changed; run the command again')
     const had = this.natives.get(id)?.size
     this.natives.delete(id)
-    if (had) for (const listener of this.nativeListeners.get(id) ?? []) listener()
+    if (had) notify(this.nativeListeners.get(id), (listener) => listener())
   }
   finish(id: string, principal: Principal, _generation: number, terminate: boolean): Promise<Session> {
     return this.run(async () => {

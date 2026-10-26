@@ -80,7 +80,9 @@ export class ControlClient {
       else next.reject(new ControlError(lines.join('\n') || 'Terminal command failed'))
     }, onNotification)
     this.ready = new Promise<void>((resolve, reject) => {
-      this.pending.push({ resolve: () => resolve(), reject })
+      // The attach is answered like a command, and times out like one.
+      const timer = setTimeout(() => this.close(), this.timeoutMs)
+      this.pending.push({ resolve: () => { clearTimeout(timer); resolve() }, reject: (error) => { clearTimeout(timer); reject(error) } })
     })
     // An unawaited ready must not become an unhandled rejection on exit.
     this.ready.catch(() => undefined)
