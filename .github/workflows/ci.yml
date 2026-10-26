@@ -12,11 +12,12 @@ concurrency:
 
 env:
   # The ONE compatible Bakin SDK source both jobs build and verify against.
-  # zod externalization (bakin #948, PR #1015): the merge commit whose SDK
-  # makes zod a bare ~4.6.5 peer and whose host serves /vendor/zod.js — the
-  # contract this repo's CLIENT_EXTERNAL now matches (react19-sdk-focused-v2).
-  # Pin a reviewed commit, never a moving branch.
-  BAKIN_SDK_REF: a88603c4eea9352afcb507f050c54c2a38b6becd
+  # Projects revamp: Bakin P1 (structured questions, the conversation-width
+  # PageAside rail; #1031) plus the kit a11y fixes (#1032 — empty-state
+  # headingLevel, aria-hidden composer file input). Includes the zod
+  # externalization contract (#948). Pin a reviewed commit, never a moving
+  # branch.
+  BAKIN_SDK_REF: 7c0c3285ebd21045f8755cc53adb6cdce6e0da3e
 
 jobs:
   check:
