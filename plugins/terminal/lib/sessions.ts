@@ -458,22 +458,32 @@ export class Sessions {
       } catch (error) { failure ??= error }
     }
     const newest = fresh.at(-1)?.client
+    const admittedTokens: string[] = []
     if (newest) {
       // The newest admitted app claims the size and the session takes it on.
-      // Claim, record and resize succeed together, or those admissions are revoked.
+      // Claim, record and resize succeed together, or every fresh admission is revoked.
+      let sized = false
       try {
         Object.assign(session, claimSize(session, nativeViewer(newest.pid), { kind: 'native' }))
         const size = clampSize(newest.cols, newest.rows)
         await this.applySize(session, size.cols, size.rows)
-        // Only now can it type.
-        for (const { client } of fresh) {
-          await this.driver.setReadonly(id, client, false)
-          next.set(client.pid, { ...client, readonly: false })
-        }
+        sized = true
       } catch (error) {
         failure ??= error
-        for (const { client, token } of fresh.splice(0)) {
-          next.delete(client.pid)
+        for (const { client, token } of fresh) {
+          await this.driver.detachClient(client.name).catch(() => undefined)
+          this.dropReservation(token, `Could not admit this terminal: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+      // Only now can they type, each on its own: one leaving never costs another its admission.
+      if (sized) for (const { client, token } of fresh) {
+        try {
+          if (await this.onClient(id, client, () => this.driver.setReadonly(id, client, false))) {
+            next.set(client.pid, { ...client, readonly: false })
+            admittedTokens.push(token)
+          } else this.dropReservation(token, 'This terminal left before it was admitted; run the command again')
+        } catch (error) {
+          failure ??= error
           await this.driver.detachClient(client.name).catch(() => undefined)
           this.dropReservation(token, `Could not admit this terminal: ${error instanceof Error ? error.message : String(error)}`)
         }
@@ -489,8 +499,9 @@ export class Sessions {
         try { await this.applySize(session, size.cols, size.rows) } catch (error) { failure ??= error }
       }
     }
+    // Recorded first, then the confirms learn they were admitted.
     this.natives.set(id, next)
-    for (const { token } of fresh) this.dropReservation(token)
+    for (const token of admittedTokens) this.dropReservation(token)
     const changed = next.size !== admitted.size || [...next].some(([pid, client]) => {
       const before = admitted.get(pid)
       return !before || before.cols !== client.cols || before.rows !== client.rows

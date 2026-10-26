@@ -651,3 +651,23 @@ test('a fresh client stays read-only until its claim and resize are in place, an
   await expect(manager.confirmAttach(second.token, 996)).rejects.toThrow('Could not admit this terminal')
   expect(seen).not.toContain(false)
 })
+
+test('one fresh client leaving before it can type does not revoke another', async () => {
+  const { manager, natives } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const first = await manager.reserveAttach(session.id, operator)
+  const second = await manager.reserveAttach(session.id, operator)
+  const driver = (manager as unknown as { driver: { resize(id: string, cols: number, rows: number): Promise<void> } }).driver
+  const resize = driver.resize
+  // Both confirmed before either attaches; then both attach and 1001 closes while the session resizes.
+  const a = manager.confirmAttach(first.token, 1001)
+  const b = manager.confirmAttach(second.token, 1002)
+  await manager.idle()
+  driver.resize = async (...args) => { natives.set(session.id, natives.get(session.id)!.filter((client) => client.pid !== 1001)); return resize(...args) }
+  natives.set(session.id, [ghostty(1001), ghostty(1002, 110, 35)])
+  ;(manager as unknown as { clientsChanged(id: string): void }).clientsChanged(session.id)
+  await expect(a).rejects.toThrow('left before it was admitted')
+  await b
+  expect(manager.nativeClients(session.id).map((client) => client.pid)).toEqual([1002])
+  expect(natives.get(session.id)?.[0]?.readonly).toBe(false)
+})
