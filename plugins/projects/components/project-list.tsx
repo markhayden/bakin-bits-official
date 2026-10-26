@@ -42,8 +42,6 @@ export function ProjectList() {
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
-  // Every project the server returned, archived included — zero means none at all.
-  const [total, setTotal] = useState(0)
   const [startScreen, setStartScreen] = useState(false)
   const agentList = useAgentList()
   const agentNames = useMemo(() => new Map(agentList.map(agent => [agent.id, agent.name ?? agent.id])), [agentList])
@@ -70,7 +68,6 @@ export function ProjectList() {
       if (!Array.isArray(data.projects)) throw new Error('The project list response was invalid. Please retry.')
       if (requestVersion === listRequestVersion.current) {
         setProjects(status === 'all' ? data.projects.filter((project: ProjectSummary) => project.status !== 'archived') : data.projects)
-        setTotal(data.projects.length)
         if (status === 'all' && data.projects.length === 0) setStartScreen(true)
         setLoadError(null)
       }
@@ -150,8 +147,8 @@ export function ProjectList() {
       listRequestVersion.current += 1
       setLoading(false)
       setProjects(current => current.filter(project => project.id !== deleteTarget.id))
-      setTotal(current => Math.max(0, current - 1))
-      if (total <= 1) setStartScreen(true)
+      // The unfiltered list decides whether that was the last project.
+      if (status === 'all') void fetchProjects()
       setDeleteTarget(null)
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : 'Could not delete project. Please try again.')

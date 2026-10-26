@@ -175,9 +175,16 @@ const fixtureProjects = [
   },
 ]
 
+// The mock server forgets a project once its DELETE succeeds.
+const deletedIds = new Set<string>()
+
 const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === 'string' ? input : String(input)
-  if (init?.method === 'DELETE') return deleteResponse()
+  if (init?.method === 'DELETE') {
+    const response = await deleteResponse()
+    if (response.ok) deletedIds.add(decodeURIComponent(url.split('/').pop() ?? ''))
+    return response
+  }
   if (url === '/api/plugins/projects/' && init?.method === 'POST') {
     return {
       ok: true,
@@ -188,12 +195,13 @@ const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
   const status = new URL(url, 'http://localhost').searchParams.get('status')
   return {
     ok: true,
-    json: async () => ({ projects: status ? fixtureProjects.filter(project => project.status === status) : fixtureProjects }),
+    json: async () => ({ projects: fixtureProjects.filter(project => !deletedIds.has(project.id) && (!status || project.status === status)) }),
     text: async () => '',
   }
 }) as unknown as typeof fetch
 
 beforeEach(() => {
+  deletedIds.clear()
   for (const k of Object.keys(queryState)) delete queryState[k]
   for (const k of Object.keys(querySetters)) delete querySetters[k]
   stubSearchResults = []
@@ -527,16 +535,19 @@ describe('ProjectList', () => {
   it('does not restore a deleted row when an earlier background refresh settles late', async () => {
     render(<ProjectList />)
     await screen.findByRole('list', { name: 'Projects' })
-    let finishRefresh!: (response: Response) => void
+    const refreshes: ((response: Response) => void)[] = []
     globalThis.fetch = mock((input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === 'DELETE') return deleteResponse()
-      return new Promise<Response>(resolve => { finishRefresh = resolve })
+      return new Promise<Response>(resolve => { refreshes.push(resolve) })
     }) as unknown as typeof fetch
     act(() => emitPluginEvent({ event: 'projects.brainstorm.done', projectId: 'p1' }))
     const dialog = await requestDelete()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete project' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    await act(async () => finishRefresh(Response.json({ projects: fixtureProjects })))
+    // The refresh started BEFORE the delete settles late with the old list…
+    await act(async () => refreshes[0]!(Response.json({ projects: fixtureProjects })))
+    // …while the post-delete refresh reflects the server.
+    await act(async () => refreshes.at(-1)!(Response.json({ projects: fixtureProjects.filter(project => project.id !== 'p1') })))
     expect(screen.queryByRole('button', { name: 'Open project: Alpha Launch' })).toBeNull()
     expect(screen.getByText('2 shown')).toBeDefined()
   })
@@ -549,6 +560,16 @@ describe('ProjectList', () => {
     expect((await within(dialog).findByRole('alert')).textContent).toContain('Network unavailable')
     expect(screen.getByText('3 shown')).toBeDefined()
     expect((within(dialog).getByRole('button', { name: 'Delete project' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('deleting the last project in a filter shows that filter empty, not the start screen', async () => {
+    render(<ProjectList />)
+    await screen.findByRole('list', { name: 'Projects' })
+    await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Draft' })) })
+    const dialog = await requestDelete('Gamma Cleanup')
+    await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Delete project' })) })
+    expect(await screen.findByText('No draft projects')).toBeDefined()
+    expect(screen.queryByRole('heading', { name: 'What kind of project is on your mind?' })).toBeNull()
   })
 
   it('shows the start screen after deleting the final project', async () => {

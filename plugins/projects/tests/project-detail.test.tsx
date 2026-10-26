@@ -131,6 +131,15 @@ describe('ProjectDetail shell', () => {
     expect(await screen.findByLabelText('Unread reply')).toBeDefined()
   })
 
+  it('nothing is marked seen before the project loads (the tab default is only a guess until then)', async () => {
+    ;(globalThis as unknown as { __bakinTestSdkHooks: Record<string, unknown> }).__bakinTestSdkHooks.useCollapsedAside = () => React.useState(true)
+    mockFetch('p-early', { status: 'active', brainstormUnread: true })
+    render(<ProjectDetail projectId="p-early" onBack={() => {}} />)
+    await screen.findByTestId('project-checklist')
+    const calls = (globalThis.fetch as unknown as { mock: { calls: [string][] } }).mock.calls.map(([url]) => String(url))
+    expect(calls.filter(url => url.endsWith('/brainstorm/seen'))).toEqual([])
+  })
+
   it('mobile: no dock; an Ask button switches to the conversation', async () => {
     desktop = false
     mockFetch('p-mobile', { status: 'active' })

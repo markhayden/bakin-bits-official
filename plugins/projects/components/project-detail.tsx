@@ -140,7 +140,9 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
   }
 
   const showDock = desktop && tab !== 'conversation'
-  const panelVisible = tab === 'conversation' || (showDock && !dockCollapsed)
+  // Nothing is "visible" until the project has loaded: the tab default is a
+  // guess until then, and marking a reply seen early would clear its dot.
+  const panelVisible = Boolean(project) && (tab === 'conversation' || (showDock && !dockCollapsed))
   const [unread, setUnread] = useState(false)
   const panelVisibleRef = useRef(panelVisible)
   panelVisibleRef.current = panelVisible

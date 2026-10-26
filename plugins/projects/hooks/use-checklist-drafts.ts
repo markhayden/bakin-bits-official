@@ -132,6 +132,10 @@ export function useChecklistDrafts(projectId: string, tasks: ProjectTask[], refr
         method: action === 'remove' ? 'DELETE' : action === 'toggle' ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ checked, requestId, expectedInstanceId: item.instanceId ?? '' }),
       })
+      // A confirmed request's identity is spent: the next action on this item
+      // (e.g. Send to board again after its task was deleted) is a new request.
+      // Unconfirmed requests keep theirs so a retry dedupes.
+      requestIds.current.delete(key)
     })
   }
   return {
