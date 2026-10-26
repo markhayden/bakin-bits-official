@@ -15,6 +15,7 @@ import {
   callRoute,
   callTool,
   callSearchRoute,
+  CLI_ARG_TYPES,
   declaredCliArgShapes,
   execToolArgShape,
 } from '../test-helpers'
@@ -1858,7 +1859,10 @@ describe('projects cliCommands args', () => {
     for (const declared of declaredCliArgShapes(manifest)) {
       const tool = findTool(plugin.execTools, declared.tool)
       expect(tool, `${declared.command} dispatches missing tool ${declared.tool}`).toBeDefined()
-      expect(declared.args, declared.command).toEqual(execToolArgShape(tool!))
+      const implied = execToolArgShape(tool!)
+      expect(declared.args, declared.command).toEqual(implied)
+      expect(declared.positionals, `${declared.command} positionals follow the usage placeholders`).toEqual(declared.placeholders)
+      for (const [name, arg] of Object.entries(implied)) expect(CLI_ARG_TYPES, `${declared.command} --${name} has an unsupported type`).toContain(arg.type)
     }
   })
 })
