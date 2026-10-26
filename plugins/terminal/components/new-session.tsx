@@ -66,7 +66,7 @@ export function NewSession({ open, onOpenChange, onCreated }: { open: boolean; o
   async function submit(event: FormEvent) {
     event.preventDefault(); setBusy(true); setError('')
     try {
-      const session = await api<Session>('/sessions', { title: (title ?? suggestedTitle).slice(0, 100), cwd, program, checkout, agentId: agentId || undefined, taskId: taskId || undefined, projectId: projectId || undefined, size: estimateTerminalSize() })
+      const session = await api<Session>('/sessions', { title: (title ?? suggestedTitle).slice(0, 100), cwd, program, checkout: program === 'shell' ? 'existing' : checkout, agentId: agentId || undefined, taskId: taskId || undefined, projectId: projectId || undefined, size: estimateTerminalSize() })
       onCreated(session); onOpenChange(false)
     } catch (error) { setError(error instanceof Error ? error.message : 'Could not create session') }
     finally { setBusy(false) }

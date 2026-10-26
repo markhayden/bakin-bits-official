@@ -7,7 +7,7 @@ import type { Session } from '../lib/contracts'
 import { clampSize } from '../lib/sizing'
 import { clientId } from './api'
 import { enableWebgl } from './terminal-renderer'
-import { TerminalSocketClient, type InputResult } from './terminal-socket'
+import { TerminalSocketClient, type InputResult, type Presence } from './terminal-socket'
 import { consumeControl, encodeTerminalKey, type TerminalInputHandle } from './terminal-input'
 import { BASE_FONT, clampFont, fitWidthFont, minFont, pinchFont, resizePlan, reveal, screenDevice, storedFont, storeFont } from './terminal-view'
 import '@xterm/xterm/css/xterm.css'
@@ -15,9 +15,9 @@ import '@xterm/xterm/css/xterm.css'
 /** What the page asks of the canvas: "Fit to this device" claims the size; refit applies a new smallest-text choice. */
 export interface TerminalViewHandle { fitToDevice(): boolean; refit(): void }
 
-export function TerminalCanvas({ session, writable, captureTab, attempt, inputEnabled, inputHandle, viewHandle, onCtrlChange, onStatus, onInput, onClaim, onSession, onSizeFrozen, onResult }: {
+export function TerminalCanvas({ session, writable, captureTab, attempt, inputEnabled, inputHandle, viewHandle, onCtrlChange, onStatus, onInput, onClaim, onSession, onPresence, onResult }: {
   inputEnabled: boolean; inputHandle: RefObject<TerminalInputHandle | null>; viewHandle: RefObject<TerminalViewHandle | null>; onCtrlChange(armed: boolean): void;
-  session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string): void; onClaim(data: string): void; onSession(session: Session): void; onSizeFrozen(frozen: boolean): void; onResult(result: InputResult): void
+  session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string): void; onClaim(data: string): void; onSession(session: Session): void; onPresence(presence: Presence): void; onResult(result: InputResult): void
 }) {
   const pane = useRef<HTMLDivElement>(null)
   const element = useRef<HTMLDivElement>(null)
@@ -28,8 +28,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
   const [zoom, setZoom] = useState(() => storedFont())
   // Manual pans, selections (and History) stop the view chasing the cursor.
   const [paused, setPaused] = useState(false)
-  const callbacks = useRef({ onInput, onClaim, onSession, onSizeFrozen, onResult, writable, authority, inputEnabled, onCtrlChange, captureTab: false, sizeEpoch: session.sizeEpoch, zoom, paused })
-  callbacks.current = { onInput, onClaim, onSession, onSizeFrozen, onResult, writable, authority, inputEnabled, onCtrlChange, captureTab, sizeEpoch: session.sizeEpoch, zoom, paused }
+  const callbacks = useRef({ onInput, onClaim, onSession, onPresence, onResult, writable, authority, inputEnabled, onCtrlChange, captureTab: false, sizeEpoch: session.sizeEpoch, zoom, paused })
+  callbacks.current = { onInput, onClaim, onSession, onPresence, onResult, writable, authority, inputEnabled, onCtrlChange, captureTab, sizeEpoch: session.sizeEpoch, zoom, paused }
   const [status, setStatus] = useState('Connecting')
   useEffect(() => { onStatus(status) }, [status, onStatus])
   const terminal = useRef<Terminal | null>(null)
@@ -228,7 +228,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
       },
       onOutput: (bytes, done) => term.write(bytes, done),
       onSession: (next) => callbacks.current.onSession(next),
-      onPresence: (frozen) => callbacks.current.onSizeFrozen(frozen),
+      onPresence: (presence) => callbacks.current.onPresence(presence),
       onResult: (result) => callbacks.current.onResult(result),
       onStatus: (next) => {
         if (next !== 'Connected') { ready.current = false; reset() }
