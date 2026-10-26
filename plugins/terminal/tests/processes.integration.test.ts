@@ -203,6 +203,8 @@ processTest('terminal apps: an unreserved attach is detached; an admitted one si
   try {
     await wait(() => service.ready(), 'service')
     manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProcesses(service), options)
+    // A second session first, so tmux has another one a careless toggle could switch the client to.
+    await manager.create({ title: 'Other', cwd: root }, human)
     const session = await manager.create({ title: 'Native', cwd: root, agentId: 'patch' }, human)
     const attachedPids = async () => (await service.command(['list-clients', '-t', session.id, '-F', '#{client_pid}'])).split('\n').filter(Boolean).map(Number)
 
@@ -219,19 +221,21 @@ processTest('terminal apps: an unreserved attach is detached; an admitted one si
     // A reserved, confirmed attach is admitted and sizes the session; its resizes are followed.
     const reserved = await manager.reserveAttach(session.id, operator)
     const ghostty = app(reserved.args, 132, 41)
+    // The confirm resolves once the client is admitted.
     await manager.confirmAttach(reserved.token, ghostty.pid)
-    await wait(() => manager!.nativeClients(session.id).length === 1, 'admitted')
+    expect(manager.nativeClients(session.id)).toHaveLength(1)
     await wait(() => manager!.get(session.id, human).cols === 132, 'sized by the app')
     // Launched read-only, admitted it can type.
-    expect((await service.command(['list-clients', '-t', session.id, '-F', '#{client_pid} #{client_readonly}'])).split('\n')).toContain(`${ghostty.pid} 0`)
+    expect((await service.command(['list-clients', '-t', session.id, '-F', '#{client_pid} #{client_readonly} #{client_session}'])).split('\n')).toContain(`${ghostty.pid} 0 ${session.id}`)
     expect(manager.get(session.id, human).sizeAuthority).toEqual({ viewer: `native:${ghostty.pid}`, kind: 'native' })
     expect((await service.command(['display-message', '-p', '-t', session.id, '#{window_width}x#{window_height}'])).trim()).toBe('132x41')
     ghostty.terminal!.resize(100, 33)
     await wait(() => manager!.get(session.id, human).cols === 100 && manager!.get(session.id, human).rows === 33, 'followed the resize')
 
-    // An expired reservation admits nothing.
+    // A reservation nobody confirms lapses: its client was held read-only, then detached.
     const stale = await manager.reserveAttach(session.id, operator)
     const late = app(stale.args, 80, 24)
+    await wait(async () => (await service.command(['list-clients', '-t', session.id, '-F', '#{client_pid} #{client_readonly}'])).includes(`${late.pid} 1`), 'held read-only')
     await late.exited
     await expect(manager.confirmAttach(stale.token, late.pid)).rejects.toThrow()
 

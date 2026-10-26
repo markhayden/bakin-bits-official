@@ -11,7 +11,14 @@ interface WorktreeResult { ok: boolean; error?: string; worktreePath?: string }
 /** How long a launched terminal app has to confirm its pid (spec D7). */
 export const RESERVATION_MS = 15_000
 /** A minted, single-use permission for one terminal app to attach. */
-interface Reservation { sessionId: string; generation: number; expires: number; pid?: number }
+interface Reservation {
+  sessionId: string
+  generation: number
+  expires: number
+  /** Set by the confirm; the reservation is spent when this client is admitted. */
+  pid?: number
+  settle?: { resolve(): void; reject(error: Error): void }
+}
 const nativeViewer = (pid: number) => `native:${pid}`
 /** The creating screen's grid and what kind of screen it is (it holds the size claim). */
 export type StartSize = { cols: number; rows: number } & SizeClaimant
@@ -344,28 +351,38 @@ export class Sessions {
       await this.ensureAttached(session)
       const token = randomUUID()
       this.reservations.set(token, { sessionId: id, generation: session.generation, expires: this.now() + RESERVATION_MS })
-      // Unconfirmed by then, its waiting client (if any) is detached.
+      // Unconfirmed or unattached by then, it lapses and its waiting client (if any) is detached.
       const timer = setTimeout(() => { this.timers.delete(timer); this.clientsChanged(id) }, RESERVATION_MS + 50)
       this.timers.add(timer)
       return { session, token, args: this.driver.attachArgs(id) }
     })
   }
-  confirmAttach(token: string, pid: number): Promise<void> {
-    return this.run(async () => {
+  /**
+   * The launched client's pid. Resolves once that client is admitted, and
+   * rejects when the reservation lapses first (expired, control changed, the
+   * session ended), so the CLI never reports a terminal that was turned away.
+   */
+  async confirmAttach(token: string, pid: number): Promise<void> {
+    const { admitted } = await this.run(async () => {
       const reservation = this.reservations.get(token)
       if (!reservation || reservation.pid !== undefined) throw new TerminalError('This attach is no longer valid; run the command again', 409)
       const session = this.store.sessions().find((entry) => entry.id === reservation.sessionId)
       if (reservation.expires < this.now()) {
-        this.reservations.delete(token)
+        this.dropReservation(token)
         throw new TerminalError('This attach expired; run the command again', 409)
       }
       if (!session || session.generation !== reservation.generation || session.owner.kind !== 'human') {
-        this.reservations.delete(token)
+        this.dropReservation(token)
         throw new TerminalError('Control changed; run the command again', 409)
       }
       reservation.pid = pid
+      // Wrapped, not returned: the queue must not wait on admission (admission runs in the queue).
+      const admitted = new Promise<void>((resolve, reject) => { reservation.settle = { resolve, reject } })
+      admitted.catch(() => undefined)
       await this.reconcileClients(session.id)
+      return { admitted }
     })
+    await admitted
   }
   /** The terminal apps admitted to a session right now. */
   nativeClients(id: string): NativeClient[] { return [...this.natives.get(id)?.values() ?? []] }
@@ -389,34 +406,37 @@ export class Sessions {
     }).catch(() => undefined)
   }
   /**
-   * Admit clients with a confirmed reservation, hold them while a reservation
-   * waits for its confirm, detach everything else, and follow the app that
-   * sizes the session. Runs in the queue.
+   * Admit clients with a confirmed reservation, hold terminal clients
+   * (read-only) while a reservation waits for its confirm, detach everything
+   * else — a foreign control-mode client always, since read-only does not
+   * stop its commands — and follow the app that sizes the session. Runs in
+   * the queue. A client that leaves mid-way is skipped; other failures throw.
    */
   private async reconcileClients(id: string): Promise<void> {
     const session = this.store.sessions().find((entry) => entry.id === id)
     if (!session || session.state !== 'running') { this.forgetNatives(id); return }
-    for (const [token, reservation] of this.reservations) if (reservation.expires < this.now()) this.reservations.delete(token)
+    for (const [token, reservation] of this.reservations) {
+      if (reservation.expires < this.now()) this.dropReservation(token, 'This attach expired; run the command again')
+    }
     const admitted = this.natives.get(id) ?? new Map<number, NativeClient>()
     const next = new Map<number, NativeClient>()
     let newest: NativeClient | undefined
-    for (const client of await this.driver.clients(id)) {
+    const present = await this.driver.clients(id)
+    for (const client of present) {
       if (admitted.has(client.pid)) { next.set(client.pid, client); continue }
-      const match = [...this.reservations].find(([, reservation]) => reservation.sessionId === id && reservation.pid === client.pid && reservation.generation === session.generation)
+      const match = client.control ? undefined : [...this.reservations].find(([, reservation]) => reservation.sessionId === id && reservation.pid === client.pid && reservation.generation === session.generation)
       if (match && session.owner.kind === 'human') {
-        this.reservations.delete(match[0])
         // Launched read-only; admitted, it types.
-        if (client.readonly) await this.driver.setReadonly(client.name, false)
+        if (!await this.onClient(id, client, () => this.driver.setReadonly(id, client, false))) continue
         next.set(client.pid, { ...client, readonly: false })
         newest = client
+        this.dropReservation(match[0])
         continue
       }
-      // A confirm is on its way: hold the client, unable to type, until then.
-      if ([...this.reservations.values()].some((reservation) => reservation.sessionId === id && reservation.pid === undefined)) {
-        if (!client.readonly) await this.driver.setReadonly(client.name, true)
-        continue
-      }
-      await this.driver.detachClient(client.name)
+      const pending = [...this.reservations.values()].some((reservation) => reservation.sessionId === id && reservation.pid === undefined)
+      // A confirm is on its way: hold the terminal client, unable to type, until then.
+      if (pending && !client.control) await this.onClient(id, client, () => this.driver.setReadonly(id, client, true))
+      else await this.onClient(id, client, () => this.driver.detachClient(client.name))
     }
     const changed = next.size !== admitted.size || [...next].some(([pid, client]) => {
       const before = admitted.get(pid)
@@ -433,8 +453,26 @@ export class Sessions {
     } else if (newest) this.save(session)
     if (changed) for (const listener of this.nativeListeners.get(id) ?? []) listener()
   }
-  private dropReservations(id: string): void {
-    for (const [token, reservation] of this.reservations) if (reservation.sessionId === id) this.reservations.delete(token)
+  /** Act on one client; false when it left meanwhile (tmux no longer lists it). Anything else is a real failure. */
+  private async onClient(id: string, client: NativeClient, action: () => Promise<void>): Promise<boolean> {
+    try {
+      await action()
+      return true
+    } catch (error) {
+      if ((await this.driver.clients(id)).some((entry) => entry.pid === client.pid)) throw error
+      return false
+    }
+  }
+  /** Spend or revoke a reservation; a waiting confirm learns the outcome. */
+  private dropReservation(token: string, refused?: string): void {
+    const reservation = this.reservations.get(token)
+    if (!reservation) return
+    this.reservations.delete(token)
+    if (refused) reservation.settle?.reject(new TerminalError(refused, 409))
+    else reservation.settle?.resolve()
+  }
+  private dropReservations(id: string, refused = 'Control changed; run the command again'): void {
+    for (const [token, reservation] of this.reservations) if (reservation.sessionId === id) this.dropReservation(token, refused)
   }
   /** Detach every client that is not Bakin's own (admitted or held) and wait until tmux reports them gone. */
   private async detachNatives(id: string): Promise<void> {
@@ -442,14 +480,15 @@ export class Sessions {
       const remaining = await this.driver.clients(id)
       if (!remaining.length) break
       if (attempt >= 40) throw new TerminalError('A terminal app is still attached; close it and try again', 503)
-      if (attempt % 10 === 0) for (const client of remaining) await this.driver.detachClient(client.name)
+      // One that already left is fine: the next listing decides.
+      if (attempt % 10 === 0) for (const client of remaining) await this.driver.detachClient(client.name).catch(() => undefined)
       await Bun.sleep(50)
     }
     this.forgetNatives(id)
   }
   /** The session no longer has terminal apps (detached, ended or deleted): drop its admission state. */
   private forgetNatives(id: string): void {
-    this.dropReservations(id)
+    this.dropReservations(id, 'The session changed; run the command again')
     const had = this.natives.get(id)?.size
     this.natives.delete(id)
     if (had) for (const listener of this.nativeListeners.get(id) ?? []) listener()
@@ -584,6 +623,7 @@ export class Sessions {
   async shutdown(): Promise<void> {
     for (const timer of this.timers) clearTimeout(timer)
     this.timers.clear()
+    for (const token of [...this.reservations.keys()]) this.dropReservation(token, 'Terminal is shutting down')
     await this.pending
     this.closed = true
     await this.driver.detach()

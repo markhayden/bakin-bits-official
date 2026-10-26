@@ -56,7 +56,7 @@ describe('operator', () => {
 
 describe('sessionTable', () => {
   it('prints one aligned row per session with its terminal app count', () => {
-    const table = sessionTable([a, { ...c, owner: { kind: 'agent', id: 'patch' }, worktreePath: '/w', cwd: '/w' }], (id) => id === a.id ? [{ pid: 1, name: 't', cols: 1, rows: 1, readonly: false }] : [], '/Users/me')
+    const table = sessionTable([a, { ...c, owner: { kind: 'agent', id: 'patch' }, worktreePath: '/w', cwd: '/w' }], (id) => id === a.id ? [{ pid: 1, name: 't', cols: 1, rows: 1, readonly: false, control: false }] : [], '/Users/me')
     expect(table.split('\n')).toEqual([
       'ID        TITLE  PROGRAM  OWNER  STATE      SIZE    DIRECTORY      APPS',
       '1a2b3c4d  bakin  shell    you    running    200×60  ~/code/bakin   1',
