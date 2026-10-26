@@ -136,6 +136,11 @@ export function SegmentedControl({ options = [], value, onValueChange, ariaLabel
   )
 }
 
+// ── CopyButton (the one copy affordance; the stub only names the action) ──
+export function CopyButton({ text, label = 'Copy', className, onCopied }) {
+  return React.createElement('button', { type: 'button', className, 'aria-label': label, 'data-copy-text': text, onClick: () => onCopied?.() })
+}
+
 // ── AgentSelect (presentation-only; consumer supplies the agents) ─────────
 export function AgentSelect({ value, onValueChange, agents = [], ariaLabel, placeholder, disabled }) {
   return React.createElement(

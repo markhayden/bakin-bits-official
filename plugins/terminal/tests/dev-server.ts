@@ -10,6 +10,7 @@ import { Store } from '../lib/store'
 import type { PluginSocket } from '@makinbakin/sdk/types'
 import { command, creatingScreen, failure, human } from '../lib/http'
 import { TerminalViewer } from '../lib/socket'
+import { attachBody, confirmBody, launch, operator, resolveRef } from '../lib/cli'
 
 const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-preview-'))
 // Terminal runs only the managed tmux: give the disposable home one
@@ -72,13 +73,25 @@ const server = Bun.serve<ViewerData>({
     }
     try {
       if (url.pathname === '/api/plugins/projects/') return Response.json({ projects: [{ id: 'project-1', title: 'Bakin' }] })
+      // The CLI's launch routes (the terminal app side of a handoff), as the plugin serves them.
+      if (url.pathname === '/api/plugins/terminal/cli/attach') {
+        const principal = operator(request)
+        const { params } = attachBody.parse(await request.json())
+        return Response.json(await launch(manager, resolveRef(manager.list(principal), params.ref).id, principal))
+      }
+      if (url.pathname === '/api/plugins/terminal/cli/confirm') {
+        operator(request)
+        const { token, pid } = confirmBody.parse(await request.json())
+        await manager.confirmAttach(token, pid)
+        return Response.json({ admitted: true })
+      }
       if (url.pathname.startsWith('/api/plugins/terminal/')) {
         const principal = human(request)
         const path = url.pathname.slice('/api/plugins/terminal'.length)
         if (path === '/options') return Response.json({ agents: [{ id: 'patch', name: 'Patch', enabled: true, workspace: '/tmp' }, { id: 'chef', name: 'Chef', enabled: false }], tasks: [{ id: 'task-1', title: 'Terminal development', agentId: 'patch', projectId: 'project-1' }], defaults: { cwd: process.cwd(), agentId: 'patch' } })
         if (path === '/sessions' && request.method === 'GET') {
           await manager.refreshStates()
-          return Response.json({ sessions: manager.list(principal), serviceReady: true })
+          return Response.json({ sessions: manager.list(principal).map((session) => ({ ...session, nativeClients: manager.nativeClients(session.id).length })), serviceReady: true })
         }
         if (path === '/sessions' && request.method === 'POST') {
           const body = await request.json() as Record<string, unknown>
@@ -99,7 +112,7 @@ const server = Bun.serve<ViewerData>({
     } catch (error) { return failure(error) }
   },
 })
-console.log(JSON.stringify({ url: `http://127.0.0.1:${server.port}`, workingDirectory: root }))
+console.log(JSON.stringify({ url: `http://127.0.0.1:${server.port}`, workingDirectory: root, tmux: service.tmux }))
 let stopping = false
 async function shutdown() {
   if (stopping) return

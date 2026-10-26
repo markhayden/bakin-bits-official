@@ -1,12 +1,12 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Page, PageBody, PageHeader, WorkspacePage, WorkspacePageHeader, WorkspacePageCompactHeader, WorkspacePageBody, ConfirmDialog, AgentAvatar, AgentSelect, DataTable, SegmentedControl } from '@makinbakin/sdk/patterns'
-import { Inline, Stack } from '@makinbakin/sdk/layout'
+import { Page, PageBody, PageHeader, WorkspacePage, WorkspacePageHeader, WorkspacePageCompactHeader, WorkspacePageBody, ConfirmDialog, AgentAvatar, AgentSelect, CopyButton, DataTable, SegmentedControl } from '@makinbakin/sdk/patterns'
+import { Inline, Panel, Stack } from '@makinbakin/sdk/layout'
 import { Alert, AlertDescription, Badge, Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SystemState, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, Text, Separator, Popover, PopoverTrigger, PopoverContent, PopoverTitle, DropdownMenuItem, DropdownMenuSwitchItem, DropdownMenuSeparator } from '@makinbakin/sdk/ui'
 import { PluginLink, useQueryState, useRouter } from '@makinbakin/sdk/navigation'
 import { formatAge } from '@makinbakin/sdk/utils'
 import { toast } from '@makinbakin/sdk/hooks'
-import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Terminal, RotateCw, Keyboard, Ruler } from 'lucide-react'
-import type { Session } from '../lib/contracts'
+import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Terminal, RotateCw, Keyboard, Ruler, AppWindow } from 'lucide-react'
+import { attachCommand, shortId, type Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
 import { api } from './api'
 import { TerminalControls } from './terminal-controls'
@@ -14,7 +14,7 @@ import type { TerminalInputHandle } from './terminal-input'
 import { TerminalCanvas, type TerminalViewHandle } from './terminal-canvas'
 import { SizeControl } from './size-control'
 import { estimateTerminalSize } from './terminal-size'
-import type { InputResult } from './terminal-socket'
+import type { InputResult, Presence } from './terminal-socket'
 import { NewSession } from './new-session'
 import { TerminalTool as Tool } from './terminal-tool'
 import { useTerminalAgents } from './use-terminal-agents'
@@ -44,8 +44,11 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const [captureTab, setCaptureTab] = useState(true)
   const inputHandle = useRef<TerminalInputHandle | null>(null)
   const viewHandle = useRef<TerminalViewHandle | null>(null)
-  // Viewer-socket presence, not session state: the screen that sizes the open session is away.
-  const [sizeFrozen, setSizeFrozen] = useState(false)
+  // Viewer-socket presence, not session state: whether the screen or app that
+  // sizes the open session is away, and how many terminal apps are attached.
+  const [presence, setPresence] = useState<Presence>({ sizeFrozen: false, nativeClients: 0 })
+  // Terminal apps attached per session, for the list (refreshed with it).
+  const [apps, setApps] = useState<Record<string, number>>({})
   const [ctrl, setCtrl] = useState(false)
   const [attempt, setAttempt] = useState(0)
   const [streamStatus, setStreamStatus] = useState('Connecting')
@@ -71,8 +74,9 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const refresh = useCallback(async () => {
     try {
       const known = listEpoch.current
-      const result = await api<{ sessions: Session[]; serviceReady: boolean; serviceUpdateRequired?: boolean }>('/sessions')
-      for (const session of result.sessions) update(session)
+      const result = await api<{ sessions: Array<Session & { nativeClients?: number }>; serviceReady: boolean; serviceUpdateRequired?: boolean }>('/sessions')
+      for (const { nativeClients: _apps, ...session } of result.sessions) update(session)
+      setApps(Object.fromEntries(result.sessions.map((session) => [session.id, session.nativeClients ?? 0])))
       // Deleted sessions vanish from the server list. Drop them locally, but
       // never against a response older than a session added while in flight.
       if (listEpoch.current === known) {
@@ -142,8 +146,10 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const chipTone = session?.historyDeleted || ended ? 'neutral' : !connected ? 'attention' : writable ? 'success' : 'neutral'
   const chipLabel = session?.historyDeleted ? 'Output deleted' : ended ? 'Ended' : !connected ? streamStatus.split(' / ')[0] : writable ? "You're driving" : ownerAgentName ? `You're watching ${ownerAgentName}` : "You're watching"
   const statusChip = session && <Badge size="xs" variant="solid" tone={chipTone} role="status" title={status}>{chipLabel}</Badge>
+  // Shown while the session is also open in a terminal app on this Mac (bakin terminal attach).
+  const appChip = session && !ended && presence.nativeClients > 0 && <Badge size="xs" variant="outline" title="Also open in a terminal app on this Mac"><AppWindow size={12} />Open in a terminal app</Badge>
   useEffect(() => { setAssignment(session?.agentId ?? '') }, [session?.id, session?.agentId])
-  useEffect(() => { setSizeFrozen(false) }, [sessionId])
+  useEffect(() => { setPresence({ sizeFrozen: false, nativeClients: 0 }) }, [sessionId])
   async function operate(operation: string, extra: Record<string, unknown> = {}, targetId = sessionId) {
     const target = current.current.find((item) => item.id === targetId)
     if (!target) return
@@ -255,7 +261,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     {error && <Alert tone="danger"><AlertDescription>{error}</AlertDescription></Alert>}
   </>
   const controls = session && <Inline gap="dense" wrap={false} aria-label="Terminal controls">
-            {!ended && !session.historyDeleted && <SizeControl session={session} frozen={sizeFrozen} busy={busy} onMinFont={() => viewHandle.current?.refit()} onFit={() => { if (!viewHandle.current?.fitToDevice()) setError('Size not changed: the terminal is reconnecting.') }} />}
+            {!ended && !session.historyDeleted && <SizeControl session={session} frozen={presence.sizeFrozen} busy={busy} onMinFont={() => viewHandle.current?.refit()} onFit={() => { if (!viewHandle.current?.fitToDevice()) setError('Size not changed: the terminal is reconnecting.') }} />}
             <Popover>
               <Tool label="Session details" description="View the working directory, agent assignment, and linked work." render={<PopoverTrigger render={<Button size="icon-sm" variant="ghost" aria-label="Session details" />} />}><Info size={16} /></Tool>
               <PopoverContent align="end">
@@ -264,10 +270,19 @@ function Workspace({ sessionId }: { sessionId?: string }) {
                   <Stack gap="dense">
                     <Text weight="semibold">{session.title}</Text>
                     <Text size="meta" tone="muted" mono>{session.cwd}</Text>
+                    <Text size="meta" tone="muted" mono>ID {shortId(session)}</Text>
                     <Text size="meta" tone="muted">{session.program} / {session.state}</Text>
                     <Text size="meta" tone="muted">{status}</Text>
                     {session.worktreePath && <Badge size="xs" variant="outline">Worktree retained</Badge>}
                   </Stack>
+                  {!ended && <Stack gap="dense">
+                    <Text size="meta" weight="semibold">Continue in a terminal app</Text>
+                    <Panel variant="code" padding="compact" className="flex min-w-0 items-center gap-bakin-2">
+                      <code className="min-w-0 flex-1 break-all text-bakin-text-primary">{attachCommand(session)}</code>
+                      <CopyButton text={attachCommand(session)} label="Copy attach command" />
+                    </Panel>
+                    <Text size="meta" tone="muted">Run it in Ghostty or any terminal on this Mac. Detach with Ctrl-b d.</Text>
+                  </Stack>}
                   <Inline gap="dense">
                     <div className="min-w-0 flex-1"><AgentSelect className="w-full" ariaLabel="Assigned agent" value={assignment} onValueChange={setAssignment} agents={agentChoices} allowNone disabled={busy || Boolean(agentsError)} /></div>
                     <Tool label="Assign agent" description="Apply the selected agent to this session." disabled={busy || Boolean(agentsError) || assignment === (session.agentId ?? '')} onClick={() => void operate('assign', { agentId: assignment || undefined })}><UserRoundCheck size={16} /></Tool>
@@ -338,7 +353,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
             const name = choice?.name ?? item.agentId
             return <Inline gap="dense" wrap={false} className="min-w-0"><AgentAvatar size="xs" decorative agent={{ id: item.agentId, name, imageSrc: choice?.imageSrc, color: choice?.color }} /><Text size="meta" className="truncate">{name}</Text></Inline>
           } },
-          { key: 'state', header: 'Status', narrow: 'meta', sortable: true, sortValue: (item) => item.state === 'running' ? 0 : item.state === 'exited' ? 1 : 2, cell: (item) => <Stack gap="dense" align="start"><Badge size="xs" variant="solid" tone={item.state === 'running' ? 'success' : 'neutral'}>{item.state === 'running' ? 'Running' : item.state === 'exited' ? 'Exited' : 'Completed'}</Badge>{item.worktreePath && <Badge size="xs" variant="soft">Worktree retained</Badge>}</Stack> },
+          { key: 'state', header: 'Status', narrow: 'meta', sortable: true, sortValue: (item) => item.state === 'running' ? 0 : item.state === 'exited' ? 1 : 2, cell: (item) => <Stack gap="dense" align="start"><Badge size="xs" variant="solid" tone={item.state === 'running' ? 'success' : 'neutral'}>{item.state === 'running' ? 'Running' : item.state === 'exited' ? 'Exited' : 'Completed'}</Badge>{item.state === 'running' && (apps[item.id] ?? 0) > 0 && <Badge size="xs" variant="outline"><AppWindow size={12} />Open in a terminal app</Badge>}{item.worktreePath && <Badge size="xs" variant="soft">Worktree retained</Badge>}</Stack> },
           { key: 'activity', header: 'Last activity', narrow: 'label', sortable: true, sortValue: (item) => item.lastActivityAt, cell: (item) => <Text size="meta" tone="muted" title={new Date(item.lastActivityAt).toLocaleString()}>{formatAge(new Date(item.lastActivityAt).toISOString())}</Text> },
           { key: 'cwd', header: 'Working directory', narrow: 'label', headClassName: 'w-1/3', cellClassName: 'whitespace-normal', cell: (item) => <Text size="meta" tone="muted" mono className="block break-all">{item.cwd}</Text> },
           { key: 'actions', header: 'Actions', narrow: 'trailing', hideLabel: true, align: 'end', headClassName: 'w-(--bakin-layout-size-row)', cell: (item) => <SessionActions session={item} busy={busy} label={`Actions for ${item.title}`} allowTake onOperate={(operation, id) => void operate(operation, {}, id)} onConfirm={setConfirm} /> },
@@ -348,9 +363,9 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     </PageBody>
   </Page> : <WorkspacePage mode="immersive" viewport="visual" className="terminal-page" data-terminal-ui-ready={!loading ? '' : undefined}>
     <WorkspacePageHeader>
-        <PageHeader navigation={back} eyebrow="Terminal" title={session?.title ?? 'Terminal'} meta={statusChip} actions={controls} />
+        <PageHeader navigation={back} eyebrow="Terminal" title={session?.title ?? 'Terminal'} meta={<Inline gap="dense" wrap={false}>{statusChip}{appChip}</Inline>} actions={controls} />
     </WorkspacePageHeader>
-    <WorkspacePageCompactHeader navigation={back} title={<Inline gap="dense" wrap={false} className="min-w-0 items-center"><span className="truncate">{session?.title ?? 'Terminal'}</span>{statusChip}</Inline>} action={controls} />
+    <WorkspacePageCompactHeader navigation={back} title={<Inline gap="dense" wrap={false} className="min-w-0 items-center"><span className="truncate">{session?.title ?? 'Terminal'}</span>{statusChip}{appChip}</Inline>} action={controls} />
     <WorkspacePageBody inputAccessory={session && !ended && !session.historyDeleted
       ? <TerminalControls key={session.id} disabled={!inputEnabled} ctrl={ctrl} onCtrl={() => inputHandle.current?.toggleCtrl()} onKey={key => inputHandle.current?.key(key)} />
       : undefined}>
@@ -365,7 +380,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
           {session.cleanupReason && <Alert tone="attention"><AlertDescription>{session.cleanupReason}</AlertDescription></Alert>}
           </Stack>}
           <Separator />
-          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} inputEnabled={Boolean(inputEnabled)} inputHandle={inputHandle} viewHandle={viewHandle} onCtrlChange={setCtrl} captureTab={captureTab} attempt={attempt} onStatus={setStreamStatus} onInput={input} onClaim={handleClaim} onSession={update} onSizeFrozen={setSizeFrozen} onResult={handleResult} />}
+          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} inputEnabled={Boolean(inputEnabled)} inputHandle={inputHandle} viewHandle={viewHandle} onCtrlChange={setCtrl} captureTab={captureTab} attempt={attempt} onStatus={setStreamStatus} onInput={input} onClaim={handleClaim} onSession={update} onPresence={setPresence} onResult={handleResult} />}
         </>)}
       </Stack>
     </WorkspacePageBody>

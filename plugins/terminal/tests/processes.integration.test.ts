@@ -139,7 +139,7 @@ processTest('control client: command round trip, quoting, subscriptions and exit
   }
 }, 20000)
 
-processTest('bridge: titles the session, cancels copy-mode before input, and only resize-window sizes the window', async () => {
+processTest('bridge: titles the session, cancels copy-mode before input, and sizes the window only on a claim', async () => {
   const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-bridge-'))
   const service = new TerminalService(root)
   const config = join(root, 'tmux.conf')
@@ -148,7 +148,6 @@ processTest('bridge: titles the session, cancels copy-mode before input, and onl
   const human = { kind: 'human', id: 'integration-browser' } as const
   const options = { settings: () => ({}), prepare: async () => undefined, release: async () => undefined }
   let manager: Sessions | undefined
-  let other: ReturnType<typeof Bun.spawn> | undefined
   const wait = async (predicate: () => Promise<boolean>) => {
     for (let attempt = 0; attempt < 100; attempt++) { if (await predicate()) return; await Bun.sleep(50) }
     throw new Error('Bridge probe timed out')
@@ -158,9 +157,7 @@ processTest('bridge: titles the session, cancels copy-mode before input, and onl
     manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProcesses(service), options)
     const session = await manager.create({ title: 'Bridge "probe"', cwd: root }, human)
     expect((await service.command(['display-message', '-p', '-t', session.id, '#{@bakin_title}'])).trim()).toBe('Bridge "probe"')
-    // Another client of a different size (as a native terminal would be) does not resize the window.
-    other = Bun.spawn([service.tmux!, '-S', service.socket, 'attach-session', '-t', session.id], { env: terminalEnvironment(), terminal: { cols: 60, rows: 15, data: () => {} } })
-    await wait(async () => (await service.command(['list-clients', '-t', session.id, '-F', '#{client_width}'])).includes('60'))
+    // The bridge and control clients never size the window.
     expect((await service.command(['display-message', '-p', '-t', session.id, '#{window_width}x#{window_height}'])).trim()).toBe(`${session.cols}x${session.rows}`)
     // Input cancels a pane left in copy mode, then reaches the shell.
     await service.command(['copy-mode', '-t', session.id])
@@ -174,7 +171,6 @@ processTest('bridge: titles the session, cancels copy-mode before input, and onl
     expect((await service.command(['display-message', '-p', '-t', session.id, '#{window_width}x#{window_height}'])).trim()).toBe('90x20')
     await manager.finish(session.id, human, session.generation, true)
   } finally {
-    other?.kill()
     await manager?.shutdown()
     await service.command(['kill-server'], true)
     server.kill(); await server.exited
@@ -182,3 +178,78 @@ processTest('bridge: titles the session, cancels copy-mode before input, and onl
   }
 }, 30000)
 
+
+processTest('terminal apps: an unreserved attach is detached; an admitted one sizes the session until Return', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-native-'))
+  const service = new TerminalService(root)
+  const config = join(root, 'tmux.conf')
+  await Bun.write(config, (await import('../lib/tmux-config')).tmuxConfig())
+  const server = Bun.spawn([service.tmux!, '-D', '-S', service.socket, '-f', config], { env: terminalEnvironment(), stdout: 'ignore', stderr: 'ignore' })
+  const human = { kind: 'human', id: 'integration-browser' } as const
+  const operator = { kind: 'human', id: 'cli' } as const
+  const options = { settings: () => ({ enabledAgents: [{ id: 'patch' }] }), prepare: async () => undefined, release: async () => undefined }
+  let manager: Sessions | undefined
+  const apps: Array<ReturnType<typeof Bun.spawn>> = []
+  // A terminal app is a tmux client on its own PTY, the way the CLI launches one.
+  const app = (args: string[], cols: number, rows: number) => {
+    const child = Bun.spawn([service.tmux!, ...args], { env: terminalEnvironment(), terminal: { cols, rows, data: () => {} } })
+    apps.push(child)
+    return child
+  }
+  const wait = async (predicate: () => boolean | Promise<boolean>, label: string) => {
+    for (let attempt = 0; attempt < 100; attempt++) { if (await predicate()) return; await Bun.sleep(50) }
+    throw new Error(`Native probe timed out: ${label}`)
+  }
+  try {
+    await wait(() => service.ready(), 'service')
+    manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProcesses(service), options)
+    // A second session first, so tmux has another one a careless toggle could switch the client to.
+    await manager.create({ title: 'Other', cwd: root }, human)
+    const session = await manager.create({ title: 'Native', cwd: root, agentId: 'patch' }, human)
+    const attachedPids = async () => (await service.command(['list-clients', '-t', session.id, '-F', '#{client_pid}'])).split('\n').filter(Boolean).map(Number)
+
+    // A raw attach (no reservation) is detached at once.
+    const raw = app(['-S', service.socket, 'attach-session', '-t', session.id], 90, 30)
+    await raw.exited
+    expect(await attachedPids()).not.toContain(raw.pid)
+    expect(manager.get(session.id, human).cols).toBe(200)
+    // So is a foreign control-mode client: only Bakin's own bridge and control clients are exempt.
+    const foreign = Bun.spawn([service.tmux!, '-S', service.socket, '-C', 'attach-session', '-t', session.id], { env: terminalEnvironment(), stdin: 'pipe', stdout: 'ignore', stderr: 'ignore' })
+    apps.push(foreign)
+    await wait(async () => !(await attachedPids()).includes(foreign.pid), 'foreign control client detached')
+
+    // A reserved, confirmed attach is admitted and sizes the session; its resizes are followed.
+    const reserved = await manager.reserveAttach(session.id, operator)
+    const ghostty = app(reserved.args, 132, 41)
+    // The confirm resolves once the client is admitted.
+    await manager.confirmAttach(reserved.token, ghostty.pid)
+    expect(manager.nativeClients(session.id)).toHaveLength(1)
+    await wait(() => manager!.get(session.id, human).cols === 132, 'sized by the app')
+    // Launched read-only, admitted it can type.
+    expect((await service.command(['list-clients', '-t', session.id, '-F', '#{client_pid} #{client_readonly} #{client_session}'])).split('\n')).toContain(`${ghostty.pid} 0 ${session.id}`)
+    expect(manager.get(session.id, human).sizeAuthority).toEqual({ viewer: `native:${ghostty.pid}`, kind: 'native' })
+    expect((await service.command(['display-message', '-p', '-t', session.id, '#{window_width}x#{window_height}'])).trim()).toBe('132x41')
+    ghostty.terminal!.resize(100, 33)
+    await wait(() => manager!.get(session.id, human).cols === 100 && manager!.get(session.id, human).rows === 33, 'followed the resize')
+
+    // A reservation nobody confirms lapses: its client was held read-only, then detached.
+    const stale = await manager.reserveAttach(session.id, operator)
+    const late = app(stale.args, 80, 24)
+    await wait(async () => (await service.command(['list-clients', '-t', session.id, '-F', '#{client_pid} #{client_readonly}'])).includes(`${late.pid} 1`), 'held read-only')
+    await late.exited
+    await expect(manager.confirmAttach(stale.token, late.pid)).rejects.toThrow()
+
+    // Return detaches the app before the agent drives; the size holds.
+    const returned = await manager.control(session.id, human, 'return')
+    expect(returned.owner).toEqual({ kind: 'agent', id: 'patch' })
+    await ghostty.exited
+    expect(manager.nativeClients(session.id)).toEqual([])
+    expect([manager.get(session.id, human).cols, manager.get(session.id, human).rows]).toEqual([100, 33])
+  } finally {
+    for (const child of apps) child.kill()
+    await manager?.shutdown()
+    await service.command(['kill-server'], true)
+    server.kill(); await server.exited
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 40000)

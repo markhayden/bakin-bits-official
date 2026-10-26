@@ -36,7 +36,8 @@ or API billing.
 3. Enable each allowed agent under plugin settings (`enabledAgents`, a list of
    `{ "id": "patch" }` entries). The default is no agent access.
 4. Create a session. Coding CLIs default to an isolated Git worktree; **Existing
-   checkout** is explicit. Shell sessions use the supplied working directory.
+   checkout** is explicit. Shell sessions use the supplied working directory
+   unless `--worktree` (CLI) or the agent tool asks for an isolated one.
 
 Terminal runs only Bakin's managed tmux (`~/.bakin/bin/tmux`); a tmux on
 `PATH` (Homebrew or manual) is never used. If it is missing or damaged, open
@@ -95,6 +96,38 @@ keyboard or sends input.
 Session actions › **Use this size as the default** saves the current grid as
 the Default columns/rows for new sessions nobody's screen sized yet (agent
 sessions).
+
+## Continue in a terminal app
+
+Any running session you drive can also be open in Ghostty (or any terminal) on
+this Mac, and vice versa:
+
+- `bakin terminal new --as human` starts a shell in the current directory,
+  titled after it, and attaches this terminal. `--program claude|codex` runs a
+  coding CLI instead, `--worktree` works in a new isolated Git worktree (any
+  program, shells included), `--title` names it, and `--agent <id>` assigns an
+  agent without handing it control.
+- `bakin terminal attach <ref> --as human` continues an existing session.
+  `<ref>` is the full id, a unique id prefix of at least 8 characters, or an
+  exact title; an ambiguous one lists the candidates. Session details in the
+  browser show the short id and a copyable attach command.
+- `bakin terminal ls --as human` lists sessions: id, title, program, owner,
+  state, size, directory, and how many terminal apps are attached.
+
+While attached, `Ctrl-b d` detaches, `Ctrl-b [` scrolls back, and closing the
+window also detaches; the session keeps running in Bakin. Attaching makes the
+terminal app the screen that sizes the session (the header says **Sized by
+terminal app**), and its window resizes are followed until another screen
+chooses **Fit to this device**. The browser shows **Open in a terminal app**
+while one is attached.
+
+Only the operator attaches, from a terminal (not inside tmux, an agent shell,
+or a remote `BAKIN_URL`). An agent-driven session refuses with "Take control
+first", and **Return control** detaches terminal apps before the agent types
+again. Every attach is a single-use reservation the CLI confirms within 15
+seconds; any other tmux client on a session, including a hand-typed
+`tmux attach`, is detached at once. A Bakin restart detaches attached terminal
+apps; attach again.
 
 ## Agent Tool
 
@@ -208,7 +241,9 @@ It prints a loopback URL and uses disposable state, not the user's Bakin home.
 It enables only `patch` and has no Git hook integration, so coding sessions in
 the preview require Existing checkout. Stop the preview to stop its shells.
 Run `TERMINAL_PREVIEW_URL=<printed URL> bun test tests/browser.integration.test.ts
---isolate` from this plugin for live desktop/mobile browser verification.
+--isolate` from this plugin for live desktop/mobile browser verification;
+`tests/handoff.browser.test.ts` also needs `TERMINAL_PREVIEW_TMUX` (the
+printed `tmux`) to attach a terminal app.
 
 The `/terminal` index uses `storybook/public/pages/page.stories.tsx` /
 `CanonicalUsage` and `lists/data-table.stories.tsx` / `ActivatableRows`.

@@ -1,6 +1,6 @@
 {
   "name": "@bakin-bits/terminal",
-  "version": "0.4.0-dev.3",
+  "version": "0.4.0-dev.4",
   "private": true,
   "type": "module",
   "main": "./index.ts",

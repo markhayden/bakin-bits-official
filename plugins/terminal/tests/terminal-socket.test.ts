@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { TerminalSocketClient, type SocketLike } from '../components/terminal-socket'
+import { TerminalSocketClient, type SocketLike , type Presence } from '../components/terminal-socket'
 import type { Session } from '../lib/contracts'
 
 const session = { id: 's1', generation: 1, inputSequence: 0, cols: 100, rows: 30, state: 'running' } as Session
@@ -24,14 +24,14 @@ class FakeSocket implements SocketLike {
 
 function setup(overrides: Partial<ConstructorParameters<typeof TerminalSocketClient>[0]> = {}) {
   FakeSocket.all = []
-  const events = { syncs: [] as unknown[], output: [] as Uint8Array[], sessions: [] as Session[], results: [] as unknown[], statuses: [] as string[], frozen: [] as boolean[] }
+  const events = { syncs: [] as unknown[], output: [] as Uint8Array[], sessions: [] as Session[], results: [] as unknown[], statuses: [] as string[], presence: [] as Presence[] }
   const client = new TerminalSocketClient({
     url: 'ws://host/api/plugins/terminal/socket?id=s1', clientId: 'tab-0123456789abcdef',
     createSocket: (url) => new FakeSocket(url),
     onSync: (sync) => { events.syncs.push(sync) },
     onOutput: (bytes, done) => { events.output.push(bytes); done() },
     onSession: (next) => { events.sessions.push(next) },
-    onPresence: (frozen) => { events.frozen.push(frozen) },
+    onPresence: (presence) => { events.presence.push(presence) },
     onResult: (result) => { events.results.push(result) },
     onStatus: (status) => { events.statuses.push(status) },
     ackBytes: 10, ackMs: 1000, coalesceMs: 5, reconnectMs: [5, 10],
@@ -212,11 +212,11 @@ describe('TerminalSocketClient', () => {
     expect(socket().of('resize')).toEqual([{ type: 'resize', epoch: 3, cols: 90, rows: 30 }])
   })
 
-  it('reports whether the size is frozen on every sync and on each presence change', () => {
+  it('reports the frozen size and attached terminal apps on every sync and on each presence change', () => {
     const { client, socket, events } = setup()
     client.connect(); socket().open()
-    socket().server({ type: 'sync', epoch: 1, session, snapshot: '', cursor: 0, sizeFrozen: true })
-    socket().server({ type: 'presence', sizeFrozen: false })
-    expect(events.frozen).toEqual([true, false])
+    socket().server({ type: 'sync', epoch: 1, session, snapshot: '', cursor: 0, sizeFrozen: true, nativeClients: 0 })
+    socket().server({ type: 'presence', sizeFrozen: false, nativeClients: 1 })
+    expect(events.presence).toEqual([{ sizeFrozen: true, nativeClients: 0 }, { sizeFrozen: false, nativeClients: 1 }])
   })
 })

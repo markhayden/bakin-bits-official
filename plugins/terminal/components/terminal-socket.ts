@@ -18,7 +18,9 @@ export interface SocketLike {
   close(code?: number): void
 }
 
-export interface SyncMessage { epoch: number; session: Session; snapshot: string; cursor: number; sizeFrozen: boolean }
+/** Who is around a session besides this screen: whether its size is frozen (the sizing screen or app is away) and how many terminal apps are attached. */
+export interface Presence { sizeFrozen: boolean; nativeClients: number }
+export interface SyncMessage extends Presence { epoch: number; session: Session; snapshot: string; cursor: number }
 export interface InputResult { viewerSeq: number; status: 'accepted' | 'rejected' | 'uncertain'; error?: string }
 
 /** Server close codes (lib/socket.ts SOCKET_CLOSE) that must not auto-reconnect. */
@@ -32,7 +34,7 @@ export interface TerminalSocketOptions {
   onOutput(bytes: Uint8Array, done: () => void): void
   onSession(session: Session): void
   /** The screen that sizes the session disconnected (true) or is back (false); every sync says it too. */
-  onPresence(sizeFrozen: boolean): void
+  onPresence(presence: Presence): void
   onResult(result: InputResult): void
   onStatus(status: string): void
   createSocket?: (url: string) => SocketLike
@@ -163,11 +165,11 @@ export class TerminalSocketClient {
         clearTimeout(this.ackTimer)
         this.ackTimer = undefined
         this.options.onSync(message as unknown as SyncMessage)
-        this.options.onPresence(Boolean(message.sizeFrozen))
+        this.options.onPresence(presenceOf(message))
         this.options.onStatus((message.session as Session).state === 'completed' ? 'Completed' : 'Connected')
         return
       case 'session': this.options.onSession(message.session as Session); return
-      case 'presence': this.options.onPresence(Boolean(message.sizeFrozen)); return
+      case 'presence': this.options.onPresence(presenceOf(message)); return
       case 'result': {
         const result = message as unknown as InputResult
         const generation = this.inFlight.get(result.viewerSeq)
@@ -242,4 +244,8 @@ export class TerminalSocketClient {
     this.retryTimer = setTimeout(() => this.connect(), delays[Math.min(this.retry, delays.length - 1)])
     this.retry++
   }
+}
+
+function presenceOf(message: Record<string, unknown>): Presence {
+  return { sizeFrozen: Boolean(message.sizeFrozen), nativeClients: Number(message.nativeClients) || 0 }
 }

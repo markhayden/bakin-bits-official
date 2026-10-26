@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import type { PluginSocket } from '@makinbakin/sdk/types'
 import { DeliveryUncertainError, TerminalError, type Principal, type Session } from '../lib/contracts'
+import type { NativeClient } from '../lib/processes'
 import { SOCKET_CLOSE, TerminalViewer, type ViewerManager } from '../lib/socket'
 
 const CLIENT = 'browser-0123456789abcdef'
@@ -18,6 +19,8 @@ function fakeManager(initial = session()) {
   let floor = 0
   const outputWaiters = new Set<() => void>()
   const sessionListeners = new Set<(session: Session) => void>()
+  let natives: NativeClient[] = []
+  const nativeListeners = new Set<() => void>()
   const writes: Array<{ principal: Principal; data: string }> = []
   let writeError: Error | undefined
   const manager: ViewerManager = {
@@ -42,6 +45,8 @@ function fakeManager(initial = session()) {
       signal.addEventListener('abort', done, { once: true })
     }),
     onSessionChange: (_id, listener) => { sessionListeners.add(listener); return () => sessionListeners.delete(listener) },
+    nativeClients: () => natives,
+    onNatives: (_id, listener) => { nativeListeners.add(listener); return () => nativeListeners.delete(listener) },
     writeNext: async (_id, principal, _generation, data) => {
       if (writeError) throw writeError
       writes.push({ principal, data })
@@ -57,6 +62,7 @@ function fakeManager(initial = session()) {
     roll: (to: number) => { floor = to },
     change: (next: Partial<Session>) => { current = { ...current, ...next }; for (const listener of sessionListeners) listener(current) },
     failWrites: (error: Error) => { writeError = error },
+    setNatives: (next: NativeClient[]) => { natives = next; for (const listener of nativeListeners) listener() },
   }
 }
 
@@ -309,12 +315,27 @@ describe('TerminalViewer', () => {
     new TerminalViewer(manager, desk.socket, 's1', options)
     desk.client({ type: 'hello', clientId: AUTHORITY })
     await until(() => watcher.of('presence').length === 1, 'authority arrived')
-    expect(watcher.of('presence')[0]).toEqual({ type: 'presence', sizeFrozen: false })
+    expect(watcher.of('presence')[0]).toEqual({ type: 'presence', sizeFrozen: false, nativeClients: 0 })
     await until(() => desk.of('sync').length === 1, 'authority sync')
     expect(desk.of('sync')[0]!.sizeFrozen).toBe(false)
     desk.socket.close(1000)
     await until(() => watcher.of('presence').length === 2, 'authority left')
-    expect(watcher.of('presence')[1]).toEqual({ type: 'presence', sizeFrozen: true })
+    expect(watcher.of('presence')[1]).toEqual({ type: 'presence', sizeFrozen: true, nativeClients: 0 })
+  })
+
+  it('counts terminal apps and freezes the size while the app that sizes it is gone', async () => {
+    const { manager, setNatives } = fakeManager(session({ sizeEpoch: 1, sizeRevision: 0, sizeAuthority: { viewer: 'native:501', kind: 'native' } }))
+    const peer = fakeSocket()
+    new TerminalViewer(manager, peer.socket, 's1', options)
+    peer.client({ type: 'hello', clientId: CLIENT })
+    await until(() => peer.of('sync').length === 1, 'sync')
+    expect(peer.of('sync')[0]).toMatchObject({ sizeFrozen: true, nativeClients: 0 })
+    setNatives([{ pid: 501, name: '/dev/ttys001', cols: 120, rows: 40, readonly: false, control: false }])
+    expect(peer.of('presence')).toEqual([{ type: 'presence', sizeFrozen: false, nativeClients: 1 }])
+    setNatives([{ pid: 501, name: '/dev/ttys001', cols: 130, rows: 40, readonly: false, control: false }])
+    expect(peer.of('presence')).toHaveLength(1)
+    setNatives([])
+    expect(peer.of('presence')[1]).toEqual({ type: 'presence', sizeFrozen: true, nativeClients: 0 })
   })
 
   it('re-evaluates the freeze when another screen claims the size', async () => {
@@ -326,6 +347,6 @@ describe('TerminalViewer', () => {
     expect(peer.of('sync')[0]!.sizeFrozen).toBe(true)
     change({ sizeEpoch: 2, sizeAuthority: { viewer: CLIENT, kind: 'browser', device: 'desktop' } })
     await until(() => peer.of('presence').length === 1, 'thawed by the claim')
-    expect(peer.of('presence')[0]).toEqual({ type: 'presence', sizeFrozen: false })
+    expect(peer.of('presence')[0]).toEqual({ type: 'presence', sizeFrozen: false, nativeClients: 0 })
   })
 })

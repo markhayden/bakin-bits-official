@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
 import { DAY, type Session } from '../lib/contracts'
-import type { ProcessDriver } from '../lib/processes'
+import type { NativeClient, ProcessDriver } from '../lib/processes'
 
 const managers: Sessions[] = []
 afterEach(async () => { for (const manager of managers.splice(0)) await manager.shutdown() })
@@ -19,13 +19,34 @@ function fixture() {
   let readBackFailure: Error | undefined
   const tmuxSizes = new Map<string, { cols: number; rows: number }>()
   const outputs = new Map<string, (data: Uint8Array) => void>()
+  /** Terminal apps attached in tmux, per session, and each session's "clients changed" signal. */
+  const natives = new Map<string, NativeClient[]>()
+  const clientsChanged = new Map<string, () => void>()
+  const vanishing = new Set<number>()
+  const detachedClients: string[] = []
   const driver: ProcessDriver = {
-    create: async (s) => { live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, output) { attached.add(s.id); outputs.set(s.id, output) }, connected: (id) => attached.has(id),
+    create: async (s) => { live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, output, changed) { attached.add(s.id); outputs.set(s.id, output); clientsChanged.set(s.id, changed) }, connected: (id) => attached.has(id),
     write: async (_id, data) => { if (writeFailure) throw writeFailure; writes.push(data) },
     resize: async (id, cols, rows) => { if (resizeFailure) { tmuxSizes.set(id, { cols: 77, rows: 22 }); throw resizeFailure } tmuxSizes.set(id, { cols, rows }) },
     windowSize: async (id) => { if (readBackFailure) throw readBackFailure; return tmuxSizes.get(id)! },
     title: async () => {}, alive: async (id) => live.has(id), screen: async () => '',
     terminate: async (id) => { terminated.push(id); live.delete(id) }, inUse: async () => false, detach: async (id) => { if (id) attached.delete(id); else attached.clear() },
+    // Like tmux: a client in `vanishing` is listed once, then gone before anyone acts on it.
+    clients: async (id) => {
+      const listed = natives.get(id) ?? []
+      natives.set(id, listed.filter((client) => !vanishing.has(client.pid)))
+      return listed
+    },
+    detachClient: async (name) => {
+      if (![...natives.values()].flat().some((client) => client.name === name)) throw new Error(`can't find client: ${name}`)
+      detachedClients.push(name)
+      for (const [id, list] of natives) natives.set(id, list.filter((client) => client.name !== name))
+    },
+    setReadonly: async (id, target, readonly) => {
+      if (!(natives.get(id) ?? []).some((client) => client.name === target.name)) throw new Error(`can't find client: ${target.name}`)
+      natives.set(id, (natives.get(id) ?? []).map((client) => client.name === target.name ? { ...client, readonly } : client))
+    },
+    attachArgs: (id) => ['-S', '/tmp/t.sock', 'attach-session', '-t', id],
   }
   const releases: Array<{ sessionId: string; worktreePath: string; teardown?: boolean }> = []
   const manager = new Sessions(new Store(':memory:'), driver, {
@@ -35,7 +56,19 @@ function fixture() {
   })
   managers.push(manager)
   return {
-    manager, writes, live, attached, terminated, releases, outputs,
+    manager, writes, live, attached, terminated, releases, outputs, natives, detachedClients, vanishing,
+    /** A terminal app attaches (or resizes) in tmux; the control client notices. */
+    nativeAttach: async (id: string, client: NativeClient) => {
+      natives.set(id, [...(natives.get(id) ?? []).filter((entry) => entry.pid !== client.pid), client])
+      clientsChanged.get(id)?.()
+      await manager.idle()
+    },
+    nativeLeave: async (id: string, pid: number) => {
+      natives.set(id, (natives.get(id) ?? []).filter((entry) => entry.pid !== pid))
+      clientsChanged.get(id)?.()
+      await manager.idle()
+    },
+    later: (ms: number) => { now += ms },
     failWrites: (error: Error) => { writeFailure = error },
     failResizes: (error: Error | undefined) => { resizeFailure = error },
     failReadBack: (error: Error | undefined) => { readBackFailure = error },
@@ -324,4 +357,317 @@ test('reattaching after setup adopts tmux\'s window, even when the stored record
   const screen = await manager.readScreen(session.id, human)
   expect([screen.cols, screen.rows]).toEqual([120, 40])
   expect(manager.store.sessions().find((stored) => stored.id === session.id)).toMatchObject({ cols: 120, rows: 40 })
+})
+
+const operator = { kind: 'human', id: 'cli' } as const
+/** Launched by the CLI, a terminal app attaches read-only until admitted. */
+const ghostty = (pid: number, cols = 120, rows = 40, readonly = true): NativeClient => ({ pid, name: `/dev/ttys00${pid % 10}`, cols, rows, readonly, control: false })
+
+test('a terminal app attaches only through a confirmed reservation, then sizes the session', async () => {
+  const { manager, nativeAttach, detachedClients, natives } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  expect(reserved.args).toEqual(['-S', '/tmp/t.sock', 'attach-session', '-t', session.id])
+  // tmux can attach before the CLI's confirm arrives: held, not detached.
+  await nativeAttach(session.id, ghostty(501))
+  expect(detachedClients).toEqual([])
+  expect(manager.nativeClients(session.id)).toEqual([])
+  expect(natives.get(session.id)?.[0]?.readonly).toBe(true)
+  await manager.confirmAttach(reserved.token, 501)
+  expect(manager.nativeClients(session.id).map((client) => client.pid)).toEqual([501])
+  // Admitted, it can type.
+  expect(natives.get(session.id)?.[0]?.readonly).toBe(false)
+  const sized = manager.get(session.id, human)
+  expect(sized.sizeAuthority).toEqual({ viewer: 'native:501', kind: 'native' })
+  expect([sized.cols, sized.rows]).toEqual([120, 40])
+  // The app's window resizes: the session follows (clamped to the floor).
+  await nativeAttach(session.id, ghostty(501, 30, 8, false))
+  expect([manager.get(session.id, human).cols, manager.get(session.id, human).rows]).toEqual([40, 10])
+  // A reservation is single-use.
+  await expect(manager.confirmAttach(reserved.token, 777)).rejects.toThrow('run the command again')
+})
+
+test('an unreserved attach (a raw tmux attach) is detached at once', async () => {
+  const { manager, nativeAttach, detachedClients } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  await nativeAttach(session.id, ghostty(601))
+  expect(detachedClients).toEqual(['/dev/ttys001'])
+  expect(manager.nativeClients(session.id)).toEqual([])
+})
+
+test('an expired reservation admits nothing, and its waiting client is detached', async () => {
+  const { manager, nativeAttach, detachedClients, later } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  await nativeAttach(session.id, ghostty(702))
+  later(15_001)
+  await expect(manager.confirmAttach(reserved.token, 702)).rejects.toThrow('expired')
+  await nativeAttach(session.id, ghostty(702))
+  expect(detachedClients).toEqual(['/dev/ttys002'])
+})
+
+test('agent-owned sessions refuse a terminal app; take, return and assign invalidate reservations', async () => {
+  const { manager } = fixture()
+  const session = await manager.create({ title: 'Agent', cwd: '/tmp' }, agent)
+  await expect(manager.reserveAttach(session.id, operator)).rejects.toThrow('Take control first')
+  await expect(manager.reserveAttach(session.id, agent)).rejects.toThrow('Only the human')
+  await manager.control(session.id, human, 'take')
+  for (const operation of ['take', 'assign'] as const) {
+    const reserved = await manager.reserveAttach(session.id, operator)
+    await manager.control(session.id, human, operation, operation === 'assign' ? 'patch' : undefined)
+    await expect(manager.confirmAttach(reserved.token, 1)).rejects.toThrow('run the command again')
+  }
+})
+
+test('Return detaches every admitted terminal app before the agent drives', async () => {
+  const { manager, nativeAttach, detachedClients } = fixture()
+  const session = await manager.create({ title: 'Agent', cwd: '/tmp' }, agent)
+  await manager.control(session.id, human, 'take')
+  const reserved = await manager.reserveAttach(session.id, operator)
+  // The confirm can arrive before tmux has attached: it waits for the admission.
+  const confirmed = manager.confirmAttach(reserved.token, 803)
+  await manager.idle()
+  await nativeAttach(session.id, ghostty(803))
+  await confirmed
+  expect(manager.nativeClients(session.id)).toHaveLength(1)
+  const returned = await manager.control(session.id, human, 'return')
+  expect(detachedClients).toEqual(['/dev/ttys003'])
+  expect(manager.nativeClients(session.id)).toEqual([])
+  expect(returned.owner).toEqual(agent)
+})
+
+test('the app leaving is heard, and a browser claim stops following it', async () => {
+  const { manager, nativeAttach, nativeLeave } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const heard: number[] = []
+  manager.onNatives(session.id, () => heard.push(manager.nativeClients(session.id).length))
+  const reserved = await manager.reserveAttach(session.id, operator)
+  await nativeAttach(session.id, ghostty(904))
+  await manager.confirmAttach(reserved.token, 904)
+  await manager.claim(session.id, human, 100, 30, { kind: 'browser', device: 'desktop' })
+  await nativeAttach(session.id, ghostty(904, 150, 50, false))
+  expect([manager.get(session.id, human).cols, manager.get(session.id, human).rows]).toEqual([100, 30])
+  await nativeLeave(session.id, 904)
+  expect(heard).toEqual([1, 1, 0])
+})
+
+test('while a confirm is pending, every unmatched client is held unable to type, and Return detaches held clients too', async () => {
+  const { manager, nativeAttach, natives, detachedClients } = fixture()
+  const session = await manager.create({ title: 'Agent', cwd: '/tmp' }, agent)
+  await manager.control(session.id, human, 'take')
+  await manager.reserveAttach(session.id, operator)
+  // A raw attach that slips into the window (writable) is made read-only while it waits.
+  await nativeAttach(session.id, ghostty(311, 80, 24, false))
+  expect(natives.get(session.id)?.[0]).toMatchObject({ pid: 311, readonly: true })
+  expect(detachedClients).toEqual([])
+  const returned = await manager.control(session.id, human, 'return')
+  expect(detachedClients).toEqual(['/dev/ttys001'])
+  expect(natives.get(session.id)).toEqual([])
+  expect(returned.owner).toEqual(agent)
+})
+
+test('ending or deleting a session forgets its terminal apps', async () => {
+  const { manager, nativeAttach, live } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const heard: number[] = []
+  manager.onNatives(session.id, () => heard.push(manager.nativeClients(session.id).length))
+  const reserved = await manager.reserveAttach(session.id, operator)
+  await nativeAttach(session.id, ghostty(412))
+  await manager.confirmAttach(reserved.token, 412)
+  live.delete(session.id)
+  await manager.refreshStates()
+  expect(manager.nativeClients(session.id)).toEqual([])
+  expect(heard).toEqual([1, 0])
+  await expect(manager.reserveAttach(session.id, operator)).rejects.toThrow('exited')
+})
+
+test('a CLI-created session starts at the caller\'s terminal size, sized by the terminal app', async () => {
+  const { manager, tmuxSizes } = fixture()
+  const session = await manager.create({ title: 'Here', cwd: '/tmp', checkout: 'existing' }, operator, { cols: 90, rows: 28, kind: 'native' })
+  expect([session.cols, session.rows]).toEqual([90, 28])
+  expect(tmuxSizes.get(session.id)).toEqual({ cols: 90, rows: 28 })
+  expect(session.sizeAuthority).toEqual({ viewer: 'cli', kind: 'native' })
+})
+
+test('an isolated checkout is prepared for a shell too; a shell defaults to the existing checkout', async () => {
+  const prepared: string[] = []
+  const driver = { create: async () => {}, attach() {}, connected: () => true, write: async () => {}, resize: async () => {}, windowSize: async () => ({ cols: 200, rows: 60 }), title: async () => {}, alive: async () => true, screen: async () => '', terminate: async () => {}, inUse: async () => false, detach: async () => {}, clients: async () => [], detachClient: async () => {}, setReadonly: async () => {}, attachArgs: () => [] } satisfies ProcessDriver
+  const manager = new Sessions(new Store(':memory:'), driver, {
+    settings: () => ({ enabledAgents: [] }),
+    prepare: async (input) => { prepared.push(input.sessionId); return { ok: true, worktreePath: '/tmp' } },
+    release: async () => ({ ok: true }),
+  })
+  managers.push(manager)
+  const plain = await manager.create({ title: 'Plain', cwd: '/tmp' }, human)
+  expect(plain.worktreePath).toBeUndefined()
+  const isolated = await manager.create({ title: 'Isolated', cwd: '/tmp', checkout: 'isolated' }, human)
+  expect(prepared).toEqual([isolated.id])
+  expect(isolated.worktreePath).toBe('/tmp')
+})
+
+test('a confirm resolves only on admission, and rejects when the reservation lapses first', async () => {
+  const { manager, nativeAttach, detachedClients } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  const confirmed = manager.confirmAttach(reserved.token, 515)
+  await manager.idle()
+  // Control changes before tmux attaches: the CLI hears it was turned away.
+  await manager.control(session.id, human, 'take')
+  await expect(confirmed).rejects.toThrow('Control changed')
+  await nativeAttach(session.id, ghostty(515))
+  expect(detachedClients).toEqual(['/dev/ttys005'])
+})
+
+test('a foreign control-mode client is detached even while a confirm is pending', async () => {
+  const { manager, nativeAttach, detachedClients } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  await manager.reserveAttach(session.id, operator)
+  await nativeAttach(session.id, { ...ghostty(626, 80, 24, false), control: true })
+  expect(detachedClients).toEqual(['/dev/ttys006'])
+})
+
+test('a client that leaves mid-reconcile does not undo another client\'s admission', async () => {
+  const { manager, natives, nativeAttach, vanishing, detachedClients } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  // Listed beside 737 but gone before it is acted on: skipped, and 737 is still admitted.
+  vanishing.add(838)
+  natives.set(session.id, [ghostty(838, 80, 24, false), ghostty(737)])
+  await manager.confirmAttach(reserved.token, 737)
+  expect(manager.nativeClients(session.id).map((client) => client.pid)).toEqual([737])
+  expect(detachedClients).toEqual([])
+  // Later reconciles keep it.
+  await nativeAttach(session.id, ghostty(737, 100, 30, false))
+  expect(manager.nativeClients(session.id).map((client) => client.pid)).toEqual([737])
+})
+
+test('an admission survives a later client failing in the same pass, and the confirm resolves', async () => {
+  const { manager, natives, nativeAttach } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  const confirmed = manager.confirmAttach(reserved.token, 941)
+  await manager.idle()
+  // 941 is admitted first; then a stuck client's detach fails for real (it is still listed).
+  const driver = (manager as unknown as { driver: { detachClient(name: string): Promise<void> } }).driver
+  const detach = driver.detachClient
+  driver.detachClient = async (name) => { if (name === 'stuck') throw new Error('server busy'); return detach(name) }
+  natives.set(session.id, [ghostty(941)])
+  await nativeAttach(session.id, { ...ghostty(942, 80, 24, false), control: true, name: 'stuck' })
+  await confirmed
+  expect(manager.nativeClients(session.id).map((client) => client.pid)).toEqual([941])
+  expect(manager.get(session.id, human).sizeAuthority).toEqual({ viewer: 'native:941', kind: 'native' })
+})
+
+test('a confirm whose admission pass fails is refused, not left waiting', async () => {
+  const { manager, natives } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  natives.set(session.id, [ghostty(951)])
+  const driver = (manager as unknown as { driver: { setReadonly(): Promise<void> } }).driver
+  driver.setReadonly = async () => { throw new Error('server busy') }
+  await expect(manager.confirmAttach(reserved.token, 951)).rejects.toThrow('Could not admit this terminal: server busy')
+})
+
+test('the admitted app is sized even when another client fails in the same pass', async () => {
+  const { manager, natives, nativeAttach, tmuxSizes } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  const confirmed = manager.confirmAttach(reserved.token, 961)
+  await manager.idle()
+  const driver = (manager as unknown as { driver: { detachClient(name: string): Promise<void> } }).driver
+  driver.detachClient = async () => { throw new Error('server busy') }
+  natives.set(session.id, [{ ...ghostty(962, 80, 24, false), control: true, name: 'stuck' }])
+  await nativeAttach(session.id, ghostty(961, 120, 40))
+  await confirmed
+  expect(tmuxSizes.get(session.id)).toEqual({ cols: 120, rows: 40 })
+  expect([manager.get(session.id, human).cols, manager.get(session.id, human).rows]).toEqual([120, 40])
+})
+
+test('an admission whose size claim cannot be saved is revoked: detached and refused', async () => {
+  const { manager, natives, detachedClients } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  natives.set(session.id, [ghostty(971)])
+  const store = manager.store as unknown as { save(session: unknown): void }
+  const save = store.save.bind(store)
+  store.save = () => { throw new Error('disk full') }
+  await expect(manager.confirmAttach(reserved.token, 971)).rejects.toThrow('Could not admit this terminal')
+  store.save = save
+  expect(manager.nativeClients(session.id)).toEqual([])
+  expect(detachedClients).toEqual(['/dev/ttys001'])
+})
+
+test('a viewer listener that throws does not stop an admission', async () => {
+  const { manager, natives } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  manager.onSessionChange(session.id, () => { throw new Error('viewer gone') })
+  manager.onNatives(session.id, () => { throw new Error('viewer gone') })
+  const reserved = await manager.reserveAttach(session.id, operator)
+  natives.set(session.id, [ghostty(981)])
+  await manager.confirmAttach(reserved.token, 981)
+  expect(manager.nativeClients(session.id).map((client) => client.pid)).toEqual([981])
+  expect(manager.get(session.id, human).sizeAuthority).toEqual({ viewer: 'native:981', kind: 'native' })
+})
+
+test('an admission whose resize cannot be reconciled is revoked too', async () => {
+  const { manager, natives, detachedClients, failResizes, failReadBack } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  natives.set(session.id, [ghostty(991, 120, 40)])
+  failResizes(new Error('tmux refused'))
+  failReadBack(new Error('tmux gone'))
+  await expect(manager.confirmAttach(reserved.token, 991)).rejects.toThrow('Could not admit this terminal')
+  expect(manager.nativeClients(session.id)).toEqual([])
+  expect(detachedClients).toEqual(['/dev/ttys001'])
+})
+
+test('a fresh client stays read-only until its claim and resize are in place, and if they fail', async () => {
+  const { manager, natives, failResizes, failReadBack } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  natives.set(session.id, [ghostty(995, 120, 40)])
+  const driver = (manager as unknown as { driver: { resize(id: string, cols: number, rows: number): Promise<void> } }).driver
+  const resize = driver.resize
+  let release!: () => void
+  let entered!: () => void
+  const resizing = new Promise<void>((resolve) => { entered = resolve })
+  driver.resize = async (...args) => { entered(); await new Promise<void>((resolve) => { release = resolve }); return resize(...args) }
+  const confirmed = manager.confirmAttach(reserved.token, 995)
+  await resizing
+  expect(natives.get(session.id)?.[0]?.readonly).toBe(true)
+  release()
+  await confirmed
+  expect(natives.get(session.id)?.[0]?.readonly).toBe(false)
+  // And when sizing fails, it never became writable before being detached.
+  driver.resize = resize
+  const second = await manager.reserveAttach(session.id, operator)
+  const seen: boolean[] = []
+  const setReadonly = (manager as unknown as { driver: { setReadonly(id: string, client: unknown, readonly: boolean): Promise<void> } }).driver
+  const original = setReadonly.setReadonly
+  setReadonly.setReadonly = async (id, client, readonly) => { seen.push(readonly); return original(id, client, readonly) }
+  natives.set(session.id, [...natives.get(session.id)!, ghostty(996, 90, 30)])
+  failResizes(new Error('tmux refused'))
+  failReadBack(new Error('tmux gone'))
+  await expect(manager.confirmAttach(second.token, 996)).rejects.toThrow('Could not admit this terminal')
+  expect(seen).not.toContain(false)
+})
+
+test('one fresh client leaving before it can type does not revoke another', async () => {
+  const { manager, natives } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const first = await manager.reserveAttach(session.id, operator)
+  const second = await manager.reserveAttach(session.id, operator)
+  const driver = (manager as unknown as { driver: { resize(id: string, cols: number, rows: number): Promise<void> } }).driver
+  const resize = driver.resize
+  // Both confirmed before either attaches; then both attach and 1001 closes while the session resizes.
+  const a = manager.confirmAttach(first.token, 1001)
+  const b = manager.confirmAttach(second.token, 1002)
+  await manager.idle()
+  driver.resize = async (...args) => { natives.set(session.id, natives.get(session.id)!.filter((client) => client.pid !== 1001)); return resize(...args) }
+  natives.set(session.id, [ghostty(1001), ghostty(1002, 110, 35)])
+  ;(manager as unknown as { clientsChanged(id: string): void }).clientsChanged(session.id)
+  await expect(a).rejects.toThrow('left before it was admitted')
+  await b
+  expect(manager.nativeClients(session.id).map((client) => client.pid)).toEqual([1002])
+  expect(natives.get(session.id)?.[0]?.readonly).toBe(false)
 })

@@ -98,7 +98,7 @@
     },
     "plugins/terminal": {
       "name": "@bakin-bits/terminal",
-      "version": "0.4.0-dev.3",
+      "version": "0.4.0-dev.4",
       "dependencies": {
         "@xterm/addon-fit": "0.11.0",
         "@xterm/addon-serialize": "0.14.0",

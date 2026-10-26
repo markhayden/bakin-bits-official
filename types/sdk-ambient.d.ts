@@ -1223,6 +1223,8 @@ declare module '@makinbakin/sdk/patterns' {
   export const AgentFilter: PatternComponent
   export const FacetFilter: PatternComponent
   export const SegmentedControl: PatternComponent
+  /** The one copy affordance (CLI commands, ids, paths). */
+  export const CopyButton: ComponentType<{ text: string; label?: string; className?: string; onCopied?: () => void }>
   export const WorkspacePage: PatternComponent
   export const WorkspacePageBody: PatternComponent
   export const WorkspacePageHeader: PatternComponent

@@ -74,6 +74,22 @@ describe('ControlClient', () => {
     expect(notes).toEqual(['%client-detached /dev/ttys1'])
   })
 
+  it('closes a connection whose reply never comes, failing every waiter (replies correlate by order)', async () => {
+    const { transport } = fakeTransport()
+    const client = new ControlClient(transport, () => {}, 20)
+    client.feed('%begin 1 1 0\n%end 1 1 0\n')
+    const settled = await Promise.allSettled([client.command(['resize-window', '-t', 's1', '-x', '80', '-y', '24']), client.command(['display-message', '-p', 'x'])])
+    expect(settled.map((result) => result.status === 'rejected' && (result.reason as Error).message)).toEqual(['Terminal control connection closed', 'Terminal control connection closed'])
+    expect(client.isClosed).toBe(true)
+  })
+
+  it('closes a connection whose attach is never answered', async () => {
+    const { transport } = fakeTransport()
+    const client = new ControlClient(transport, () => {}, 20)
+    await expect(client.ready).rejects.toThrow('closed')
+    expect(client.isClosed).toBe(true)
+  })
+
   it('rejects a failed command with tmux\'s message', async () => {
     const { transport } = fakeTransport()
     const client = new ControlClient(transport, () => {})
