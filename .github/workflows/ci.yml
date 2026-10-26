@@ -14,10 +14,12 @@ env:
   # The ONE compatible Bakin SDK source both jobs build and verify against.
   # Projects revamp: Bakin P1 (structured questions, the conversation-width
   # PageAside rail; #1031) plus the kit a11y fixes (#1032 — empty-state
-  # headingLevel, aria-hidden composer file input; merged as 11ea1b3). Includes the zod
+  # headingLevel, aria-hidden composer file input), and #1034, whose
+  # styles.css/census are regenerated against this repo's Projects revamp
+  # (so the stylesheet-identity checks match). Includes the zod
   # externalization contract (#948). Pin a reviewed commit, never a moving
   # branch.
-  BAKIN_SDK_REF: 11ea1b3536bc7a0dd09fdfb43350c7aee304d4b9
+  BAKIN_SDK_REF: 9533256592f5de687c1567933c431692629ec3a9
 
 jobs:
   check:
