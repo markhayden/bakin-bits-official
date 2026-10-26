@@ -10,7 +10,7 @@ import {
   computeProgress,
   nextTaskItemId,
 } from './parser'
-import type { ChecklistPromotionOperation, Project, ProjectTask, ProjectStatus } from '../types'
+import type { ChecklistPromotionOperation, MutationCaller, Project, ProjectTask, ProjectStatus, TitleSource } from '../types'
 import { assertItemIdentity, assertExpectedFields, ProjectMutationError, validateItemPatch, validateProjectPatch } from './project-mutations'
 
 const log = {
@@ -49,6 +49,7 @@ function getIndex(): Map<string, TaskLinkEntry> {
 
 export interface CreateProjectOpts {
   title: string
+  titleSource: TitleSource
   body?: string
   owner?: string
   tasks?: string[]
@@ -61,7 +62,8 @@ export interface UpdateProjectOpts {
   owner?: string
 }
 
-export interface ApplyProjectPlanOpts extends UpdateProjectOpts {
+/** Agent plan writes: never lifecycle status (D9a). */
+export interface ApplyProjectPlanOpts extends Omit<UpdateProjectOpts, 'status'> {
   appendBody?: string
   checklistItems?: string[]
 }
@@ -71,7 +73,6 @@ export interface ApplyProjectPlanResult {
   progress: number
   updated: {
     title: boolean
-    status: boolean
     body: boolean
     owner: boolean
     checklistItems: boolean
@@ -100,8 +101,8 @@ export interface ProjectService {
   getProjectForTask(boardTaskId: string): TaskLinkEntry | undefined
   getProjectTitleForTask(boardTaskId: string): string | null
   createProject(opts: CreateProjectOpts): Promise<{ id: string; taskItems: { id: string; title: string }[] }>
-  updateProject(id: string, updates: UpdateProjectOpts, agent?: string, expected?: UpdateProjectOpts): Promise<void>
-  applyProjectPlan(id: string, updates: ApplyProjectPlanOpts, agent?: string): Promise<ApplyProjectPlanResult>
+  updateProject(id: string, updates: UpdateProjectOpts, caller: MutationCaller, expected?: UpdateProjectOpts): Promise<void>
+  applyProjectPlan(id: string, updates: ApplyProjectPlanOpts, caller: MutationCaller): Promise<ApplyProjectPlanResult>
   /** Restore a plan snapshot by history index; snapshots the current body first (bakin#703). */
   restorePlanVersion(id: string, index: number, expectedTs?: string): Promise<{ changed: boolean }>
   deleteProject(id: string, agent?: string): Promise<void>
@@ -121,6 +122,25 @@ export interface ProjectService {
     resolvedTasks: Record<string, { column: string; title: string } | null>
     resolvedAssets: ResolvedAsset[]
   }>
+}
+
+/**
+ * The ONE authority chokepoint (D9a): every project-field write passes here
+ * with its caller. Agents never change lifecycle status (that is the user's,
+ * or an approval's) and never overwrite a title a human typed.
+ */
+function assertCallerMay(project: Project, patch: { title?: string; status?: ProjectStatus }, caller: MutationCaller): void {
+  if (caller.kind !== 'agent') return
+  if (patch.status !== undefined && patch.status !== project.status) {
+    throw new ProjectMutationError('Agents cannot change a project\'s status — starting, completing and archiving are the user\'s decisions.', 403, 'agent_status')
+  }
+  if (patch.title !== undefined && patch.title !== project.title && project.titleSource === 'user') {
+    throw new ProjectMutationError('The user named this project — keep their title.', 409, 'title_locked')
+  }
+}
+
+function callerName(caller: MutationCaller, project: Project): string {
+  return caller.kind === 'agent' ? caller.agentId : project.owner
 }
 
 // Reservations have globally unique IDs; simultaneous callers share only their own operation.
@@ -167,6 +187,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       const project: Project = {
         id,
         title: opts.title,
+        titleSource: opts.titleSource,
         status: 'draft',
         created: now,
         updated: now,
@@ -184,21 +205,25 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     })
   }
 
-  async function updateProject(id: string, updates: UpdateProjectOpts, agent?: string, expected?: UpdateProjectOpts): Promise<void> {
+  async function updateProject(id: string, updates: UpdateProjectOpts, caller: MutationCaller, expected?: UpdateProjectOpts): Promise<void> {
     const patch = validateProjectPatch(updates)
     return withProjectLock(() => {
       const project = repo.readProject(id)
       if (!project) throw new ProjectMutationError(`Project not found: ${id}`, 404, 'not_found')
       assertExpectedFields(project, patch, expected)
       if (Object.entries(patch).every(([field, value]) => value === undefined || project[field as keyof UpdateProjectOpts] === value)) return
-      if (patch.title !== undefined) project.title = patch.title
+      assertCallerMay(project, patch, caller)
+      if (patch.title !== undefined && patch.title !== project.title) {
+        project.title = patch.title
+        project.titleSource = caller.kind
+      }
       if (patch.status !== undefined) project.status = patch.status
       if (patch.body !== undefined && patch.body !== project.body) {
         // Snapshot the PRIOR body before it changes (bakin#703) — no-op
         // writes never snapshot.
         repo.appendPlanSnapshot(id, {
           ts: new Date().toISOString(),
-          author: agent ? 'agent' : 'user',
+          author: caller.kind,
           body: project.body,
         })
         project.body = patch.body
@@ -207,12 +232,12 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       project.updated = new Date().toISOString()
       project.progress = computeProgress(project.tasks)
       repo.writeProject(project)
-      ctx.activity.audit('updated', agent || project.owner, { id, ...updates })
+      ctx.activity.audit('updated', callerName(caller, project), { id, ...updates })
       broadcast({ type: 'project.updated', id, title: project.title })
     })
   }
 
-  async function applyProjectPlan(id: string, updates: ApplyProjectPlanOpts, agent?: string): Promise<ApplyProjectPlanResult> {
+  async function applyProjectPlan(id: string, updates: ApplyProjectPlanOpts, caller: MutationCaller): Promise<ApplyProjectPlanResult> {
     return withProjectLock(() => {
       if (updates.body !== undefined && updates.appendBody !== undefined) {
         throw new Error('Provide either body or appendBody, not both')
@@ -220,6 +245,8 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
 
       const project = repo.readProject(id)
       if (!project) throw new Error(`Project not found: ${id}`)
+      // Guard first: a refused title must not half-apply the checklist.
+      assertCallerMay(project, { title: updates.title }, caller)
 
       const checklistItems = (updates.checklistItems ?? [])
         .map((title) => title.trim())
@@ -233,8 +260,10 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
         addedItems.push({ id: itemId, title })
       }
 
-      if (updates.title !== undefined) project.title = updates.title
-      if (updates.status !== undefined) project.status = updates.status
+      if (updates.title !== undefined && updates.title !== project.title) {
+        project.title = updates.title
+        project.titleSource = caller.kind
+      }
       if (updates.owner !== undefined) project.owner = updates.owner
       const priorBody = project.body
       if (updates.body !== undefined) {
@@ -245,18 +274,17 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       if (project.body !== priorBody) {
         // Snapshot the PRIOR body (bakin#703) — every agent edit is
         // visible in the plan history and revertable.
-        repo.appendPlanSnapshot(id, { ts: new Date().toISOString(), author: 'agent', body: priorBody })
+        repo.appendPlanSnapshot(id, { ts: new Date().toISOString(), author: caller.kind, body: priorBody })
       }
 
       project.updated = new Date().toISOString()
       project.progress = computeProgress(project.tasks)
       repo.writeProject(project)
 
-      ctx.activity.audit('plan.applied', agent || project.owner, {
+      ctx.activity.audit('plan.applied', callerName(caller, project), {
         id,
         addedItemCount: addedItems.length,
         title: updates.title,
-        status: updates.status,
         owner: updates.owner,
         bodyUpdated: updates.body !== undefined || updates.appendBody !== undefined,
       })
@@ -270,7 +298,6 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
         progress: project.progress,
         updated: {
           title: updates.title !== undefined,
-          status: updates.status !== undefined,
           body: updates.body !== undefined || updates.appendBody !== undefined,
           owner: updates.owner !== undefined,
           checklistItems: addedItems.length > 0,

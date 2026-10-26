@@ -30,6 +30,9 @@ import { createProjectRepository, type ProjectRepository } from '../../../plugin
 import { MarkdownStorageAdapter } from '../test-helpers'
 import type { PluginContext } from '@makinbakin/sdk/types'
 
+const USER = { kind: 'user' } as const
+const AGENT = { kind: 'agent', agentId: 'agent' } as const
+
 let service: ProjectService
 let repo: ProjectRepository
 let createProject: ProjectService['createProject']
@@ -161,7 +164,7 @@ afterEach(() => {
 
 describe('createProject', () => {
   it('creates a project file and returns id', async () => {
-    const result = await createProject({ title: 'New Project' })
+    const result = await createProject({ titleSource: 'user', title: 'New Project' })
     expect(result.id).toBeDefined()
     expect(result.id.length).toBe(8)
 
@@ -174,7 +177,7 @@ describe('createProject', () => {
   })
 
   it('creates initial checklist items', async () => {
-    const result = await createProject({ title: 'With Tasks', tasks: ['Task A', 'Task B'] })
+    const result = await createProject({ titleSource: 'user', title: 'With Tasks', tasks: ['Task A', 'Task B'] })
     expect(result.taskItems).toHaveLength(2)
     expect(result.taskItems[0].title).toBe('Task A')
     expect(result.taskItems[1].title).toBe('Task B')
@@ -186,7 +189,7 @@ describe('createProject', () => {
   })
 
   it('accepts optional body and owner', async () => {
-    const result = await createProject({ title: 'Custom', body: '# Hello', owner: 'scout' })
+    const result = await createProject({ titleSource: 'user', title: 'Custom', body: '# Hello', owner: 'scout' })
     const project = readProject(result.id)
     expect(project!.body).toBe('# Hello')
     expect(project!.owner).toBe('scout')
@@ -195,8 +198,8 @@ describe('createProject', () => {
 
 describe('updateProject', () => {
   it('updates title and status', async () => {
-    const { id } = await createProject({ title: 'Original' })
-    await updateProject(id, { title: 'Updated', status: 'active' })
+    const { id } = await createProject({ titleSource: 'user', title: 'Original' })
+    await updateProject(id, { title: 'Updated', status: 'active' }, USER)
 
     const project = readProject(id)
     expect(project!.title).toBe('Updated')
@@ -204,29 +207,29 @@ describe('updateProject', () => {
   })
 
   it('allows explicit completion with unchecked items', async () => {
-    const { id } = await createProject({ title: 'Incomplete', tasks: ['Task'] })
-    await updateProject(id, { status: 'completed' })
+    const { id } = await createProject({ titleSource: 'user', title: 'Incomplete', tasks: ['Task'] })
+    await updateProject(id, { status: 'completed' }, USER)
     expect(readProject(id)?.status).toBe('completed')
     expect(readProject(id)?.progress).toBe(0)
   })
 
   it('allows completing when all items checked', async () => {
-    const { id } = await createProject({ title: 'Complete', tasks: ['Task'] })
+    const { id } = await createProject({ titleSource: 'user', title: 'Complete', tasks: ['Task'] })
     await markChecklistItem(id, 't001', true)
-    await updateProject(id, { status: 'completed' })
+    await updateProject(id, { status: 'completed' }, USER)
 
     const project = readProject(id)
     expect(project!.status).toBe('completed')
   })
 
   it('throws for non-existent project', async () => {
-    await expect(updateProject('nonexistent', { title: 'Nope' })).rejects.toThrow('not found')
+    await expect(updateProject('nonexistent', { title: 'Nope' }, USER)).rejects.toThrow('not found')
   })
 })
 
 describe('deleteProject', () => {
   it('deletes a project', async () => {
-    const { id } = await createProject({ title: 'To Delete' })
+    const { id } = await createProject({ titleSource: 'user', title: 'To Delete' })
     await deleteProject(id)
     expect(readProject(id)).toBeNull()
   })
@@ -242,7 +245,7 @@ describe('deleteProject', () => {
 
 describe('addChecklistItem', () => {
   it('adds an item and updates progress', async () => {
-    const { id } = await createProject({ title: 'P', tasks: ['Existing'] })
+    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['Existing'] })
     await markChecklistItem(id, 't001', true)
 
     const { taskItemId } = await addChecklistItem(id, 'New Item')
@@ -257,7 +260,7 @@ describe('addChecklistItem', () => {
 
 describe('markChecklistItem', () => {
   it('checks and unchecks items', async () => {
-    const { id } = await createProject({ title: 'P', tasks: ['A', 'B'] })
+    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['A', 'B'] })
 
     await markChecklistItem(id, 't001', true)
     let project = readProject(id)
@@ -271,8 +274,8 @@ describe('markChecklistItem', () => {
   })
 
   it('keeps active lifecycle independent when all items are checked', async () => {
-    const { id } = await createProject({ title: 'P', tasks: ['Only'] })
-    await updateProject(id, { status: 'active' })
+    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['Only'] })
+    await updateProject(id, { status: 'active' }, USER)
 
     await markChecklistItem(id, 't001', true)
     const project = readProject(id)
@@ -281,7 +284,7 @@ describe('markChecklistItem', () => {
   })
 
   it('does not auto-complete draft projects', async () => {
-    const { id } = await createProject({ title: 'P', tasks: ['Only'] })
+    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['Only'] })
 
     await markChecklistItem(id, 't001', true)
     const project = readProject(id)
@@ -291,7 +294,7 @@ describe('markChecklistItem', () => {
 
 describe('updateChecklistItem', () => {
   it('updates title and description', async () => {
-    const { id } = await createProject({ title: 'P', tasks: ['Original'] })
+    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['Original'] })
     await updateChecklistItem(id, 't001', { title: 'Renamed', description: 'Details here' })
 
     const project = readProject(id)
@@ -300,7 +303,7 @@ describe('updateChecklistItem', () => {
   })
 
   it('clears description with empty string', async () => {
-    const { id } = await createProject({ title: 'P', tasks: ['Task'] })
+    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['Task'] })
     await updateChecklistItem(id, 't001', { description: 'First' })
     await updateChecklistItem(id, 't001', { description: '' })
 
@@ -311,7 +314,7 @@ describe('updateChecklistItem', () => {
 
 describe('removeChecklistItem', () => {
   it('removes an item and updates progress', async () => {
-    const { id } = await createProject({ title: 'P', tasks: ['A', 'B'] })
+    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['A', 'B'] })
     await markChecklistItem(id, 't001', true)
 
     await removeChecklistItem(id, 't001')
@@ -328,7 +331,7 @@ describe('removeChecklistItem', () => {
 
 describe('linkChecklistItem', () => {
   it('links a board task to a checklist item', async () => {
-    const { id } = await createProject({ title: 'P', tasks: ['Task'] })
+    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['Task'] })
     await linkChecklistItem(id, 't001', 'board01')
 
     const project = readProject(id)
@@ -338,7 +341,7 @@ describe('linkChecklistItem', () => {
 
 describe('promoteItemToTask', () => {
   it('creates a board task and links it', async () => {
-    const { id } = await createProject({ title: 'P', tasks: ['Promote me'] })
+    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['Promote me'] })
     const result = await promoteItemToTask(id, 't001')
 
     expect(result.taskId).toMatch(/^task-/)
@@ -348,7 +351,7 @@ describe('promoteItemToTask', () => {
   })
 
   it('rejects if already linked', async () => {
-    const { id } = await createProject({ title: 'P', tasks: ['Linked'] })
+    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['Linked'] })
     await linkChecklistItem(id, 't001', 'existing')
 
     await expect(promoteItemToTask(id, 't001')).rejects.toThrow('already linked')
@@ -361,7 +364,7 @@ describe('promoteItemToTask', () => {
 
 describe('rebuildIndex / getProjectForTask / getProjectTitleForTask', () => {
   it('indexes linked tasks', async () => {
-    const { id } = await createProject({ title: 'Indexed', tasks: ['Task'] })
+    const { id } = await createProject({ titleSource: 'user', title: 'Indexed', tasks: ['Task'] })
     await linkChecklistItem(id, 't001', 'board01')
 
     rebuildIndex()
@@ -388,7 +391,7 @@ describe('rebuildIndex / getProjectForTask / getProjectTitleForTask', () => {
 
 describe('autoCheckLinkedItem', () => {
   it('checks the linked item when board task completes', async () => {
-    const { id } = await createProject({ title: 'P', tasks: ['Auto'] })
+    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['Auto'] })
     await linkChecklistItem(id, 't001', 'board01')
     rebuildIndex()
 
@@ -406,7 +409,7 @@ describe('autoCheckLinkedItem', () => {
 
 describe('autoUnlinkTask', () => {
   it('unlinks and unchecks when board task is deleted', async () => {
-    const { id } = await createProject({ title: 'P', tasks: ['Unlink'] })
+    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['Unlink'] })
     await linkChecklistItem(id, 't001', 'board01')
     await markChecklistItem(id, 't001', true)
     rebuildIndex()
@@ -426,7 +429,7 @@ describe('autoUnlinkTask', () => {
 
 describe('attachAsset / detachAsset', () => {
   it('attaches and detaches assets', async () => {
-    const { id } = await createProject({ title: 'P' })
+    const { id } = await createProject({ titleSource: 'user', title: 'P' })
 
     await attachAsset(id, '20260401-logo-a1b2c3d4', 'Logo')
     let project = readProject(id)
@@ -444,7 +447,7 @@ describe('attachAsset / detachAsset', () => {
   })
 
   it('rejects asset attachments that do not exist', async () => {
-    const { id } = await createProject({ title: 'P' })
+    const { id } = await createProject({ titleSource: 'user', title: 'P' })
     ctx.assets.getAsset = mock(async () => null) as typeof ctx.assets.getAsset
 
     await expect(attachAsset(id, '20260401-missing-a1b2c3d4')).rejects.toThrow('Asset not found')
@@ -452,13 +455,13 @@ describe('attachAsset / detachAsset', () => {
   })
 
   it('detach no-ops for unattached asset', async () => {
-    const { id } = await createProject({ title: 'P' })
+    const { id } = await createProject({ titleSource: 'user', title: 'P' })
     await detachAsset(id, 'nonexistent')
     // Should not throw
   })
 
   it('relinks an existing asset reference to a replacement asset', async () => {
-    const { id } = await createProject({ title: 'P' })
+    const { id } = await createProject({ titleSource: 'user', title: 'P' })
     await attachAsset(id, '20260401-deleted-a1b2c3d4', 'Hero reference')
 
     await relinkAsset(id, '20260401-deleted-a1b2c3d4', '20260401-hero-e5f6g7h8')
@@ -469,7 +472,7 @@ describe('attachAsset / detachAsset', () => {
   })
 
   it('relink removes the old reference when the replacement is already attached', async () => {
-    const { id } = await createProject({ title: 'P' })
+    const { id } = await createProject({ titleSource: 'user', title: 'P' })
     await attachAsset(id, '20260401-deleted-a1b2c3d4', 'Deleted')
     await attachAsset(id, '20260401-hero-e5f6g7h8', 'Hero')
 
@@ -487,7 +490,7 @@ describe('attachAsset / detachAsset', () => {
 
 describe('resolveLinkedTaskStatuses', () => {
   it('resolves linked task columns', async () => {
-    const { id } = await createProject({ title: 'P', tasks: ['A', 'B'] })
+    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['A', 'B'] })
     await linkChecklistItem(id, 't001', 'board01')
     await linkChecklistItem(id, 't002', 'missing99')
 
@@ -499,7 +502,7 @@ describe('resolveLinkedTaskStatuses', () => {
   })
 
   it('marks deleted assets missing without failing the project', async () => {
-    const { id } = await createProject({ title: 'P' })
+    const { id } = await createProject({ titleSource: 'user', title: 'P' })
     await attachAsset(id, '20260401-logo-a1b2c3d4', 'Logo')
     ctx.assets.getAsset = mock(async () => null) as typeof ctx.assets.getAsset
 
@@ -511,7 +514,7 @@ describe('resolveLinkedTaskStatuses', () => {
   })
 
   it('marks assets missing when the asset API is unavailable', async () => {
-    const { id } = await createProject({ title: 'P' })
+    const { id } = await createProject({ titleSource: 'user', title: 'P' })
     await attachAsset(id, '20260401-logo-a1b2c3d4', 'Logo')
     delete (ctx.assets as Partial<typeof ctx.assets>).getAsset
 
@@ -523,7 +526,7 @@ describe('resolveLinkedTaskStatuses', () => {
   })
 
   it('marks an asset missing when resolving it throws', async () => {
-    const { id } = await createProject({ title: 'P' })
+    const { id } = await createProject({ titleSource: 'user', title: 'P' })
     await attachAsset(id, '20260401-logo-a1b2c3d4', 'Logo')
     ctx.assets.getAsset = mock(async () => { throw new Error('asset store unavailable') }) as typeof ctx.assets.getAsset
 
@@ -565,11 +568,11 @@ assets:
 
 describe('plan history (bakin#703)', () => {
   it('snapshots the PRIOR body on agent and user edits, with attribution; no-op writes never snapshot', async () => {
-    const { id } = await createProject({ title: 'History', body: 'v1' })
-    await service.applyProjectPlan(id, { body: 'v2' })          // agent edit
-    await updateProject(id, { body: 'v3' })                     // user edit (no agent arg)
-    await updateProject(id, { body: 'v3' })                     // no-op — must not snapshot
-    await updateProject(id, { title: 'Renamed' })               // body untouched — no snapshot
+    const { id } = await createProject({ titleSource: 'user', title: 'History', body: 'v1' })
+    await service.applyProjectPlan(id, { body: 'v2' }, AGENT)          // agent edit
+    await updateProject(id, { body: 'v3' }, USER)                     // user edit (no agent arg)
+    await updateProject(id, { body: 'v3' }, USER)                     // no-op — must not snapshot
+    await updateProject(id, { title: 'Renamed' }, USER)               // body untouched — no snapshot
 
     const history = repo.readPlanHistory(id)
     expect(history.map((s) => ({ author: s.author, body: s.body }))).toEqual([
@@ -580,8 +583,8 @@ describe('plan history (bakin#703)', () => {
   })
 
   it('appendBody changes snapshot too', async () => {
-    const { id } = await createProject({ title: 'Append', body: 'base' })
-    await service.applyProjectPlan(id, { appendBody: 'more' })
+    const { id } = await createProject({ titleSource: 'user', title: 'Append', body: 'base' })
+    await service.applyProjectPlan(id, { appendBody: 'more' }, AGENT)
     const history = repo.readPlanHistory(id)
     expect(history).toHaveLength(1)
     expect(history[0]).toMatchObject({ author: 'agent', body: 'base' })
@@ -589,9 +592,9 @@ describe('plan history (bakin#703)', () => {
   })
 
   it('caps history at 20 snapshots, dropping the oldest', async () => {
-    const { id } = await createProject({ title: 'Capped', body: 'v0' })
+    const { id } = await createProject({ titleSource: 'user', title: 'Capped', body: 'v0' })
     for (let i = 1; i <= 25; i++) {
-      await updateProject(id, { body: `v${i}` })
+      await updateProject(id, { body: `v${i}` }, USER)
     }
     const history = repo.readPlanHistory(id)
     expect(history).toHaveLength(20)
@@ -600,9 +603,9 @@ describe('plan history (bakin#703)', () => {
   })
 
   it('restore snapshots the current body first (never destructive) and applies the chosen version', async () => {
-    const { id } = await createProject({ title: 'Restore', body: 'first' })
-    await service.applyProjectPlan(id, { body: 'second' })
-    await service.applyProjectPlan(id, { body: 'third' })
+    const { id } = await createProject({ titleSource: 'user', title: 'Restore', body: 'first' })
+    await service.applyProjectPlan(id, { body: 'second' }, AGENT)
+    await service.applyProjectPlan(id, { body: 'third' }, AGENT)
 
     await service.restorePlanVersion(id, 0) // back to 'first'
     expect(repo.readProject(id)?.body).toBe('first')
@@ -616,8 +619,8 @@ describe('plan history (bakin#703)', () => {
   })
 
   it('deleting a project removes its history sidecar', async () => {
-    const { id } = await createProject({ title: 'Gone', body: 'a' })
-    await updateProject(id, { body: 'b' })
+    const { id } = await createProject({ titleSource: 'user', title: 'Gone', body: 'a' })
+    await updateProject(id, { body: 'b' }, USER)
     expect(repo.readPlanHistory(id)).toHaveLength(1)
     await deleteProject(id)
     expect(repo.readPlanHistory(id)).toEqual([])
@@ -627,16 +630,17 @@ describe('plan history (bakin#703)', () => {
 
 describe('independent project lifecycle', () => {
   it('allows completed agent plans to append unchecked work', async () => {
-    const { id } = await createProject({ title: 'Plan', tasks: ['Old task'] })
-    await service.applyProjectPlan(id, { status: 'completed', checklistItems: ['New task'] }, 'agent')
+    const { id } = await createProject({ titleSource: 'user', title: 'Plan', tasks: ['Old task'] })
+    await updateProject(id, { status: 'completed' }, USER)
+    await service.applyProjectPlan(id, { checklistItems: ['New task'] }, AGENT)
     expect(readProject(id)?.status).toBe('completed')
     expect(readProject(id)?.tasks).toHaveLength(2)
     expect(readProject(id)?.progress).toBe(0)
   })
 
   it('linked task completion updates progress without changing lifecycle', async () => {
-    const { id } = await createProject({ title: 'Plan', tasks: ['Linked'] })
-    await updateProject(id, { status: 'active' })
+    const { id } = await createProject({ titleSource: 'user', title: 'Plan', tasks: ['Linked'] })
+    await updateProject(id, { status: 'active' }, USER)
     await linkChecklistItem(id, 't001', 'board02')
     await autoCheckLinkedItem('board02')
     expect(readProject(id)?.progress).toBe(100)

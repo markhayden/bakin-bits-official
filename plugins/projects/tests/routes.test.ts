@@ -61,9 +61,14 @@ import { MarkdownStorageAdapter } from '../test-helpers'
 // ---------------------------------------------------------------------------
 
 /** Create a project markdown file directly on disk for read-only tests. */
+async function readViaTool(projectId: string): Promise<Record<string, unknown>> {
+  const result = await callTool(findTool(plugin.execTools, 'bakin_exec_projects_get')!, { projectId })
+  return result.project as Record<string, unknown>
+}
+
 function writeProjectFixture(
   id: string,
-  opts: { title?: string; status?: string; tasks?: Array<{ id: string; title: string; checked: boolean; taskId?: string }>; assets?: Array<{ assetId: string; label?: string }>; body?: string; owner?: string } = {},
+  opts: { title?: string; titleSource?: string; status?: string; tasks?: Array<{ id: string; title: string; checked: boolean; taskId?: string }>; assets?: Array<{ assetId: string; label?: string }>; body?: string; owner?: string } = {},
 ) {
   const title = opts.title ?? `Project ${id}`
   const status = opts.status ?? 'active'
@@ -76,6 +81,7 @@ function writeProjectFixture(
   const fm: Record<string, unknown> = {
     id,
     title,
+    ...(opts.titleSource ? { titleSource: opts.titleSource } : {}),
     status,
     created: now,
     updated: now,
@@ -312,6 +318,14 @@ describe('Routes', () => {
       })
       expect(status).toBe(200)
       expect(body.ok).toBe(true)
+    })
+
+    it('a user rename claims the title (titleSource user)', async () => {
+      writeProjectFixture('proj-upd-src', { title: 'Agent named', titleSource: 'agent' })
+      const route = findRoute(plugin.routes, 'PUT', '/:projectId')!
+      await callRoute(route, plugin.ctx, { searchParams: { projectId: 'proj-upd-src' }, body: { title: 'Mine now' } })
+      const project = await readViaTool('proj-upd-src')
+      expect(project).toMatchObject({ title: 'Mine now', titleSource: 'user' })
     })
 
     it('returns 400 when id is missing', async () => {
@@ -1382,17 +1396,31 @@ describe('Exec Tools', () => {
   // bakin_exec_projects_update
   // -------------------------------------------------------------------------
   describe('bakin_exec_projects_update', () => {
-    it('updates project fields', async () => {
-      writeProjectFixture('proj-tool-upd', { title: 'Old', status: 'draft' })
+    it('updates project fields and records an agent-set title', async () => {
+      writeProjectFixture('proj-tool-upd', { title: 'Old', titleSource: 'fallback', status: 'draft' })
 
       const tool = findTool(plugin.execTools, 'bakin_exec_projects_update')!
       expect(tool).toBeDefined()
-      const result = await callTool(tool, {
-        projectId: 'proj-tool-upd',
-        title: 'New Title',
-        status: 'active',
-      })
+      const result = await callTool(tool, { projectId: 'proj-tool-upd', title: 'New Title', body: 'Plan' })
       expect(result.ok).toBe(true)
+      expect(await readViaTool('proj-tool-upd')).toMatchObject({ title: 'New Title', titleSource: 'agent', body: 'Plan' })
+    })
+
+    it('refuses to overwrite a title the user typed', async () => {
+      writeProjectFixture('proj-tool-user-title', { title: 'My name for it' })
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_update')!
+      const result = await callTool(tool, { projectId: 'proj-tool-user-title', title: 'Agent idea' })
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(/user named this project/)
+      expect(await readViaTool('proj-tool-user-title')).toMatchObject({ title: 'My name for it' })
+    })
+
+    it('cannot change lifecycle status', async () => {
+      writeProjectFixture('proj-tool-status', { title: 'Lifecycle', status: 'draft' })
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_update')!
+      expect(Object.keys(tool.parameters as Record<string, unknown>)).not.toContain('status')
+      await callTool(tool, { projectId: 'proj-tool-status', status: 'completed' })
+      expect(await readViaTool('proj-tool-status')).toMatchObject({ status: 'draft' })
     })
 
     it('returns error for non-existent project', async () => {
@@ -1402,23 +1430,30 @@ describe('Exec Tools', () => {
       expect(result.error).toMatch(/not found/i)
     })
 
-    it('allows explicit lifecycle completion with unchecked items', async () => {
-      writeProjectFixture('proj-incomplete', {
-        title: 'Incomplete',
-        tasks: [{ id: 't001', title: 'Not done', checked: false }],
-      })
-
-      const tool = findTool(plugin.execTools, 'bakin_exec_projects_update')!
-      const result = await callTool(tool, { projectId: 'proj-incomplete', status: 'completed' })
-      expect(result.ok).toBe(true)
-      expect(result.error).toBeUndefined()
-    })
   })
 
   // -------------------------------------------------------------------------
   // bakin_exec_projects_apply_plan
   // -------------------------------------------------------------------------
   describe('bakin_exec_projects_apply_plan', () => {
+    it('cannot change status and refuses a user title without applying anything', async () => {
+      writeProjectFixture('proj-apply-locked', { title: 'Typed by me', status: 'draft', tasks: [] })
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_apply_plan')!
+      expect(Object.keys(tool.parameters as Record<string, unknown>)).not.toContain('status')
+      const result = await callTool(tool, { projectId: 'proj-apply-locked', title: 'Agent idea', checklistItems: ['Should not land'] })
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(/user named this project/)
+      expect(await readViaTool('proj-apply-locked')).toMatchObject({ title: 'Typed by me', status: 'draft', tasks: [] })
+    })
+
+    it('names a fallback-titled project and records the agent', async () => {
+      writeProjectFixture('proj-apply-name', { title: 'clean up my inbox', titleSource: 'fallback' })
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_apply_plan')!
+      const result = await callTool(tool, { projectId: 'proj-apply-name', title: 'Inbox cleanup' })
+      expect(result.ok).toBe(true)
+      expect(await readViaTool('proj-apply-name')).toMatchObject({ title: 'Inbox cleanup', titleSource: 'agent' })
+    })
+
     it('updates the project body and appends checklist items in one tool call', async () => {
       writeProjectFixture('proj-apply-plan', {
         title: 'Apply Plan',
@@ -1528,32 +1563,6 @@ describe('Exec Tools', () => {
       const result = await callTool(tool, { projectId: 'proj-mi2', taskItemId: 't001', checked: false })
       expect(result.ok).toBe(true)
       expect(result.progress).toBe(0)
-    })
-  })
-
-  // -------------------------------------------------------------------------
-  // bakin_exec_projects_remove_item
-  // -------------------------------------------------------------------------
-  describe('bakin_exec_projects_remove_item', () => {
-    it('removes a checklist item', async () => {
-      writeProjectFixture('proj-ri', {
-        title: 'Remove Item',
-        tasks: [{ id: 't001', title: 'Remove', checked: false }, { id: 't002', title: 'Keep', checked: false }],
-      })
-
-      const tool = findTool(plugin.execTools, 'bakin_exec_projects_remove_item')!
-      expect(tool).toBeDefined()
-      const result = await callTool(tool, { projectId: 'proj-ri', taskItemId: 't001' })
-      expect(result.ok).toBe(true)
-    })
-
-    it('returns error for non-existent item', async () => {
-      writeProjectFixture('proj-ri2', { title: 'No Item', tasks: [] })
-
-      const tool = findTool(plugin.execTools, 'bakin_exec_projects_remove_item')!
-      const result = await callTool(tool, { projectId: 'proj-ri2', taskItemId: 't999' })
-      expect(result.ok).toBe(false)
-      expect(result.error).toMatch(/not found/i)
     })
   })
 
@@ -1812,7 +1821,6 @@ describe('Registration', () => {
       'bakin_exec_projects_delete',
       'bakin_exec_projects_add_item',
       'bakin_exec_projects_mark_item',
-      'bakin_exec_projects_remove_item',
       'bakin_exec_projects_link_item',
       'bakin_exec_projects_promote_item',
       'bakin_exec_projects_attach_asset',
@@ -1824,6 +1832,8 @@ describe('Registration', () => {
       const tool = findTool(plugin.execTools, name)
       expect(tool, `Missing exec tool: ${name}`).toBeDefined()
     }
+    // Agents never delete steps (D9a) — removal is a user action only.
+    expect(findTool(plugin.execTools, 'bakin_exec_projects_remove_item')).toBeUndefined()
   })
 
   it('registers hooks', () => {

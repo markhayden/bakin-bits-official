@@ -148,13 +148,6 @@ const projectsPlugin: BakinPlugin = {
   name: 'Projects',
   version: '2.0.0',
 
-  settingsSchema: {
-    fields: [
-      { key: 'defaultStatus', type: 'select', label: 'Default project status', description: 'Status assigned to new projects', options: [{ value: 'active', label: 'Active' }, { value: 'planning', label: 'Planning' }, { value: 'paused', label: 'Paused' }], default: 'active' },
-      { key: 'autoPromoteThreshold', type: 'number', label: 'Auto-promote threshold', description: 'Auto-promote checklist items to tasks when project has more than N unchecked items (0 = disabled)', default: 0 },
-    ],
-  },
-
   navItems: [
     { id: 'projects', label: 'Projects', icon: 'FolderKanban', href: '/projects', order: 30 },
   ],
@@ -430,7 +423,7 @@ const projectsPlugin: BakinPlugin = {
       const body = await readBody<{ title: string; body?: string; owner?: string; tasks?: string[] }>(req)
       if (!body.title) return json({ error: 'Missing title' }, 400)
       const owner = body.owner ?? await getRuntimeMainAgentId(ctx)
-      const result = await createProject({ ...body, owner })
+      const result = await createProject({ ...body, owner, titleSource: 'user' })
       ctx.activity.audit('created', owner, { projectId: result.id, title: body.title })
       ctx.activity.log(owner, `Created project "${body.title}"`)
       indexProject(result.id).catch(() => {})
@@ -447,7 +440,7 @@ const projectsPlugin: BakinPlugin = {
       const id = url.searchParams.get('projectId') || bodyId
       if (!id) return json({ error: 'Missing id' }, 400)
       try {
-        await updateProject(id, patch, undefined, expected)
+        await updateProject(id, patch, { kind: 'user' }, expected)
         ctx.activity.audit('updated', 'system', { projectId: id })
         ctx.activity.log('system', `Updated project ${id}`)
         indexProject(id).catch(() => {})
@@ -807,6 +800,7 @@ const projectsPlugin: BakinPlugin = {
       handler: async (params: Record<string, unknown>, agent: string) => {
         const result = await createProject({
           title: params.title as string,
+          titleSource: 'agent',
           body: params.body as string | undefined,
           owner: (params.owner as string) || agent,
           tasks: params.tasks as string[] | undefined,
@@ -819,11 +813,10 @@ const projectsPlugin: BakinPlugin = {
     ctx.registerExecTool({
       name: 'bakin_exec_projects_update',
       label: 'Updated a project',
-      description: 'Update a project\'s title, status, body, or owner. Lifecycle status is independent of checklist completion; completed may contain unchecked work.',
+      description: 'Update a project\'s title, body, or owner. Lifecycle status (start, complete, archive) is the user\'s decision and cannot be changed by agents. A title the user typed cannot be overwritten.',
       parameters: {
         projectId: z.string().describe('Project ID'),
-        title: z.string().optional().describe('New title'),
-        status: z.enum(['draft', 'active', 'completed', 'archived']).optional().describe('New status'),
+        title: z.string().optional().describe('New title (refused when the user named the project)'),
         body: z.string().optional().describe('New markdown body'),
         owner: z.string().optional().describe('New owner'),
       },
@@ -831,10 +824,9 @@ const projectsPlugin: BakinPlugin = {
         try {
           await updateProject(params.projectId as string, {
             title: params.title as string | undefined,
-            status: params.status as ProjectStatus | undefined,
             body: params.body as string | undefined,
             owner: params.owner as string | undefined,
-          }, agent)
+          }, { kind: 'agent', agentId: agent })
           indexProject(params.projectId as string).catch(() => {})
           return { ok: true }
         } catch (err: unknown) {
@@ -849,8 +841,7 @@ const projectsPlugin: BakinPlugin = {
       description: 'Apply a confirmed project plan update in one operation. Use this after the user confirms exact body/checklist changes so agents do not need shell scripts or multiple low-level calls.',
       parameters: {
         projectId: z.string().describe('Project ID'),
-        title: z.string().optional().describe('Optional new project title'),
-        status: z.enum(['draft', 'active', 'completed', 'archived']).optional().describe('Optional new status'),
+        title: z.string().optional().describe('Optional new project title (refused when the user named the project)'),
         body: z.string().optional().describe('Replacement markdown body for the project plan'),
         appendBody: z.string().optional().describe('Markdown to append to the existing project body; cannot be combined with body'),
         owner: z.string().optional().describe('Optional new owner'),
@@ -860,12 +851,11 @@ const projectsPlugin: BakinPlugin = {
         try {
           const result = await applyProjectPlan(params.projectId as string, {
             title: params.title as string | undefined,
-            status: params.status as ProjectStatus | undefined,
             body: params.body as string | undefined,
             appendBody: params.appendBody as string | undefined,
             owner: params.owner as string | undefined,
             checklistItems: params.checklistItems as string[] | undefined,
-          }, agent)
+          }, { kind: 'agent', agentId: agent })
           indexProject(params.projectId as string).catch(() => {})
           return { ok: true, ...result }
         } catch (err: unknown) {
@@ -924,25 +914,6 @@ const projectsPlugin: BakinPlugin = {
         )
         indexProject(params.projectId as string).catch(() => {})
         return { ok: true, ...result }
-      },
-    })
-
-    ctx.registerExecTool({
-      name: 'bakin_exec_projects_remove_item',
-      label: 'Removed project item',
-      description: 'Remove a checklist item from a project.',
-      parameters: {
-        projectId: z.string().describe('Project ID'),
-        taskItemId: z.string().describe('Checklist item ID to remove'),
-      },
-      handler: async (params: Record<string, unknown>) => {
-        try {
-          await removeChecklistItem(params.projectId as string, params.taskItemId as string)
-          indexProject(params.projectId as string).catch(() => {})
-          return { ok: true }
-        } catch (err: unknown) {
-          return { ok: false, error: (err as Error).message }
-        }
       },
     })
 

@@ -6,6 +6,8 @@ import { createProjectRepository, parseProject, serializeProject } from '../lib/
 import { createProjectService } from '../lib/project-service'
 import { createTestContext } from '../test-helpers'
 
+const USER = { kind: 'user' } as const
+
 let root: string
 let setup: ReturnType<typeof createTestContext>
 let repo: ReturnType<typeof createProjectRepository>
@@ -16,7 +18,7 @@ beforeEach(async () => {
   setup = createTestContext('projects', root)
   repo = createProjectRepository(setup.ctx.storage)
   service = createProjectService(setup.ctx, repo)
-  id = (await service.createProject({ title: 'Project' })).id
+  id = (await service.createProject({ titleSource: 'user', title: 'Project' })).id
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 
@@ -69,7 +71,7 @@ it('coalesces concurrent promotions and permits hooks to reenter the project ser
   let calls = 0
   setup.ctx.tasks.create = async input => {
     calls++
-    await service.updateProject(id, { owner: 'hook-agent' })
+    await service.updateProject(id, { owner: 'hook-agent' }, USER)
     return create(input)
   }
   const results = await Promise.all(Array.from({ length: 8 }, () => service.promoteItemToTask(id, taskItemId, { requestId: 'promote-request' })))

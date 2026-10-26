@@ -6,6 +6,9 @@ import { createProjectRepository } from '../lib/parser'
 import { createProjectService } from '../lib/project-service'
 import { createTestContext } from '../test-helpers'
 
+const USER = { kind: 'user' } as const
+const AGENT = { kind: 'agent', agentId: 'agent' } as const
+
 let root: string
 let repo: ReturnType<typeof createProjectRepository>
 let service: ReturnType<typeof createProjectService>
@@ -15,16 +18,16 @@ beforeEach(async () => {
   const { ctx } = createTestContext('projects', root)
   repo = createProjectRepository(ctx.storage)
   service = createProjectService(ctx, repo)
-  id = (await service.createProject({ title: 'Original', body: 'Original body', owner: 'main' })).id
+  id = (await service.createProject({ titleSource: 'user', title: 'Original', body: 'Original body', owner: 'main' })).id
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 
 describe('atomic expected-value updates', () => {
   it('merges disjoint updates but rejects overlapping fields without partial writes', async () => {
-    await service.updateProject(id, { owner: 'agent' }, 'agent')
-    await service.updateProject(id, { title: 'Mine' }, undefined, { title: 'Original' })
+    await service.updateProject(id, { owner: 'agent' }, AGENT)
+    await service.updateProject(id, { title: 'Mine' }, USER, { title: 'Original' })
     expect(repo.readProject(id)?.owner).toBe('agent')
-    await expect(service.updateProject(id, { title: 'Stale', body: 'Do not save' }, undefined, { title: 'Original', body: 'Original body' })).rejects.toMatchObject({
+    await expect(service.updateProject(id, { title: 'Stale', body: 'Do not save' }, USER, { title: 'Original', body: 'Original body' })).rejects.toMatchObject({
       status: 409, code: 'field_conflict', conflicts: { title: { expected: 'Original', current: 'Mine', requested: 'Stale' } },
     })
     expect(repo.readProject(id)?.body).toBe('Original body')
@@ -32,27 +35,27 @@ describe('atomic expected-value updates', () => {
   })
 
   it('accepts equal-value convergence without duplicate snapshots', async () => {
-    await service.updateProject(id, { body: 'Same result' }, 'agent')
+    await service.updateProject(id, { body: 'Same result' }, AGENT)
     const timestamp = repo.readProject(id)?.updated
-    await service.updateProject(id, { body: 'Same result' }, undefined, { body: 'Original body' })
+    await service.updateProject(id, { body: 'Same result' }, USER, { body: 'Original body' })
     expect(repo.readPlanHistory(id)).toHaveLength(1)
     expect(repo.readProject(id)?.updated).toBe(timestamp)
   })
 
   it('serializes concurrent saves and rechecks the latest reviewed value on retry', async () => {
     const results = await Promise.allSettled([
-      service.updateProject(id, { title: 'First' }, undefined, { title: 'Original' }),
-      service.updateProject(id, { title: 'Second' }, undefined, { title: 'Original' }),
+      service.updateProject(id, { title: 'First' }, USER, { title: 'Original' }),
+      service.updateProject(id, { title: 'Second' }, USER, { title: 'Original' }),
     ])
     expect(results.map(result => result.status)).toEqual(['fulfilled', 'rejected'])
-    await service.updateProject(id, { title: 'Third' }, 'agent')
-    await expect(service.updateProject(id, { title: 'Second' }, undefined, { title: 'First' })).rejects.toMatchObject({ status: 409 })
+    await service.updateProject(id, { title: 'Third' }, USER)
+    await expect(service.updateProject(id, { title: 'Second' }, USER, { title: 'First' })).rejects.toMatchObject({ status: 409 })
   })
 
   it('rejects malformed or incomplete intent before changing any fields', async () => {
-    await expect(service.updateProject(id, { title: 'Valid', body: 42 } as never)).rejects.toMatchObject({ status: 400 })
-    await expect(service.updateProject(id, { title: 'Valid', body: 'New' }, undefined, { title: 'Original' })).rejects.toMatchObject({ status: 400 })
-    await expect(service.updateProject(id, { title: '   ' })).rejects.toMatchObject({ status: 400 })
+    await expect(service.updateProject(id, { title: 'Valid', body: 42 } as never, USER)).rejects.toMatchObject({ status: 400 })
+    await expect(service.updateProject(id, { title: 'Valid', body: 'New' }, USER, { title: 'Original' })).rejects.toMatchObject({ status: 400 })
+    await expect(service.updateProject(id, { title: '   ' }, USER)).rejects.toMatchObject({ status: 400 })
     expect(repo.readProject(id)?.title).toBe('Original')
     expect(repo.readPlanHistory(id)).toEqual([])
   })
@@ -83,6 +86,6 @@ it('announces durable changes on the plugin event bus with project identity', as
   const events: Array<{ event: string; data: unknown }> = []
   ctx.events.emit = (event, data) => { events.push({ event, data }) }
   const observed = createProjectService(ctx, repo)
-  await observed.updateProject(id, { title: 'Event update' })
+  await observed.updateProject(id, { title: 'Event update' }, USER)
   expect(events).toContainEqual({ event: 'projects.changed', data: { id, projectId: id, title: 'Event update', action: 'project.updated' } })
 })

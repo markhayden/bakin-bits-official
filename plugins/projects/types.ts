@@ -20,9 +20,22 @@ export interface ProjectAsset {
   label?: string          // optional human label / summary
 }
 
+/**
+ * Who named the project (D9). `fallback` = the start screen's first-message
+ * trim, `agent` = the lead named it, `user` = a human typed it. Agents may
+ * rename only `fallback`/`agent` titles. Absent (pre-revamp files) reads as
+ * `user`: those titles were typed by hand.
+ */
+export const TITLE_SOURCES = ['fallback', 'agent', 'user'] as const
+export type TitleSource = (typeof TITLE_SOURCES)[number]
+
+/** Who is writing: agent tool calls are held to the authority rules (D9a). */
+export type MutationCaller = { kind: 'user' } | { kind: 'agent'; agentId: string }
+
 export interface ProjectFrontmatter {
   id: string
   title: string
+  titleSource: TitleSource
   status: ProjectStatus
   created: string
   updated: string

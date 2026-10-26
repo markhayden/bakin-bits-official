@@ -7,7 +7,7 @@
 import type { StorageAdapter } from '@makinbakin/sdk/types'
 import { dump, load } from 'js-yaml'
 import { z } from 'zod'
-import type { PlanSnapshot, Project, ProjectFrontmatter, ProjectTask, ProjectAsset, ProjectBrainstormMessage, ProjectSummary } from '../types'
+import { TITLE_SOURCES, type PlanSnapshot, type Project, type ProjectFrontmatter, type ProjectTask, type ProjectAsset, type ProjectBrainstormMessage, type ProjectSummary, type TitleSource } from '../types'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -111,6 +111,7 @@ export function parseProject(content: string): Project {
   const fm: ProjectFrontmatter = {
     id: String(raw.id || ''),
     title: String(raw.title || ''),
+    titleSource: TITLE_SOURCES.includes(raw.titleSource as TitleSource) ? raw.titleSource as TitleSource : 'user',
     status: (['draft', 'active', 'completed', 'archived'].includes(String(raw.status)) ? String(raw.status) : 'draft') as ProjectFrontmatter['status'],
     created: String(raw.created || new Date().toISOString()),
     updated: String(raw.updated || new Date().toISOString()),

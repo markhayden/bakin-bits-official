@@ -316,13 +316,6 @@
         ]
       },
       {
-        "name": "bakin_exec_projects_remove_item",
-        "summary": "Remove a checklist item",
-        "permissions": [
-          "storage.write"
-        ]
-      },
-      {
         "name": "bakin_exec_projects_link_item",
         "summary": "Link a checklist item to a task",
         "permissions": [
@@ -528,12 +521,6 @@
           "type": "execTool",
           "name": "bakin_exec_projects_ask"
         }
-      }
-    ],
-    "settings": [
-      {
-        "key": "defaultOwner",
-        "summary": "Default project owner when no owner is supplied"
       }
     ],
     "docs": {
