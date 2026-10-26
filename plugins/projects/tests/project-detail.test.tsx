@@ -153,6 +153,53 @@ describe('ProjectDetail shell', () => {
   })
 })
 
+describe('Plan updated (D15)', () => {
+  const agentRevision = {
+    body: 'latest plan',
+    planRevision: 3,
+    planSeenRevision: 1,
+    planUpdatedBy: 'agent',
+    planUpdatedAt: '2026-10-25T10:00:00.000Z',
+  }
+  const history = {
+    history: [
+      { ts: '2026-10-25T09:00:00.000Z', author: 'agent', body: 'seen version', revision: 1 },
+      { ts: '2026-10-25T09:30:00.000Z', author: 'agent', body: 'middle version', revision: 2 },
+    ],
+  }
+
+  it('an unseen agent revision dots the Plan tab and shows the notice with the conversation', async () => {
+    mockFetch('p-rev', agentRevision, { '/api/plugins/projects/p-rev/history': () => history })
+    render(<ProjectDetail projectId="p-rev" onBack={() => {}} />)
+    expect(await screen.findByText(/^Plan updated/)).toBeDefined()
+    expect(screen.getByRole('tab', { name: 'Plan updated' })).toBeDefined()
+  })
+
+  it('Review changes opens the Plan history against the last-seen revision and marks the new one seen', async () => {
+    const seen: unknown[] = []
+    mockFetch('p-review', agentRevision, {
+      '/api/plugins/projects/p-review/history': () => history,
+      '/api/plugins/projects/p-review/plan/seen': (init) => { seen.push(JSON.parse(String(init?.body))); return { ok: true, planSeenRevision: 3 } },
+    })
+    render(<ProjectDetail projectId="p-review" onBack={() => {}} />)
+    const review = await screen.findByRole('button', { name: 'Review changes' })
+    await act(async () => { fireEvent.click(review) })
+    expect(selectedTab()).toMatch(/^Plan/)
+    await waitFor(() => expect(seen).toEqual([{ revision: 3 }]))
+    // The comparison baseline is the version the user last saw (revision 1).
+    const diff = await screen.findByTestId('plan-history-diff')
+    expect(within(diff).getByText('seen version')).toBeDefined()
+  })
+
+  it('a user\'s own revision raises nothing', async () => {
+    mockFetch('p-own', { ...agentRevision, planUpdatedBy: 'user' })
+    render(<ProjectDetail projectId="p-own" onBack={() => {}} />)
+    await screen.findByRole('tablist', { name: 'Project sections' })
+    expect(screen.queryByText(/^Plan updated/)).toBeNull()
+    expect(screen.getByRole('tab', { name: 'Plan' })).toBeDefined()
+  })
+})
+
 describe('ProjectDetail brainstorm durability (bakin#703)', () => {
   it('echoes the user message immediately on send — before the 202 lands', async () => {
     let resolvePost: () => void = () => {}

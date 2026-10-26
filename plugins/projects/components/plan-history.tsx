@@ -34,11 +34,13 @@ function snapshotLabel(snapshot: PlanSnapshot): string {
   return `${formatDateTime(snapshot.ts)} · ${snapshot.author === 'agent' ? 'agent edit' : 'your edit'}`
 }
 
-export function PlanHistoryPanel({ projectId, currentBody, onRestored, historyState }: {
+export function PlanHistoryPanel({ projectId, currentBody, onRestored, historyState, compareRevision }: {
   projectId: string
   historyState: ProjectHistory
   /** The live plan body (diff target). */
   currentBody: string
+  /** Compare against the snapshot of this revision by default ("Review changes" since last seen, D15). */
+  compareRevision?: number
   /** Fired after a successful restore so the host refetches the project. */
   onRestored: () => void | Promise<void>
 }) {
@@ -55,7 +57,10 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored, historySt
     return () => { owner.current = '' }
   }, [projectId])
   const selectedIndex = history?.findIndex(snapshot => snapshot.ts === selectedTs) ?? -1
-  const selected = history?.length ? (selectedIndex < 0 ? history.length - 1 : selectedIndex) : null
+  const baselineIndex = compareRevision === undefined ? -1 : history?.findIndex(snapshot => snapshot.revision === compareRevision) ?? -1
+  const selected = history?.length
+    ? selectedIndex >= 0 ? selectedIndex : baselineIndex >= 0 ? baselineIndex : history.length - 1
+    : null
   const snapshot = selected !== null ? history?.[selected] : undefined
 
   const restore = async () => {
@@ -121,7 +126,7 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored, historySt
             <SelectContent>
               {[...history.keys()].reverse().map((index) => (
                 <SelectItem key={index} value={String(index)}>
-                  {snapshotLabel(history[index])}{index === history.length - 1 ? ' (previous)' : ''}
+                  {snapshotLabel(history[index])}{index === baselineIndex ? ' (last seen)' : index === history.length - 1 ? ' (previous)' : ''}
                 </SelectItem>
               ))}
             </SelectContent>

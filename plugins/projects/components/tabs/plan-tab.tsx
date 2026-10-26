@@ -19,12 +19,17 @@ import { RenderedPlan } from '../rendered-plan'
 
 const HINTS_KEY = 'projects-show-change-hints'
 
+export type PlanView = 'rendered' | 'changes'
+
 export function PlanTab({
   project,
   history,
   draft,
   editing,
   onEditingChange,
+  view,
+  onViewChange,
+  compareRevision,
   onRestored,
 }: {
   project: ProjectDetailData
@@ -32,9 +37,12 @@ export function PlanTab({
   draft: PlanDraftModel
   editing: boolean
   onEditingChange: (editing: boolean) => void
+  view: PlanView
+  onViewChange: (view: PlanView) => void
+  /** The seen baseline "Review changes" compares against. */
+  compareRevision?: number
   onRestored: () => Promise<unknown>
 }) {
-  const [view, setView] = useState<'rendered' | 'changes'>('rendered')
   const [hints, setHints] = useState(() => {
     try { return localStorage.getItem(HINTS_KEY) !== 'false' } catch { return true }
   })
@@ -97,7 +105,7 @@ export function PlanTab({
           <SegmentedControl
             options={[{ value: 'rendered', label: 'Rendered' }, { value: 'changes', label: 'History' }]}
             value={view}
-            onValueChange={(value: string) => setView(value === 'changes' ? 'changes' : 'rendered')}
+            onValueChange={(value: string) => onViewChange(value === 'changes' ? 'changes' : 'rendered')}
             ariaLabel="Plan view"
           />
           <Button type="button" variant="secondary" size="sm" onClick={() => onEditingChange(true)}>
@@ -107,7 +115,7 @@ export function PlanTab({
         </div>
       </div>
       {view === 'changes' ? (
-        <PlanHistoryPanel projectId={project.id} currentBody={project.body} historyState={history} onRestored={async () => { await onRestored() }} />
+        <PlanHistoryPanel projectId={project.id} currentBody={project.body} historyState={history} compareRevision={compareRevision} onRestored={async () => { await onRestored() }} />
       ) : project.body.trim() ? (
         <RenderedPlan historyState={history} body={project.body} hintsEnabled={hints} />
       ) : (

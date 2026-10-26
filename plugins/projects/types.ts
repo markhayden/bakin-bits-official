@@ -122,6 +122,8 @@ export interface ResolvedProjectAsset extends ProjectAsset {
 
 /** Hydrated detail projection; checklist descriptions retain their shared type. */
 export interface ProjectDetailData extends Project {
+  /** The plan revision the user last viewed (D15). */
+  planSeenRevision?: number
   resolvedTasks: Record<string, { column: string; title: string } | null>
   resolvedAssets: ResolvedProjectAsset[]
   brainstormMessages?: ProjectBrainstormMessage[]

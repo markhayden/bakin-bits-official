@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MessageSquare } from 'lucide-react'
+import { formatAge } from '@makinbakin/sdk/utils'
 import { emitPluginEvent, toast, useAgentList, useMainAgentId, useMediaQuery, usePluginEvent } from '@makinbakin/sdk/hooks'
 import { useQueryState, useUnsavedChangesGuard } from '@makinbakin/sdk/navigation'
 import { ConversationEmptyState, ConversationPanel, useConversationThread } from '@makinbakin/sdk/conversation'
@@ -18,6 +19,7 @@ import {
   AgentSelect,
   ConfirmDialog,
   PageBody,
+  StatusMarker,
   WorkspacePage,
   WorkspacePageBody,
   WorkspacePageHeader,
@@ -67,6 +69,7 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
   const [dockCollapsed, setDockCollapsed] = useCollapsedAside('projects:conversation-dock')
   const [tabParam, setTabParam] = useQueryState('tab', '')
   const [editParam, setEditParam] = useQueryState('edit', '')
+  const [viewParam, setViewParam] = useQueryState('view', '')
 
   const agentList = useAgentList()
   const agents = useMemo(() => agentList.map(agent => ({
@@ -91,7 +94,28 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
     if (!isTab(next)) return
     // The stage default stays out of the URL.
     setTabParam(project && next === DEFAULT_TAB[project.status] ? '' : next)
-    if (next !== 'plan') setEditParam('')
+    if (next !== 'plan') { setEditParam(''); setViewParam('') }
+  }
+
+  // ── "Plan updated" (D15): an agent wrote a revision the user has not seen.
+  const planUnseen = Boolean(project && project.planUpdatedBy === 'agent' && project.planRevision > (project.planSeenRevision ?? 0))
+  // Opening the Plan tab captures the comparison baseline for this view
+  // FIRST, then marks the current revision seen.
+  const [planBaseline, setPlanBaseline] = useState<number | undefined>(undefined)
+  const planRevision = project?.planRevision
+  const seenRevision = project?.planSeenRevision ?? 0
+  useEffect(() => {
+    if (tab !== 'plan' || planRevision === undefined || planRevision <= seenRevision) return
+    setPlanBaseline(seenRevision)
+    void projectRequest(`${encodeURIComponent(projectId)}/plan/seen`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ revision: planRevision }),
+    }).then(() => refresh()).catch(() => {})
+  }, [tab, planRevision, seenRevision, projectId, refresh])
+  const reviewPlanChanges = () => {
+    selectTab('plan')
+    setViewParam('changes')
   }
 
   const showDock = desktop && tab !== 'conversation'
@@ -301,6 +325,21 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
     />
   )
 
+  // The notice sits with the conversation wherever it is shown; nothing is
+  // injected into the transcript.
+  const conversation = (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {planUnseen ? (
+        <div data-slot="plan-updated-notice" className="flex shrink-0 flex-wrap items-center gap-bakin-2 border-b border-bakin-border-subtle px-bakin-3 py-bakin-2">
+          <StatusMarker tone="accent" />
+          <Text size="meta">Plan updated{project.planUpdatedAt ? ` ${formatAge(project.planUpdatedAt)}` : ''}</Text>
+          <Button type="button" variant="ghost" size="xs" onClick={reviewPlanChanges}>Review changes</Button>
+        </div>
+      ) : null}
+      {panel}
+    </div>
+  )
+
   const content = tab === 'plan' ? (
     <PlanTab
       project={project}
@@ -308,6 +347,9 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
       draft={plan}
       editing={editing}
       onEditingChange={next => setEditParam(next ? '1' : '')}
+      view={viewParam === 'changes' ? 'changes' : 'rendered'}
+      onViewChange={next => setViewParam(next === 'changes' ? 'changes' : '')}
+      compareRevision={planBaseline}
       onRestored={refresh}
     />
   ) : tab === 'steps' ? (
@@ -340,6 +382,7 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
                   {PROJECT_TABS.map(entry => (
                     <TabsTrigger key={entry.id} value={entry.id} id={`project-tab-${entry.id}`} aria-controls={`project-panel-${entry.id}`}>
                       {entry.label}
+                      {entry.id === 'plan' && planUnseen ? <StatusMarker tone="accent" label="updated" /> : null}
                     </TabsTrigger>
                   ))}
                 </TabsList>
@@ -354,7 +397,7 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
                   ? 'flex min-h-0 flex-1 flex-col'
                   : 'flex min-h-0 flex-1 flex-col overflow-y-auto py-bakin-4 focus-visible:outline-2 focus-visible:outline-bakin-focus-ring focus-visible:-outline-offset-2 lg:pr-bakin-4'}
               >
-                {tab === 'conversation' ? panel : content}
+                {tab === 'conversation' ? conversation : content}
                 {!desktop && tab !== 'conversation' ? (
                   <div className="sticky bottom-0 flex justify-end bg-bakin-canvas-default pt-bakin-3">
                     <Button type="button" onClick={() => selectTab('conversation')}>
@@ -373,7 +416,7 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
                 working={thread.streaming}
                 unread={unread}
               >
-                {dockCollapsed ? null : panel}
+                {dockCollapsed ? null : conversation}
               </ChatDock>
             ) : null}
           </div>
