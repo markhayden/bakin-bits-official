@@ -886,8 +886,8 @@ describe('Routes', () => {
       })
     })
 
-    it('instructs brainstorm agents to treat the plan as the primary artifact: apply incremental edits, ask before big rewrites', async () => {
-      writeProjectFixture('proj-plan-prompt', { title: 'Plan Prompt Project' })
+    it('a draft project gets the shaping posture: one question card per turn, draft when firm', async () => {
+      writeProjectFixture('proj-plan-prompt', { title: 'Plan Prompt Project', status: 'draft', titleSource: 'fallback' })
       const streamMock = mockRuntimeStream(['ok'])
       const settled = nextSettle()
 
@@ -898,16 +898,15 @@ describe('Routes', () => {
       await settled
 
       const prompt = String(streamMock.mock.calls[0]?.[0]?.content ?? '')
-      expect(prompt).toContain('PRIMARY working artifact — actively create, edit, and refine it')
-      expect(prompt).toContain('Apply INCREMENTAL updates directly, then report exactly what you changed')
-      expect(prompt).toContain('ASK FIRST — in chat, before applying — for wholesale rewrites or large deletions')
-      expect(prompt).toContain('Prefer bakin_exec_projects_apply_plan for combined body and checklist updates')
-      expect(prompt).toContain('snapshotted with a visible diff and one-click restore')
+      expect(prompt).toContain('brainstorm buddy')
+      expect(prompt).toContain('Ask exactly ONE question per turn with bakin_exec_ask_user')
+      expect(prompt).toContain('Draft plan is ready in the Plan tab')
+      expect(prompt).toContain('The title is provisional')
       expect(prompt).toContain('Invoke Bakin tools as described in your Tool access section — the exact call form depends on the active runtime.')
     })
 
-    it('the bakin_exec_projects_ask tool sends the SAME plan-first instructions (single shared constant)', async () => {
-      writeProjectFixture('proj-tool-prompt', { title: 'Tool Prompt Project' })
+    it('the bakin_exec_projects_ask tool shares the builder but asks in plain text (no chat to hold a card)', async () => {
+      writeProjectFixture('proj-tool-prompt', { title: 'Tool Prompt Project', status: 'draft' })
       const sendMock = mock(async (args: MessageArgs) => ({ id: 'msg-1', content: 'tool reply', ...(args ? {} : {}) }))
       plugin.ctx.runtime.messaging.send = sendMock
 
@@ -916,8 +915,10 @@ describe('Routes', () => {
       expect(result).toMatchObject({ ok: true, reply: 'tool reply' })
 
       const prompt = String(sendMock.mock.calls[0]?.[0]?.content ?? '')
-      expect(prompt).toContain('PRIMARY working artifact — actively create, edit, and refine it')
-      expect(prompt).toContain('ASK FIRST — in chat, before applying — for wholesale rewrites or large deletions')
+      expect(prompt).toContain('brainstorm buddy')
+      expect(prompt).toContain('in plain text')
+      expect(prompt).not.toContain('bakin_exec_ask_user')
+      expect(prompt).toContain('The user named this project — keep their title.')
       expect(prompt).toContain('User request:\nWhat next?')
     })
 
