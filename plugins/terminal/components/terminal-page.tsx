@@ -11,6 +11,7 @@ import { api } from './api'
 import { TerminalControls } from './terminal-controls'
 import type { TerminalInputHandle } from './terminal-input'
 import { TerminalCanvas } from './terminal-canvas'
+import type { InputResult } from './terminal-socket'
 import { NewSession } from './new-session'
 import { TerminalTool as Tool } from './terminal-tool'
 import { useTerminalAgents } from './use-terminal-agents'
@@ -47,7 +48,6 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const [agentsError, setAgentsError] = useState('')
   const agentChoices = useTerminalAgents(agents)
   const [confirm, setConfirm] = useState<SessionConfirmation | null>(null)
-  const queue = useRef(Promise.resolve())
   const epoch = useRef(0)
   const listEpoch = useRef(0)
   const update = useCallback((session: Session) => {
@@ -118,6 +118,8 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     return sortDir === 'asc' ? compared : -compared
   })
   const session = all.find((item) => item.id === sessionId)
+  const openSession = useRef(sessionId)
+  openSession.current = sessionId
   const ended = session?.state === 'exited' || session?.state === 'completed'
   const ownerAgentName = session?.owner.kind === 'agent' ? agents.find((agent) => agent.id === session.owner.id)?.name ?? session.owner.id : undefined
   // The operator is not the tab: any human client drives a human-owned live session.
@@ -138,7 +140,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   async function operate(operation: string, extra: Record<string, unknown> = {}, targetId = sessionId) {
     const target = current.current.find((item) => item.id === targetId)
     if (!target) return
-    if (operation !== 'resize') { setBusy(true); epoch.current++; inputHandle.current?.reset() }
+    setBusy(true); epoch.current++; inputHandle.current?.reset()
     setError('')
     try {
       const result = await api<Session>('/session', { id: target.id, operation, generation: target.generation, ...extra })
@@ -146,20 +148,20 @@ function Workspace({ sessionId }: { sessionId?: string }) {
       await refresh()
       return true
     } catch (error) { setError(error instanceof Error ? error.message : 'Terminal operation failed'); return false }
-    finally { if (operation !== 'resize') setBusy(false) }
+    finally { setBusy(false) }
   }
   function input(data: string) {
     if (!session || !inputEnabled) return
     markActivity()
-    const id = session.id, generation = session.generation, batch = epoch.current
-    queue.current = queue.current.then(async () => {
-      if (batch !== epoch.current) return
-      const latest = current.current.find((entry) => entry.id === id)
-      if (!latest || latest.generation !== generation || latest.owner.kind !== 'human' || latest.state !== 'running') return
-      const updated = await api<Session>('/session', { id, operation: 'write', generation, sequence: latest.inputSequence + 1, data })
-      update(updated)
-    }).catch((error) => { epoch.current++; setError(error.message); void refresh() })
+    // The viewer socket sequences and coalesces; a refused envelope comes back as a result.
+    if (!inputHandle.current?.send(session.generation, data)) setError('Input not sent: the terminal is reconnecting.')
   }
+  const handleResult = useCallback((result: InputResult) => {
+    if (result.status === 'accepted') return
+    epoch.current++
+    setError(result.status === 'uncertain' ? `May have been delivered: ${result.error ?? 'the connection dropped'}` : `Input not sent: ${result.error ?? 'refused'}`)
+    void refresh()
+  }, [refresh])
   // Claim-on-type: typing while watching takes over, after a one-time confirm
   // that is remembered for CLAIM_GRACE_MS so it does not nag on every keystroke.
   const CLAIM_GRACE_MS = 15 * 60 * 1000
@@ -173,11 +175,10 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     markActivity()
     if (!await operate('take', {}, targetId)) return
     const latest = current.current.find((item) => item.id === targetId)
-    if (!data || !latest || latest.owner.kind !== 'human' || latest.state !== 'running') return
-    try {
-      const updated = await api<Session>('/session', { id: targetId, operation: 'write', generation: latest.generation, sequence: latest.inputSequence + 1, data })
-      update(updated)
-    } catch (error) { setError(error instanceof Error ? error.message : 'Terminal input failed'); void refresh() }
+    // The input handle belongs to whatever session is open now: never type
+    // into it if the operator navigated away while the takeover ran.
+    if (!data || !latest || openSession.current !== targetId || latest.owner.kind !== 'human' || latest.state !== 'running') return
+    if (!inputHandle.current?.send(latest.generation, data)) setError('Input not sent: the terminal is reconnecting.')
   }
   function handleClaim(data: string) {
     const target = current.current.find((item) => item.id === sessionId)
@@ -348,7 +349,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
           {session.cleanupReason && <Alert tone="attention"><AlertDescription>{session.cleanupReason}</AlertDescription></Alert>}
           </Stack>}
           <Separator />
-          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} inputEnabled={Boolean(inputEnabled)} inputHandle={inputHandle} onCtrlChange={setCtrl} captureTab={captureTab} attempt={attempt} onStatus={setStreamStatus} onInput={input} onClaim={handleClaim} onSession={update} onResize={(cols, rows) => operate('resize', { cols, rows })} />}
+          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} inputEnabled={Boolean(inputEnabled)} inputHandle={inputHandle} onCtrlChange={setCtrl} captureTab={captureTab} attempt={attempt} onStatus={setStreamStatus} onInput={input} onClaim={handleClaim} onSession={update} onResult={handleResult} />}
         </>)}
       </Stack>
     </WorkspacePageBody>

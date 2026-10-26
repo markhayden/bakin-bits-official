@@ -2,7 +2,7 @@ import { expect } from 'bun:test'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { browserTest, launchChromium } from './browser'
+import { browserTest, launchChromium, viewerSocket } from './browser'
 
 browserTest('phone keys drive completion, history and interrupt while preserving focus and short viewport geometry', async () => {
   const browser = await launchChromium()
@@ -14,14 +14,8 @@ browserTest('phone keys drive completion, history and interrupt while preserving
   const endpoint = new URL('/api/plugins/terminal/session', process.env.TERMINAL_PREVIEW_URL!).href
   let id: string | undefined
   const errors: string[] = []
-  const writes: string[] = []
   page.on('pageerror', error => errors.push(error.message))
-  page.on('request', request => {
-    if (request.url() === endpoint && request.method() === 'POST') {
-      const data = request.postDataJSON()
-      if (data?.operation === 'write') writes.push(data.data)
-    }
-  })
+  const socket = await viewerSocket(page)
   await page.addInitScript(() => {
     const viewport = Object.assign(new EventTarget(), { height: 800, width: 320, offsetTop: 0, offsetLeft: 0, scale: 1 })
     Object.defineProperty(window, 'visualViewport', { configurable: true, value: viewport })
@@ -34,7 +28,7 @@ browserTest('phone keys drive completion, history and interrupt while preserving
     await page.goto(new URL('/terminal/' + id, endpoint).href)
     const keys = page.getByRole('group', { name: 'Terminal keys', exact: true })
     const tab = keys.getByRole('button', { name: 'Tab', exact: true })
-    await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>('.terminal-input-controls button')?.disabled)
+    await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.terminal-input-controls button')?.disabled === false)
     await tab.waitFor()
     const input = page.locator('.xterm-helper-textarea')
     await input.focus()
@@ -46,15 +40,16 @@ browserTest('phone keys drive completion, history and interrupt while preserving
     await keys.getByRole('button', { name: 'Up', exact: true }).tap()
     await page.keyboard.press('Enter')
     await output('COMPLETION_OK')
-    expect(writes).toContain('\t')
-    expect(writes.some(data => data === '\x1b[A' || data === '\x1bOA')).toBe(true)
+    // Keystrokes may coalesce into one envelope; the bytes and their order are what matter.
+    await socket.waitForTyped('\t')
+    expect(socket.typed().includes('\x1b[A') || socket.typed().includes('\x1bOA')).toBe(true)
     // A raw terminal application enables DECCKM and reads the actual cursor bytes.
     await page.keyboard.type("stty -icanon -echo; printf '\\033[?1hAPP_%s\\n' READY; dd bs=1 count=3 2>/dev/null | od -An -tx1; printf '\\033[?1l'; stty sane")
     await page.keyboard.press('Enter')
     await output('APP_READY')
     await keys.getByRole('button', { name: 'Up', exact: true }).tap()
     await output('1b 4f 41')
-    expect(writes).toContain('\x1bOA')
+    await socket.waitForTyped('\x1bOA')
     await page.keyboard.type('sleep 30')
     await page.keyboard.press('Enter')
     await keys.getByRole('button', { name: 'Ctrl', exact: true }).tap()
@@ -62,7 +57,7 @@ browserTest('phone keys drive completion, history and interrupt while preserving
     await page.keyboard.type("printf 'AFTER_%s\\n' INTERRUPT")
     await page.keyboard.press('Enter')
     await output('AFTER_INTERRUPT')
-    expect(writes).toContain('\x03')
+    await socket.waitForTyped('\x03')
     expect(await keys.getByRole('button', { name: 'Ctrl', exact: true }).getAttribute('aria-pressed')).toBe('false')
     await keys.getByRole('button', { name: 'Ctrl', exact: true }).tap()
     await page.evaluate(() => {
@@ -74,7 +69,7 @@ browserTest('phone keys drive completion, history and interrupt while preserving
     await keys.getByRole('button', { name: 'Ctrl', exact: true }).tap()
     await keys.getByRole('button', { name: 'More', exact: true }).tap()
     await keys.getByRole('button', { name: 'Shift+Tab', exact: true }).tap()
-    expect(writes).toContain('\x1b[Z')
+    await socket.waitForTyped('\x1b[Z')
     expect(await input.evaluate(el => el === document.activeElement)).toBe(true)
     await page.waitForFunction(() => {
       const screen = document.querySelector('.xterm-screen')!.getBoundingClientRect()
@@ -112,41 +107,37 @@ browserTest('ownership changes and reconnects discard Ctrl and disable stale key
   const endpoint = new URL('/api/plugins/terminal/session', process.env.TERMINAL_PREVIEW_URL!).href
   const headers = { 'X-Bakin-Terminal-Client': 'mobile-ownership-test' }
   let id: string | undefined
-  const writes: unknown[] = []
-  page.on('request', request => {
-    if (request.url() === endpoint && request.method() === 'POST' && request.postDataJSON()?.operation === 'write') writes.push(request.postDataJSON())
-  })
+  const socket = await viewerSocket(page)
   try {
     const created = await page.request.post(endpoint + 's', { headers, data: { title: 'Ownership keys', cwd: '/tmp', agentId: 'patch' } })
     id = (await created.json()).id
     await page.goto(new URL('/terminal/' + id, endpoint).href)
     const ctrl = page.getByRole('button', { name: 'Ctrl', exact: true })
-    await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>('.terminal-input-controls button')?.disabled)
+    await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.terminal-input-controls button')?.disabled === false)
     await ctrl.tap()
     await page.request.post(endpoint, { headers, data: { id, operation: 'return' } })
     await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.terminal-input-controls button')?.disabled && document.querySelector('.terminal-input-controls button[aria-pressed]')?.getAttribute('aria-pressed') === 'false')
     expect(await ctrl.getAttribute('aria-pressed')).toBe('false')
-    const before = writes.length
+    const before = socket.inputs().length
     await page.getByRole('button', { name: 'Tab', exact: true }).evaluate((el: HTMLButtonElement) => el.click())
-    expect(writes.length).toBe(before)
+    expect(socket.inputs().length).toBe(before)
     await page.getByRole('button', { name: 'Take over', exact: true }).filter({ visible: true }).click()
-    await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>('.terminal-input-controls button')?.disabled)
+    await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.terminal-input-controls button')?.disabled === false)
     expect(await ctrl.getAttribute('aria-pressed')).toBe('false')
     await ctrl.tap()
-    await page.route('**/api/plugins/terminal/stream?**', route => route.abort())
+    socket.block(true)
     const actions = page.getByRole('button', { name: 'Session actions', exact: true }).filter({ visible: true })
     await actions.click()
     await page.getByRole('menuitem', { name: 'Reconnect terminal', exact: true }).click()
     await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.terminal-input-controls button')?.disabled && document.querySelector('.terminal-input-controls button[aria-pressed]')?.getAttribute('aria-pressed') === 'false')
     expect(await ctrl.getAttribute('aria-pressed')).toBe('false')
-    await page.unroute('**/api/plugins/terminal/stream?**')
+    socket.block(false)
     await actions.click()
     await page.getByRole('menuitem', { name: 'Reconnect terminal', exact: true }).click()
-    await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>('.terminal-input-controls button')?.disabled)
-    const sent = page.waitForResponse(response => response.url() === endpoint && response.request().postDataJSON()?.operation === 'write')
+    await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.terminal-input-controls button')?.disabled === false)
     await page.getByRole('button', { name: 'Tab', exact: true }).tap()
-    await sent
-    expect(writes.length).toBe(before + 1)
+    await socket.waitFor((frame) => frame.type === 'input' && frame.data === '\t')
+    expect(socket.inputs().length).toBe(before + 1)
   } finally {
     try {
       if (id) {

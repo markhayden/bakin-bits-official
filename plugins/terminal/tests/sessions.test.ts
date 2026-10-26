@@ -202,3 +202,36 @@ test('service setup runs in the same queue as creation, never in the middle of o
   expect(order).toEqual(['created', 'setup'])
 })
 
+test('writeNext assigns the session sequence, so two viewers never collide', async () => {
+  const { manager, writes } = fixture()
+  const session = await manager.create({ title: 'Two', cwd: '/tmp', program: 'shell' }, human)
+  const otherHuman = { kind: 'human', id: 'phone-123456789012' } as const
+  await Promise.all([manager.writeNext(session.id, human, session.generation, 'a'), manager.writeNext(session.id, otherHuman, session.generation, 'b')])
+  expect(writes).toEqual(['a', 'b'])
+  expect(manager.get(session.id, human).inputSequence).toBe(2)
+})
+
+test('a delivery failure after the sequence is consumed is reported as uncertain', async () => {
+  const { manager, failWrites } = fixture()
+  const { DeliveryUncertainError } = await import('../lib/contracts')
+  const session = await manager.create({ title: 'Uncertain', cwd: '/tmp', program: 'shell' }, human)
+  failWrites(new Error('Terminal control connection closed'))
+  const failure = await manager.writeNext(session.id, human, session.generation, 'x').catch((error) => error)
+  expect(failure).toBeInstanceOf(DeliveryUncertainError)
+  // A rejection before consumption is an ordinary TerminalError.
+  const stale = await manager.writeNext(session.id, human, session.generation + 5, 'x').catch((error) => error)
+  expect(stale).not.toBeInstanceOf(DeliveryUncertainError)
+})
+
+test('session-change listeners hear every saved change', async () => {
+  const { manager } = fixture()
+  const session = await manager.create({ title: 'Watched', cwd: '/tmp', program: 'shell', agentId: 'patch' }, human)
+  const generations: number[] = []
+  const unsubscribe = manager.onSessionChange(session.id, (changed) => generations.push(changed.generation))
+  await manager.control(session.id, human, 'return')
+  await manager.control(session.id, human, 'take')
+  unsubscribe()
+  await manager.control(session.id, human, 'return')
+  expect(generations).toEqual([2, 3])
+})
+

@@ -3,25 +3,25 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { BoundedOverflow } from '@makinbakin/sdk/layout'
 import type { Session } from '../lib/contracts'
-import { terminalFetch } from './api'
+import { clientId } from './api'
 import { enableWebgl } from './terminal-renderer'
+import { TerminalSocketClient, type InputResult } from './terminal-socket'
 import { consumeControl, encodeTerminalKey, type TerminalInputHandle } from './terminal-input'
 import '@xterm/xterm/css/xterm.css'
 
-export function TerminalCanvas({ session, writable, captureTab, attempt, inputEnabled, inputHandle, onCtrlChange, onStatus, onInput, onClaim, onSession, onResize }: {
+export function TerminalCanvas({ session, writable, captureTab, attempt, inputEnabled, inputHandle, onCtrlChange, onStatus, onInput, onClaim, onSession, onResult }: {
   inputEnabled: boolean; inputHandle: RefObject<TerminalInputHandle | null>; onCtrlChange(armed: boolean): void;
-  session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string): void; onClaim(data: string): void; onSession(session: Session): void; onResize(cols: number, rows: number): Promise<boolean | undefined>
+  session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string): void; onClaim(data: string): void; onSession(session: Session): void; onResult(result: InputResult): void
 }) {
   const element = useRef<HTMLDivElement>(null)
-  const callbacks = useRef({ onInput, onClaim, onSession, onResize, writable, inputEnabled, onCtrlChange, captureTab: false })
-  callbacks.current = { onInput, onClaim, onSession, onResize, writable, inputEnabled, onCtrlChange, captureTab }
+  const callbacks = useRef({ onInput, onClaim, onSession, onResult, writable, inputEnabled, onCtrlChange, captureTab: false, generation: session.generation })
+  callbacks.current = { onInput, onClaim, onSession, onResult, writable, inputEnabled, onCtrlChange, captureTab, generation: session.generation }
   const [status, setStatus] = useState('Connecting')
-  const [truncated, setTruncated] = useState(false)
-  useEffect(() => { onStatus(`${status}${truncated ? ' / Earlier output truncated' : ''}`) }, [status, truncated, onStatus])
+  useEffect(() => { onStatus(status) }, [status, onStatus])
   const terminal = useRef<Terminal | null>(null)
   const fit = useRef<FitAddon | null>(null)
-  const resizing = useRef(false)
-  const resizeAgain = useRef(false)
+  const socket = useRef<TerminalSocketClient | null>(null)
+  const sentSize = useRef('')
   const ctrl = useRef(false)
   const ready = useRef(false)
   const BASE_FONT = 13
@@ -41,23 +41,19 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     term.options.fontSize = next
     if (passes > 0) requestAnimationFrame(() => fitFontToPane(passes - 1))
   }
-  async function resizeToViewport() {
-    if (resizing.current) { resizeAgain.current = true; return }
+  function resizeToViewport() {
     const term = terminal.current
     const size = fit.current?.proposeDimensions()
     if (!size || !term || !callbacks.current.writable) return
     const cols = Math.min(400, Math.max(20, size.cols))
     const rows = Math.min(150, Math.max(1, size.rows))
-    if (term.cols === cols && term.rows === rows) return
-    resizing.current = true
-    try { await callbacks.current.onResize(cols, rows) }
-    finally {
-      resizing.current = false
-      if (resizeAgain.current) { resizeAgain.current = false; void resizeToViewport() }
-    }
+    // Never resend a size; the session update the server pushes resizes xterm.
+    const key = `${cols}x${rows}`
+    if ((term.cols === cols && term.rows === rows) || sentSize.current === key) return
+    // Only a size that actually left counts; a disconnected one is retried after the next sync.
+    if (socket.current?.resize(callbacks.current.generation, cols, rows)) sentSize.current = key
   }
   useEffect(() => {
-    const abort = new AbortController()
     ready.current = false
     const setCtrl = (armed: boolean) => { ctrl.current = armed; callbacks.current.onCtrlChange(armed) }
     const reset = () => setCtrl(false)
@@ -78,6 +74,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
       },
       toggleCtrl() { if (ready.current && callbacks.current.inputEnabled) setCtrl(!ctrl.current) },
       reset,
+      send: (generation, data) => socket.current?.input(generation, data) ?? false,
     }
     const leave = (event: Event) => {
       const target = event.target
@@ -103,51 +100,59 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
       }
       else if (data && data.charCodeAt(0) >= 0x20) callbacks.current.onClaim(data)
     })
-    async function connect() {
-      setStatus('Connecting')
-      try {
-        const response = await terminalFetch(`/stream?id=${encodeURIComponent(session.id)}`, { signal: abort.signal })
-        if (!response.ok || !response.body) throw new Error('Disconnected')
-        const reader = response.body.getReader()
-        const decoder = new TextDecoder()
-        let pending = ''
-        try {
-          while (!abort.signal.aborted) {
-            const next = await reader.read()
-            if (next.done) break
-            pending += decoder.decode(next.value, { stream: true })
-            if (pending.length > 4 * 1024 * 1024) throw new Error('Output frame too large')
-            let boundary: number
-            while ((boundary = pending.indexOf('\n\n')) >= 0) {
-              const frame = pending.slice(0, boundary)
-              pending = pending.slice(boundary + 2)
-              if (!frame.startsWith('data: ')) continue
-              const data = JSON.parse(frame.slice(6))
-              if (data.type === 'error') throw new Error(data.error)
-              if (data.type === 'snapshot') term.reset()
-              if (data.session) callbacks.current.onSession(data.session)
-              if (data.truncated) setTruncated(true)
-              const bytes = Uint8Array.from(atob(data.data ?? ''), (value) => value.charCodeAt(0))
-              await new Promise<void>((resolve) => term.write(bytes, resolve))
-              ready.current = data.session?.state !== 'completed'
-              setStatus(data.session?.state === 'completed' ? 'Completed' : 'Connected')
-            }
-          }
-          if (!abort.signal.aborted) { ready.current = false; reset(); setStatus('Disconnected') }
-        } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
-      } catch (error) { if (!abort.signal.aborted) { ready.current = false; reset(); setStatus(error instanceof Error ? error.message : 'Disconnected') } }
+    const url = new URL(`/api/plugins/terminal/socket?id=${encodeURIComponent(session.id)}`, window.location.href)
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+    const client = new TerminalSocketClient({
+      url: url.href, clientId: clientId(),
+      onSync: (sync) => {
+        // A sync is a complete picture: the snapshot, then output after its cursor.
+        term.reset()
+        if (sync.snapshot) term.write(Uint8Array.from(atob(sync.snapshot), (value) => value.charCodeAt(0)))
+        callbacks.current.onSession(sync.session)
+        ready.current = sync.session.state !== 'completed'
+        // Every sync re-fits: the server may hold any size by now.
+        sentSize.current = ''
+        requestAnimationFrame(() => { if (callbacks.current.writable) resizeToViewport() })
+      },
+      onOutput: (bytes, done) => term.write(bytes, done),
+      onSession: (next) => callbacks.current.onSession(next),
+      onResult: (result) => callbacks.current.onResult(result),
+      onStatus: (next) => {
+        if (next !== 'Connected') { ready.current = false; reset() }
+        setStatus(next)
+      },
+    })
+    socket.current = client
+    client.connect()
+    // Phones suspend backgrounded pages and may leave a socket that looks open
+    // but is dead: after a real absence (or a network change) take a fresh
+    // connection and sync; otherwise just run any pending reconnect now.
+    let hiddenAt = 0
+    const visibility = () => {
+      if (document.hidden) { hiddenAt = Date.now(); return }
+      if (hiddenAt && Date.now() - hiddenAt > 5000) client.reconnect()
+      else client.resume()
+      hiddenAt = 0
     }
-    void connect()
+    const online = () => client.reconnect()
+    const resume = () => client.resume()
+    document.addEventListener('visibilitychange', visibility)
+    window.addEventListener('online', online)
+    window.addEventListener('focus', resume)
     return () => {
       ready.current = false
       inputHandle.current = null
+      document.removeEventListener('visibilitychange', visibility)
+      window.removeEventListener('online', online)
+      window.removeEventListener('focus', resume)
+      client.close(); socket.current = null; sentSize.current = ''
       textarea.removeEventListener('paste', reset, true)
       textarea.removeEventListener('compositionstart', reset, true)
       document.removeEventListener('focusin', leave)
       document.removeEventListener('pointerdown', leave)
       document.removeEventListener('visibilitychange', hide)
       window.removeEventListener('blur', reset)
-      abort.abort(); disposeRenderer(); term.dispose(); terminal.current = null
+      disposeRenderer(); term.dispose(); terminal.current = null
     }
   }, [session.id, attempt])
   useLayoutEffect(() => { inputHandle.current?.reset() }, [inputEnabled, session.generation, session.id, attempt])
@@ -164,7 +169,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
         // PTY and scale the font so the fixed grid fills the pane instead.
         if (callbacks.current.writable) {
           if (terminal.current && terminal.current.options.fontSize !== BASE_FONT) terminal.current.options.fontSize = BASE_FONT
-          void resizeToViewport()
+          resizeToViewport()
         } else fitFontToPane()
       }, 100)
     }

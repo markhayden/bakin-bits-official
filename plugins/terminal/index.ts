@@ -1,6 +1,6 @@
 import { mkdirSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
-import { definePlugin, defineRoute } from '@makinbakin/sdk'
+import { definePlugin, defineRoute, defineSocketRoute } from '@makinbakin/sdk'
 import type { PluginContext, PluginToolContext, HealthObservationInput } from '@makinbakin/sdk/types'
 import { z } from 'zod'
 import { Store } from './lib/store'
@@ -8,8 +8,9 @@ import { TerminalService } from './lib/service'
 import { TmuxProcesses } from './lib/processes'
 import { Sessions } from './lib/sessions'
 import { TerminalError, terminalSettings, type Principal } from './lib/contracts'
-import { command, failure, human, stream } from './lib/http'
+import { agentCommand, command, failure, human } from './lib/http'
 import { sessionOptions } from './lib/session-options'
+import { TerminalViewer } from './lib/socket'
 
 let manager: Sessions | undefined
 let service: TerminalService | undefined
@@ -30,7 +31,7 @@ const route = (path: string, method: 'GET' | 'POST', summary: string, handler: (
 })
 
 export default definePlugin({
-  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.1',
+  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.2',
   routes: [
     route('/options', 'GET', 'Get terminal form defaults and available agents and tasks', async (request) => {
       const principal = human(request)
@@ -45,14 +46,18 @@ export default definePlugin({
     }),
     route('/sessions', 'POST', 'Create a terminal session', async (request) => { const principal = human(request); return Response.json(await sessions().create(await request.json(), principal)) }),
     route('/session', 'POST', 'Operate a terminal session', async (request) => { const principal = human(request); return Response.json(await command(sessions(), await request.json(), principal)) }),
-    route('/stream', 'GET', 'Stream private terminal output', async (request) => stream(sessions(), request)),
-    route('/history', 'GET', 'Read bounded terminal history', async (request) => {
-      const principal = human(request)
-      const url = new URL(request.url)
-      const cursor = z.coerce.number().int().nonnegative().parse(url.searchParams.get('cursor') ?? 0)
-      return Response.json(sessions().output(url.searchParams.get('id') ?? '', principal, cursor))
-    }),
     route('/service', 'POST', 'Set up the persistent terminal service', async (request) => { human(request); await sessions().setupService(() => service!.install()); return Response.json({ ready: true }) }),
+  ],
+  socketRoutes: [
+    defineSocketRoute({
+      path: '/socket',
+      summary: 'Live terminal output and input for one viewer',
+      admit: (request) => {
+        const id = new URL(request.url).searchParams.get('id') ?? ''
+        if (!manager?.store.sessions().some((session) => session.id === id)) return Response.json({ error: 'Session not found' }, { status: 404 })
+      },
+      open: (socket, request) => { new TerminalViewer(sessions(), socket, new URL(request.url).searchParams.get('id')!) },
+    }),
   ],
   settingsSchema: { fields: [
     { key: 'enabledAgents', label: 'Enable terminal access', description: 'Enabled agents can open and operate terminal sessions. A session is a real shell running as your user, so an enabled agent can read any file you can — including stored API keys and credentials. Enable only agents you trust with full access to this machine.', type: 'agent-toggles', default: ['main'] },
@@ -194,7 +199,7 @@ export default definePlugin({
           const id = z.string().min(1).parse(input.id)
           if (operation === 'screen') return { ok: true, screen: await sessions().readScreen(id, principal) }
           if (operation === 'output') return { ok: true, ...sessions().output(id, principal, z.number().int().nonnegative().parse(input.cursor ?? 0)) }
-          return { ok: true, session: await command(sessions(), { ...input, operation }, principal) }
+          return { ok: true, session: await agentCommand(sessions(), { ...input, operation }, principal) }
         } catch (error) { return { ok: false, error: error instanceof TerminalError ? error.message : 'Invalid or unavailable terminal operation' } }
       },
     })

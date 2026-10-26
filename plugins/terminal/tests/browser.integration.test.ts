@@ -1,7 +1,7 @@
 import { expect } from 'bun:test'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { browserTest, launchChromium } from './browser'
+import { browserTest, launchChromium, viewerSocket } from './browser'
 
 browserTest('browser creates a real shell, sends input and reconnects without losing output', async () => {
   const browser = await launchChromium()
@@ -11,6 +11,7 @@ browserTest('browser creates a real shell, sends input and reconnects without lo
   let completed = false
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
+  const socket = await viewerSocket(page)
   const screenshots = join(import.meta.dir, '../test-results/live')
   mkdirSync(screenshots, { recursive: true })
   try {
@@ -21,16 +22,15 @@ browserTest('browser creates a real shell, sends input and reconnects without lo
     await page.getByRole('combobox', { name: 'Assigned agent' }).click()
     await page.getByRole('option', { name: 'Unassigned', exact: true }).click()
     const creation = page.waitForResponse((response) => response.url().endsWith('/terminal/sessions') && response.request().method() === 'POST')
-    const resize = page.waitForResponse((response) => response.url().endsWith('/terminal/session') && response.request().postDataJSON()?.operation === 'resize')
     await page.getByRole('button', { name: 'Start terminal', exact: true }).click()
     createdId = (await (await creation).json()).id
     await page.locator('.xterm-helper-textarea').waitFor()
     const workspace = page.locator('[data-archetype="workspace"]')
     await workspace.evaluate((element) => { element.scrollTop = element.scrollHeight })
     await page.locator('[data-slot="workspace-page-compact-header"][data-stuck]').waitFor()
-    const fitted = await (await resize).json()
-    expect(fitted.cols).toBeGreaterThan(80)
-    expect(fitted.rows).toBeGreaterThan(24)
+    const fitted = await socket.waitFor((frame) => frame.type === 'resize')
+    expect(fitted.cols as number).toBeGreaterThan(80)
+    expect(fitted.rows as number).toBeGreaterThan(24)
     await page.locator('.xterm-helper-textarea').focus()
     await page.keyboard.type('printf "BROWSER_%s_OK\\n" TERMINAL')
     await page.keyboard.press('Enter')
@@ -50,10 +50,9 @@ browserTest('browser creates a real shell, sends input and reconnects without lo
     const tabCapture = page.getByRole('menuitemcheckbox', { name: 'Capture Tab', exact: true })
     expect(await tabCapture.isChecked()).toBe(true)
     await page.keyboard.press('Escape')
-    const tabInput = page.waitForResponse((response) => response.url().endsWith('/terminal/session') && response.request().postDataJSON()?.operation === 'write' && response.request().postDataJSON()?.data === '\t')
     await page.locator('.xterm-helper-textarea').focus()
     await page.keyboard.press('Tab')
-    expect((await tabInput).ok()).toBe(true)
+    await socket.waitFor((frame) => frame.type === 'input' && frame.data === '\t')
     await controls.getByRole('button', { name: 'Session actions', exact: true }).click()
     await tabCapture.click()
     expect(await tabCapture.isChecked()).toBe(false)
@@ -61,7 +60,6 @@ browserTest('browser creates a real shell, sends input and reconnects without lo
     await page.locator('.xterm-helper-textarea').focus()
     await page.keyboard.press('Tab')
     expect(await page.locator('.xterm-helper-textarea').evaluate((element) => element === document.activeElement)).toBe(false)
-    const mobileResize = page.waitForResponse((response) => response.url().endsWith('/terminal/session') && response.request().postDataJSON()?.operation === 'resize' && response.request().postDataJSON()?.cols < 40)
     await page.setViewportSize({ width: 320, height: 740 })
     const closeActivity = page.getByTestId('mobile-live-activity-button')
     if (await closeActivity.isVisible() && await closeActivity.getAttribute('aria-pressed') === 'true') {
@@ -69,7 +67,7 @@ browserTest('browser creates a real shell, sends input and reconnects without lo
       await page.waitForFunction(() => (document.querySelector('[data-slot="activity-panel"]')?.getBoundingClientRect().width ?? 0) <= 1)
     }
     await workspace.evaluate((element) => { element.scrollTop = element.scrollHeight })
-    expect((await (await mobileResize).json()).cols).toBeLessThan(40)
+    await socket.waitFor((frame) => frame.type === 'resize' && (frame.cols as number) < 40)
     await page.screenshot({ path: join(screenshots, 'mobile.png'), fullPage: true })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
     await page.getByRole('button', { name: 'Session actions', exact: true }).click()

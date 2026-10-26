@@ -7,7 +7,9 @@ import { tmuxConfig } from '../lib/tmux-config'
 import { TmuxProcesses } from '../lib/processes'
 import { Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
-import { command, failure, human, stream } from '../lib/http'
+import type { PluginSocket } from '@makinbakin/sdk/types'
+import { command, failure, human } from '../lib/http'
+import { TerminalViewer } from '../lib/socket'
 
 const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-preview-'))
 // Terminal runs only the managed tmux: give the disposable home one
@@ -39,11 +41,35 @@ if (!built.success) throw new Error(built.logs.join('\n'))
 const css = transformPluginCss({ pluginId: 'terminal', css: readFileSync(join(root, 'preview.css'), 'utf8'), from: 'preview.css' }).css
 writeFileSync(join(root, 'preview.css'), css)
 const sdkCss = readFileSync(Bun.resolveSync('@makinbakin/sdk/styles.css', import.meta.dir), 'utf8')
-const server = Bun.serve({
+type ViewerData = { id: string; message: Array<(data: string | Uint8Array) => void>; close: Array<(code: number, reason: string) => void> }
+const server = Bun.serve<ViewerData>({
   hostname: '127.0.0.1', port: Number(process.env.TERMINAL_PREVIEW_PORT ?? 0),
   idleTimeout: 0,
-  async fetch(request) {
+  // The host serves plugin socket routes (bakin #1029); the preview adapts
+  // Bun's native WebSocket to the same PluginSocket the viewer expects.
+  websocket: {
+    open(ws) {
+      const socket: PluginSocket = {
+        send: (data) => { if (ws.readyState !== 1) return false; ws.send(data); return true },
+        onMessage: (listener) => { ws.data.message.push(listener) },
+        onClose: (listener) => { ws.data.close.push(listener) },
+        close: (code, reason) => { ws.close(code, reason) },
+      }
+      new TerminalViewer(manager, socket, ws.data.id)
+    },
+    message(ws, data) { for (const listener of ws.data.message) listener(typeof data === 'string' ? data : new Uint8Array(data)) },
+    close(ws, code, reason) { for (const listener of ws.data.close) listener(code, reason) },
+  },
+  async fetch(request, preview) {
     const url = new URL(request.url)
+    if (url.pathname === '/api/plugins/terminal/socket') {
+      // The same cross-site guard the host applies before any plugin socket.
+      const origin = request.headers.get('origin')
+      if (!origin || new URL(origin).host !== url.host) return new Response('Cross-origin socket refused', { status: 403 })
+      const id = url.searchParams.get('id') ?? ''
+      if (preview.upgrade(request, { data: { id, message: [], close: [] } })) return undefined
+      return new Response('Upgrade required', { status: 426 })
+    }
     try {
       if (url.pathname === '/api/plugins/projects/') return Response.json({ projects: [{ id: 'project-1', title: 'Bakin' }] })
       if (url.pathname.startsWith('/api/plugins/terminal/')) {
@@ -56,7 +82,6 @@ const server = Bun.serve({
         }
         if (path === '/sessions' && request.method === 'POST') return Response.json(await manager.create(await request.json(), principal))
         if (path === '/session' && request.method === 'POST') return Response.json(await command(manager, await request.json(), principal))
-        if (path === '/stream') return stream(manager, request)
         return new Response('Not found', { status: 404 })
       }
       if (url.pathname === '/preview.js' || url.pathname === '/preview.css') return new Response(Bun.file(join(root, url.pathname.slice(1))))

@@ -59,6 +59,10 @@ export const DAY = 86_400_000
 export class TerminalError extends Error {
   constructor(message: string, readonly status = 409) { super(message) }
 }
+/** Input whose sequence was consumed but whose delivery failed: never retry it. */
+export class DeliveryUncertainError extends TerminalError {
+  constructor(message: string) { super(`${message}; the input may have been delivered — do not retry it`, 503) }
+}
 
 export function authorize(session: Session, principal: Principal, enabled: string[], write = false, generation?: number): void {
   if (principal.kind === 'agent' && (!enabled.includes(principal.id) || session.agentId !== principal.id)) {

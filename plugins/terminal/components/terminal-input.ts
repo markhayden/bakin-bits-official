@@ -27,4 +27,10 @@ export function consumeControl(data: string, armed: boolean, source: 'text' | 'p
   return { data, armed: false }
 }
 
-export interface TerminalInputHandle { key(key: TerminalKey): void; toggleCtrl(): void; reset(): void }
+export interface TerminalInputHandle {
+  key(key: TerminalKey): void
+  toggleCtrl(): void
+  reset(): void
+  /** Send typed/pasted text for `generation` over the viewer socket; false when not connected. */
+  send(generation: number, data: string): boolean
+}

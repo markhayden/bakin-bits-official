@@ -103,8 +103,25 @@ cursor, and an explicit truncation flag.
   resize does, so an extra client, such as a terminal app, never reshapes a
   session. Input is delivered byte-exact with `send-keys -H` and never passes
   through tmux key bindings. A pane left in copy mode is returned to its
-  program first. New output reaches viewers as soon as it is stored, with no
-  polling interval.
+  program first.
+- **Each browser holds one WebSocket to the session** (`/api/plugins/terminal/socket`).
+  - The connection opens with a sync: a snapshot of the screen, the cursor it
+    reflects, and the session's ownership, input sequence and size.
+  - Output follows as binary frames as soon as it is stored. The browser
+    acknowledges what it has drawn, and the server never runs more than
+    256 KiB ahead of a viewer. A viewer stuck behind for 10 s is disconnected
+    and resyncs, so a stalled phone never slows a desktop.
+  - Keystrokes are batched while one is in flight. Every input batch gets an
+    answer: an error reads **Input not sent** when it was refused, or **May
+    have been delivered** when the connection dropped mid-delivery. Input is
+    never replayed.
+  - The browser reconnects by itself with backoff. After the page has been in
+    the background for more than a few seconds, or when the network comes back,
+    it takes a fresh connection and sync, so a phone returning from the
+    background picks up where it left off, even if its old socket only looked
+    open. Input that was mid-flight when a connection dropped reads **May have
+    been delivered**; input still queued reads **Input not sent**. Opening the
+    same session in another tab is fine; each tab has its own connection.
 - Ten live sessions and ten retained managed worktrees are separate defaults.
   At the worktree cap, safely eligible work is reclaimed or creation is blocked.
 - Cleanup requires completion, no process using the path, no tracked/untracked/
@@ -116,7 +133,7 @@ cursor, and an explicit truncation flag.
   checks. An exited session idle for 30 days becomes cleanup-eligible, never
   forcibly discarded. `idleDays` is configurable. Live processes always block.
 - Output payloads roll at 10 MiB/session and 250 MiB total. Screen parsing and
-  stream pages are also bounded. Completed output expires after 30 days or can
+  output pages are also bounded. Completed output expires after 30 days or can
   be deleted manually. SQLite page/WAL overhead is outside the payload budget;
   session metadata remains for ownership and retained-work review.
 - Health reports unavailable service, maintenance failure, and retained work.
@@ -221,7 +238,7 @@ Terminal automatically uses xterm's WebGL renderer when available. GPU startup f
 
 Phones and touch-capable tablets keep a centered strip of Esc, Tab, one-shot Ctrl, and arrow keys below the output, above the software keyboard. Wrapped rows and expanded keys stay centered. More reveals Enter, Backspace, Delete, Shift+Tab, Home/End, Page Up/Down, and Ctrl+C/D/Z/R/L/A/E/U/K/W. Tap Ctrl again to cancel it. The next key consumes it; paste, composition, disconnection, ownership changes, and leaving the interaction cancel it. Ordinary terminal resizing preserves an armed Ctrl. Explicit combinations always send their named keys. Pointer taps preserve existing editor focus and do not open the keyboard when it is closed.
 
-Keys are disabled while watching, disconnected, or changing ownership; use Take over to drive. Ended sessions and deleted output have no key strip. Normal/application cursor modes use the current xterm mode. All keys pass through the existing ordered input queue. Automatic resize may shrink a live, human-owned grid to one row on short viewports; watchers never resize its PTY. Physical Tab follows Capture Tab while input is available.
+Keys are disabled while watching, disconnected, or changing ownership; use Take over to drive. Ended sessions and deleted output have no key strip. Normal/application cursor modes use the current xterm mode. All keys pass through the viewer connection's ordered input. Automatic resize may shrink a live, human-owned grid to one row on short viewports; watchers never resize its PTY. Physical Tab follows Capture Tab while input is available.
 
 The shared references are `pages/workspace-page.stories.tsx — KeyboardAwareInput` and `recipes/terminal-input.stories.tsx — CompactAndExpanded`. The kit owns viewport measurement and the reserved accessory slot; the plugin owns key encoding, Ctrl state, and ownership.
 
