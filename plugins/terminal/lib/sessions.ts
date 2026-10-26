@@ -458,12 +458,14 @@ export class Sessions {
         else await this.onClient(id, client, () => this.driver.detachClient(client.name))
       } catch (error) { failure ??= error }
     }
-    // The newest admitted app claims the size. The claim must persist, or those admissions are revoked.
     const newest = fresh.at(-1)?.client
     if (newest) {
+      // The newest admitted app claims the size and the session takes it on.
+      // Claim, record and resize succeed together, or those admissions are revoked.
       try {
         Object.assign(session, claimSize(session, nativeViewer(newest.pid), { kind: 'native' }))
-        this.save(session)
+        const size = clampSize(newest.cols, newest.rows)
+        await this.applySize(session, size.cols, size.rows)
       } catch (error) {
         failure ??= error
         for (const { client, token } of fresh.splice(0)) {
@@ -472,16 +474,19 @@ export class Sessions {
           this.dropReservation(token, `Could not admit this terminal: ${error instanceof Error ? error.message : String(error)}`)
         }
       }
+    } else {
+      // The admitted app holding the claim is followed. If tmux and the record
+      // cannot be made to agree, applySize drops Bakin's attachment (the
+      // next one adopts tmux's window); the app itself is attached to tmux.
+      const authority = session.sizeAuthority
+      const sizer = authority?.kind === 'native' ? [...next.values()].find((client) => nativeViewer(client.pid) === authority.viewer) : undefined
+      if (sizer) {
+        const size = clampSize(sizer.cols, sizer.rows)
+        try { await this.applySize(session, size.cols, size.rows) } catch (error) { failure ??= error }
+      }
     }
     this.natives.set(id, next)
     for (const { token } of fresh) this.dropReservation(token)
-    // The app holding the claim is followed.
-    const authority = session.sizeAuthority
-    const sizer = authority?.kind === 'native' ? [...next.values()].find((client) => nativeViewer(client.pid) === authority.viewer) : undefined
-    if (sizer) {
-      const size = clampSize(sizer.cols, sizer.rows)
-      try { await this.applySize(session, size.cols, size.rows) } catch (error) { failure ??= error }
-    }
     const changed = next.size !== admitted.size || [...next].some(([pid, client]) => {
       const before = admitted.get(pid)
       return !before || before.cols !== client.cols || before.rows !== client.rows

@@ -591,7 +591,7 @@ test('an admission whose size claim cannot be saved is revoked: detached and ref
   const store = manager.store as unknown as { save(session: unknown): void }
   const save = store.save.bind(store)
   store.save = () => { throw new Error('disk full') }
-  await expect(manager.confirmAttach(reserved.token, 971)).rejects.toThrow('Could not admit this terminal: disk full')
+  await expect(manager.confirmAttach(reserved.token, 971)).rejects.toThrow('Could not admit this terminal')
   store.save = save
   expect(manager.nativeClients(session.id)).toEqual([])
   expect(detachedClients).toEqual(['/dev/ttys001'])
@@ -607,4 +607,16 @@ test('a viewer listener that throws does not stop an admission', async () => {
   await manager.confirmAttach(reserved.token, 981)
   expect(manager.nativeClients(session.id).map((client) => client.pid)).toEqual([981])
   expect(manager.get(session.id, human).sizeAuthority).toEqual({ viewer: 'native:981', kind: 'native' })
+})
+
+test('an admission whose resize cannot be reconciled is revoked too', async () => {
+  const { manager, natives, detachedClients, failResizes, failReadBack } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  natives.set(session.id, [ghostty(991, 120, 40)])
+  failResizes(new Error('tmux refused'))
+  failReadBack(new Error('tmux gone'))
+  await expect(manager.confirmAttach(reserved.token, 991)).rejects.toThrow('Could not admit this terminal')
+  expect(manager.nativeClients(session.id)).toEqual([])
+  expect(detachedClients).toEqual(['/dev/ttys001'])
 })
