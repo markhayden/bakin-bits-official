@@ -1,330 +1,115 @@
 'use client'
 
-import { useState, useCallback, useMemo, useEffect, useRef, type CSSProperties } from 'react'
-import { emitPluginEvent, toast, useHorizontalResize, usePluginEvent } from '@makinbakin/sdk/hooks'
-import { Paperclip, X, FileText, Image, Film, Music, File, Pencil, Link2 } from 'lucide-react'
-import { useAgentList, useMainAgentId } from "@makinbakin/sdk/hooks"
-import { PluginLink, useRouter, useUnsavedChangesGuard } from "@makinbakin/sdk/navigation"
-import { ConversationEmptyState, useConversationThread } from "@makinbakin/sdk/conversation"
-import type { ConversationAgent } from "@makinbakin/sdk/conversation"
+/**
+ * Project detail (D10): header, then a Conversation · Plan · Steps · Files
+ * tab bar over one content column. The project conversation is the primary
+ * surface: full width on its tab, and docked beside Plan/Steps/Files on
+ * desktop. Exactly ONE ConversationPanel is mounted at a time — on the
+ * Conversation tab, or in the expanded dock, never both; the shared
+ * storageKey carries the composer draft across the remount.
+ */
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { MessageSquare } from 'lucide-react'
+import { emitPluginEvent, toast, useAgentList, useMainAgentId, useMediaQuery, usePluginEvent } from '@makinbakin/sdk/hooks'
+import { useQueryState, useUnsavedChangesGuard } from '@makinbakin/sdk/navigation'
+import { ConversationEmptyState, ConversationPanel, useConversationThread } from '@makinbakin/sdk/conversation'
+import type { ConversationAgent } from '@makinbakin/sdk/conversation'
 import {
   AgentSelect,
-  AssetPicker,
   ConfirmDialog,
-  KeyValue,
-  ListRow,
-  ListRowActions,
-  ListRows,
-  Page,
-  SegmentedControl,
-  StatusBadge,
-} from "@makinbakin/sdk/patterns"
-import type { AssetPickerCollection } from "@makinbakin/sdk/patterns"
-import { ProjectChecklist } from './project-checklist'
+  PageBody,
+  WorkspacePage,
+  WorkspacePageBody,
+  WorkspacePageHeader,
+  useCollapsedAside,
+} from '@makinbakin/sdk/patterns'
+import { Button, Checkbox, Field, FieldLabel, Skeleton, SystemState, Tabs, TabsList, TabsTrigger, Text } from '@makinbakin/sdk/ui'
+import { ChatDock } from './chat-dock'
 import { ProjectHeader } from './project-header'
-import { ProjectBrainstorm } from './project-brainstorm'
+import { FilesTab } from './tabs/files-tab'
+import { PlanTab } from './tabs/plan-tab'
+import { StepsTab } from './tabs/steps-tab'
 import { useChecklistDrafts } from '../hooks/use-checklist-drafts'
-import { ProjectDraftForm } from './project-draft-form'
-import { useProjectDraft } from '../hooks/use-project-draft'
-import {
-  Alert,
-  AlertDescription,
-  Badge,
-  Button,
-  Checkbox,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  Field,
-  FieldLabel,
-  Progress,
-  Separator,
-  Skeleton,
-  Switch,
-  SystemState,
-  Text,
-  buttonVariants,
-} from "@makinbakin/sdk/ui"
-import { PlanHistoryPanel } from './plan-history'
-import { RenderedPlan } from './rendered-plan'
-import type { ProjectTask, ProjectStatus, ResolvedProjectAsset as ResolvedAsset } from '../types'
+import { usePlanDraft } from '../hooks/use-plan-draft'
 import { useProjectDetail } from '../hooks/use-project-detail'
 import { useProjectHistory } from '../hooks/use-project-history'
 import { projectRequest } from '../lib/project-api'
-import { formatAge, formatDateTime } from '@makinbakin/sdk/utils'
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+import type { ProjectStatus, ProjectTask } from '../types'
 
 const EMPTY_TASKS: ProjectTask[] = []
 
-type AssetPickerMode = { type: 'attach' } | { type: 'relink'; target: ResolvedAsset }
+export const PROJECT_TABS = [
+  { id: 'conversation', label: 'Conversation' },
+  { id: 'plan', label: 'Plan' },
+  { id: 'steps', label: 'Steps' },
+  { id: 'files', label: 'Files' },
+] as const
+export type ProjectTab = (typeof PROJECT_TABS)[number]['id']
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const STATUS_LABEL: Record<ProjectStatus, string> = {
-  draft: 'Draft',
-  active: 'Active',
-  completed: 'Completed',
-  archived: 'Archived',
+/** Where a project opens when `?tab` is absent: what matters at its stage. */
+export const DEFAULT_TAB: Record<ProjectStatus, ProjectTab> = {
+  draft: 'conversation',
+  active: 'steps',
+  completed: 'files',
+  archived: 'plan',
 }
 
-const IMAGE_TYPES = new Set(['images', 'image'])
-const VIDEO_TYPES = new Set(['video'])
-const AUDIO_TYPES = new Set(['audio'])
+const isTab = (value: string): value is ProjectTab => PROJECT_TABS.some(tab => tab.id === value)
 
-const ASSET_ICONS: Record<string, typeof FileText> = {
-  text: FileText,
-  images: Image,
-  video: Film,
-  audio: Music,
-}
-
-function AssetIcon({ type }: { type: string }) {
-  const Icon = ASSET_ICONS[type] || File
-  return <Icon className="size-3.5 shrink-0 text-bakin-text-muted" />
-}
-
-function AssetThumb({ asset }: { asset: ResolvedAsset }) {
-  const [err, setErr] = useState(false)
-  if (IMAGE_TYPES.has(asset.type) && !asset.missing && !err) {
-    return (
-      <img
-        src={`/api/assets/${encodeURIComponent(asset.assetId)}`}
-        alt={asset.assetId}
-        onError={() => setErr(true)}
-        className="size-bakin-8 rounded object-cover shrink-0 bg-bakin-surface-elevated"
-      />
-    )
-  }
-  return (
-    <div className="size-bakin-8 rounded bg-bakin-surface-elevated flex items-center justify-center shrink-0">
-      <AssetIcon type={asset.type} />
-    </div>
-  )
-}
-
-function assetUrl(assetId: string): string {
-  return `/api/assets/${encodeURIComponent(assetId)}`
-}
-
-function assetHref(assetId: string): string {
-  return `/assets/${encodeURIComponent(assetId)}`
-}
-
-function assetName(asset: ResolvedAsset): string {
-  return asset.label || asset.assetId
-}
-
-function AssetPreviewModal({ asset, onClose }: { asset: ResolvedAsset; onClose: () => void }) {
-  const name = assetName(asset)
-  const url = assetUrl(asset.assetId)
-  const href = assetHref(asset.assetId)
-
-  return (
-    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-4xl" closeLabel="Close preview" data-testid="asset-preview">
-        <DialogHeader>
-          <DialogTitle className="truncate">{name}</DialogTitle>
-          <DialogDescription>{asset.type}</DialogDescription>
-        </DialogHeader>
-        <div className="flex min-w-0 justify-center">
-          {IMAGE_TYPES.has(asset.type) ? (
-            <img
-              src={url}
-              alt={name}
-              className="max-w-full rounded object-contain"
-            />
-          ) : VIDEO_TYPES.has(asset.type) ? (
-            <video
-              src={url}
-              controls
-              className="max-w-full rounded bg-bakin-canvas-default"
-            />
-          ) : AUDIO_TYPES.has(asset.type) ? (
-            <audio src={url} controls className="w-full" />
-          ) : (
-            <div className="flex flex-col items-center gap-bakin-3 text-center">
-              <div className="flex size-12 items-center justify-center rounded bg-bakin-surface-elevated">
-                <AssetIcon type={asset.type} />
-              </div>
-              <Text size="meta" tone="muted">No inline preview for this asset type.</Text>
-            </div>
-          )}
-        </div>
-        <DialogFooter showCloseButton>
-          <PluginLink to={href} className={buttonVariants({ variant: 'outline', size: 'sm' })}>Open asset</PluginLink>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
-
-export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditChange }: { projectId?: string; onBack: () => void; initialEdit?: boolean; onEditChange?: (editing: boolean) => void }) {
-  const router = useRouter()
-  const isNew = !projectId
-  const currentId = projectId || ''
+export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack: () => void }) {
   const mainAgentId = useMainAgentId() ?? ''
-  const detail = useProjectDetail(currentId)
-  const historyState = useProjectHistory(currentId, detail.project?.body)
+  const detail = useProjectDetail(projectId)
   const { project, loading, error: loadError, refresh } = detail
+  const history = useProjectHistory(projectId, project?.body)
+  const plan = usePlanDraft(projectId, project, refresh)
+  const checklist = useChecklistDrafts(projectId, project?.tasks ?? EMPTY_TASKS, refresh)
+  const desktop = useMediaQuery('(min-width: 1024px)')
+  const [dockCollapsed, setDockCollapsed] = useCollapsedAside('projects:conversation-dock')
+  const [tabParam, setTabParam] = useQueryState('tab', '')
+  const [editParam, setEditParam] = useQueryState('edit', '')
 
-  // Draggable divider between the main plan column and the progress/tasks sidebar.
-  const { width: sidebarWidth, handleProps: sidebarResizeProps } = useHorizontalResize({
-    defaultWidth: 346,
-    minWidth: 280,
-    maxWidth: 640,
-    storageKey: 'projects-sidebar',
-  })
-
-  // Edit mode — single toggle for title + spec
-  const [editing, setEditing] = useState(initialEdit)
-  const [editTransition, setEditTransition] = useState<boolean | null>(null)
-  const [exitSaving, setExitSaving] = useState(false)
-  const [exitError, setExitError] = useState<string | null>(null)
-  const draft = useProjectDraft(currentId, project, refresh)
-  const checklist = useChecklistDrafts(currentId, project?.tasks ?? EMPTY_TASKS, refresh)
-  // Brainstorm
-  const [brainstormAgent, setBrainstormAgent] = useState(mainAgentId)
-  // The focused conversation kit and AgentSelect are presentation-only — the
-  // consumer resolves agent identity and supplies the selectable agents.
   const agentList = useAgentList()
-  const selectableAgents = useMemo(
-    () => agentList.map((agent) => ({
-      id: agent.id,
-      name: agent.name ?? agent.id,
-      imageSrc: agent.headshot ?? null,
-    })),
-    [agentList],
-  )
-  const brainstormConversationAgent = useMemo<ConversationAgent | undefined>(() => {
-    if (!brainstormAgent) return undefined
-    const agent = agentList.find((candidate) => candidate.id === brainstormAgent)
-    return {
-      id: brainstormAgent,
-      name: agent?.name ?? brainstormAgent,
-      ...(agent?.headshot ? { avatarUrl: agent.headshot } : {}),
-    }
-  }, [agentList, brainstormAgent])
+  const agents = useMemo(() => agentList.map(agent => ({
+    id: agent.id,
+    name: agent.name ?? agent.id,
+    imageSrc: agent.headshot ?? null,
+  })), [agentList])
+  // The lead answers by default; the composer's picker is for one-off consults (D13).
+  const [consultAgent, setConsultAgent] = useState<string | null>(null)
+  const replyAgent = consultAgent ?? project?.owner ?? mainAgentId
+  const replyAgentRef = useRef(replyAgent)
+  replyAgentRef.current = replyAgent
+  const leadAgent = useMemo<ConversationAgent>(() => {
+    const id = project?.owner || mainAgentId
+    const agent = agentList.find(candidate => candidate.id === id)
+    return { id, name: agent?.name ?? (id || 'Agent'), ...(agent?.headshot ? { avatarUrl: agent.headshot } : {}) }
+  }, [agentList, project?.owner, mainAgentId])
 
-  // Plan history "Diff" view (bakin#703)
-  const [showChanges, setShowChanges] = useState(false)
-  // Change hints on the rendered view — sticky preference.
-  const [showChangeHints, setShowChangeHints] = useState(() => {
-    try { return localStorage.getItem('projects-show-change-hints') !== 'false' } catch { return true }
-  })
-  const toggleChangeHints = (next: boolean) => {
-    setShowChangeHints(next)
-    try { localStorage.setItem('projects-show-change-hints', String(next)) } catch { /* private mode */ }
+  const tab: ProjectTab = isTab(tabParam) ? tabParam : project ? DEFAULT_TAB[project.status] : 'conversation'
+  const editing = tab === 'plan' && editParam === '1'
+  const selectTab = (next: string) => {
+    if (!isTab(next)) return
+    // The stage default stays out of the URL.
+    setTabParam(project && next === DEFAULT_TAB[project.status] ? '' : next)
+    if (next !== 'plan') setEditParam('')
   }
 
+  const showDock = desktop && tab !== 'conversation'
+  const panelVisible = tab === 'conversation' || (showDock && !dockCollapsed)
+  const [unread, setUnread] = useState(false)
+  const panelVisibleRef = useRef(panelVisible)
+  panelVisibleRef.current = panelVisible
 
-  // Assets
-  const [assetPickerOpen, setAssetPickerOpen] = useState(false)
-  const [assetPickerMode, setAssetPickerMode] = useState<AssetPickerMode>({ type: 'attach' })
-  const [assetSearch, setAssetSearch] = useState('')
-  const [assetCollection, setAssetCollection] = useState<AssetPickerCollection>({ status: 'loading' })
-  const [previewAsset, setPreviewAsset] = useState<ResolvedAsset | null>(null)
-  const [assetRelinkError, setAssetRelinkError] = useState<string | null>(null)
-  const [relinkingAsset, setRelinkingAsset] = useState(false)
+  // ── Conversation: the server owns the transcript AND the turn (bakin#703).
+  const markSeen = useCallback(() => {
+    if (document.visibilityState !== 'visible') return
+    void fetch(`/api/plugins/projects/${encodeURIComponent(projectId)}/brainstorm/seen`, { method: 'POST' })
+      .then(() => emitPluginEvent({ event: 'projects.brainstorm.seen', projectId }))
+      .catch(() => {})
+  }, [projectId])
 
-  // Delete confirmation
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
-  const [deleteLinkedTasks, setDeleteLinkedTasks] = useState(false)
-  const [deleting, setDeleting] = useState(false)
-  const [deleteError, setDeleteError] = useState<string | null>(null)
-  const [leaving, setLeaving] = useState(false)
-  const [assetDetachTarget, setAssetDetachTarget] = useState<ResolvedAsset | null>(null)
-  const [detachingAsset, setDetachingAsset] = useState(false)
-  const [assetDetachError, setAssetDetachError] = useState<string | null>(null)
-
-  // ---------------------------------------------------------------------------
-  // Data fetching
-  // ---------------------------------------------------------------------------
-
-  const fetchProject = useCallback(() => refresh(), [refresh])
-  useEffect(() => {
-    if (isNew) router.replace('/projects')
-  }, [isNew, router])
-
-  // Sync default owner once main agent id resolves from the team store.
-  useEffect(() => {
-    if (!mainAgentId) return
-    setBrainstormAgent((prev) => (prev ? prev : mainAgentId))
-  }, [mainAgentId, isNew])
-
-  // ---------------------------------------------------------------------------
-  // The four project fields share one staged draft and explicit save boundary.
-  // ---------------------------------------------------------------------------
-  const enterEdit = () => {
-    if (checklist.saving || draft.saving) return
-    if (onEditChange) setEditTransition(true)
-    else setEditing(true)
-  }
-  const finishEdit = () => {
-    if (draft.dirty || draft.saving || checklist.saving) return
-    if (onEditChange) setEditTransition(false)
-    else setEditing(false)
-  }
-  const exitGuard = useUnsavedChangesGuard({
-    hasUnsavedChanges: !leaving && editTransition === null && (draft.dirty || checklist.dirty || draft.saving || checklist.saving),
-    saving: draft.saving || checklist.saving || exitSaving,
-    onCancel: () => setLeaving(true),
-    saveLabel: 'Save all and leave',
-    description: 'Save all project and checklist edits, discard them, or stay here. Your brainstorm draft is kept and will not be sent.',
-    error: exitError,
-    onSaveAndExit: async () => {
-      setExitError(null)
-      if (!draft.validate() || !checklist.validate()) { setExitError('Resolve the highlighted draft conflicts before leaving. Choose Cancel to review them.'); return false }
-      setExitSaving(true)
-      try {
-        if (!await draft.save()) { setExitError('Project edits remain unsaved. Choose Cancel to review conflicts, or retry.'); return false }
-        if (!await checklist.saveAll()) { setExitError('Project changes are saved. Some checklist edits remain unsaved; retry saves only the unfinished work.'); return false }
-        return !draft.isDirty() && !checklist.isDirty()
-      } finally { setExitSaving(false) }
-    },
-    onDiscardAndExit: () => { draft.discard(); checklist.discardAll() },
-  })
-  // This controlled transition stays within the same mounted project owner.
-  // Install the guard's clean transition state before replacing the route.
-  const transitioned = useRef<boolean | null>(null)
-  useEffect(() => {
-    if (editTransition === null || transitioned.current === editTransition) return
-    transitioned.current = editTransition
-    onEditChange?.(editTransition)
-  }, [editTransition, onEditChange])
-  useEffect(() => {
-    setEditing(initialEdit)
-    setEditTransition(null)
-    transitioned.current = null
-  }, [initialEdit])
-
-  // ---------------------------------------------------------------------------
-  // Brainstorm
-  // ---------------------------------------------------------------------------
-
-  // The server owns the transcript AND the turn (bakin#703): the ask route
-  // 202s and the turn streams as projects.brainstorm.* bus events, so
-  // navigating away never kills it and remounting rehydrates mid-stream
-  // (server-seeded `brainstormStreaming`). The kit hook adds the
-  // synchronous optimistic user echo.
-  const brainstormAgentRef = useRef(brainstormAgent)
-  brainstormAgentRef.current = brainstormAgent
-  // Bridged via ref: markBrainstormSeen is defined below (it needs state
-  // declared after this hook), while onSettled here needs to call it.
-  const markBrainstormSeenRef = useRef<() => void>(() => {})
-  const brainstorm = useConversationThread({
-    threadKey: currentId ?? '',
+  const thread = useConversationThread({
+    threadKey: projectId,
     events: {
       chunk: 'projects.brainstorm.chunk',
       done: 'projects.brainstorm.done',
@@ -332,7 +117,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
     },
     keyOf: useCallback((payload: Record<string, unknown>) => payload.projectId, []),
     load: useCallback(async (key: string) => {
-      const res = await fetch(`/api/plugins/projects/${key}`)
+      const res = await fetch(`/api/plugins/projects/${encodeURIComponent(key)}`)
       if (!res.ok) return null
       const data = await res.json()
       return {
@@ -342,293 +127,272 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
       }
     }, []),
     post: useCallback(async (key: string, content: string) => {
-      const res = await fetch(`/api/plugins/projects/${key}/ask`, {
+      const res = await fetch(`/api/plugins/projects/${encodeURIComponent(key)}/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: key, prompt: content, agent: brainstormAgentRef.current }),
+        body: JSON.stringify({ projectId: key, prompt: content, agent: replyAgentRef.current }),
       })
       if (res.ok) return { ok: true }
       const body = await res.json().catch(() => ({}))
       return { ok: false, status: res.status, ...(body.error ? { error: String(body.error) } : {}) }
     }, []),
-    // Refresh after a reply settles — the agent may have updated the spec —
-    // and the reply landed while the user was looking at this project.
+    // The agent may have edited the plan or steps; a reply landing out of
+    // sight marks the collapsed dock unread.
     onSettled: useCallback(() => {
-      fetchProject()
-      markBrainstormSeenRef.current()
-    }, [fetchProject]),
+      void refresh()
+      if (panelVisibleRef.current) markSeen()
+      else setUnread(true)
+    }, [refresh, markSeen]),
   })
 
-  // Send failures (409 busy, network) surface as a toast; the optimistic
-  // row stays visible in the panel.
   useEffect(() => {
-    if (brainstorm.sendError) toast(brainstorm.sendError, 'error')
-  }, [brainstorm.sendError])
+    if (thread.sendError) toast(thread.sendError, 'error')
+  }, [thread.sendError])
 
-  // The agent edits the plan MID-turn (apply_plan tool calls) — refresh the
-  // visible plan when tool activity lands instead of waiting for settle
-  // (review I1: "Applied a project plan" rows next to an unchanged plan).
-  usePluginEvent('projects.changed', (payload) => { if (payload.projectId === currentId) void fetchProject() })
+  useEffect(() => {
+    if (!panelVisible) return
+    setUnread(false)
+    markSeen()
+  }, [panelVisible, markSeen])
+
+  // Mid-turn plan/step edits land as tool activity — refresh immediately.
+  usePluginEvent('projects.changed', (payload) => { if (payload.projectId === projectId) void refresh() })
   usePluginEvent('projects.brainstorm.chunk', (payload) => {
-    if (payload.projectId !== currentId) return
-    const chunk = payload.chunk as { type?: string } | undefined
-    if (chunk?.type === 'tool') void fetchProject()
+    if (payload.projectId !== projectId) return
+    if ((payload.chunk as { type?: string } | undefined)?.type === 'tool') void refresh()
   })
 
-  // Viewing the project (or a reply landing while viewing) marks the
-  // brainstorm seen; the synthetic bus event refreshes the nav badge only
-  // AFTER the write lands (the chat pattern — refreshing on done alone
-  // races the seen POST). Hidden/background tabs never mark seen — nobody
-  // saw anything.
-  const markBrainstormSeen = useCallback(() => {
-    if (!currentId || isNew || document.visibilityState !== 'visible') return
-    void fetch(`/api/plugins/projects/${currentId}/brainstorm/seen`, { method: 'POST' })
-      .then(() => emitPluginEvent({ event: 'projects.brainstorm.seen', projectId: currentId }))
-      .catch(() => {})
-  }, [currentId, isNew])
+  const abort = useCallback(() => {
+    void fetch(`/api/plugins/projects/${encodeURIComponent(projectId)}/ask/abort`, { method: 'POST' }).catch(() => {})
+  }, [projectId])
+  const retry = useCallback(() => {
+    const lastUser = [...thread.messages].reverse().find(message => message.kind === 'user')
+    if (lastUser?.kind === 'user' && lastUser.content) void thread.send(lastUser.content)
+  }, [thread])
 
-  markBrainstormSeenRef.current = markBrainstormSeen
+  // ── Leaving with unsaved plan or step edits.
+  const [leaving, setLeaving] = useState(false)
+  const [exitSaving, setExitSaving] = useState(false)
+  const [exitError, setExitError] = useState<string | null>(null)
+  const exitGuard = useUnsavedChangesGuard({
+    hasUnsavedChanges: !leaving && (plan.dirty || checklist.dirty || plan.saving || checklist.saving),
+    saving: plan.saving || checklist.saving || exitSaving,
+    onCancel: () => setLeaving(true),
+    saveLabel: 'Save all and leave',
+    description: 'Save your plan and step edits, discard them, or stay here. Your message draft is kept and will not be sent.',
+    error: exitError,
+    onSaveAndExit: async () => {
+      setExitError(null)
+      if (!plan.validate() || !checklist.validate()) { setExitError('Resolve the highlighted conflicts before leaving. Choose Cancel to review them.'); return false }
+      setExitSaving(true)
+      try {
+        if (!await plan.save()) { setExitError('Plan edits remain unsaved. Choose Cancel to review conflicts, or retry.'); return false }
+        if (!await checklist.saveAll()) { setExitError('The plan is saved. Some step edits remain unsaved; retry saves only the unfinished work.'); return false }
+        return !plan.isDirty() && !checklist.isDirty()
+      } finally { setExitSaving(false) }
+    },
+    onDiscardAndExit: () => { plan.discard(); checklist.discardAll() },
+  })
+  useEffect(() => { if (leaving) onBack() }, [leaving, onBack])
 
-  useEffect(() => {
-    markBrainstormSeen()
-  }, [markBrainstormSeen])
-
-  const abortBrainstorm = useCallback(() => {
-    if (!currentId) return
-    void fetch(`/api/plugins/projects/${currentId}/ask/abort`, { method: 'POST' }).catch(() => {})
-  }, [currentId])
-
-  // "Try again" on an error turn re-sends the newest user message (chat parity).
-  const retryBrainstorm = useCallback(() => {
-    const lastUser = [...brainstorm.messages].reverse().find((m) => m.kind === 'user')
-    if (lastUser?.kind === 'user' && lastUser.content) void brainstorm.send(lastUser.content)
-  }, [brainstorm])
-
-  // ---------------------------------------------------------------------------
-  // Assets
-  // ---------------------------------------------------------------------------
-
-  // Load the pickable asset library for the SDK AssetPicker: the plugin owns
-  // the data (assets-plugin REST fetch + attached-filter), the pattern owns
-  // the presentation. Loading/error land as honest collection states.
-  const loadAssetCollection = useCallback(async (mode: AssetPickerMode) => {
-    setAssetCollection({ status: 'loading' })
-    try {
-      const res = await fetch('/api/plugins/assets/versioned')
-      if (!res.ok) throw new Error(`Asset library returned ${res.status}`)
-      const data = await res.json()
-      const attached = new Set(
-        (project?.assets || [])
-          .filter(a => mode.type !== 'relink' || a.assetId !== mode.target.assetId)
-          .map(a => a.assetId)
-      )
-      setAssetCollection({
-        status: 'ready',
-        assets: (data.assets || [])
-          .filter((a: { assetId: string }) => !attached.has(a.assetId))
-          .map((a: { assetId: string; type: string; description?: string }) => ({
-            id: a.assetId,
-            label: a.assetId,
-            description: a.description,
-            type: a.type,
-            thumbnailSrc: IMAGE_TYPES.has(a.type) ? assetUrl(a.assetId) : undefined,
-          })),
-      })
-    } catch {
-      // assets plugin may not be available
-      setAssetCollection({ status: 'error', message: 'The asset library is unavailable right now.' })
-    }
-  }, [project])
-
-  const openAssetPicker = (mode: AssetPickerMode) => {
-    setAssetPickerMode(mode)
-    setAssetRelinkError(null)
-    setAssetSearch('')
-    setAssetPickerOpen(true)
-    void loadAssetCollection(mode)
-  }
-
-  const handleAttachAsset = async (assetId: string) => {
-    if (!currentId || relinkingAsset) return
-    setRelinkingAsset(true)
-    setAssetRelinkError(null)
-    try {
-      await projectRequest(`${encodeURIComponent(currentId)}/assets`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ assetId }) })
-      setAssetPickerOpen(false)
-      await fetchProject()
-    } catch (error) { setAssetRelinkError(error instanceof Error ? error.message : 'The asset could not be attached. Try again.') }
-    finally { setRelinkingAsset(false) }
-  }
-
-  const handleRelinkAsset = async (target: ResolvedAsset, newAssetId: string) => {
-    if (!currentId || relinkingAsset) return
-    setRelinkingAsset(true)
-    setAssetRelinkError(null)
-    const controller = new AbortController()
-    const timeout = window.setTimeout(() => controller.abort(), 10000)
-    try {
-      const res = await fetch(`/api/plugins/projects/${currentId}/assets/${encodeURIComponent(target.assetId)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: currentId, assetId: target.assetId, newAssetId }),
-        signal: controller.signal,
-      })
-      if (!res.ok) {
-        const message = await res.text().catch(() => '')
-        throw new Error(message || `Relink failed with status ${res.status}`)
-      }
-      setAssetPickerOpen(false)
-      void fetchProject()
-    } catch (err) {
-      const message = err instanceof DOMException && err.name === 'AbortError'
-        ? 'Relink timed out. Check the server log and try again.'
-        : err instanceof Error
-          ? err.message
-          : 'Failed to relink asset.'
-      setAssetRelinkError(message)
-    } finally {
-      window.clearTimeout(timeout)
-      setRelinkingAsset(false)
-    }
-  }
-
-  const handlePickerAssetSelect = async (assetId: string) => {
-    if (assetPickerMode.type === 'relink') {
-      await handleRelinkAsset(assetPickerMode.target, assetId)
-      return
-    }
-    await handleAttachAsset(assetId)
-  }
-
-  const handleDetachAsset = async (assetId: string) => {
-    if (!currentId) return
-    setDetachingAsset(true)
-    setAssetDetachError(null)
-    const controller = new AbortController()
-    const timeout = window.setTimeout(() => controller.abort(), 10000)
-    try {
-      const res = await fetch(`/api/plugins/projects/${currentId}/assets/${encodeURIComponent(assetId)}`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: currentId, assetId }),
-        signal: controller.signal,
-      })
-      if (!res.ok) {
-        const message = await res.text().catch(() => '')
-        throw new Error(message || `Detach failed with status ${res.status}`)
-      }
-      setAssetDetachTarget(null)
-      void fetchProject()
-    } catch (err) {
-      const message = err instanceof DOMException && err.name === 'AbortError'
-        ? 'Detach timed out. Check the server log and try again.'
-        : err instanceof Error
-          ? err.message
-          : 'Failed to detach asset.'
-      setAssetDetachError(message)
-    } finally {
-      window.clearTimeout(timeout)
-      setDetachingAsset(false)
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Delete
-  // ---------------------------------------------------------------------------
-
-  const linkedTaskCount = project?.tasks.filter(t => t.taskId).length ?? 0
-
-  const handleDelete = async (deleteLinkedTasks: boolean) => {
-    if (!currentId || deleting || draft.saving || checklist.saving) return
+  // ── Delete.
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteLinkedTasks, setDeleteLinkedTasks] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const linkedTaskCount = project?.tasks.filter(task => task.taskId).length ?? 0
+  const handleDelete = async () => {
+    if (deleting || plan.saving || checklist.saving) return
     setDeleting(true)
     setDeleteError(null)
     try {
-      await projectRequest(encodeURIComponent(currentId), { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deleteLinkedTasks }) })
-      draft.discard(); checklist.discardAll()
-      setDeleteDialogOpen(false)
+      await projectRequest(encodeURIComponent(projectId), {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deleteLinkedTasks: linkedTaskCount > 0 && deleteLinkedTasks }),
+      })
+      plan.discard(); checklist.discardAll()
+      setDeleteOpen(false)
       setLeaving(true)
-    } catch (error) { setDeleteError(error instanceof Error ? error.message : 'The project could not be deleted. Try again.') }
-    finally { setDeleting(false) }
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : 'The project could not be deleted. Try again.')
+    } finally {
+      setDeleting(false)
+    }
   }
-
-  // Let React remove the dirty guard before controlled navigation begins.
-  useEffect(() => { if (leaving) onBack() }, [leaving, onBack])
-
-  // ---------------------------------------------------------------------------
-  // Render
-  // ---------------------------------------------------------------------------
 
   if (loading && !project) {
     return (
-      <Page>
-        <Button variant="ghost" onClick={onBack}>Back to projects</Button>
-        <SystemState
-          kind="loading"
-          scope="section"
-          title="Loading project"
-          description="Project details will appear here."
-          preview={(
-            <div className="flex flex-col gap-bakin-3">
-              <Skeleton className="h-bakin-6 w-60" />
-              <Skeleton className="h-bakin-4 w-40" />
-              <Skeleton className="h-40 w-full" />
-            </div>
-          )}
-        />
-      </Page>
+      <WorkspacePage>
+        <WorkspacePageBody>
+          <PageBody>
+            <Button variant="ghost" onClick={onBack}>Back to projects</Button>
+            <SystemState
+              kind="loading"
+              scope="section"
+              title="Loading project"
+              description="Project details will appear here."
+              preview={(
+                <div className="flex flex-col gap-bakin-3">
+                  <Skeleton className="h-bakin-6 w-60" />
+                  <Skeleton className="h-bakin-4 w-40" />
+                  <Skeleton className="h-40 w-full" />
+                </div>
+              )}
+            />
+          </PageBody>
+        </WorkspacePageBody>
+      </WorkspacePage>
     )
   }
   if (!project) {
+    const missing = loadError?.status === 404
     return (
-      <Page>
-        <Button variant="ghost" onClick={onBack}>Back to projects</Button>
-        <SystemState
-          kind="error"
-          recovery={loadError?.status === 404 ? 'unavailable' : 'available'}
-          scope="section"
-          title={loadError?.status === 404 ? 'Project not found' : 'Project could not be loaded'}
-          description={loadError?.status === 404 ? 'This project may have been deleted or its file moved.' : loadError?.message ?? 'Try loading this project again.'}
-          action={loadError?.status === 404 ? undefined : <Button variant="outline" onClick={() => { void fetchProject() }}>Try again</Button>}
-        />
-      </Page>
+      <WorkspacePage>
+        <WorkspacePageBody>
+          <PageBody>
+            <Button variant="ghost" onClick={onBack}>Back to projects</Button>
+            <SystemState
+              kind="error"
+              recovery={missing ? 'unavailable' : 'available'}
+              scope="section"
+              title={missing ? 'Project not found' : 'Project could not be loaded'}
+              description={missing ? 'This project may have been deleted or its file moved.' : loadError?.message ?? 'Try loading this project again.'}
+              action={missing ? undefined : <Button variant="outline" onClick={() => { void refresh() }}>Try again</Button>}
+            />
+          </PageBody>
+        </WorkspacePageBody>
+      </WorkspacePage>
     )
   }
 
-  const statusLabel = STATUS_LABEL[project.status]
+  const inDock = tab !== 'conversation'
+  const panel = (
+    <ConversationPanel
+      messages={thread.messages}
+      liveChunks={thread.liveChunks}
+      streaming={thread.streaming}
+      onSend={thread.send}
+      onAbort={abort}
+      onRetry={retry}
+      agent={leadAgent}
+      agentControl={(
+        <AgentSelect
+          value={replyAgent}
+          onValueChange={setConsultAgent}
+          agents={agents}
+          ariaLabel="Reply agent"
+          size="sm"
+          variant="filled"
+        />
+      )}
+      storageKey={`project:${projectId}`}
+      showHeader={false}
+      fitParent
+      chrome="top-divider"
+      autoFocus={!inDock}
+      placeholder={`Message ${leadAgent.name}…`}
+      emptyState={(
+        <ConversationEmptyState
+          title={`Shape this project with ${leadAgent.name}`}
+          description="Talk it through — your lead asks one question at a time, pokes holes, and drafts the plan once it is clear."
+        />
+      )}
+    />
+  )
+
+  const content = tab === 'plan' ? (
+    <PlanTab
+      project={project}
+      history={history}
+      draft={plan}
+      editing={editing}
+      onEditingChange={next => setEditParam(next ? '1' : '')}
+      onRestored={refresh}
+    />
+  ) : tab === 'steps' ? (
+    <StepsTab project={project} checklist={checklist} />
+  ) : tab === 'files' ? (
+    <FilesTab project={project} onChanged={refresh} />
+  ) : null
 
   return (
-    <Page scroll="contained">
-    <div data-slot="project-detail" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+    <WorkspacePage data-slot="project-detail">
+      <WorkspacePageHeader>
+        {loadError ? (
+          <SystemState kind="error" recovery="available" scope="inline" title="Project could not be refreshed" description={loadError.message} action={<Button variant="outline" size="sm" onClick={() => { void refresh() }}>Try again</Button>} />
+        ) : null}
+        {exitGuard.dialog}
+        <ProjectHeader
+          project={project}
+          agents={agents}
+          onBack={exitGuard.requestExit}
+          onChanged={refresh}
+          onDelete={() => { setDeleteError(null); setDeleteOpen(true) }}
+        />
+      </WorkspacePageHeader>
+      <WorkspacePageBody>
+        <PageBody gap="content">
+          <div className="flex min-h-0 min-w-0 flex-1">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <Tabs value={tab} onValueChange={selectTab}>
+                <TabsList variant="underline" aria-label="Project sections">
+                  {PROJECT_TABS.map(entry => (
+                    <TabsTrigger key={entry.id} value={entry.id} id={`project-tab-${entry.id}`} aria-controls={`project-panel-${entry.id}`}>
+                      {entry.label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+              <div
+                role="tabpanel"
+                id={`project-panel-${tab}`}
+                aria-labelledby={`project-tab-${tab}`}
+                data-slot="project-tab-panel"
+                tabIndex={tab === 'conversation' ? -1 : 0}
+                className={tab === 'conversation'
+                  ? 'flex min-h-0 flex-1 flex-col'
+                  : 'flex min-h-0 flex-1 flex-col overflow-y-auto py-bakin-4 focus-visible:outline-2 focus-visible:outline-bakin-focus-ring focus-visible:-outline-offset-2 lg:pr-bakin-4'}
+              >
+                {tab === 'conversation' ? panel : content}
+                {!desktop && tab !== 'conversation' ? (
+                  <div className="sticky bottom-0 flex justify-end bg-bakin-canvas-default pt-bakin-3">
+                    <Button type="button" onClick={() => selectTab('conversation')}>
+                      <MessageSquare aria-hidden="true" />
+                      Ask {leadAgent.name}
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+            {showDock ? (
+              <ChatDock
+                agent={leadAgent}
+                collapsed={dockCollapsed}
+                onCollapsedChange={setDockCollapsed}
+                working={thread.streaming}
+                unread={unread}
+              >
+                {dockCollapsed ? null : panel}
+              </ChatDock>
+            ) : null}
+          </div>
+        </PageBody>
+      </WorkspacePageBody>
 
-      {loadError ? <SystemState kind="error" recovery="available" scope="inline" title="Project could not be refreshed" description={loadError.message} action={<Button variant="outline" size="sm" onClick={() => { void fetchProject() }}>Try again</Button>} /> : null}
-
-      {exitGuard.dialog}
-
-      {/* ── Header ── */}
-      <ProjectHeader
-        project={project}
-        agents={selectableAgents}
-        onBack={exitGuard.requestExit}
-        onChanged={fetchProject}
-        onDelete={() => { setDeleteError(null); setDeleteDialogOpen(true) }}
-      />
-
-      {/* ── Delete confirmation dialog ── */}
       <ConfirmDialog
-        open={deleteDialogOpen}
+        open={deleteOpen}
         title="Delete project?"
-        description={(
-          <>This will permanently delete <Text weight="medium">{project.title}</Text> and all its checklist items.</>
-        )}
+        description={<>This will permanently delete <Text weight="medium">{project.title}</Text>, its plan and its steps.</>}
         confirmLabel="Delete"
         busyLabel="Deleting..."
         confirmTone="danger"
-        busy={deleting || draft.saving || checklist.saving}
+        busy={deleting || plan.saving || checklist.saving}
         error={deleteError}
-        onConfirm={() => handleDelete(linkedTaskCount > 0 && deleteLinkedTasks)}
+        onConfirm={() => { void handleDelete() }}
         onCancel={() => {
           if (deleting) return
-          setDeleteDialogOpen(false)
+          setDeleteOpen(false)
           setDeleteLinkedTasks(false)
         }}
       >
@@ -638,294 +402,12 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
               This project has <Text size="meta" weight="medium">{linkedTaskCount}</Text> linked board {linkedTaskCount === 1 ? 'task' : 'tasks'}. Unchecked, {linkedTaskCount === 1 ? 'it stays' : 'they stay'} on the board.
             </Text>
             <Field orientation="horizontal" name="deleteLinkedTasks">
-              <Checkbox
-                checked={deleteLinkedTasks}
-                onCheckedChange={(checked: boolean) => setDeleteLinkedTasks(checked === true)}
-              />
+              <Checkbox checked={deleteLinkedTasks} onCheckedChange={(checked: boolean) => setDeleteLinkedTasks(checked === true)} />
               <FieldLabel>Also delete {linkedTaskCount === 1 ? 'the linked board task' : 'the linked board tasks'}</FieldLabel>
             </Field>
           </div>
         )}
       </ConfirmDialog>
-
-      {/* ── Asset detach confirmation dialog ── */}
-      <ConfirmDialog
-        open={Boolean(assetDetachTarget)}
-        title="Detach asset?"
-        description={assetDetachTarget ? (
-          <>This removes <Text weight="medium">{assetName(assetDetachTarget)}</Text> from this project. It will not delete the asset file.</>
-        ) : undefined}
-        confirmLabel="Detach"
-        busyLabel="Detaching..."
-        confirmTone="danger"
-        busy={detachingAsset}
-        error={assetDetachError}
-        onConfirm={() => { if (assetDetachTarget) void handleDetachAsset(assetDetachTarget.assetId) }}
-        onCancel={() => {
-          if (detachingAsset) return
-          setAssetDetachTarget(null)
-        }}
-      >
-        {assetDetachTarget?.missing && (
-          <Alert tone="attention">
-            <AlertDescription>
-              Bakin can't find this asset. Detaching it cleans up the broken project reference.
-            </AlertDescription>
-          </Alert>
-        )}
-      </ConfirmDialog>
-
-      {/* ── Two-column body ── */}
-      <div
-        data-slot="project-detail-body"
-        className="flex min-h-0 min-w-0 flex-1 flex-col gap-bakin-6 overflow-y-auto pt-bakin-6 lg:flex-row lg:overflow-hidden"
-      >
-
-        {/* ── Main column ── */}
-        <div className="flex w-full min-w-0 shrink-0 flex-col lg:min-h-0 lg:flex-1">
-
-          {/* Scrollable content area */}
-          <div role="region" aria-label="Project plan" tabIndex={0} className="flex min-w-0 shrink-0 flex-col focus-visible:outline-2 focus-visible:outline-bakin-focus-ring focus-visible:-outline-offset-2 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-bakin-1">
-            {/* Details (spec) — the header row stays pinned while the plan
-                scrolls; Rendered|Diff rides the SDK SegmentedControl. */}
-            <div className="sticky top-0 z-10 -mx-bakin-1 flex flex-wrap items-center justify-between gap-bakin-3 bg-bakin-canvas-default px-bakin-1 pt-bakin-1 pb-bakin-2">
-              <h2>Plan</h2>
-              {editing ? (
-                <Button variant="secondary" size="sm" onClick={finishEdit} disabled={draft.dirty || draft.saving || checklist.saving}>Done editing</Button>
-              ) : (
-                <Button variant="secondary" size="sm" onClick={enterEdit}><Pencil aria-hidden="true" />Edit plan</Button>
-              )}
-              {!editing && (
-                <div className="flex min-w-0 flex-wrap items-center gap-bakin-3">
-                  {!showChanges && (
-                    <Field orientation="horizontal" name="showChangeHints" data-testid="show-changes-switch">
-                      <Switch size="sm" checked={showChangeHints} onCheckedChange={toggleChangeHints} />
-                      <FieldLabel>Show changes</FieldLabel>
-                    </Field>
-                  )}
-                  <SegmentedControl
-                    options={[{ value: 'details', label: 'Rendered' }, { value: 'changes', label: 'Diff' }]}
-                    value={showChanges ? 'changes' : 'details'}
-                    onValueChange={(value: string) => setShowChanges(value === 'changes')}
-                    ariaLabel="Plan view"
-                  />
-                </div>
-              )}
-            </div>
-            <div className="flex min-h-0 flex-col pb-bakin-6">
-              {showChanges && !editing ? (
-                <PlanHistoryPanel
-                  projectId={currentId ?? ''}
-                  currentBody={project.body}
-                  historyState={historyState}
-                  onRestored={async () => { await fetchProject() }}
-                />
-              ) : editing ? (
-                <ProjectDraftForm model={draft} agents={selectableAgents} />
-              ) : (
-                <RenderedPlan historyState={historyState} body={project.body} hintsEnabled={showChangeHints} />
-              )}
-            </div>
-
-          </div>
-
-          {/* ── Brainstorm — pinned at bottom ── */}
-          <ProjectBrainstorm
-            hasHistory={Boolean(project.brainstormMessages?.length)}
-            messages={brainstorm.messages}
-            liveChunks={brainstorm.liveChunks}
-            streaming={brainstorm.streaming}
-            onSend={brainstorm.send}
-            onAbort={abortBrainstorm}
-            onRetry={retryBrainstorm}
-            agent={brainstormConversationAgent}
-            agentControl={(
-              <AgentSelect
-                value={brainstormAgent}
-                onValueChange={setBrainstormAgent}
-                agents={selectableAgents}
-                ariaLabel="Brainstorm agent"
-                size="sm"
-                variant="filled"
-              />
-            )}
-            storageKey={`project:${currentId}`}
-            showHeader={false}
-            chrome="top-divider"
-            autoFocus={false}
-            placeholder="Ask about this project..."
-            emptyState={(
-              <ConversationEmptyState
-                title="Brainstorm this project with an agent"
-                description={'The agent treats the plan above as its working document — it applies small edits directly (every change is snapshotted, see the Diff view) and asks before big rewrites. Try "flesh out the plan", "what\'s missing?", or "break this into tasks".'}
-              />
-            )}
-          />
-        </div>
-
-        {/* ── Right sidebar (resizable) ── */}
-        <div
-          role="region" aria-label="Project checklist and assets" tabIndex={0}
-          className="relative w-full shrink-0 focus-visible:outline-2 focus-visible:outline-bakin-focus-ring focus-visible:-outline-offset-2 space-y-5 border-t border-bakin-border-subtle pt-bakin-6 lg:w-[var(--project-sidebar-width)] lg:overflow-y-auto lg:border-l lg:border-t-0 lg:pl-bakin-6 lg:pr-bakin-2 lg:pt-0"
-          style={{ '--project-sidebar-width': `${sidebarWidth}px` } as CSSProperties}
-        >
-          {/* Drag handle — sits over the left border to resize the sidebar.
-              role / aria-orientation / tabIndex / aria-value* / keyboard all come from handleProps. */}
-          <div
-            {...sidebarResizeProps}
-            aria-label="Resize progress panel"
-            className="group/handle absolute inset-y-0 left-0 z-10 hidden w-bakin-2 cursor-col-resize items-center justify-center outline-none transition-colors hover:bg-bakin-signal-accent/50 focus-visible:bg-bakin-signal-accent/50 active:bg-bakin-signal-accent focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-2px] focus-visible:outline-bakin-focus-ring motion-reduce:transition-none lg:flex"
-          >
-            <span
-              aria-hidden="true"
-              className="h-bakin-8 w-px rounded-bakin-pill bg-bakin-border-subtle opacity-60 transition-[background-color,opacity] group-hover/handle:bg-bakin-signal-accent group-focus-visible/handle:bg-bakin-signal-accent group-active/handle:bg-bakin-signal-accent group-hover/handle:opacity-100 group-focus-visible/handle:opacity-100 group-active/handle:opacity-100 motion-reduce:transition-none"
-            />
-          </div>
-
-          {/* Progress */}
-          <div>
-            <div className="mb-bakin-2 flex items-center justify-between">
-              <h2>Progress</h2>
-              <Text size="meta" tone="muted" mono className="tabular-nums">{project.progress}%</Text>
-            </div>
-            <Progress value={project.progress} aria-label="Checklist progress" />
-            <Text size="meta" tone="muted">{project.tasks.length ? `${project.tasks.filter(task => task.checked).length} of ${project.tasks.length} tasks completed` : 'No checklist tasks yet'}. Project status: {statusLabel}.</Text>
-          </div>
-
-          <Separator />
-
-          {/* Checklist */}
-          <ProjectChecklist
-            projectId={currentId}
-            tasks={project.tasks}
-            resolvedTasks={project.resolvedTasks}
-            model={checklist}
-          />
-
-          <Separator />
-
-          {/* Assets */}
-          <div>
-            <div className="mb-bakin-3 flex items-center justify-between">
-              <h2>Assets</h2>
-
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => openAssetPicker({ type: 'attach' })}
-                className="gap-bakin-1 font-bakin-typography-weight-regular text-bakin-text-muted hover:bg-transparent hover:text-bakin-text-primary"
-              >
-                <Paperclip className="size-bakin-3" />
-                Attach
-              </Button>
-            </div>
-
-            {project.resolvedAssets.length === 0 ? (
-              <SystemState kind="initial-empty" scope="inline" headingLevel={3} title="No assets attached." description="Use Attach to choose an asset from your library." />
-            ) : (
-              <div className="flex flex-col gap-bakin-2">
-                {project.resolvedAssets.some(asset => asset.missing) && (
-                  <Alert tone="attention">
-                    <AlertDescription>
-                      Some attached assets could not be loaded. Detach broken references to clean up this project.
-                    </AlertDescription>
-                  </Alert>
-                )}
-                <ListRows variant="separated" size="sm" aria-label="Attached assets">
-                  {project.resolvedAssets.map((asset) => (
-                    <ListRow
-                      key={asset.assetId}
-                      className="flex items-start gap-bakin-2"
-                      interactive={asset.missing ? undefined : { label: `Open ${assetName(asset)}`, onActivate: () => setPreviewAsset(asset) }}
-                    >
-                      <AssetThumb asset={asset} />
-                      <div className="min-w-0 flex-1">
-                        <Text as="p" size="meta" className="truncate leading-tight">{assetName(asset)}</Text>
-                        {asset.description && (
-                          <Text as="p" size="meta" tone="muted" className="truncate">{asset.description}</Text>
-                        )}
-                        {asset.tags && asset.tags.length > 0 && (
-                          <div className="mt-bakin-1 flex flex-wrap gap-bakin-1">
-                            {asset.tags.slice(0, 3).map(tag => (
-                              <Badge key={tag} size="xs" tone="neutral" variant="soft">{tag}</Badge>
-                            ))}
-                          </div>
-                        )}
-                        {asset.missing && (
-                          <StatusBadge tone="attention" variant="soft" size="xs" className="mt-bakin-1">can't find asset</StatusBadge>
-                        )}
-                      </div>
-                      {/* Missing assets keep their repair actions visible; healthy rows reveal on hover / focus-within. */}
-                      <ListRowActions reveal="always">
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          onClick={() => openAssetPicker({ type: 'relink', target: asset })}
-                          aria-label={`Relink ${assetName(asset)}`}
-                        >
-                          <Link2 aria-hidden="true" />
-                          Relink
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          onClick={() => { setAssetDetachError(null); setAssetDetachTarget(asset) }}
-                          aria-label={`Detach ${assetName(asset)}`}
-                        >
-                          <X aria-hidden="true" />
-                        </Button>
-                      </ListRowActions>
-                    </ListRow>
-                  ))}
-                </ListRows>
-              </div>
-            )}
-
-          </div>
-
-          <Separator />
-
-          {/* Meta */}
-          <div>
-            <h2 className="mb-bakin-2">Project information</h2>
-            <KeyValue
-              layout="rows"
-              items={[
-                { label: 'Created', value: formatDateTime(project.created) },
-                { label: 'Updated', value: formatAge(project.updated) },
-                { label: 'ID', value: project.id.slice(0, 8), mono: true },
-              ]}
-            />
-          </div>
-        </div>
-
-      </div>
-
-      {/* ── Asset picker (SDK pattern; plugin owns the collection data) ── */}
-      <AssetPicker
-        open={assetPickerOpen}
-        onOpenChange={(open) => {
-          if (!open && relinkingAsset) return
-          setAssetPickerOpen(open)
-        }}
-        collection={assetCollection}
-        query={assetSearch}
-        onQueryChange={setAssetSearch}
-        onPick={(assetId) => { void handlePickerAssetSelect(assetId) }}
-        onRetry={() => { void loadAssetCollection(assetPickerMode) }}
-        busy={relinkingAsset}
-        notice={assetRelinkError}
-        view="list"
-        title={assetPickerMode.type === 'relink' ? 'Relink asset' : 'Attach asset'}
-        description={assetPickerMode.type === 'relink'
-          ? `Choose a replacement for ${assetName(assetPickerMode.target)}.`
-          : 'Choose an asset from the library to attach to this project.'}
-        emptyTitle="No assets available"
-        emptyDescription="Add an asset to the library, then return here to choose it."
-      />
-
-      {previewAsset && <AssetPreviewModal asset={previewAsset} onClose={() => setPreviewAsset(null)} />}
-    </div>
-    </Page>
+    </WorkspacePage>
   )
 }

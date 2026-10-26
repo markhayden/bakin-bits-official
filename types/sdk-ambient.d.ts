@@ -1745,6 +1745,8 @@ declare module '@makinbakin/sdk/content' {
 }
 
 declare module '@makinbakin/sdk/hooks' {
+  /** Live `matchMedia` result (false on the server). */
+  export function useMediaQuery(query: string): boolean
   export interface AgentInfo {
     id: string
     name: string

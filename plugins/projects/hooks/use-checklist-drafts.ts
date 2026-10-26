@@ -147,3 +147,4 @@ export function useChecklistDrafts(projectId: string, tasks: ProjectTask[], refr
     discardAll: () => { if (!Object.values(current.current.busy).some(Boolean)) { current.current = empty(); setState(current.current) } },
   }
 }
+export type ChecklistModel = ReturnType<typeof useChecklistDrafts>

@@ -127,8 +127,7 @@ export interface ProjectDetailData extends Project {
   brainstormMessages?: ProjectBrainstormMessage[]
 }
 
-export type ProjectEditableValues = Pick<Project, 'title' | 'owner' | 'status' | 'body'>
-export type ProjectPatch = Partial<ProjectEditableValues>
+export type ProjectPatch = Partial<Pick<Project, 'title' | 'owner' | 'status' | 'body'>>
 export type ChecklistPatch = Partial<Pick<ProjectTask, 'title' | 'description'>>
 
 export interface ChecklistAddOperation {

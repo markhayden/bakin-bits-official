@@ -5,9 +5,8 @@ import { Stack } from '@makinbakin/sdk/layout'
 import { ListRow, ListRowActions, ListRows, StatusBadge } from '@makinbakin/sdk/patterns'
 import { PluginLink } from '@makinbakin/sdk/navigation'
 import type { ProjectTask } from '../types'
-import type { useChecklistDrafts } from '../hooks/use-checklist-drafts'
+import type { ChecklistModel } from '../hooks/use-checklist-drafts'
 
-type ChecklistModel = ReturnType<typeof useChecklistDrafts>
 const columns: Record<string, string> = { backlog: 'Backlog', todo: 'To do', inProgress: 'In progress', review: 'In review', done: 'Done', archived: 'Archived', blocked: 'Blocked' }
 function ErrorNotice({ message }: { message?: string }) {
   return message ? <Alert tone="danger"><AlertDescription>{message}</AlertDescription></Alert> : null

@@ -65,15 +65,11 @@
       },
       {
         "path": "/projects/new",
-        "summary": "Create project"
+        "summary": "Start a project"
       },
       {
         "path": "/projects/[id]",
         "summary": "Project detail"
-      },
-      {
-        "path": "/projects/[id]/edit",
-        "summary": "Edit project"
       }
     ],
     "apiRoutes": [
