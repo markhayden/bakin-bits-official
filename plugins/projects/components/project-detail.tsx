@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, type CSSProperties } from 'react'
 import { emitPluginEvent, toast, useHorizontalResize, usePluginEvent } from '@makinbakin/sdk/hooks'
-import { ArrowLeft, Paperclip, X, FileText, Image, Film, Music, File, Pencil, Trash, Link2 } from 'lucide-react'
+import { Paperclip, X, FileText, Image, Film, Music, File, Pencil, Link2 } from 'lucide-react'
 import { useAgentList, useMainAgentId } from "@makinbakin/sdk/hooks"
 import { PluginLink, useRouter, useUnsavedChangesGuard } from "@makinbakin/sdk/navigation"
 import { ConversationEmptyState, useConversationThread } from "@makinbakin/sdk/conversation"
@@ -16,12 +16,12 @@ import {
   ListRowActions,
   ListRows,
   Page,
-  PageHeader,
   SegmentedControl,
   StatusBadge,
 } from "@makinbakin/sdk/patterns"
 import type { AssetPickerCollection } from "@makinbakin/sdk/patterns"
 import { ProjectChecklist } from './project-checklist'
+import { ProjectHeader } from './project-header'
 import { ProjectBrainstorm } from './project-brainstorm'
 import { useChecklistDrafts } from '../hooks/use-checklist-drafts'
 import { ProjectDraftForm } from './project-draft-form'
@@ -38,7 +38,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DropdownMenuItem,
   Field,
   FieldLabel,
   Progress,
@@ -69,13 +68,11 @@ type AssetPickerMode = { type: 'attach' } | { type: 'relink'; target: ResolvedAs
 // Constants
 // ---------------------------------------------------------------------------
 
-type StatusTone = 'neutral' | 'success' | 'attention' | 'danger' | 'accent'
-
-const STATUS_CONFIG: Record<ProjectStatus, { label: string; tone: StatusTone }> = {
-  draft: { label: 'Draft', tone: 'neutral' },
-  active: { label: 'Active', tone: 'accent' },
-  completed: { label: 'Completed', tone: 'success' },
-  archived: { label: 'Archived', tone: 'neutral' },
+const STATUS_LABEL: Record<ProjectStatus, string> = {
+  draft: 'Draft',
+  active: 'Active',
+  completed: 'Completed',
+  archived: 'Archived',
 }
 
 const IMAGE_TYPES = new Set(['images', 'image'])
@@ -597,7 +594,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
     )
   }
 
-  const statusCfg = STATUS_CONFIG[project.status]
+  const statusLabel = STATUS_LABEL[project.status]
 
   return (
     <Page scroll="contained">
@@ -608,34 +605,12 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
       {exitGuard.dialog}
 
       {/* ── Header ── */}
-      <PageHeader
-        className="shrink-0"
-        measure="wide"
-        navigation={(
-          <Button type="button" variant="ghost" size="icon-sm" onClick={exitGuard.requestExit} aria-label="Back to projects">
-            <ArrowLeft aria-hidden="true" />
-          </Button>
-        )}
-        eyebrow="Projects / detail"
-        title={project.title || 'Untitled project'}
-        actions={(
-          <div className="flex w-full min-w-0 flex-wrap items-center gap-bakin-2 @3xl/page-header:w-auto">
-            <StatusBadge tone={statusCfg.tone}>{statusCfg.label}</StatusBadge>
-            <Text size="meta" tone="muted">Owner: {selectableAgents.find(agent => agent.id === project.owner)?.name ?? (project.owner || 'Unassigned')}</Text>
-            {editing ? (
-              <Button variant="secondary" size="sm" onClick={finishEdit} disabled={draft.dirty || draft.saving || checklist.saving}>Done editing</Button>
-            ) : (
-              <Button variant="secondary" size="sm" onClick={enterEdit}><Pencil aria-hidden="true" />Edit</Button>
-            )}
-          </div>
-        )}
-        overflowActionsLabel="Project actions"
-        overflowActions={(
-          <DropdownMenuItem variant="danger" onClick={() => { setDeleteError(null); setDeleteDialogOpen(true) }}>
-            <Trash aria-hidden="true" />
-            Delete
-          </DropdownMenuItem>
-        )}
+      <ProjectHeader
+        project={project}
+        agents={selectableAgents}
+        onBack={exitGuard.requestExit}
+        onChanged={fetchProject}
+        onDelete={() => { setDeleteError(null); setDeleteDialogOpen(true) }}
       />
 
       {/* ── Delete confirmation dialog ── */}
@@ -715,6 +690,11 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
                 scrolls; Rendered|Diff rides the SDK SegmentedControl. */}
             <div className="sticky top-0 z-10 -mx-bakin-1 flex flex-wrap items-center justify-between gap-bakin-3 bg-bakin-canvas-default px-bakin-1 pt-bakin-1 pb-bakin-2">
               <h2>Plan</h2>
+              {editing ? (
+                <Button variant="secondary" size="sm" onClick={finishEdit} disabled={draft.dirty || draft.saving || checklist.saving}>Done editing</Button>
+              ) : (
+                <Button variant="secondary" size="sm" onClick={enterEdit}><Pencil aria-hidden="true" />Edit plan</Button>
+              )}
               {!editing && (
                 <div className="flex min-w-0 flex-wrap items-center gap-bakin-3">
                   {!showChanges && (
@@ -809,7 +789,7 @@ export function ProjectDetail({ projectId, onBack, initialEdit = false, onEditCh
               <Text size="meta" tone="muted" mono className="tabular-nums">{project.progress}%</Text>
             </div>
             <Progress value={project.progress} aria-label="Checklist progress" />
-            <Text size="meta" tone="muted">{project.tasks.length ? `${project.tasks.filter(task => task.checked).length} of ${project.tasks.length} tasks completed` : 'No checklist tasks yet'}. Project status: {statusCfg.label}.</Text>
+            <Text size="meta" tone="muted">{project.tasks.length ? `${project.tasks.filter(task => task.checked).length} of ${project.tasks.length} tasks completed` : 'No checklist tasks yet'}. Project status: {statusLabel}.</Text>
           </div>
 
           <Separator />

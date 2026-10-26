@@ -313,7 +313,12 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
         project.title = patch.title
         project.titleSource = caller.kind
       }
-      if (patch.status !== undefined) project.status = patch.status
+      if (patch.status !== undefined && patch.status !== project.status) {
+        // Archive remembers where it came from; leaving it forgets (D11).
+        if (patch.status === 'archived') project.archivedFrom = project.status as Exclude<ProjectStatus, 'archived'>
+        else delete project.archivedFrom
+        project.status = patch.status
+      }
       if (patch.body !== undefined) commitBody(repo, project, patch.body, caller.kind)
       if (patch.owner !== undefined) project.owner = patch.owner
       project.updated = new Date().toISOString()

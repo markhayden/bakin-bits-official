@@ -77,7 +77,7 @@ describe('ProjectDetail', () => {
     const body = document.querySelector('[data-slot="project-detail-body"]')
     expect(detail?.className).toContain('min-w-0')
     expect(screen.getByRole('button', { name: 'Back to projects' })).toBeDefined()
-    expect(screen.getByRole('button', { name: 'Project actions' })).toBeDefined()
+    expect(screen.getByRole('button', { name: 'More project actions' })).toBeDefined()
     expect(body?.className).toContain('lg:flex-row')
     expect(body?.className).toContain('pt-bakin-6')
     expect(screen.getByTestId('conversation-panel').getAttribute('data-chrome')).toBe('top-divider')

@@ -60,6 +60,8 @@ export interface ProjectFrontmatter {
    * never do; restores do). Absent in pre-revamp files ⇒ 0.
    */
   planRevision: number
+  /** The status an archive left (D11) — Unarchive returns to it. */
+  archivedFrom?: Exclude<ProjectStatus, 'archived'>
   planUpdatedBy?: 'agent' | 'user'
   planUpdatedAt?: string
   /** Private durable mutation receipts; omitted from browser projections. */

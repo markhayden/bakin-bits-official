@@ -129,6 +129,7 @@ export function parseProject(content: string): Project {
     planRevision: Number.isInteger(raw.planRevision) && (raw.planRevision as number) >= 0 ? raw.planRevision as number : 0,
     ...(raw.planUpdatedBy === 'agent' || raw.planUpdatedBy === 'user' ? { planUpdatedBy: raw.planUpdatedBy } : {}),
     ...(typeof raw.planUpdatedAt === 'string' ? { planUpdatedAt: raw.planUpdatedAt } : {}),
+    ...(raw.archivedFrom === 'draft' || raw.archivedFrom === 'active' || raw.archivedFrom === 'completed' ? { archivedFrom: raw.archivedFrom } : {}),
     ...(raw.operations === undefined ? {} : { operations: operationsSchema.parse(raw.operations) }),
   }
 

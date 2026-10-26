@@ -334,6 +334,18 @@ describe('Routes', () => {
       expect(body.ok).toBe(true)
     })
 
+    it('archive remembers the prior status and unarchive forgets it (D11)', async () => {
+      writeProjectFixture('proj-archive', { title: 'Archive me', status: 'active' })
+      const route = findRoute(plugin.routes, 'PUT', '/:projectId')!
+      const put = (status: string, expected: string) => callRoute(route, plugin.ctx, { searchParams: { projectId: 'proj-archive' }, body: { status, expected: { status: expected } } })
+      expect((await put('archived', 'active')).status).toBe(200)
+      expect(await readViaTool('proj-archive')).toMatchObject({ status: 'archived', archivedFrom: 'active' })
+      expect((await put('active', 'archived')).status).toBe(200)
+      const project = await readViaTool('proj-archive')
+      expect(project.status).toBe('active')
+      expect(project.archivedFrom).toBeUndefined()
+    })
+
     it('a user rename claims the title (titleSource user)', async () => {
       writeProjectFixture('proj-upd-src', { title: 'Agent named', titleSource: 'agent' })
       const route = findRoute(plugin.routes, 'PUT', '/:projectId')!
