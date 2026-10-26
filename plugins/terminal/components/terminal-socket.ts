@@ -113,10 +113,17 @@ export class TerminalSocketClient {
     return true
   }
 
-  /** True when the resize was sent (a disconnected client sends nothing). */
-  resize(generation: number, cols: number, rows: number): boolean {
+  /** Make this screen the session's size authority at `cols`×`rows`. */
+  claim(cols: number, rows: number): boolean {
     if (!this.synced || !this.socket) return false
-    this.socket.send(JSON.stringify({ type: 'resize', generation, cols, rows }))
+    this.socket.send(JSON.stringify({ type: 'claim', cols, rows }))
+    return true
+  }
+
+  /** The authority's pane changed: follow it at the current size `epoch`. True when sent. */
+  resize(epoch: number, cols: number, rows: number): boolean {
+    if (!this.synced || !this.socket) return false
+    this.socket.send(JSON.stringify({ type: 'resize', epoch, cols, rows }))
     return true
   }
 
@@ -173,6 +180,8 @@ export class TerminalSocketClient {
       }
       case 'ping': this.socket?.send(JSON.stringify({ type: 'pong' })); return
       case 'error': this.options.onStatus(String(message.error)); return
+      // Someone else claimed in between; the pushed session already says who sizes.
+      case 'size-refused': return
     }
   }
 

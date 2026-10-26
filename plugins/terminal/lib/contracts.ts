@@ -25,6 +25,12 @@ export interface Session {
   inputSequence: number
   cols: number
   rows: number
+  /** The viewer that sizes the grid (spec D2); absent until someone claims. */
+  sizeAuthority?: { viewer: string; kind: 'browser' | 'native' }
+  /** Bumped by every claim; a resize must carry the current epoch. */
+  sizeEpoch: number
+  /** Bumped by every actual dimension change; agents re-read after it moves. */
+  sizeRevision: number
   state: 'running' | 'exited' | 'completed'
   createdAt: number
   lastActivityAt: number
@@ -35,6 +41,8 @@ export interface Session {
 }
 export interface TerminalSettings {
   enabledAgents?: Array<{ id: string }>
+  /** Grid for sessions nobody's screen sized yet (agents, CLI without a TTY size). */
+  defaultSize?: { cols: number; rows: number }
   maxSessions?: number
   maxWorktrees?: number
   idleDays?: number
@@ -48,8 +56,10 @@ export function terminalSettings(raw: Record<string, unknown>): TerminalSettings
   const enabledAgents = Array.isArray(stored)
     ? stored.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 100).map((id) => ({ id }))
     : [{ id: 'main' }]
+  const within = (value: unknown, fallback: number, min: number, max: number) => Number.isInteger(value) && (value as number) >= min && (value as number) <= max ? (value as number) : fallback
   return {
     enabledAgents,
+    defaultSize: { cols: within(raw.defaultCols, 200, 40, 400), rows: within(raw.defaultRows, 60, 10, 150) },
     maxSessions: bounded(raw.maxSessions, 10, 100),
     maxWorktrees: bounded(raw.maxWorktrees, 10, 100),
     idleDays: bounded(raw.idleDays, 30, 365),

@@ -3,6 +3,7 @@ import { realpathSync, statSync } from 'node:fs'
 import { relative, isAbsolute } from 'node:path'
 import { authorize, createSchema, DAY, DeliveryUncertainError, TerminalError, type CreateInput, type Principal, type Session, type TerminalSettings } from './contracts'
 import type { ProcessDriver } from './processes'
+import { claimSize, clampSize, nextSize, type SizeAuthority } from './sizing'
 import { Screen } from './screen'
 import { Store } from './store'
 
@@ -132,7 +133,12 @@ export class Sessions {
       return this.screens.get(id)!
     })
   }
-  create(raw: unknown, principal: Principal): Promise<Session> {
+  /**
+   * `size` is the creating screen's grid (a human's pane or terminal); it
+   * makes that viewer the size authority. Without one — agents — the session
+   * starts at the configured default with nobody sizing it yet.
+   */
+  create(raw: unknown, principal: Principal, size?: { cols: number; rows: number; kind?: SizeAuthority['kind'] }): Promise<Session> {
     return this.run(async () => {
       const input = createSchema.parse(raw)
       this.list(principal)
@@ -145,7 +151,8 @@ export class Sessions {
       if (!statSync(cwd).isDirectory()) throw new TerminalError('Working directory must be a directory', 400)
       const session: Session = {
         ...input, cwd, agentId, id: `terminal-${randomUUID()}`, owner: principal,
-        generation: 1, inputSequence: 0, cols: 100, rows: 30, state: 'running',
+        generation: 1, inputSequence: 0, state: 'running',
+        ...this.startSize(principal, size),
         createdAt: this.now(), lastActivityAt: this.now(),
       }
       if (input.program !== 'shell' && input.checkout === 'isolated') {
@@ -214,18 +221,55 @@ export class Sessions {
     }
     return session
   }
-  resize(id: string, principal: Principal, generation: number, cols: number, rows: number): Promise<Session> {
+  /** Make `principal`'s screen the size authority and fit the grid to it (any human; spec D2). */
+  claim(id: string, principal: Principal, cols: number, rows: number, kind: SizeAuthority['kind'] = 'browser'): Promise<Session> {
+    return this.run(async () => {
+      if (principal.kind !== 'human') throw new TerminalError('Only the human sizes terminal sessions', 403)
+      const session = this.get(id, principal)
+      if (session.state !== 'running') throw new TerminalError('Session has exited')
+      Object.assign(session, claimSize(session, principal.id, kind))
+      const size = clampSize(cols, rows)
+      return this.applySize(session, size.cols, size.rows)
+    })
+  }
+  /** The authority's screen changed size: follow it. Anyone else, or an older epoch, is stale. */
+  resizeAs(id: string, principal: Principal, epoch: number, cols: number, rows: number): Promise<Session> {
     return this.run(async () => {
       const session = this.get(id, principal)
-      authorize(session, principal, this.enabled(), true, generation)
       if (session.state !== 'running') throw new TerminalError('Session has exited')
-      if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 20 || cols > 400 || rows < 1 || rows > 150) throw new TerminalError('Invalid terminal dimensions', 400)
-      await this.driver.resize(id, cols, rows)
-      this.screens.get(id)?.resize(cols, rows)
-      session.cols = cols; session.rows = rows
-      this.save(session)
-      return session
+      const next = nextSize(session, { viewer: principal.id, epoch, cols, rows })
+      return this.applySize(session, next.cols, next.rows)
     })
+  }
+  /**
+   * tmux first (the source of truth), then the bridge PTY, the headless
+   * screen and the record. If tmux refuses, read back the window it actually
+   * has and make everything else match. Runs inside the queue, so input
+   * waits until the representations agree.
+   */
+  private async applySize(session: Session, cols: number, rows: number): Promise<Session> {
+    let size = { cols, rows }
+    if (cols !== session.cols || rows !== session.rows) {
+      try {
+        await this.driver.resize(session.id, cols, rows)
+      } catch {
+        // A failed resize-window may still have moved the window; trust tmux.
+        size = await this.driver.windowSize(session.id).catch(() => { throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503) })
+      }
+    }
+    if (size.cols !== session.cols || size.rows !== session.rows) {
+      this.screens.get(session.id)?.resize(size.cols, size.rows)
+      session.cols = size.cols
+      session.rows = size.rows
+      session.sizeRevision++
+    }
+    this.save(session)
+    return session
+  }
+  private startSize(principal: Principal, size?: { cols: number; rows: number; kind?: SizeAuthority['kind'] }): Pick<Session, 'cols' | 'rows' | 'sizeEpoch' | 'sizeRevision' | 'sizeAuthority'> {
+    if (principal.kind === 'human' && size) return { ...clampSize(size.cols, size.rows), sizeEpoch: 1, sizeRevision: 0, sizeAuthority: { viewer: principal.id, kind: size.kind ?? 'browser' } }
+    const fallback = this.options.settings().defaultSize ?? { cols: 200, rows: 60 }
+    return { ...clampSize(fallback.cols, fallback.rows), sizeEpoch: 0, sizeRevision: 0 }
   }
   finish(id: string, principal: Principal, _generation: number, terminate: boolean): Promise<Session> {
     return this.run(async () => {
@@ -252,11 +296,13 @@ export class Sessions {
     const current = this.get(id, principal)
     return { session: current, ...snapshot }
   }
-  async readScreen(id: string, principal: Principal): Promise<string> {
+  /** The visible pane as text, with the grid it was read at (captured together). */
+  async readScreen(id: string, principal: Principal): Promise<{ screen: string; cols: number; rows: number; sizeRevision: number }> {
     const screen = await this.ensureScreen(id, principal)
-    const text = await screen.capture(() => screen.text())
-    this.get(id, principal)
-    return text
+    return screen.capture(() => {
+      const session = this.get(id, principal)
+      return { screen: screen.text(), cols: session.cols, rows: session.rows, sizeRevision: session.sizeRevision }
+    })
   }
   /** One bounded page of stored output after `cursor`, as bytes (at least one stored chunk, else at most `limit` bytes). */
   outputPage(id: string, principal: Principal, cursor: number, limit?: number): { session: Session; cursor: number; data: Buffer; truncated: boolean } {

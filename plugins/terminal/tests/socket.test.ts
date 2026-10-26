@@ -48,7 +48,8 @@ function fakeManager(initial = session()) {
       current = { ...current, inputSequence: current.inputSequence + 1 }
       return current
     },
-    resize: async () => current,
+    claim: async () => current,
+    resizeAs: async () => current,
   }
   return {
     manager, writes,
@@ -278,6 +279,22 @@ describe('TerminalViewer', () => {
     other.client({ type: 'hello', clientId: 'other-0123456789abcdef' })
     await until(() => other.state.closed !== null, 'closed on output failure')
     expect(other.state.closed?.code).toBe(SOCKET_CLOSE.resync)
+  })
+
+  it('routes claim and epoch-checked resize to the manager and reports a refused size quietly', async () => {
+    const { manager } = fakeManager()
+    const calls: string[] = []
+    manager.claim = async (_id, principal, cols, rows) => { calls.push(`claim ${principal.id} ${cols}x${rows}`); return manager.get('s1', principal) }
+    manager.resizeAs = async (_id, _principal, epoch) => { calls.push(`resize @${epoch}`); throw new TerminalError('Another device is sizing this session', 409) }
+    const peer = fakeSocket()
+    new TerminalViewer(manager, peer.socket, 's1', options)
+    peer.client({ type: 'hello', clientId: CLIENT })
+    await until(() => peer.of('sync').length === 1, 'sync')
+    peer.client({ type: 'claim', cols: 120, rows: 40 })
+    peer.client({ type: 'resize', epoch: 2, cols: 100, rows: 30 })
+    await until(() => peer.of('size-refused').length === 1, 'refusal')
+    expect(calls).toEqual([`claim ${CLIENT} 120x40`, 'resize @2'])
+    expect(peer.state.closed).toBeNull()
   })
 })
 

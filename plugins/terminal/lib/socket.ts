@@ -5,7 +5,9 @@
  * client → server: hello { clientId } (first, binds identity) · ack { epoch,
  *   bytes } (cumulative bytes written to xterm since that sync; acks for an
  *   older epoch are ignored) · input { generation, viewerSeq, data }
- *   · resize { generation, cols, rows } · pong
+ *   · claim { cols, rows } (this screen sizes the session from now on) ·
+ *   resize { epoch, cols, rows } (the claiming screen changed size; stale for
+ *   anyone else or an older epoch) · pong
  * server → client: sync { epoch, session, snapshot, cursor } (atomic: the
  *   snapshot and the cursor it was taken at, plus generation, consumed input
  *   sequence and size on `session`) · binary output · session { session } ·
@@ -46,14 +48,16 @@ export interface ViewerManager {
   nextOutput(id: string, cursor: number, signal: AbortSignal): Promise<void>
   onSessionChange(id: string, listener: (session: Session) => void): () => void
   writeNext(id: string, principal: Principal, generation: number, data: string): Promise<Session>
-  resize(id: string, principal: Principal, generation: number, cols: number, rows: number): Promise<Session>
+  claim(id: string, principal: Principal, cols: number, rows: number): Promise<Session>
+  resizeAs(id: string, principal: Principal, epoch: number, cols: number, rows: number): Promise<Session>
 }
 
 const message = z.discriminatedUnion('type', [
   z.object({ type: z.literal('hello'), clientId: z.string().regex(CLIENT_ID) }),
   z.object({ type: z.literal('ack'), epoch: z.number().int().nonnegative(), bytes: z.number().int().nonnegative() }),
   z.object({ type: z.literal('input'), generation: z.number().int().nonnegative(), viewerSeq: z.number().int().positive(), data: z.string().max(65536) }),
-  z.object({ type: z.literal('resize'), generation: z.number().int().nonnegative(), cols: z.number().int().min(20).max(400), rows: z.number().int().min(1).max(150) }),
+  z.object({ type: z.literal('claim'), cols: z.number().int().min(1).max(400), rows: z.number().int().min(1).max(150) }),
+  z.object({ type: z.literal('resize'), epoch: z.number().int().nonnegative(), cols: z.number().int().min(1).max(400), rows: z.number().int().min(1).max(150) }),
   z.object({ type: z.literal('pong') }),
 ])
 
@@ -133,9 +137,15 @@ export class TerminalViewer {
         if (this.sent - this.acked < this.window()) { clearTimeout(this.evict); this.evict = undefined; this.wake?.() }
         return
       case 'input': return this.input(parsed.generation, parsed.viewerSeq, parsed.data)
+      case 'claim':
       case 'resize':
-        try { await this.manager.resize(this.sessionId, this.principal!, parsed.generation, parsed.cols, parsed.rows) }
-        catch (error) { this.send({ type: 'error', error: error instanceof Error ? error.message : 'Resize failed' }) }
+        try {
+          if (parsed.type === 'claim') await this.manager.claim(this.sessionId, this.principal!, parsed.cols, parsed.rows)
+          else await this.manager.resizeAs(this.sessionId, this.principal!, parsed.epoch, parsed.cols, parsed.rows)
+        } catch (error) {
+          // A stale resize (someone else claimed) is normal: the pushed session says who sizes now.
+          this.send({ type: 'size-refused', error: error instanceof Error ? error.message : 'Resize failed' })
+        }
         return
       case 'pong': return
     }

@@ -199,12 +199,16 @@ describe('TerminalSocketClient', () => {
     expect(socket().sent[0]).toEqual({ type: 'hello', clientId: 'tab-0123456789abcdef' })
   })
 
-  it('resize reports whether it was sent', () => {
+  it('claim and resize report whether they were sent, and resize carries the size epoch', () => {
     const { client, socket } = setup()
     client.connect(); socket().open()
-    expect(client.resize(1, 80, 24)).toBe(false)
+    expect(client.claim(80, 24)).toBe(false)
+    expect(client.resize(3, 80, 24)).toBe(false)
     socket().server({ type: 'sync', epoch: 1, session, snapshot: '', cursor: 0 })
-    expect(client.resize(1, 80, 24)).toBe(true)
+    expect(client.claim(80, 24)).toBe(true)
+    expect(client.resize(3, 90, 30)).toBe(true)
+    expect(socket().of('claim')).toEqual([{ type: 'claim', cols: 80, rows: 24 }])
+    expect(socket().of('resize')).toEqual([{ type: 'resize', epoch: 3, cols: 90, rows: 30 }])
   })
 })
 

@@ -72,3 +72,28 @@ test('an available service update is ONE observation with the Apply update repai
   }
 })
 
+test('agents cannot resize, screen reads carry the grid, and the operator can save a size as the default', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-size-'))
+  const tools: ExecToolDefinition[] = []
+  const updates: Record<string, unknown>[] = []
+  const context = {
+    storage: { localRoot: root }, getSettings: () => ({ enabledAgents: ['patch'] }), updateSettings: (patch: Record<string, unknown>) => { updates.push(patch) },
+    hooks: { register: () => () => {}, invoke: async () => undefined },
+    tasks: { get: async () => undefined }, log: { error: () => {} },
+    registerExecTool: (tool: ExecToolDefinition) => { tools.push(tool) }, registerHealthRepairAction: () => 'setup-service',
+    registerHealthCheck: (check: HealthCheckRegistrationInput) => check.id,
+  } as unknown as PluginContext
+  try {
+    await plugin.activate(context)
+    const operations = (tools[0]!.parameters as { operation: { options: string[] } }).operation.options
+    expect(operations).not.toContain('resize')
+    const route = plugin.routes!.find((entry) => entry.path === '/session' && entry.method === 'POST')!
+    const response = await route.handler(new Request('http://localhost/session', {
+      method: 'POST', headers: { 'x-bakin-terminal-client': 'isolated-browser-client', 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'missing', operation: 'default-size' }),
+    }), context as unknown as Parameters<typeof route.handler>[1], {} as never)
+    expect(response.status).toBe(404)
+    expect(updates).toEqual([])
+  } finally { await plugin.onShutdown?.(); rmSync(root, { recursive: true, force: true }) }
+})
+

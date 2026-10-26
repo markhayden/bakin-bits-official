@@ -11,6 +11,7 @@ import { api } from './api'
 import { TerminalControls } from './terminal-controls'
 import type { TerminalInputHandle } from './terminal-input'
 import { TerminalCanvas } from './terminal-canvas'
+import { estimateTerminalSize } from './terminal-size'
 import type { InputResult } from './terminal-socket'
 import { NewSession } from './new-session'
 import { TerminalTool as Tool } from './terminal-tool'
@@ -223,7 +224,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     // checkout, never minting a second worktree) with the same assignment.
     setBusy(true); setError('')
     try {
-      const created = await api<Session>('/sessions', { title: target.title, cwd: target.cwd, program: target.program, checkout: 'existing', agentId: target.agentId || undefined, taskId: target.taskId || undefined, projectId: target.projectId || undefined })
+      const created = await api<Session>('/sessions', { title: target.title, cwd: target.cwd, program: target.program, checkout: 'existing', agentId: target.agentId || undefined, taskId: target.taskId || undefined, projectId: target.projectId || undefined, size: estimateTerminalSize() })
       update(created); router.push(`/terminal/${encodeURIComponent(created.id)}`)
     } catch (error) { setError(error instanceof Error ? error.message : 'Could not reopen session') }
     finally { setBusy(false) }

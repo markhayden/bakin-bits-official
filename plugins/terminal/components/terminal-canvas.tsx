@@ -14,8 +14,10 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
   session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string): void; onClaim(data: string): void; onSession(session: Session): void; onResult(result: InputResult): void
 }) {
   const element = useRef<HTMLDivElement>(null)
-  const callbacks = useRef({ onInput, onClaim, onSession, onResult, writable, inputEnabled, onCtrlChange, captureTab: false, generation: session.generation })
-  callbacks.current = { onInput, onClaim, onSession, onResult, writable, inputEnabled, onCtrlChange, captureTab, generation: session.generation }
+  // This screen sizes the grid only while it holds the session's size claim.
+  const authority = session.state === 'running' && session.sizeAuthority?.viewer === clientId()
+  const callbacks = useRef({ onInput, onClaim, onSession, onResult, writable, authority, inputEnabled, onCtrlChange, captureTab: false, sizeEpoch: session.sizeEpoch })
+  callbacks.current = { onInput, onClaim, onSession, onResult, writable, authority, inputEnabled, onCtrlChange, captureTab, sizeEpoch: session.sizeEpoch }
   const [status, setStatus] = useState('Connecting')
   useEffect(() => { onStatus(status) }, [status, onStatus])
   const terminal = useRef<Terminal | null>(null)
@@ -25,13 +27,13 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
   const ctrl = useRef(false)
   const ready = useRef(false)
   const BASE_FONT = 13
-  // Watching a session we don't own: we must not resize the shared PTY, so
-  // instead scale the font up/down so the agent's fixed grid fills the pane.
-  // Purely local; converges over a few animation frames as xterm re-renders.
+  // Another screen sizes this session: never resize it; scale the font so its
+  // real grid fills this pane instead. Purely local; converges over a few
+  // animation frames as xterm re-renders.
   function fitFontToPane(passes = 3): void {
     const term = terminal.current
     const el = element.current
-    if (!term || !el || callbacks.current.writable) return
+    if (!term || !el || callbacks.current.authority) return
     const screen = el.querySelector('.xterm-screen') as HTMLElement | null
     if (!screen || !screen.clientWidth || !screen.clientHeight || !el.clientWidth || !el.clientHeight) return
     const current = term.options.fontSize ?? BASE_FONT
@@ -44,14 +46,14 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
   function resizeToViewport() {
     const term = terminal.current
     const size = fit.current?.proposeDimensions()
-    if (!size || !term || !callbacks.current.writable) return
+    if (!size || !term || !callbacks.current.authority) return
     const cols = Math.min(400, Math.max(20, size.cols))
     const rows = Math.min(150, Math.max(1, size.rows))
     // Never resend a size; the session update the server pushes resizes xterm.
     const key = `${cols}x${rows}`
     if ((term.cols === cols && term.rows === rows) || sentSize.current === key) return
     // Only a size that actually left counts; a disconnected one is retried after the next sync.
-    if (socket.current?.resize(callbacks.current.generation, cols, rows)) sentSize.current = key
+    if (socket.current?.resize(callbacks.current.sizeEpoch, cols, rows)) sentSize.current = key
   }
   useEffect(() => {
     ready.current = false
@@ -112,7 +114,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
         ready.current = sync.session.state !== 'completed'
         // Every sync re-fits: the server may hold any size by now.
         sentSize.current = ''
-        requestAnimationFrame(() => { if (callbacks.current.writable) resizeToViewport() })
+        requestAnimationFrame(() => { if (callbacks.current.authority) resizeToViewport() })
       },
       onOutput: (bytes, done) => term.write(bytes, done),
       onSession: (next) => callbacks.current.onSession(next),
@@ -165,9 +167,9 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
       if (disposed) return
       clearTimeout(timer)
       timer = setTimeout(() => {
-        // Driving: fit the PTY to the pane at the base font. Watching: keep the
-        // PTY and scale the font so the fixed grid fills the pane instead.
-        if (callbacks.current.writable) {
+        // Sizing: fit the session to the pane at the base font. Otherwise keep
+        // the session's grid and scale the font so it fills the pane instead.
+        if (callbacks.current.authority) {
           if (terminal.current && terminal.current.options.fontSize !== BASE_FONT) terminal.current.options.fontSize = BASE_FONT
           resizeToViewport()
         } else fitFontToPane()
@@ -180,7 +182,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     void document.fonts.ready.then(schedule)
     schedule()
     return () => { disposed = true; clearTimeout(timer); observer.disconnect() }
-  }, [session.id, writable, attempt])
+  }, [session.id, authority, session.sizeEpoch, attempt])
   return <BoundedOverflow label="Terminal output" className="min-h-0 flex-1 bg-bakin-canvas-default p-bakin-4">
       <div ref={element} className="terminal-xterm h-full min-w-0" />
     </BoundedOverflow>

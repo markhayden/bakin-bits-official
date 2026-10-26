@@ -44,8 +44,24 @@ export default definePlugin({
       if (serviceReady) await sessions().refreshStates()
       return Response.json({ sessions: sessions().list(principal), serviceReady, serviceUpdateRequired: await service?.updateRequired() })
     }),
-    route('/sessions', 'POST', 'Create a terminal session', async (request) => { const principal = human(request); return Response.json(await sessions().create(await request.json(), principal)) }),
-    route('/session', 'POST', 'Operate a terminal session', async (request) => { const principal = human(request); return Response.json(await command(sessions(), await request.json(), principal)) }),
+    route('/sessions', 'POST', 'Create a terminal session', async (request) => {
+      const principal = human(request)
+      const body = await request.json() as Record<string, unknown>
+      // The creating screen's grid, so the program starts at the size it is seen at.
+      const size = z.object({ cols: z.number().int(), rows: z.number().int() }).safeParse(body.size)
+      return Response.json(await sessions().create(body, principal, size.success ? size.data : undefined))
+    }),
+    route('/session', 'POST', 'Operate a terminal session', async (request) => {
+      const principal = human(request)
+      const body = await request.json() as { id?: unknown; operation?: unknown }
+      if (body.operation === 'default-size') {
+        // "Use this size as the default for new sessions": the operator's current grid.
+        const session = sessions().get(z.string().min(1).parse(body.id), principal)
+        context!.updateSettings({ defaultCols: session.cols, defaultRows: session.rows })
+        return Response.json({ defaultSize: { cols: session.cols, rows: session.rows } })
+      }
+      return Response.json(await command(sessions(), body, principal))
+    }),
     route('/service', 'POST', 'Set up the persistent terminal service', async (request) => { human(request); await sessions().setupService(() => service!.install()); return Response.json({ ready: true }) }),
   ],
   socketRoutes: [
@@ -61,6 +77,8 @@ export default definePlugin({
   ],
   settingsSchema: { fields: [
     { key: 'enabledAgents', label: 'Enable terminal access', description: 'Enabled agents can open and operate terminal sessions. A session is a real shell running as your user, so an enabled agent can read any file you can — including stored API keys and credentials. Enable only agents you trust with full access to this machine.', type: 'agent-toggles', default: ['main'] },
+    { key: 'defaultCols', label: 'Default columns for new sessions', description: 'Sessions an agent starts (or that no screen sized yet) use this grid. Session actions › Use this size as the default sets both from a session you are viewing.', type: 'number', default: 200 },
+    { key: 'defaultRows', label: 'Default rows for new sessions', type: 'number', default: 60 },
     { key: 'maxSessions', label: 'Maximum live sessions', type: 'number', default: 10 },
     { key: 'maxWorktrees', label: 'Maximum retained worktrees', type: 'number', default: 10 },
     { key: 'idleDays', label: 'Idle worktree review age (days)', type: 'number', default: 30 },
@@ -169,24 +187,23 @@ export default definePlugin({
         'Typical flow: `create` a session, then `screen` to read the visible pane, then `write` to type a command (end it with a trailing carriage return "\\r" to run it), then `screen` again to read the result, then `complete` when finished.',
         'Writing requires `generation` (from your last response) and `sequence` = that response\'s `inputSequence` + 1. If a write fails, call `screen` to re-read the current state — never retry with the same or a guessed sequence.',
         'A human can take control at any time; that bumps `generation` and rejects your writes until control returns. Treat a rejected write as "the human is driving", not an error to retry.',
+        'The human\'s screen sizes the session and may change it while you work: every `screen` reports `cols`, `rows` and `sizeRevision`; when the revision moves, re-read the screen before acting on its layout.',
       ].join(' '),
       requiresVerifiedAgent: true,
       parameters: {
-        operation: z.enum(['list', 'create', 'screen', 'output', 'write', 'resize', 'interrupt', 'complete', 'terminate'])
-          .describe('list: your sessions. create: start one. screen: read the visible pane (start here). output: read raw output after a cursor. write: type input. interrupt: send Ctrl-C. resize: set cols/rows. complete: finish an exited session. terminate: stop a running process then finish.'),
+        operation: z.enum(['list', 'create', 'screen', 'output', 'write', 'interrupt', 'complete', 'terminate'])
+          .describe('list: your sessions. create: start one. screen: read the visible pane and its size (start here). output: read raw output after a cursor. write: type input. interrupt: send Ctrl-C. complete: finish an exited session. terminate: stop a running process then finish.'),
         input: z.object({
-          id: z.string().optional().describe('Session id. Required for screen, output, write, resize, interrupt, complete, terminate.'),
+          id: z.string().optional().describe('Session id. Required for screen, output, write, interrupt, complete, terminate.'),
           title: z.string().optional().describe('create: a short human-readable name for the session.'),
           cwd: z.string().optional().describe('create: absolute working directory.'),
           program: z.enum(['shell', 'claude', 'codex']).optional().describe('create: program to launch (default shell).'),
           checkout: z.enum(['isolated', 'existing']).optional().describe('create (coding programs): new isolated git worktree (default) or the existing checkout at cwd.'),
           taskId: z.string().optional().describe('create: link the session to a Bakin task id.'),
-          generation: z.number().int().optional().describe('write, resize, interrupt: the `generation` from your latest response for this session.'),
+          generation: z.number().int().optional().describe('write, interrupt: the `generation` from your latest response for this session.'),
           sequence: z.number().int().optional().describe('write: the latest `inputSequence` + 1. Consumed once — never reuse or guess it.'),
           data: z.string().optional().describe('write: the exact keystrokes to send. End a command with a carriage return "\\r" to run it.'),
           cursor: z.number().int().optional().describe('output: return output produced after this cursor (0 for all retained output).'),
-          cols: z.number().int().optional().describe('resize: terminal columns.'),
-          rows: z.number().int().optional().describe('resize: terminal rows.'),
         }).default({}).describe('Operation arguments — each field notes which operations use it.'),
       },
       handler: async (params, _agent, context) => {
@@ -197,7 +214,7 @@ export default definePlugin({
           if (operation === 'list') return { ok: true, sessions: sessions().list(principal) }
           if (operation === 'create') return { ok: true, session: await sessions().create(input, principal) }
           const id = z.string().min(1).parse(input.id)
-          if (operation === 'screen') return { ok: true, screen: await sessions().readScreen(id, principal) }
+          if (operation === 'screen') return { ok: true, ...await sessions().readScreen(id, principal) }
           if (operation === 'output') return { ok: true, ...sessions().output(id, principal, z.number().int().nonnegative().parse(input.cursor ?? 0)) }
           return { ok: true, session: await agentCommand(sessions(), { ...input, operation }, principal) }
         } catch (error) { return { ok: false, error: error instanceof TerminalError ? error.message : 'Invalid or unavailable terminal operation' } }
