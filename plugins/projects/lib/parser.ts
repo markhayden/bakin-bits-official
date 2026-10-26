@@ -6,8 +6,9 @@
  */
 import type { StorageAdapter } from '@makinbakin/sdk/types'
 import { dump, load } from 'js-yaml'
+import { parseBakinQuestion } from '@makinbakin/sdk/utils'
 import { z } from 'zod'
-import type { PlanSnapshot, Project, ProjectFrontmatter, ProjectTask, ProjectAsset, ProjectBrainstormMessage, ProjectSummary } from '../types'
+import { TITLE_SOURCES, type PlanSnapshot, type Project, type ProjectFrontmatter, type ProjectTask, type ProjectAsset, type ProjectBrainstormMessage, type ProjectSeen, type ProjectSummary, type TitleSource } from '../types'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -70,6 +71,13 @@ export const BRAINSTORM_ROW_CAP = 300
 // Parse / Serialize
 // ---------------------------------------------------------------------------
 
+const kickoffSchema = z.object({
+  requestId: z.string().min(8).max(128),
+  state: z.enum(['pending', 'started', 'settled']),
+  message: z.string().optional(),
+  agentId: z.string().optional(),
+}).strict()
+
 const operationsSchema = z.array(z.discriminatedUnion('kind', [z.object({
   kind: z.literal('add-checklist'), requestId: z.string().min(8).max(128),
   title: z.string().min(1), taskItemId: z.string().min(1),
@@ -79,6 +87,7 @@ const operationsSchema = z.array(z.discriminatedUnion('kind', [z.object({
   title: z.string().min(1), taskItemId: z.string().min(1), instanceId: z.string().uuid(),
   taskId: z.string().min(1), assignee: z.string().optional(), workflowId: z.string().optional(),
   skipWorkflowReason: z.string().optional(), phase: z.enum(['reserved', 'complete']),
+  retired: z.literal(true).optional(),
 }).strict()]))
 
 export function parseProject(content: string): Project {
@@ -111,12 +120,18 @@ export function parseProject(content: string): Project {
   const fm: ProjectFrontmatter = {
     id: String(raw.id || ''),
     title: String(raw.title || ''),
+    titleSource: TITLE_SOURCES.includes(raw.titleSource as TitleSource) ? raw.titleSource as TitleSource : 'user',
     status: (['draft', 'active', 'completed', 'archived'].includes(String(raw.status)) ? String(raw.status) : 'draft') as ProjectFrontmatter['status'],
     created: String(raw.created || new Date().toISOString()),
     updated: String(raw.updated || new Date().toISOString()),
     owner: String(raw.owner || ''),
     tasks,
     assets,
+    ...(raw.kickoff === undefined ? {} : { kickoff: kickoffSchema.parse(raw.kickoff) }),
+    planRevision: Number.isInteger(raw.planRevision) && (raw.planRevision as number) >= 0 ? raw.planRevision as number : 0,
+    ...(raw.planUpdatedBy === 'agent' || raw.planUpdatedBy === 'user' ? { planUpdatedBy: raw.planUpdatedBy } : {}),
+    ...(typeof raw.planUpdatedAt === 'string' ? { planUpdatedAt: raw.planUpdatedAt } : {}),
+    ...(raw.archivedFrom === 'draft' || raw.archivedFrom === 'active' || raw.archivedFrom === 'completed' ? { archivedFrom: raw.archivedFrom } : {}),
     ...(raw.operations === undefined ? {} : { operations: operationsSchema.parse(raw.operations) }),
   }
 
@@ -168,10 +183,14 @@ export interface ProjectRepository {
   writeProject(project: Project): void
   readBrainstormMessages(id: string): ProjectBrainstormMessage[]
   writeBrainstormMessages(id: string, messages: ProjectBrainstormMessage[]): void
-  readBrainstormSeen(id: string): string | null
-  writeBrainstormSeen(id: string, lastSeenAt: string): void
+  readSeen(id: string): ProjectSeen
+  /** Merge fields into the seen sidecar — brainstorm and plan views share it. */
+  updateSeen(id: string, patch: Partial<ProjectSeen>): void
   readLastAgentActivityTs(id: string): string | null
+  /** The transcript ends on an open question card (no user reply after it). */
+  readWaitingForUser(id: string): boolean
   readPlanHistory(id: string): PlanSnapshot[]
+  /** Append one snapshot; retention keeps the newest PLAN_HISTORY_CAP plus the seen baseline. */
   appendPlanSnapshot(id: string, snapshot: PlanSnapshot): void
   deleteProjectFile(id: string): boolean
   projectStoragePath(id: string): string
@@ -190,7 +209,7 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
   // The attention endpoint polls every project's transcript for its last
   // agent-activity timestamp — cache it against the sidecar's mtime+size so
   // steady-state polls never re-read/re-parse full transcripts (bakin#706).
-  const lastAgentTsCache = new Map<string, { mtimeMs: number; size: number; ts: string | null }>()
+  const lastAgentTsCache = new Map<string, { mtimeMs: number; size: number; ts: string | null; waiting: boolean }>()
 
   // Local so sibling methods can call them after destructuring (no `this`).
   function readBrainstormMessages(id: string): ProjectBrainstormMessage[] {
@@ -207,6 +226,42 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
     }
   }
 
+  /** Attention facts from one transcript read, cached against mtime+size. */
+  function transcriptSignals(id: string): { ts: string | null; waiting: boolean } {
+    const path = projectBrainstormPath(id)
+    const stat = storage.stat?.(path)
+    if (!stat) {
+      lastAgentTsCache.delete(id)
+      return { ts: null, waiting: false }
+    }
+    const cached = lastAgentTsCache.get(id)
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached
+    const rows = readBrainstormMessages(id)
+    // A turn that ends on a question card is agent activity too (D6a).
+    const isQuestion = (row: ProjectBrainstormMessage) => row.kind === 'tool' && parseBakinQuestion(row.metadata?.bakinQuestion) !== null
+    const ts = [...rows].reverse().find(r => r.kind === 'assistant' || r.kind === 'error' || isQuestion(r))?.ts ?? null
+    let lastUser = -1
+    for (let i = rows.length - 1; i >= 0; i--) if (rows[i]!.kind === 'user') { lastUser = i; break }
+    const waiting = rows.slice(lastUser + 1).some(isQuestion)
+    const entry = { mtimeMs: stat.mtimeMs, size: stat.size, ts, waiting }
+    lastAgentTsCache.set(id, entry)
+    return entry
+  }
+
+  function readSeen(id: string): ProjectSeen {
+    const seen: ProjectSeen = { lastSeenAt: null, planSeenRevision: 0 }
+    const content = storage.read(projectBrainstormSeenPath(id))
+    if (!content) return seen
+    try {
+      const parsed = JSON.parse(content) as { lastSeenAt?: unknown; planSeenRevision?: unknown }
+      if (typeof parsed.lastSeenAt === 'string') seen.lastSeenAt = parsed.lastSeenAt
+      if (Number.isInteger(parsed.planSeenRevision) && (parsed.planSeenRevision as number) >= 0) seen.planSeenRevision = parsed.planSeenRevision as number
+    } catch {
+      // A corrupt sidecar reads as never-seen; the next view rewrites it.
+    }
+    return seen
+  }
+
   function readPlanHistory(id: string): PlanSnapshot[] {
     try {
       const content = storage.read(projectHistoryPath(id))
@@ -214,7 +269,8 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
       const parsed: unknown = JSON.parse(content)
       if (!Array.isArray(parsed) || !parsed.every(value => value && typeof value === 'object'
         && typeof value.ts === 'string' && Number.isFinite(Date.parse(value.ts))
-        && (value.author === 'user' || value.author === 'agent') && typeof value.body === 'string')) {
+        && (value.author === 'user' || value.author === 'agent') && typeof value.body === 'string'
+        && (value.revision === undefined || Number.isInteger(value.revision)))) {
         throw new Error('Invalid plan history payload')
       }
       return parsed as PlanSnapshot[]
@@ -253,43 +309,33 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
       storage.write(projectBrainstormPath(id), JSON.stringify(messages.slice(-BRAINSTORM_ROW_CAP), null, 2))
     },
 
-    /** When the user last viewed this project's brainstorm (null = never). */
-    readBrainstormSeen(id: string): string | null {
-      const content = storage.read(projectBrainstormSeenPath(id))
-      if (!content) return null
-      try {
-        const parsed = JSON.parse(content) as { lastSeenAt?: unknown }
-        return typeof parsed.lastSeenAt === 'string' ? parsed.lastSeenAt : null
-      } catch {
-        return null
-      }
-    },
+    readSeen,
 
-    writeBrainstormSeen(id: string, lastSeenAt: string): void {
-      storage.write(projectBrainstormSeenPath(id), JSON.stringify({ lastSeenAt }))
+    updateSeen(id: string, patch: Partial<ProjectSeen>): void {
+      const next = { ...readSeen(id), ...patch }
+      storage.write(projectBrainstormSeenPath(id), JSON.stringify(next))
     },
 
     /** Timestamp of the last assistant/error row, mtime-cached. */
     readLastAgentActivityTs(id: string): string | null {
-      const path = projectBrainstormPath(id)
-      const stat = storage.stat?.(path)
-      if (!stat) {
-        lastAgentTsCache.delete(id)
-        return null
-      }
-      const cached = lastAgentTsCache.get(id)
-      if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.ts
-      const rows = readBrainstormMessages(id)
-      const ts = [...rows].reverse().find(r => r.kind === 'assistant' || r.kind === 'error')?.ts ?? null
-      lastAgentTsCache.set(id, { mtimeMs: stat.mtimeMs, size: stat.size, ts })
-      return ts
+      return transcriptSignals(id).ts
+    },
+
+    readWaitingForUser(id: string): boolean {
+      return transcriptSignals(id).waiting
     },
 
     readPlanHistory,
 
     /** Append one snapshot (oldest first), dropping past the cap. */
     appendPlanSnapshot(id: string, snapshot: PlanSnapshot): void {
-      const history = [...readPlanHistory(id), snapshot].slice(-PLAN_HISTORY_CAP)
+      const all = [...readPlanHistory(id), snapshot]
+      // The snapshot at the seen revision is the "Review changes" baseline
+      // (D15): it survives the cap for as long as it is the baseline.
+      const baseline = readSeen(id).planSeenRevision
+      const newest = all.slice(-PLAN_HISTORY_CAP)
+      const pinned = all.slice(0, -PLAN_HISTORY_CAP).find(entry => entry.revision === baseline)
+      const history = pinned ? [pinned, ...newest] : newest
       storage.write(projectHistoryPath(id), JSON.stringify(history, null, 2))
     },
 

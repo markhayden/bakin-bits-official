@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
-
-import { afterEach, describe, expect, it, mock } from 'bun:test'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+/**
+ * Project detail shell (D10): tabs with a stage default, the project
+ * conversation full width on its tab and docked beside the others on
+ * desktop, exactly ONE mounted composer in every tab/collapse/breakpoint
+ * combination, no right rail; plus brainstorm durability (bakin#703) and the
+ * Files tab's asset repair.
+ */
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import React from 'react'
 
 mock.module('../../../plugins/projects/components/project-checklist', () => ({
@@ -14,325 +20,344 @@ mock.module('../../../plugins/projects/components/project-editor', () => ({
 
 import { ProjectDetail } from '../../../plugins/projects/components/project-detail'
 import { emitPluginEvent } from '@makinbakin/sdk/hooks'
-import { act } from '@testing-library/react'
+
+let desktop = true
+
+beforeEach(() => {
+  desktop = true
+  ;(globalThis as unknown as { __bakinTestSdkHooks?: Record<string, unknown> }).__bakinTestSdkHooks = {
+    useMediaQuery: () => desktop,
+  }
+})
 
 afterEach(() => {
   cleanup()
   delete (globalThis as unknown as { fetch?: unknown }).fetch
+  delete (globalThis as unknown as { __bakinTestSdkHooks?: unknown }).__bakinTestSdkHooks
 })
 
-describe('ProjectDetail', () => {
-  it('hydrates saved brainstorm messages when reopening a project', async () => {
-    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : String(input)
-      if (url === '/api/plugins/projects/proj-1') {
-        return {
-          ok: true,
-          json: async () => ({
-            project: {
-              id: 'proj-1',
-              title: 'Persistent Project',
-              status: 'active',
-              owner: 'main',
-              progress: 0,
-              tasks: [],
-              assets: [],
-              body: '# Persistent Project',
-              created: '2026-05-01T00:00:00.000Z',
-              updated: '2026-05-09T10:00:00.000Z',
-              resolvedTasks: {},
-              resolvedAssets: [],
-              brainstormMessages: [
-                {
-                  kind: 'user',
-                  ts: '2026-05-09T10:00:01.000Z',
-                  content: 'What did we decide?',
-                },
-                {
-                  kind: 'assistant',
-                  ts: '2026-05-09T10:00:02.000Z',
-                  agentId: 'main',
-                  content: 'We decided to keep the launch plan focused.',
-                },
-              ],
-            },
-          }),
-          text: async () => '',
-        } as Response
-      }
-      if (url.endsWith('/history')) {
-        return { ok: true, json: async () => ({ history: [] }), text: async () => '' } as Response
-      }
-      throw new Error(`Unexpected fetch: ${url}`)
-    }) as unknown as typeof fetch
+function projectPayload(id: string, over: Record<string, unknown> = {}) {
+  return {
+    project: {
+      id,
+      title: 'Inbox cleanup',
+      titleSource: 'agent',
+      status: 'draft',
+      owner: 'main',
+      progress: 0,
+      planRevision: 0,
+      planSeenRevision: 0,
+      tasks: [],
+      assets: [],
+      body: '# Inbox cleanup',
+      created: '2026-05-01T00:00:00.000Z',
+      updated: '2026-05-09T10:00:00.000Z',
+      resolvedTasks: {},
+      resolvedAssets: [],
+      brainstormMessages: [],
+      brainstormStreaming: false,
+      ...over,
+    },
+  }
+}
 
-    render(<ProjectDetail projectId="proj-1" onBack={() => {}} />)
+type Routes = Record<string, (init?: RequestInit) => unknown | Promise<unknown>>
 
-    await waitFor(() => {
-      expect(screen.getByText('What did we decide?')).toBeDefined()
-      expect(screen.getByText('We decided to keep the launch plan focused.')).toBeDefined()
+function mockFetch(id: string, over: Record<string, unknown> = {}, routes: Routes = {}) {
+  globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : String(input)
+    if (routes[url]) return Response.json(await routes[url]!(init))
+    if (url === `/api/plugins/projects/${id}`) return Response.json(projectPayload(id, over))
+    if (url.endsWith('/history')) return Response.json({ history: [] })
+    if (url.endsWith('/files')) return Response.json({ produced: [] })
+    if (url.endsWith('/brainstorm/seen')) return Response.json({ ok: true })
+    throw new Error(`Unexpected fetch: ${url}`)
+  }) as unknown as typeof fetch
+}
+
+const composers = () => screen.queryAllByTestId('chat-input')
+const selectedTab = () => screen.getAllByRole('tab').find(tab => tab.getAttribute('aria-selected') === 'true')?.textContent
+
+describe('ProjectDetail shell', () => {
+  it('a draft opens on the Conversation tab with the transcript and one composer', async () => {
+    mockFetch('proj-draft', {
+      brainstormMessages: [
+        { kind: 'user', ts: '2026-05-09T10:00:01.000Z', content: 'What did we decide?' },
+        { kind: 'assistant', ts: '2026-05-09T10:00:02.000Z', agentId: 'main', content: 'Keep the launch plan focused.' },
+      ],
     })
-
-    const detail = document.querySelector('[data-slot="project-detail"]')
-    const body = document.querySelector('[data-slot="project-detail-body"]')
-    expect(detail?.className).toContain('min-w-0')
-    expect(screen.getByRole('button', { name: 'Back to projects' })).toBeDefined()
-    expect(screen.getByRole('button', { name: 'Project actions' })).toBeDefined()
-    expect(body?.className).toContain('lg:flex-row')
-    expect(body?.className).toContain('pt-bakin-6')
-    expect(screen.getByTestId('conversation-panel').getAttribute('data-chrome')).toBe('top-divider')
-    expect(screen.getByTestId('conversation-panel').getAttribute('data-auto-focus')).toBe('false')
+    render(<ProjectDetail projectId="proj-draft" onBack={() => {}} />)
+    await screen.findByText('Keep the launch plan focused.')
+    expect(selectedTab()).toBe('Conversation')
+    expect(screen.getByRole('tablist', { name: 'Project sections' })).toBeDefined()
+    expect(composers()).toHaveLength(1)
+    // No docked copy while the conversation has the full width.
+    expect(screen.queryByRole('complementary', { name: 'Project conversation' })).toBeNull()
   })
 
-  it('renders the shared project conversation empty state when no messages exist', async () => {
-    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : String(input)
-      if (url.startsWith('/api/plugins/projects/proj-empty/history')) {
-        return { ok: true, json: async () => ({ snapshots: [] }), text: async () => '' } as Response
-      }
-      if (url === '/api/plugins/projects/proj-empty') {
-        return {
-          ok: true,
-          json: async () => ({
-            project: {
-              id: 'proj-empty',
-              title: 'Quiet Project',
-              status: 'active',
-              owner: 'main',
-              progress: 0,
-              tasks: [],
-              assets: [],
-              body: '# Quiet Project',
-              created: '2026-05-01T00:00:00.000Z',
-              updated: '2026-05-09T10:00:00.000Z',
-              resolvedTasks: {},
-              resolvedAssets: [],
-              brainstormMessages: [],
-            },
-          }),
-          text: async () => '',
-        } as Response
-      }
-      throw new Error(`Unexpected fetch: ${url}`)
-    }) as unknown as typeof fetch
-
-    render(<ProjectDetail projectId="proj-empty" onBack={() => {}} />)
-
-    const emptyState = await screen.findByTestId('conversation-empty')
-    expect(emptyState.textContent).toContain('Brainstorm this project with an agent')
-    expect(emptyState.textContent).toContain('every change is snapshotted')
-  })
-
-  it('does not render non-image assets in the image lightbox', async () => {
-    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : String(input)
-      if (url === '/api/plugins/projects/proj-assets') {
-        return {
-          ok: true,
-          json: async () => ({
-            project: {
-              id: 'proj-assets',
-              title: 'Asset Project',
-              status: 'active',
-              owner: 'main',
-              progress: 0,
-              tasks: [],
-              assets: [{ assetId: '20260531-brief-abc12345', label: 'Launch brief' }],
-              body: '# Asset Project',
-              created: '2026-05-01T00:00:00.000Z',
-              updated: '2026-05-31T10:00:00.000Z',
-              resolvedTasks: {},
-              resolvedAssets: [
-                {
-                  assetId: '20260531-brief-abc12345',
-                  label: 'Launch brief',
-                  type: 'pdf',
-                  description: 'Campaign planning PDF',
-                },
-              ],
-              brainstormMessages: [],
-            },
-          }),
-          text: async () => '',
-        } as Response
-      }
-      if (url.endsWith('/history')) {
-        return { ok: true, json: async () => ({ history: [] }), text: async () => '' } as Response
-      }
-      throw new Error(`Unexpected fetch: ${url}`)
-    }) as unknown as typeof fetch
-
-    render(<ProjectDetail projectId="proj-assets" onBack={() => {}} />)
-
-    const assetButton = await screen.findByRole('button', { name: 'Open Launch brief' })
-    fireEvent.click(assetButton)
-
-    const dialog = await screen.findByRole('dialog', { name: /Launch brief/ })
-    expect(within(dialog).queryByRole('img')).toBeNull()
-    expect(within(dialog).getByRole('link', { name: 'Open asset' }).getAttribute('href')).toBe('/assets/20260531-brief-abc12345')
-
-    fireEvent.keyDown(window, { key: 'Escape' })
-    await waitFor(() => {
-      expect(screen.queryByRole('dialog', { name: /Launch brief/ })).toBeNull()
-    })
-  })
-
-  it('shows repair actions for missing assets', async () => {
-    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : String(input)
-      if (url === '/api/plugins/projects/proj-missing-asset') {
-        return {
-          ok: true,
-          json: async () => ({
-            project: {
-              id: 'proj-missing-asset',
-              title: 'Missing Asset Project',
-              status: 'active',
-              owner: 'main',
-              progress: 0,
-              tasks: [],
-              assets: [{ assetId: 'deleted-image.png', label: 'Deleted image' }],
-              body: '# Missing Asset Project',
-              created: '2026-05-01T00:00:00.000Z',
-              updated: '2026-05-31T10:00:00.000Z',
-              resolvedTasks: {},
-              resolvedAssets: [
-                {
-                  assetId: 'deleted-image.png',
-                  label: 'Deleted image',
-                  type: 'unknown',
-                  missing: true,
-                },
-              ],
-              brainstormMessages: [],
-            },
-          }),
-          text: async () => '',
-        } as Response
-      }
-      if (url === '/api/plugins/assets/versioned') {
-        return {
-          ok: true,
-          json: async () => ({
-            assets: [
-              {
-                assetId: '20260531-replacement-abc12345',
-                type: 'images',
-                description: 'Replacement image',
-              },
-            ],
-          }),
-          text: async () => '',
-        } as Response
-      }
-      if (url.endsWith('/history')) {
-        return { ok: true, json: async () => ({ history: [] }), text: async () => '' } as Response
-      }
-      throw new Error(`Unexpected fetch: ${url}`)
-    }) as unknown as typeof fetch
-
-    render(<ProjectDetail projectId="proj-missing-asset" onBack={() => {}} />)
-
-    expect(await screen.findByText("can't find asset")).toBeDefined()
-    expect(screen.getByText(/Some attached assets could not be loaded/)).toBeDefined()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Relink Deleted image' }))
-    expect(await screen.findByText('Relink asset')).toBeDefined()
-    expect(await screen.findByText('20260531-replacement-abc12345')).toBeDefined()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Detach Deleted image' }))
-    expect(await screen.findByRole('dialog', { name: 'Detach asset?' })).toBeDefined()
-    expect(screen.getByText(/Bakin can't find this asset/)).toBeDefined()
-  })
-})
-
-
-describe('ProjectDetail brainstorm durability (bakin#703)', () => {
-  function projectPayload(over: Record<string, unknown> = {}) {
-    return {
-      project: {
-        id: 'proj-703',
-        title: 'Durable Project',
-        status: 'active',
-        owner: 'main',
-        progress: 0,
-        tasks: [],
-        assets: [],
-        body: '# Durable Project',
-        created: '2026-05-01T00:00:00.000Z',
-        updated: '2026-07-20T10:00:00.000Z',
-        resolvedTasks: {},
-        resolvedAssets: [],
-        brainstormMessages: [],
-        brainstormStreaming: false,
-        ...over,
-      },
+  it('opens on what matters at each stage', async () => {
+    for (const [status, tab] of [['active', 'Steps'], ['completed', 'Files'], ['archived', 'Plan']] as const) {
+      mockFetch(`proj-${status}`, { status })
+      render(<ProjectDetail projectId={`proj-${status}`} onBack={() => {}} />)
+      await screen.findByRole('tablist', { name: 'Project sections' })
+      expect(selectedTab()).toBe(tab)
+      cleanup()
     }
+  })
+
+  it('desktop: other tabs dock the conversation; collapsing unmounts it; exactly one composer throughout', async () => {
+    mockFetch('proj-dock', { status: 'active' })
+    render(<ProjectDetail projectId="proj-dock" onBack={() => {}} />)
+    await screen.findByTestId('project-checklist')
+    const dock = screen.getByRole('complementary', { name: 'Project conversation' })
+    expect(within(dock).getAllByTestId('chat-input')).toHaveLength(1)
+    expect(composers()).toHaveLength(1)
+
+    await act(async () => { fireEvent.click(within(dock).getByRole('button', { name: 'Collapse project conversation' })) })
+    expect(composers()).toHaveLength(0)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Expand project conversation' })) })
+    expect(composers()).toHaveLength(1)
+
+    await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Conversation' })) })
+    expect(screen.queryByRole('complementary', { name: 'Project conversation' })).toBeNull()
+    expect(composers()).toHaveLength(1)
+  })
+
+  it('an unseen reply from before the visit marks a remembered-collapsed dock', async () => {
+    ;(globalThis as unknown as { __bakinTestSdkHooks: Record<string, unknown> }).__bakinTestSdkHooks.useCollapsedAside = () => React.useState(true)
+    mockFetch('proj-unread', { status: 'active', brainstormUnread: true })
+    render(<ProjectDetail projectId="proj-unread" onBack={() => {}} />)
+    await screen.findByTestId('project-checklist')
+    expect(await screen.findByLabelText('Unread reply')).toBeDefined()
+  })
+
+  it('nothing is marked seen before the project loads (the tab default is only a guess until then)', async () => {
+    ;(globalThis as unknown as { __bakinTestSdkHooks: Record<string, unknown> }).__bakinTestSdkHooks.useCollapsedAside = () => React.useState(true)
+    mockFetch('proj-early', { status: 'active', brainstormUnread: true })
+    render(<ProjectDetail projectId="proj-early" onBack={() => {}} />)
+    await screen.findByTestId('project-checklist')
+    const calls = (globalThis.fetch as unknown as { mock: { calls: [string][] } }).mock.calls.map(([url]) => String(url))
+    expect(calls.filter(url => url.endsWith('/brainstorm/seen'))).toEqual([])
+  })
+
+  it('mobile: no dock; an Ask button switches to the conversation', async () => {
+    desktop = false
+    mockFetch('proj-mobile', { status: 'active' })
+    render(<ProjectDetail projectId="proj-mobile" onBack={() => {}} />)
+    await screen.findByTestId('project-checklist')
+    expect(screen.queryByRole('complementary', { name: 'Project conversation' })).toBeNull()
+    expect(composers()).toHaveLength(0)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Ask Main' })) })
+    expect(selectedTab()).toBe('Conversation')
+    expect(composers()).toHaveLength(1)
+  })
+
+  it('has no right rail, no resize divider and no status picker', async () => {
+    mockFetch('proj-plain', { status: 'active' })
+    render(<ProjectDetail projectId="proj-plain" onBack={() => {}} />)
+    await screen.findByTestId('project-checklist')
+    expect(screen.queryByText('Project information')).toBeNull()
+    expect(screen.queryByRole('separator')).toBeNull()
+    expect(screen.queryByRole('radiogroup')).toBeNull()
+  })
+
+  it('Plan tab: Edit plan swaps in the editor with the plan body', async () => {
+    mockFetch('proj-plan', { status: 'archived', body: '# Plan body' })
+    render(<ProjectDetail projectId="proj-plan" onBack={() => {}} />)
+    const edit = await screen.findByRole('button', { name: 'Edit plan' })
+    await act(async () => { fireEvent.click(edit) })
+    expect(screen.getByTestId('project-editor').textContent).toBe('# Plan body')
+    expect(screen.getByRole('form', { name: 'Edit plan' })).toBeDefined()
+  })
+})
+
+describe('Plan updated (D15)', () => {
+  const agentRevision = {
+    body: 'latest plan',
+    planRevision: 3,
+    planSeenRevision: 1,
+    planUpdatedBy: 'agent',
+    planUpdatedAt: '2026-10-25T10:00:00.000Z',
+  }
+  const history = {
+    history: [
+      { ts: '2026-10-25T09:00:00.000Z', author: 'agent', body: 'seen version', revision: 1 },
+      { ts: '2026-10-25T09:30:00.000Z', author: 'agent', body: 'middle version', revision: 2 },
+    ],
   }
 
-  it('echoes the user message immediately on send — before the 202 lands (the refresh bug)', async () => {
-    let resolvePost: () => void = () => {}
-    const askCalls: string[] = []
-    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+  it('an unseen agent revision dots the Plan tab and shows the notice with the conversation', async () => {
+    mockFetch('proj-rev', agentRevision, { '/api/plugins/projects/proj-rev/history': () => history })
+    render(<ProjectDetail projectId="proj-rev" onBack={() => {}} />)
+    expect(await screen.findByText(/^Plan updated/)).toBeDefined()
+    expect(screen.getByRole('tab', { name: 'Plan updated' })).toBeDefined()
+  })
+
+  it('Review changes opens the Plan history against the last-seen revision and marks the new one seen', async () => {
+    const seen: unknown[] = []
+    mockFetch('proj-review', agentRevision, {
+      '/api/plugins/projects/proj-review/history': () => history,
+      '/api/plugins/projects/proj-review/plan/seen': (init) => { seen.push(JSON.parse(String(init?.body))); return { ok: true, planSeenRevision: 3 } },
+    })
+    render(<ProjectDetail projectId="proj-review" onBack={() => {}} />)
+    const review = await screen.findByRole('button', { name: 'Review changes' })
+    await act(async () => { fireEvent.click(review) })
+    expect(selectedTab()).toMatch(/^Plan/)
+    await waitFor(() => expect(seen).toEqual([{ revision: 3 }]))
+    // The comparison baseline is the version the user last saw (revision 1).
+    const diff = await screen.findByTestId('plan-history-diff')
+    expect(within(diff).getByText('seen version')).toBeDefined()
+    // The baseline is read BEFORE the revision is marked seen.
+    const calls = (globalThis.fetch as unknown as { mock: { calls: [string][] } }).mock.calls.map(([url]) => String(url))
+    expect(calls.findIndex(url => url.endsWith('/history'))).toBeLessThan(calls.findIndex(url => url.endsWith('/plan/seen')))
+  })
+
+  it('the baseline holds for the whole visit while the lead keeps revising', async () => {
+    const live = { ...agentRevision }
+    const snapshots = [...history.history]
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : String(input)
-      if (url === '/api/plugins/projects/proj-703') {
-        return { ok: true, json: async () => projectPayload(), text: async () => '' } as Response
-      }
-      if (url === '/api/plugins/projects/proj-703/ask') {
-        askCalls.push(String(init?.body))
-        await new Promise<void>((resolve) => { resolvePost = resolve })
-        return { ok: true, status: 202, json: async () => ({ ok: true, streaming: true }), text: async () => '' } as Response
-      }
-      if (url.endsWith('/history')) {
-        return { ok: true, json: async () => ({ history: [] }), text: async () => '' } as Response
-      }
+      if (url === '/api/plugins/projects/proj-hold') return Response.json(projectPayload('proj-hold', live))
+      if (url === '/api/plugins/projects/proj-hold/history') return Response.json({ history: snapshots })
+      if (url.endsWith('/plan/seen')) { live.planSeenRevision = live.planRevision; return Response.json({ ok: true }) }
+      if (url.endsWith('/brainstorm/seen')) return Response.json({ ok: true })
+      if (url.endsWith('/files')) return Response.json({ produced: [] })
       throw new Error(`Unexpected fetch: ${url}`)
     }) as unknown as typeof fetch
+    render(<ProjectDetail projectId="proj-hold" onBack={() => {}} />)
+    const review = await screen.findByRole('button', { name: 'Review changes' })
+    await act(async () => { fireEvent.click(review) })
+    await within(await screen.findByTestId('plan-history-diff')).findByText('seen version')
+    // Another agent revision lands while the user is still reviewing.
+    snapshots.push({ ts: '2026-10-25T09:45:00.000Z', author: 'agent', body: 'latest plan', revision: 3 })
+    Object.assign(live, { body: 'newest plan', planRevision: 4 })
+    await act(async () => { emitPluginEvent({ event: 'projects.changed', projectId: 'proj-hold' }) })
+    await within(screen.getByTestId('plan-history-diff')).findByText('newest plan')
+    expect(within(screen.getByTestId('plan-history-diff')).getByText('seen version')).toBeDefined()
+  })
 
+  it('a user\'s own revision raises nothing', async () => {
+    mockFetch('proj-own', { ...agentRevision, planUpdatedBy: 'user' })
+    render(<ProjectDetail projectId="proj-own" onBack={() => {}} />)
+    await screen.findByRole('tablist', { name: 'Project sections' })
+    expect(screen.queryByText(/^Plan updated/)).toBeNull()
+    expect(screen.getByRole('tab', { name: 'Plan' })).toBeDefined()
+  })
+})
+
+describe('ProjectDetail brainstorm durability (bakin#703)', () => {
+  it('echoes the user message immediately on send — before the 202 lands', async () => {
+    let resolvePost: () => void = () => {}
+    const askBodies: unknown[] = []
+    mockFetch('proj-703', {}, {
+      '/api/plugins/projects/proj-703/ask': async (init) => {
+        askBodies.push(JSON.parse(String(init?.body)))
+        await new Promise<void>((resolve) => { resolvePost = resolve })
+        return { ok: true, streaming: true }
+      },
+    })
     render(<ProjectDetail projectId="proj-703" onBack={() => {}} />)
     const input = await screen.findByTestId('chat-input')
     fireEvent.change(input, { target: { value: 'What next?' } })
     fireEvent.keyDown(input, { key: 'Enter' })
-
-    // Visible BEFORE the POST resolves — no refresh required.
     await waitFor(() => expect(screen.getByText('What next?')).toBeDefined())
-    expect(askCalls).toHaveLength(1)
+    // The lead answers unless the user picked a one-off consult.
+    expect(askBodies).toEqual([{ projectId: 'proj-703', prompt: 'What next?', agent: 'main' }])
     await act(async () => { resolvePost() })
   })
 
-  it('rehydrates a mid-flight turn on mount: partial rows + seeded streaming + live bus chunks', async () => {
-    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : String(input)
-      if (url === '/api/plugins/projects/proj-703') {
-        return {
-          ok: true,
-          json: async () => projectPayload({
-            brainstormMessages: [
-              { kind: 'user', ts: '2026-07-20T10:00:01.000Z', content: 'Long question' },
-              { kind: 'assistant', ts: '2026-07-20T10:00:02.000Z', agentId: 'main', content: 'Partial reply so far' },
-            ],
-            brainstormStreaming: true,
-          }),
-          text: async () => '',
-        } as Response
-      }
-      if (url.endsWith('/history')) {
-        return { ok: true, json: async () => ({ history: [] }), text: async () => '' } as Response
-      }
-      throw new Error(`Unexpected fetch: ${url}`)
-    }) as unknown as typeof fetch
+  it('answering the lead\'s question card sends the formatted answer to the lead', async () => {
+    const asks: unknown[] = []
+    const question = { v: 1, id: 'q_0123456789abcdef', question: 'Which inbox?', options: [{ label: 'Personal' }, { label: 'Work' }], recommended: 0, allowOther: true }
+    mockFetch('proj-ask', {
+      brainstormMessages: [
+        { kind: 'user', ts: '2026-10-25T10:00:00.000Z', content: 'help me clean my inbox' },
+        { kind: 'tool', ts: '2026-10-25T10:00:01.000Z', toolName: 'bakin_exec_ask_user', status: 'completed', metadata: { bakinQuestion: question } },
+      ],
+    }, { '/api/plugins/projects/proj-ask/ask': (init) => { asks.push(JSON.parse(String(init?.body))); return { ok: true } } })
+    render(<ProjectDetail projectId="proj-ask" onBack={() => {}} />)
+    const work = await screen.findByRole('button', { name: 'Work' })
+    await act(async () => { fireEvent.click(work) })
+    expect(asks).toEqual([{ projectId: 'proj-ask', prompt: '**Which inbox?** → Work', agent: 'main' }])
+  })
 
-    render(<ProjectDetail projectId="proj-703" onBack={() => {}} />)
-    // The incrementally-persisted partial reply is there on return...
+  it('rehydrates a mid-flight turn on mount and keeps streaming over the bus', async () => {
+    mockFetch('proj-live', {
+      brainstormMessages: [
+        { kind: 'user', ts: '2026-07-20T10:00:01.000Z', content: 'Long question' },
+        { kind: 'assistant', ts: '2026-07-20T10:00:02.000Z', agentId: 'main', content: 'Partial reply so far' },
+      ],
+      brainstormStreaming: true,
+    })
+    render(<ProjectDetail projectId="proj-live" onBack={() => {}} />)
     await waitFor(() => expect(screen.getByText('Partial reply so far')).toBeDefined())
-    // ...and the still-running turn keeps streaming over the bus.
     act(() => {
-      emitPluginEvent({
-        event: 'projects.brainstorm.chunk',
-        projectId: 'proj-703',
-        chunk: { type: 'text', content: 'live continuation' },
-      })
+      emitPluginEvent({ event: 'projects.brainstorm.chunk', projectId: 'proj-live', chunk: { type: 'text', content: 'live continuation' } })
     })
     await waitFor(() => expect(screen.getByText(/live continuation/)).toBeDefined())
+  })
+})
+
+describe('Files tab', () => {
+  it('lists what the project\'s tasks produced apart from what is attached', async () => {
+    mockFetch('proj-produced', {
+      status: 'completed',
+      assets: [{ assetId: 'brief', label: 'Brief' }],
+      resolvedAssets: [{ assetId: 'brief', label: 'Brief', type: 'text' }],
+    }, {
+      '/api/plugins/projects/proj-produced/files': () => ({
+        produced: [
+          { assetId: 'hero', type: 'images', description: 'Hero image', taskId: 'board-a' },
+          { assetId: 'brief', type: 'text', description: 'Brief', taskId: 'board-a' },
+        ],
+      }),
+    })
+    render(<ProjectDetail projectId="proj-produced" onBack={() => {}} />)
+    const produced = await screen.findByRole('list', { name: 'Produced files' })
+    expect(within(produced).getByText('Hero image')).toBeDefined()
+    // Already attached ⇒ listed once, under Attached.
+    expect(within(produced).queryByText('Brief')).toBeNull()
+    expect(within(screen.getByRole('list', { name: 'Attached files' })).getByText('Brief')).toBeDefined()
+  })
+
+
+  it('previews a non-image file without an image and links to the asset', async () => {
+    mockFetch('proj-files', {
+      status: 'completed',
+      assets: [{ assetId: '20260531-brief-abc12345', label: 'Launch brief' }],
+      resolvedAssets: [{ assetId: '20260531-brief-abc12345', label: 'Launch brief', type: 'pdf', description: 'Campaign planning PDF' }],
+    })
+    render(<ProjectDetail projectId="proj-files" onBack={() => {}} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Launch brief' }))
+    const dialog = await screen.findByRole('dialog', { name: /Launch brief/ })
+    expect(within(dialog).queryByRole('img')).toBeNull()
+    expect(within(dialog).getByRole('link', { name: 'Open asset' }).getAttribute('href')).toBe('/assets/20260531-brief-abc12345')
+  })
+
+  it('produced files reload when the project signals a board change', async () => {
+    let filesCalls = 0
+    mockFetch('proj-reload', { status: 'completed' }, { '/api/plugins/projects/proj-reload/files': () => { filesCalls++; return { produced: [] } } })
+    render(<ProjectDetail projectId="proj-reload" onBack={() => {}} />)
+    await screen.findByText('Nothing produced yet')
+    const before = filesCalls
+    await act(async () => { emitPluginEvent({ event: 'projects.changed', projectId: 'proj-reload', action: 'task.statusChanged' }) })
+    await waitFor(() => expect(filesCalls).toBeGreaterThan(before))
+  })
+
+  it('offers relink and detach for a missing file', async () => {
+    mockFetch('proj-missing', {
+      status: 'completed',
+      assets: [{ assetId: 'deleted-image.png', label: 'Deleted image' }],
+      resolvedAssets: [{ assetId: 'deleted-image.png', label: 'Deleted image', type: 'unknown', missing: true }],
+    }, {
+      '/api/plugins/assets/versioned': () => ({ assets: [{ assetId: '20260531-replacement-abc12345', type: 'images', description: 'Replacement image' }] }),
+    })
+    render(<ProjectDetail projectId="proj-missing" onBack={() => {}} />)
+    expect(await screen.findByText("can't find asset")).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: 'Relink Deleted image' }))
+    expect(await screen.findByText('20260531-replacement-abc12345')).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: 'Detach Deleted image' }))
+    expect(await screen.findByRole('dialog', { name: 'Detach file?' })).toBeDefined()
+    expect(screen.getByText(/Bakin can't find this file/)).toBeDefined()
   })
 })

@@ -4,13 +4,14 @@ import { DEFAULT_PLUGIN_UI_FIXTURE, PluginUiFixtureHost } from '@makinbakin/sdk/
 import { ProjectList } from '../components/project-list'
 import type { ProjectSummary } from '../types'
 
-// Scope the fixture to the real index page, not the unchanged detail/editor.
-// Deterministic data exercises the row
-// pattern's wrapping, status, progress, and attention treatment at both widths.
+// Scope the fixture to the real index page. Deterministic data exercises the
+// row pattern's wrapping, status and every resume signal at both widths; the
+// archived project stays out of "All".
 const projects: ProjectSummary[] = [
-  { id: 'launch', title: 'Spring menu launch with cross-team editorial review and publication approval', status: 'active', owner: 'Jessica', progress: 40, taskCount: 5, assetCount: 2, updated: '2026-01-15T10:00:00Z', brainstormStreaming: true },
-  { id: 'redesign', title: 'Food blog redesign', status: 'draft', owner: 'Pixel', progress: 0, taskCount: 3, assetCount: 0, updated: '2026-01-14T10:00:00Z', brainstormUnread: true },
-  { id: 'archive', title: 'Recipe archive migration', status: 'completed', owner: 'Rolo', progress: 100, taskCount: 4, assetCount: 0, updated: '2026-01-12T10:00:00Z' },
+  { id: 'launch', title: 'Spring menu launch with cross-team editorial review and publication approval', status: 'active', owner: 'Jessica', progress: 40, taskCount: 5, doneCount: 2, assetCount: 2, updated: '2026-01-15T10:00:00Z', brainstormStreaming: true },
+  { id: 'redesign', title: 'Food blog redesign', status: 'draft', owner: 'Pixel', progress: 0, taskCount: 3, doneCount: 0, assetCount: 0, updated: '2026-01-14T10:00:00Z', waitingForYou: true },
+  { id: 'menu', title: 'Holiday menu', status: 'active', owner: 'Pixel', progress: 25, taskCount: 4, doneCount: 1, assetCount: 0, updated: '2026-01-13T10:00:00Z', planUpdated: true },
+  { id: 'archive', title: 'Recipe archive migration', status: 'completed', owner: 'Rolo', progress: 100, taskCount: 4, doneCount: 4, assetCount: 0, updated: '2026-01-12T10:00:00Z' },
   { id: 'old', title: 'Previous seasonal menu', status: 'archived', owner: 'Jessica', progress: 100, taskCount: 2, assetCount: 1, updated: '2025-12-12T10:00:00Z' },
 ]
 

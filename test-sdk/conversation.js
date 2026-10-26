@@ -1,5 +1,5 @@
 import React from 'react'
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useImperativeHandle } from 'react'
 import { usePluginEvent, useNavBadge, toast, useAgent, useRouter } from './hooks.js'
 
 // Focused conversation-kit stubs mirroring `@makinbakin/sdk/conversation`.
@@ -13,13 +13,27 @@ function messageText(message, transformText) {
   if (message.kind === 'assistant') {
     return transformText ? transformText(message.content).text : message.content
   }
-  if (message.kind === 'tool') return `${message.toolName}${message.summary ? `: ${message.summary}` : ''}`
+  if (message.kind === 'tool') {
+    const question = message.metadata?.bakinQuestion
+    if (question?.question) return `Asked: ${question.question}`
+    return `${message.toolName}${message.summary ? `: ${message.summary}` : ''}`
+  }
   if (message.kind === 'error') return message.message
   if (message.kind === 'aborted') return 'Stopped'
   return ''
 }
 
+// Mirrors the kit: a card answer is an ordinary readable user message.
+export function formatQuestionAnswer(question, answer, note) {
+  const choice = answer.kind === 'option'
+    ? question.options[answer.index]?.label ?? ''
+    : answer.kind === 'other' ? answer.text.trim() : 'Not sure — help me choose'
+  const trimmedNote = note?.trim()
+  return `**${question.question}** → ${choice}${trimmedNote ? `\n\n${trimmedNote}` : ''}`
+}
+
 export function ConversationPanel({
+  composerHandleRef,
   chrome,
   autoFocus,
   className,
@@ -38,6 +52,12 @@ export function ConversationPanel({
   transformText,
 }) {
   const [draft, setDraft] = useState('')
+  const inputRef = useRef(null)
+  useImperativeHandle(composerHandleRef, () => ({
+    isEmpty: () => draft.trim() === '',
+    setText: text => setDraft(text),
+    focus: () => inputRef.current?.focus(),
+  }), [draft])
   const liveText = (liveChunks ?? [])
     .filter((chunk) => chunk.type === 'text')
     .map((chunk) => chunk.content ?? '')
@@ -63,15 +83,34 @@ export function ConversationPanel({
     },
     readOnly && readOnlyNotice ? readOnlyNotice : null,
     messages.length === 0 && !liveText ? emptyState : null,
-    ...messages.map((message, index) =>
-      React.createElement('div', { key: index, 'data-conv-kind': message.kind }, messageText(message, transformText)),
-    ),
+    ...messages.map((message, index) => {
+      const question = message.kind === 'tool' ? message.metadata?.bakinQuestion : undefined
+      if (question?.question && Array.isArray(question.options)) {
+        // Mirrors the kit: a card is answerable only while nothing came after
+        // it, never while a turn streams, and its answer is a normal send.
+        const answered = messages.slice(index + 1).some(row => row.kind === 'user')
+        const interactive = !answered && !streaming && !readOnly && onSend
+        return React.createElement(
+          'div',
+          { key: index, 'data-conv-kind': 'tool', 'data-conv-question': '', 'data-state': answered ? 'settled' : 'open' },
+          React.createElement('p', null, question.question),
+          ...question.options.map((option, optionIndex) => React.createElement('button', {
+            key: option.label,
+            type: 'button',
+            disabled: !interactive,
+            onClick: () => { void onSend(formatQuestionAnswer(question, { kind: 'option', index: optionIndex })) },
+          }, option.label)),
+        )
+      }
+      return React.createElement('div', { key: index, 'data-conv-kind': message.kind }, messageText(message, transformText))
+    }),
     ...extras,
     liveText ? React.createElement('div', { 'data-testid': 'live-text' }, liveText) : null,
     streaming ? React.createElement('div', { 'data-testid': 'thinking' }, 'thinking…') : null,
     agentControl ?? null,
     !readOnly && onSend
       ? React.createElement('textarea', {
+        ref: inputRef,
         'aria-label': placeholder,
         'data-testid': 'chat-input',
         value: draft,
@@ -97,28 +136,55 @@ export function Conversation({ turns = [] }) {
     React.createElement('div', { key: i }, turn.kind === 'user' ? turn.content : null)))
 }
 
-export function Composer({ onSend, placeholder }) {
+export function Composer({ onSend, placeholder, inputLabel, busy, disabled, handleRef, leadingSlot }) {
   const [draft, setDraft] = useState('')
-  return React.createElement('textarea', {
-    'aria-label': placeholder,
-    'data-testid': 'chat-input',
-    value: draft,
-    onChange: event => setDraft(event.target.value),
-    onKeyDown: event => {
-      if (event.key === 'Enter' && !event.shiftKey) {
-        event.preventDefault()
-        const value = event.currentTarget.value.trim()
-        if (value) {
-          setDraft('')
-          void onSend?.(value)
+  const inputRef = useRef(null)
+  useImperativeHandle(handleRef, () => ({
+    isEmpty: () => draft.trim() === '',
+    setText: text => setDraft(text),
+    focus: () => inputRef.current?.focus(),
+  }), [draft])
+  return React.createElement(
+    'div',
+    { 'data-testid': 'composer', 'data-busy': busy ? 'true' : undefined },
+    leadingSlot ?? null,
+    React.createElement('textarea', {
+      ref: inputRef,
+      'aria-label': inputLabel ?? placeholder,
+      placeholder,
+      'data-testid': 'chat-input',
+      value: draft,
+      disabled,
+      onChange: event => setDraft(event.target.value),
+      onKeyDown: event => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault()
+          const value = event.currentTarget.value.trim()
+          // The real composer clears its draft before handing the text off.
+          if (value && !busy && !disabled) {
+            setDraft('')
+            void onSend?.(value)
+          }
         }
-      }
-    },
-  })
+      },
+    }),
+  )
 }
 
-export function ConversationEmptyState({ title, description }) {
-  return React.createElement('div', { 'data-testid': 'conversation-empty' }, title, description)
+export function ConversationEmptyState({ title, description, suggestions, onSuggestion }) {
+  return React.createElement(
+    'section',
+    { 'data-testid': 'conversation-empty', 'aria-label': title },
+    React.createElement('h2', null, title),
+    description ? React.createElement('p', null, description) : null,
+    onSuggestion && suggestions?.length
+      ? React.createElement('div', null, ...suggestions.map(suggestion => React.createElement(
+          'button',
+          { key: suggestion, type: 'button', onClick: () => onSuggestion(suggestion) },
+          suggestion,
+        )))
+      : null,
+  )
 }
 
 export function ThinkingIndicator({ label = 'thinking' }) {
@@ -230,6 +296,14 @@ export function useConversationThread(options) {
     if (optionsRef.current.keyOf(payload) === activeKeyRef.current) settle(payload)
   })
 
+  const streamingRef = useRef(streaming)
+  streamingRef.current = streaming
+  usePluginEvent(events.appended ?? '__conv_thread_no_appended__', payload => {
+    if (optionsRef.current.keyOf(payload) !== activeKeyRef.current) return
+    if (streamingRef.current) return
+    void loadTranscript()
+  })
+
   const send = useCallback(async (content, attachments) => {
     const key = activeKeyRef.current
     if (!key) return
@@ -320,4 +394,6 @@ export function useConversationAttention(config) {
 
 // Browser fixtures use the real SDK. This export keeps the workspace import
 // contract complete without pretending the stub exercises draft persistence.
-export function writeComposerDraft() {}
+// Records seeded drafts so tests can assert them.
+export const composerDrafts = new Map()
+export function writeComposerDraft(storageKey, value) { composerDrafts.set(storageKey, value) }

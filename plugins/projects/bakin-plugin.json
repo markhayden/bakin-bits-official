@@ -1,8 +1,8 @@
 {
   "id": "projects",
   "name": "Projects",
-  "version": "0.11.4",
-  "bakin": ">=0.0.1-rc.41",
+  "version": "0.12.0",
+  "bakin": ">=0.0.1-rc.45",
   "description": "Project management with specs, checklists, task linking, and agent access via MCP tools",
   "contentFiles": [],
   "secrets": [],
@@ -65,15 +65,11 @@
       },
       {
         "path": "/projects/new",
-        "summary": "Create project"
+        "summary": "Start a project"
       },
       {
         "path": "/projects/[id]",
         "summary": "Project detail"
-      },
-      {
-        "path": "/projects/[id]/edit",
-        "summary": "Edit project"
       }
     ],
     "apiRoutes": [
@@ -172,6 +168,16 @@
         ]
       },
       {
+        "method": "GET",
+        "path": "/:projectId/files",
+        "summary": "Files produced by the project's board tasks",
+        "permissions": [
+          "storage.read",
+          "tasks.read",
+          "assets.read"
+        ]
+      },
+      {
         "method": "POST",
         "path": "/:projectId/assets",
         "summary": "Attach an asset",
@@ -240,6 +246,14 @@
         ]
       },
       {
+        "method": "POST",
+        "path": "/:projectId/plan/seen",
+        "summary": "Mark a plan revision as seen",
+        "permissions": [
+          "storage.write"
+        ]
+      },
+      {
         "method": "GET",
         "path": "/:projectId/history",
         "summary": "Plan body snapshot history (oldest first)",
@@ -295,13 +309,6 @@
         ]
       },
       {
-        "name": "bakin_exec_projects_delete",
-        "summary": "Delete a project",
-        "permissions": [
-          "storage.write"
-        ]
-      },
-      {
         "name": "bakin_exec_projects_add_item",
         "summary": "Add a checklist item",
         "permissions": [
@@ -311,13 +318,6 @@
       {
         "name": "bakin_exec_projects_mark_item",
         "summary": "Mark a checklist item",
-        "permissions": [
-          "storage.write"
-        ]
-      },
-      {
-        "name": "bakin_exec_projects_remove_item",
-        "summary": "Remove a checklist item",
         "permissions": [
           "storage.write"
         ]
@@ -431,15 +431,6 @@
         }
       },
       {
-        "name": "projects:delete",
-        "usage": "bakin projects delete <projectId>",
-        "summary": "Delete a project",
-        "dispatch": {
-          "type": "execTool",
-          "name": "bakin_exec_projects_delete"
-        }
-      },
-      {
         "name": "projects:add-item",
         "usage": "bakin projects add-item <projectId> <title>",
         "summary": "Add a checklist item",
@@ -464,15 +455,6 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_update_item"
-        }
-      },
-      {
-        "name": "projects:remove-item",
-        "usage": "bakin projects remove-item <projectId> <taskItemId>",
-        "summary": "Remove a checklist item",
-        "dispatch": {
-          "type": "execTool",
-          "name": "bakin_exec_projects_remove_item"
         }
       },
       {
@@ -528,12 +510,6 @@
           "type": "execTool",
           "name": "bakin_exec_projects_ask"
         }
-      }
-    ],
-    "settings": [
-      {
-        "key": "defaultOwner",
-        "summary": "Default project owner when no owner is supplied"
       }
     ],
     "docs": {

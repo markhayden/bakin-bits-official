@@ -323,3 +323,9 @@ export function usePluginEvent(event, handler) {
     }
   }, [event])
 }
+
+export function useMediaQuery(query) {
+  const override = hookOverride('useMediaQuery')
+  if (override) return override(query)
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia(query).matches : false
+}

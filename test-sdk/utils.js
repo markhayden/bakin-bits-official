@@ -151,3 +151,49 @@ export function formatDateTime(timestamp) {
   const sameYear = d.getFullYear() === now.getFullYear()
   return `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) })} ${time}`
 }
+
+// Structured-question validation (mirrors core `questions.ts` field limits).
+export const QUESTION_LIMITS = Object.freeze({
+  question: 200, label: 60, description: 160, minOptions: 2, maxOptions: 5, serializedBytes: 2048,
+})
+
+const QUESTION_KEYS = new Set(['question', 'options', 'recommended', 'allowOther'])
+const ENVELOPE_KEYS = new Set(['v', 'id', ...QUESTION_KEYS])
+
+function questionFieldsError(value, allowedKeys = QUESTION_KEYS) {
+  if (!value || typeof value !== 'object') return 'invalid question'
+  if (Object.keys(value).some(key => !allowedKeys.has(key))) return 'unknown field'
+  const text = (v, max) => typeof v === 'string' && v.trim().length > 0 && v.length <= max
+  if (!text(value.question, QUESTION_LIMITS.question)) return 'question: invalid'
+  const options = value.options
+  if (!Array.isArray(options) || options.length < QUESTION_LIMITS.minOptions || options.length > QUESTION_LIMITS.maxOptions) {
+    return 'options: invalid'
+  }
+  for (const option of options) {
+    if (!option || !text(option.label, QUESTION_LIMITS.label)) return 'options: invalid label'
+    if (option.description !== undefined && !text(option.description, QUESTION_LIMITS.description)) return 'options: invalid description'
+  }
+  if (value.recommended !== undefined
+    && !(Number.isInteger(value.recommended) && value.recommended >= 0 && value.recommended < options.length)) {
+    return 'recommended must index one of the options'
+  }
+  const labels = options.map(option => option.label.toLowerCase())
+  if (new Set(labels).size !== labels.length) return 'options: option labels must be unique'
+  // Measured as the minted envelope, like the real schema.
+  const envelope = { v: 1, id: 'q_0000000000000000', ...value }
+  if (new TextEncoder().encode(JSON.stringify(envelope)).length > QUESTION_LIMITS.serializedBytes) return 'question is too large'
+  return null
+}
+
+export function validateBakinQuestionInput(value) {
+  const error = questionFieldsError(value)
+  if (error) return { ok: false, error }
+  return { ok: true, value: { ...value, allowOther: value.allowOther ?? true } }
+}
+
+export function parseBakinQuestion(value) {
+  if (questionFieldsError(value, ENVELOPE_KEYS)) return null
+  if (value.v !== 1 || typeof value.id !== 'string' || !/^q_[a-z0-9]{16}$/.test(value.id)) return null
+  if (typeof value.allowOther !== 'boolean') return null
+  return value
+}

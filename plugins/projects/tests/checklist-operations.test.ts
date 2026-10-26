@@ -6,6 +6,8 @@ import { createProjectRepository, parseProject, serializeProject } from '../lib/
 import { createProjectService } from '../lib/project-service'
 import { createTestContext } from '../test-helpers'
 
+const USER = { kind: 'user' } as const
+
 let root: string
 let setup: ReturnType<typeof createTestContext>
 let repo: ReturnType<typeof createProjectRepository>
@@ -16,7 +18,7 @@ beforeEach(async () => {
   setup = createTestContext('projects', root)
   repo = createProjectRepository(setup.ctx.storage)
   service = createProjectService(setup.ctx, repo)
-  id = (await service.createProject({ title: 'Project' })).id
+  id = (await service.createProject({ titleSource: 'user', title: 'Project' })).id
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 
@@ -31,7 +33,7 @@ it('replays a lost add response across service restart and concurrent requests',
 
 it('does not resurrect a deleted add result or confuse a reused display ID', async () => {
   const first = await service.addChecklistItem(id, 'Original', 'request-one')
-  await service.removeChecklistItem(id, first.taskItemId)
+  await service.removeChecklistItem(id, first.taskItemId, USER)
   const replacement = await service.addChecklistItem(id, 'Replacement', 'request-two')
   expect(replacement.taskItemId).toBe(first.taskItemId)
   expect(await service.addChecklistItem(id, 'Original', 'request-one')).toMatchObject({ taskItemId: first.taskItemId, deleted: true })
@@ -52,7 +54,7 @@ it('commits the receipt with its item and can retry a failed replacement', async
 it('retains receipts for deleted items without silently accepting corrupt metadata', async () => {
   for (let i = 0; i < 30; i++) {
     const result = await service.addChecklistItem(id, `Task ${i}`, `request-${i}`)
-    await service.removeChecklistItem(id, result.taskItemId)
+    await service.removeChecklistItem(id, result.taskItemId, USER)
   }
   const project = repo.readProject(id)!
   expect(parseProject(serializeProject(project)).operations).toHaveLength(30)
@@ -69,7 +71,7 @@ it('coalesces concurrent promotions and permits hooks to reenter the project ser
   let calls = 0
   setup.ctx.tasks.create = async input => {
     calls++
-    await service.updateProject(id, { owner: 'hook-agent' })
+    await service.updateProject(id, { owner: 'hook-agent' }, USER)
     return create(input)
   }
   const results = await Promise.all(Array.from({ length: 8 }, () => service.promoteItemToTask(id, taskItemId, { requestId: 'promote-request' })))
@@ -108,7 +110,7 @@ it('does not link a replacement item or resurrect a deleted project after creati
   const create = setup.ctx.tasks.create
   setup.ctx.tasks.create = async input => {
     const task = await create(input)
-    await service.removeChecklistItem(id, taskItemId)
+    await service.removeChecklistItem(id, taskItemId, USER)
     await service.addChecklistItem(id, 'Replacement')
     return task
   }
@@ -118,18 +120,25 @@ it('does not link a replacement item or resurrect a deleted project after creati
   expect(await setup.ctx.tasks.list()).toHaveLength(1)
 })
 
-it('rejects a foreign task collision and never recreates a deleted completed promotion', async () => {
+it('rejects a foreign task collision without creating a task', async () => {
   const { taskItemId } = await service.addChecklistItem(id, 'Promote')
   const get = setup.ctx.tasks.get
   setup.ctx.tasks.get = async taskId => ({ id: taskId, projectId: 'foreign', source: {} }) as never
   await expect(service.promoteItemToTask(id, taskItemId)).rejects.toMatchObject({ status: 409 })
   expect(await setup.ctx.tasks.list()).toHaveLength(0)
   setup.ctx.tasks.get = get
-  const result = await service.promoteItemToTask(id, taskItemId)
+})
+
+it('after its board task is deleted, a fresh promotion works while a late retry of the old one still conflicts', async () => {
+  const { taskItemId } = await service.addChecklistItem(id, 'Promote')
+  const result = await service.promoteItemToTask(id, taskItemId, { requestId: 'first-request' })
   await setup.ctx.tasks.remove(result.taskId)
-  await service.autoUnlinkTask(result.taskId)
-  await expect(service.promoteItemToTask(id, taskItemId)).rejects.toMatchObject({ status: 409 })
+  await service.unlinkMissingTask(id, result.taskId)
+  await expect(service.promoteItemToTask(id, taskItemId, { requestId: 'first-request' })).rejects.toMatchObject({ status: 409, code: 'promotion_retired' })
   expect(await setup.ctx.tasks.list()).toHaveLength(0)
+  const again = await service.promoteItemToTask(id, taskItemId)
+  expect(again.taskId).not.toBe(result.taskId)
+  expect(await setup.ctx.tasks.list()).toHaveLength(1)
 })
 
 
