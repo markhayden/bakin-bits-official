@@ -10,7 +10,7 @@ import {
   computeProgress,
   nextTaskItemId,
 } from './parser'
-import type { ChecklistPromotionOperation, MutationCaller, Project, ProjectTask, ProjectStatus, TitleSource } from '../types'
+import type { ChecklistPromotionOperation, MutationCaller, Project, ProjectKickoff, ProjectTask, ProjectStatus, TitleSource } from '../types'
 import { assertItemIdentity, assertExpectedFields, ProjectMutationError, validateItemPatch, validateProjectPatch } from './project-mutations'
 
 const log = {
@@ -53,6 +53,14 @@ export interface CreateProjectOpts {
   body?: string
   owner?: string
   tasks?: string[]
+}
+
+/** The start screen's first send (D8). */
+export interface KickoffProjectOpts {
+  requestId: string
+  title: string
+  owner: string
+  message: string
 }
 
 export interface UpdateProjectOpts {
@@ -124,6 +132,10 @@ export interface ProjectService {
   getProjectForTask(boardTaskId: string): TaskLinkEntry | undefined
   getProjectTitleForTask(boardTaskId: string): string | null
   createProject(opts: CreateProjectOpts): Promise<{ id: string; taskItems: { id: string; title: string }[] }>
+  /** Idempotent create keyed by `requestId`: a retry returns the same project. */
+  kickoffProject(opts: KickoffProjectOpts): Promise<{ id: string; created: boolean; kickoff: ProjectKickoff }>
+  /** Compare-and-set the kickoff state; false when the receipt moved on. */
+  advanceKickoff(id: string, requestId: string, from: ProjectKickoff['state'], to: ProjectKickoff['state']): Promise<boolean>
   updateProject(id: string, updates: UpdateProjectOpts, caller: MutationCaller, expected?: UpdateProjectOpts): Promise<void>
   applyProjectPlan(id: string, updates: ApplyProjectPlanOpts, caller: MutationCaller): Promise<ApplyProjectPlanResult>
   /** Restore a plan snapshot by history index; snapshots the current body first (bakin#703). */
@@ -233,6 +245,41 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       ctx.activity.audit('created', project.owner, { id, title: project.title })
       broadcast({ type: 'project.created', id, title: project.title })
       return { id, taskItems: taskItems.map(t => ({ id: t.id, title: t.title })) }
+    })
+  }
+
+  async function kickoffProject(opts: KickoffProjectOpts): Promise<{ id: string; created: boolean; kickoff: ProjectKickoff }> {
+    if (!/^[a-zA-Z0-9_-]{8,128}$/.test(opts.requestId)) {
+      throw new ProjectMutationError('Invalid create request identity.', 400, 'invalid_request_id')
+    }
+    const title = opts.title.trim()
+    const message = opts.message.trim()
+    if (!title || !message) throw new ProjectMutationError('A first message is required.', 400, 'invalid_request')
+    return withProjectLock(() => {
+      const existing = repo.readAllProjects().find(project => project.kickoff?.requestId === opts.requestId)
+      if (existing) return { id: existing.id, created: false, kickoff: existing.kickoff! }
+      const id = generateProjectId()
+      const now = new Date().toISOString()
+      const kickoff: ProjectKickoff = { requestId: opts.requestId, state: 'pending', message, agentId: opts.owner }
+      repo.writeProject({
+        id, title, titleSource: 'fallback', status: 'draft', created: now, updated: now,
+        owner: opts.owner, tasks: [], assets: [], body: '', progress: 0, kickoff,
+      })
+      ctx.activity.audit('created', opts.owner, { id, title })
+      broadcast({ type: 'project.created', id, title })
+      return { id, created: true, kickoff }
+    })
+  }
+
+  async function advanceKickoff(id: string, requestId: string, from: ProjectKickoff['state'], to: ProjectKickoff['state']): Promise<boolean> {
+    return withProjectLock(() => {
+      const project = repo.readProject(id)
+      const kickoff = project?.kickoff
+      if (!project || !kickoff || kickoff.requestId !== requestId || kickoff.state !== from) return false
+      // Settled receipts keep only the dedupe identity.
+      project.kickoff = to === 'settled' ? { requestId, state: to } : { ...kickoff, state: to }
+      repo.writeProject(project)
+      return true
     })
   }
 
@@ -684,6 +731,8 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     derive,
     rebuildIndex,
     restorePlanVersion,
+    kickoffProject,
+    advanceKickoff,
     getProjectForTask,
     getProjectTitleForTask,
     createProject,

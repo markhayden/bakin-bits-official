@@ -18,6 +18,8 @@ const log = {
 }
 
 let activeProjectRepository: ReturnType<typeof createProjectRepository> | null = null
+/** Bound in activate(); onReady resumes kickoffs a crash left pending (D8). */
+let resumePendingKickoffs: (() => Promise<void>) | null = null
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -237,7 +239,51 @@ const projectsPlugin: BakinPlugin = {
         workClass: 'chat',
         runId: (key, turnId) => `brainstorm:projects:${key}:turn:${turnId}`,
       },
+      hooks: {
+        // The kickoff receipt rides until its first turn settles (D8).
+        onSettled: async ({ key }) => {
+          const kickoff = readProject(key)?.kickoff
+          if (kickoff?.state === 'started') await projectService.advanceKickoff(key, kickoff.requestId, 'started', 'settled')
+        },
+      },
     })
+
+    /**
+     * Start a pending kickoff's first brainstorm turn — the SAME path as
+     * /ask. `started` is written only after the engine accepts, so a retry
+     * or the boot sweep can never start it twice; a busy engine leaves it
+     * pending for the next attempt.
+     */
+    async function startKickoff(projectId: string): Promise<void> {
+      const project = readProject(projectId)
+      const kickoff = project?.kickoff
+      if (!project || kickoff?.state !== 'pending' || !kickoff.message) return
+      const result = await brainstormTurns.start(ctx, projectId, kickoff.message, {
+        agentId: kickoff.agentId ?? project.owner,
+        runtimeContent: buildProjectBrainstormContext(await derive(project), kickoff.message),
+      })
+      if (result === 'accepted') await projectService.advanceKickoff(projectId, kickoff.requestId, 'pending', 'started')
+    }
+
+    resumePendingKickoffs = async () => {
+      for (const project of readAllProjects()) {
+        const kickoff = project.kickoff
+        if (!kickoff || kickoff.state === 'settled') continue
+        try {
+          // A turn alive at boot died with the process (the interrupted-turn
+          // sweep already stamped its transcript). The engine persists the
+          // user row BEFORE accepting, so a pending receipt with a transcript
+          // was accepted too — settle both; only a truly unstarted kickoff runs.
+          if (kickoff.state === 'started' || readBrainstormMessages(project.id).length > 0) {
+            await projectService.advanceKickoff(project.id, kickoff.requestId, kickoff.state, 'settled')
+          } else {
+            await startKickoff(project.id)
+          }
+        } catch (err) {
+          log.error('kickoff resume failed', err, { projectId: project.id })
+        }
+      }
+    }
 
     // ─── Search Content Type Registration ─────────────────────────────
 
@@ -423,10 +469,25 @@ const projectsPlugin: BakinPlugin = {
     }
     routeHandlers.set('GET /:projectId', getHandler)
 
-    // POST / — create project
+    // POST / — create project. With `requestId` + `firstMessage` it is the
+    // start screen's idempotent kickoff (D8): a retry returns the same
+    // project and never starts a second first turn.
     const createHandler = async (req: Request) => {
-      const body = await readBody<{ title: string; body?: string; owner?: string; tasks?: string[] }>(req)
+      const body = await readBody<{ title: string; body?: string; owner?: string; tasks?: string[]; requestId?: string; firstMessage?: string }>(req)
       if (!body.title) return json({ error: 'Missing title' }, 400)
+      if (body.requestId !== undefined || body.firstMessage !== undefined) {
+        try {
+          const owner = body.owner || await getRuntimeMainAgentId(ctx)
+          const result = await projectService.kickoffProject({
+            requestId: body.requestId ?? '', title: body.title, owner, message: body.firstMessage ?? '',
+          })
+          if (result.kickoff.state === 'pending') await startKickoff(result.id)
+          if (result.created) indexProject(result.id).catch(() => {})
+          return json({ ok: true, id: result.id, created: result.created })
+        } catch (error) {
+          return mutationFailure(error)
+        }
+      }
       const owner = body.owner ?? await getRuntimeMainAgentId(ctx)
       const result = await createProject({ ...body, owner, titleSource: 'user' })
       ctx.activity.audit('created', owner, { projectId: result.id, title: body.title })
@@ -1128,6 +1189,7 @@ const projectsPlugin: BakinPlugin = {
   },
 
   onReady() {
+    void resumePendingKickoffs?.()
     const projects = activeProjectRepository?.readAllProjects() ?? []
     const byStatus: Record<string, number> = {}
     for (const p of projects) {
@@ -1138,6 +1200,7 @@ const projectsPlugin: BakinPlugin = {
 
   onShutdown() {
     activeProjectRepository = null
+    resumePendingKickoffs = null
     log.info('Projects plugin shutting down')
   },
 }

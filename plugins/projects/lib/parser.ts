@@ -70,6 +70,13 @@ export const BRAINSTORM_ROW_CAP = 300
 // Parse / Serialize
 // ---------------------------------------------------------------------------
 
+const kickoffSchema = z.object({
+  requestId: z.string().min(8).max(128),
+  state: z.enum(['pending', 'started', 'settled']),
+  message: z.string().optional(),
+  agentId: z.string().optional(),
+}).strict()
+
 const operationsSchema = z.array(z.discriminatedUnion('kind', [z.object({
   kind: z.literal('add-checklist'), requestId: z.string().min(8).max(128),
   title: z.string().min(1), taskItemId: z.string().min(1),
@@ -118,6 +125,7 @@ export function parseProject(content: string): Project {
     owner: String(raw.owner || ''),
     tasks,
     assets,
+    ...(raw.kickoff === undefined ? {} : { kickoff: kickoffSchema.parse(raw.kickoff) }),
     ...(raw.operations === undefined ? {} : { operations: operationsSchema.parse(raw.operations) }),
   }
 

@@ -32,6 +32,18 @@ export type TitleSource = (typeof TITLE_SOURCES)[number]
 /** Who is writing: agent tool calls are held to the authority rules (D9a). */
 export type MutationCaller = { kind: 'user' } | { kind: 'agent'; agentId: string }
 
+/**
+ * Kickoff receipt (D8): the start screen's first send. `requestId` dedupes a
+ * retried create for the project's whole life; `message`/`agentId` ride along
+ * until the first turn settles, then drop (the transcript holds them).
+ */
+export interface ProjectKickoff {
+  requestId: string
+  state: 'pending' | 'started' | 'settled'
+  message?: string
+  agentId?: string
+}
+
 export interface ProjectFrontmatter {
   id: string
   title: string
@@ -42,6 +54,7 @@ export interface ProjectFrontmatter {
   owner: string
   tasks: ProjectTask[]
   assets: ProjectAsset[]
+  kickoff?: ProjectKickoff
   /** Private durable mutation receipts; omitted from browser projections. */
   operations?: (ChecklistAddOperation | ChecklistPromotionOperation)[]
 }

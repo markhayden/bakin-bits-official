@@ -61,6 +61,19 @@ import { MarkdownStorageAdapter } from '../test-helpers'
 // ---------------------------------------------------------------------------
 
 /** Create a project markdown file directly on disk for read-only tests. */
+/** Poll an async condition (the turn engine settles on its own schedule). */
+async function waitUntil(cond: () => Promise<boolean>, { label, timeoutMs = 2000 }: { label: string; timeoutMs?: number }): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!(await cond())) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`)
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+}
+
+async function waitForKickoff(projectId: string, state: string): Promise<void> {
+  await waitUntil(async () => ((await readViaTool(projectId)).kickoff as { state?: string } | undefined)?.state === state, { label: `kickoff ${state}` })
+}
+
 async function readViaTool(projectId: string): Promise<Record<string, unknown>> {
   const result = await callTool(findTool(plugin.execTools, 'bakin_exec_projects_get')!, { projectId })
   return result.project as Record<string, unknown>
@@ -68,7 +81,7 @@ async function readViaTool(projectId: string): Promise<Record<string, unknown>> 
 
 function writeProjectFixture(
   id: string,
-  opts: { title?: string; titleSource?: string; status?: string; tasks?: Array<{ id: string; title: string; checked: boolean; taskId?: string }>; assets?: Array<{ assetId: string; label?: string }>; body?: string; owner?: string } = {},
+  opts: { extra?: Record<string, unknown>; title?: string; titleSource?: string; status?: string; tasks?: Array<{ id: string; title: string; checked: boolean; taskId?: string }>; assets?: Array<{ assetId: string; label?: string }>; body?: string; owner?: string } = {},
 ) {
   const title = opts.title ?? `Project ${id}`
   const status = opts.status ?? 'active'
@@ -82,6 +95,7 @@ function writeProjectFixture(
     id,
     title,
     ...(opts.titleSource ? { titleSource: opts.titleSource } : {}),
+    ...opts.extra,
     status,
     created: now,
     updated: now,
@@ -790,6 +804,72 @@ describe('Routes', () => {
         { kind: 'assistant', content: 'Hello world' },
       ])
       expect(hydrated.body.project.brainstormStreaming).toBe(false)
+    })
+
+    describe('kickoff create (D8)', () => {
+      const createRoute = () => findRoute(plugin.routes, 'POST', '/')!
+      const kickoffBody = { requestId: 'req-kickoff-0001', title: 'Clean up my inbox', firstMessage: 'Help me clean up my inbox' }
+
+      it('creates a fallback-titled draft and starts the first turn on the turn engine', async () => {
+        const streamMock = mockRuntimeStream(['On it.'])
+        const settled = nextSettle()
+        const { status, body } = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        expect(status).toBe(200)
+        expect(body).toMatchObject({ ok: true, created: true })
+        await settled
+        expect(streamMock).toHaveBeenCalledTimes(1)
+        expect(String(streamMock.mock.calls[0]?.[0]?.content)).toContain('Help me clean up my inbox')
+        const project = await readViaTool(body.id as string)
+        expect(project).toMatchObject({ title: 'Clean up my inbox', titleSource: 'fallback', status: 'draft' })
+        await waitForKickoff(body.id as string, 'settled')
+        expect((await readViaTool(body.id as string)).kickoff).toEqual({ requestId: 'req-kickoff-0001', state: 'settled' })
+      })
+
+      it('a retried create (lost response) returns the same project and never a second turn', async () => {
+        const streamMock = mockRuntimeStream(['On it.'])
+        const settled = nextSettle()
+        const [first, second] = await Promise.all([
+          callRoute(createRoute(), plugin.ctx, { body: kickoffBody }),
+          callRoute(createRoute(), plugin.ctx, { body: kickoffBody }),
+        ])
+        await settled
+        const third = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        expect(new Set([first.body.id, second.body.id, third.body.id]).size).toBe(1)
+        expect([first.body.created, second.body.created, third.body.created].filter(Boolean)).toHaveLength(1)
+        expect(streamMock).toHaveBeenCalledTimes(1)
+      })
+
+      it('the boot resume starts a crash-orphaned pending kickoff exactly once', async () => {
+        writeProjectFixture('proj-orphan', {
+          title: 'Orphan', status: 'draft',
+          extra: { kickoff: { requestId: 'req-orphan-0001', state: 'pending', message: 'Plan my garden', agentId: 'main' } },
+        })
+        const streamMock = mockRuntimeStream(['Sure.'])
+        const settled = nextSettle()
+        await projectsPlugin.onReady!()
+        await settled
+        await projectsPlugin.onReady!()
+        expect(streamMock).toHaveBeenCalledTimes(1)
+        await waitForKickoff('proj-orphan', 'settled')
+      })
+
+      it('a pending kickoff whose turn was already accepted settles without a second turn', async () => {
+        writeProjectFixture('proj-accepted', {
+          title: 'Accepted', status: 'draft',
+          extra: { kickoff: { requestId: 'req-accept-0001', state: 'pending', message: 'Plan my garden', agentId: 'main' } },
+        })
+        writeFileSync(join(projectsDir, 'proj-accepted.brainstorm.json'), JSON.stringify([{ kind: 'user', ts: '2026-10-25T00:00:00.000Z', content: 'Plan my garden' }]))
+        const streamMock = mockRuntimeStream(['Sure.'])
+        await projectsPlugin.onReady!()
+        expect(streamMock).not.toHaveBeenCalled()
+        expect((await readViaTool('proj-accepted')).kickoff).toEqual({ requestId: 'req-accept-0001', state: 'settled' })
+      })
+
+      it('rejects a malformed request identity', async () => {
+        const { status, body } = await callRoute(createRoute(), plugin.ctx, { body: { ...kickoffBody, requestId: 'x' } })
+        expect(status).toBe(400)
+        expect(body.code).toBe('invalid_request_id')
+      })
     })
 
     it('instructs brainstorm agents to treat the plan as the primary artifact: apply incremental edits, ask before big rewrites', async () => {
