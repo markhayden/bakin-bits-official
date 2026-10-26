@@ -29,7 +29,8 @@ function getProjectLock(): { queue: Promise<void> } {
   return g.__bakinProjectLock as { queue: Promise<void> }
 }
 
-function withProjectLock<T>(fn: () => T | Promise<T>): Promise<T> {
+/** The ONE project-file lock — every read-modify-write of a project runs inside it. */
+export function withProjectLock<T>(fn: () => T | Promise<T>): Promise<T> {
   const lock = getProjectLock()
   const next = lock.queue.then(fn, fn) as Promise<T>
   lock.queue = next.then(() => {}, () => {})
@@ -151,6 +152,8 @@ export interface ProjectService {
   detachAsset(projectId: string, assetId: string): Promise<void>
   updateAssetLabel(projectId: string, assetId: string, label: string): Promise<void>
   promoteItemToTask(projectId: string, taskItemId: string, opts?: PromoteItemOpts): Promise<{ taskId: string }>
+  /** Pause or resume check-ins (D29) — the user's control; status is untouched. */
+  setStewardPaused(id: string, paused: boolean): Promise<void>
   /** Unlink a step whose board task no longer exists (read-path reconciliation). */
   unlinkMissingTask(projectId: string, boardTaskId: string): Promise<void>
   /**
@@ -693,6 +696,19 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     })
   }
 
+  async function setStewardPaused(id: string, paused: boolean): Promise<void> {
+    await withProjectLock(() => {
+      const project = repo.readProject(id)
+      if (!project) throw new ProjectMutationError(`Project not found: ${id}`, 404, 'not_found')
+      if (Boolean(project.stewardPaused) === paused) return
+      if (paused) project.stewardPaused = true
+      else delete project.stewardPaused
+      repo.writeProject(project)
+      ctx.activity.audit(paused ? 'steward.paused' : 'steward.resumed', project.owner, { id })
+      broadcast({ type: 'project.updated', id, title: project.title })
+    })
+  }
+
   async function unlinkMissingTask(projectId: string, boardTaskId: string): Promise<void> {
     await withProjectLock(() => {
       const project = repo.readProject(projectId)
@@ -807,6 +823,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     detachAsset,
     updateAssetLabel,
     promoteItemToTask,
+    setStewardPaused,
     unlinkMissingTask,
     reconcileLinks,
     resolveLinkedTaskStatuses,

@@ -1,7 +1,7 @@
 {
   "id": "projects",
   "name": "Projects",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "bakin": ">=0.0.1-rc.45",
   "description": "Project management with specs, checklists, task linking, and agent access via MCP tools",
   "contentFiles": [],
@@ -226,6 +226,14 @@
         ]
       },
       {
+        "method": "POST",
+        "path": "/:projectId/steward/pause",
+        "summary": "Pause or resume the lead's check-ins (operator only)",
+        "permissions": [
+          "storage.write"
+        ]
+      },
+      {
         "method": "GET",
         "path": "/brainstorm/attention",
         "summary": "Brainstorm attention totals (unread + in-flight)",
@@ -377,6 +385,30 @@
         "permissions": [
           "runtime.messaging",
           "storage.read"
+        ]
+      },
+      {
+        "name": "bakin_exec_projects_checkin",
+        "summary": "Report a project check-in in the project conversation",
+        "permissions": [
+          "storage.write",
+          "tasks.read"
+        ]
+      },
+      {
+        "name": "bakin_exec_projects_request_input",
+        "summary": "Ask the user a decision during a project check-in",
+        "permissions": [
+          "storage.write",
+          "tasks.read"
+        ]
+      },
+      {
+        "name": "bakin_exec_projects_request_signoff",
+        "summary": "Ask the user to sign off a deliverable or the project's completion",
+        "permissions": [
+          "storage.write",
+          "tasks.write"
         ]
       }
     ],

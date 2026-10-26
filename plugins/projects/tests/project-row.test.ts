@@ -14,3 +14,11 @@ it('ranks waiting › working › new reply › plan updated › progress', () =
   expect(resumeSignal(base, 'Roscoe').text).toBe('1 of 4 steps done')
   expect(resumeSignal({ ...base, taskCount: 0 }, 'Roscoe').text).toBe('No steps yet')
 })
+
+it('steward signals: needs approval leads; stuck outranks plan updated; a used-up day is quiet', () => {
+  expect(resumeSignal({ ...base, needsApproval: true, waitingForYou: true }, 'Roscoe')).toEqual({ text: 'Needs approval', tone: 'attention' })
+  expect(resumeSignal({ ...base, stuck: true, planUpdated: true }, 'Roscoe')).toEqual({ text: 'Stuck', tone: 'attention' })
+  expect(resumeSignal({ ...base, brainstormUnread: true, stuck: true }, 'Roscoe').text).toBe('New reply from Roscoe')
+  expect(resumeSignal({ ...base, checkinsPausedToday: true }, 'Roscoe')).toEqual({ text: 'Check-ins paused for today', tone: 'neutral' })
+  expect(resumeSignal({ ...base, planUpdated: true, checkinsPausedToday: true }, 'Roscoe').text).toBe('Plan updated')
+})

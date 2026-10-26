@@ -4,12 +4,18 @@
  */
 import { z } from 'zod'
 import { defineRoute } from '@makinbakin/sdk'
-import type { BakinPlugin, PluginContext, RuntimeAgent } from '@makinbakin/sdk/types'
+import type { BakinPlugin, ConversationTurnService, PluginContext, RuntimeAgent } from '@makinbakin/sdk/types'
 import { conversationThreadId } from '@makinbakin/sdk/utils'
 import { createProjectRepository, PlanHistoryUnavailableError, projectToSummary } from './lib/parser'
 import { createProjectService, deriveChecklist } from './lib/project-service'
 import { ProjectMutationError } from './lib/project-mutations'
 import { buildProjectBrainstormContext } from './lib/brainstorm-prompt'
+import { createStewardGates } from './lib/steward/gates'
+import { withAdmissionFence } from './lib/steward/admission'
+import { createInputGate } from './lib/steward/input-gate'
+import { buildStewardDigest } from './lib/steward/digest'
+import { createStewardLoop, localDay, readStewardSettings, STEWARD_DEFAULTS, type StewardLoop } from './lib/steward/reservation'
+import { registerStewardTools } from './lib/steward/tools'
 import type { MutationCaller, Project, ProjectBrainstormMessage, ProjectStatus, ProjectPatch, ChecklistPatch, ProducedFile } from './types'
 
 const log = {
@@ -21,6 +27,29 @@ const log = {
 let activeProjectRepository: ReturnType<typeof createProjectRepository> | null = null
 /** Bound in activate(); onReady resumes kickoffs a crash left pending (D8). */
 let resumePendingKickoffs: (() => Promise<void>) | null = null
+/** The steward loop's timer starts in activate() and stops in onShutdown (D20). */
+let stewardLoop: StewardLoop | null = null
+/** This activation's brainstorm turns — ended in onShutdown. */
+let activeBrainstormTurns: ConversationTurnService | null = null
+/**
+ * Turn admissions (an /ask or a kickoff preparing its context and starting a
+ * turn) are tracked from their first await, so shutdown can close the door,
+ * drain the ones already preparing, and only then end live turns — none can
+ * slip onto a retired turn service.
+ */
+let admissionsOpen = false
+const pendingAdmissions = new Set<Promise<unknown>>()
+
+async function admitTurn<T>(fn: () => Promise<T>): Promise<T | 'closed'> {
+  if (!admissionsOpen) return 'closed'
+  const work = fn()
+  pendingAdmissions.add(work)
+  try {
+    return await work
+  } finally {
+    pendingAdmissions.delete(work)
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -126,6 +155,17 @@ const projectsPlugin: BakinPlugin = {
     { id: 'projects', label: 'Projects', icon: 'FolderKanban', href: '/projects', order: 30 },
   ],
 
+  // The steward loop (D29). Check-ins are board tasks, so budget limits and
+  // tag routing (`project-steward`) apply through dispatch.
+  settingsSchema: {
+    fields: [
+      { key: 'stewardEnabled', type: 'boolean', label: 'Lead check-ins', description: 'Let each Active project\'s lead check in as work moves: send steps to the board, chase blocked work, and ask you when a decision or sign-off is needed.', default: STEWARD_DEFAULTS.enabled },
+      { key: 'stewardScanMinutes', type: 'number', label: 'Look for changes every (minutes)', description: 'How often Active projects are checked for something that needs the lead. Finished, blocked or reviewed work also triggers a look within about 30 seconds.', default: STEWARD_DEFAULTS.scanMinutes },
+      { key: 'stewardStuckAfterHours', type: 'number', label: 'Call work stuck after (hours)', description: 'A review or a project with no movement this long counts as stuck, and an unresolved situation is raised again once per this window.', default: STEWARD_DEFAULTS.stuckAfterHours },
+      { key: 'stewardMaxRunsPerDay', type: 'number', label: 'Check-ins per project per day', description: 'At most this many check-ins per project per day. When the limit is hit, the project shows "Check-ins paused for today".', default: STEWARD_DEFAULTS.maxRunsPerDay },
+    ],
+  },
+
   routes: [
     legacyRoute('GET', '/', 'List projects'),
     legacyRoute('GET', '/:projectId', 'Get project by ID'),
@@ -144,6 +184,7 @@ const projectsPlugin: BakinPlugin = {
     legacyRoute('DELETE', '/:projectId/assets/:assetId', 'Detach asset'),
     legacyRoute('POST', '/:projectId/ask', 'Ask agent about project (202; streams over the plugin-event bus)'),
     legacyRoute('POST', '/:projectId/ask/abort', 'Abort the in-flight brainstorm turn'),
+    legacyRoute('POST', '/:projectId/steward/pause', 'Pause or resume the lead\'s check-ins (operator only)'),
     legacyRoute('GET', '/brainstorm/attention', 'Brainstorm attention totals (unread + in-flight)'),
     legacyRoute('POST', '/:projectId/brainstorm/seen', 'Mark a project brainstorm as seen'),
     legacyRoute('POST', '/:projectId/plan/seen', 'Mark a plan revision as seen (the "Plan updated" baseline)'),
@@ -156,6 +197,10 @@ const projectsPlugin: BakinPlugin = {
     const repo = createProjectRepository(ctx.storage)
     activeProjectRepository = repo
     const projectService = createProjectService(ctx, repo)
+    stewardLoop?.stop()
+    const steward = createStewardLoop({ ctx, repo })
+    stewardLoop = steward
+    const inputGate = createInputGate(repo)
     const {
       createProject,
       updateProject,
@@ -194,6 +239,8 @@ const projectsPlugin: BakinPlugin = {
         // Fires at 202-accept — the nav working dot must not wait out model
         // latency for the first chunk (bakin#707).
         started: 'projects.brainstorm.started',
+        // Steward check-ins and questions written outside a turn (D24a).
+        appended: 'projects.brainstorm.appended',
       },
       payload: (key) => ({ projectId: key }),
       resolveThread: async (key) =>
@@ -214,13 +261,39 @@ const projectsPlugin: BakinPlugin = {
         runId: (key, turnId) => `brainstorm:projects:${key}:turn:${turnId}`,
       },
       hooks: {
-        // The kickoff receipt rides until its first turn settles (D8).
+        // The kickoff receipt rides until its first turn settles (D8); a
+        // reply to a check-in question ends its gate the same way (D25).
         onSettled: async ({ key }) => {
           const kickoff = readProject(key)?.kickoff
           if (kickoff?.state === 'started') await projectService.advanceKickoff(key, kickoff.requestId, 'started', 'settled')
+          await inputGate.settleReply(key)
         },
       },
     })
+
+    // Sign-off gates ride Bakin's approvals; registered in activate() so a
+    // hot reload re-binds them (D26).
+    // Steward rows (check-ins, questions, sign-off notes) are turn admissions
+    // too: tracked so shutdown drains them, refused once it has begun — never
+    // written through a retired turn service over the next one's live turn.
+    const stewardTurns = new Proxy(brainstormTurns, {
+      get(target, prop) {
+        if (prop === 'appendExternal') {
+          return async (...args: Parameters<ConversationTurnService['appendExternal']>) => {
+            const result = await admitTurn(() => target.appendExternal(...args))
+            if (result === 'closed') throw new Error('Projects is restarting')
+            return result
+          }
+        }
+        const value = Reflect.get(target, prop) as unknown
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    const stewardGates = createStewardGates({ ctx, repo, turns: stewardTurns, projectService })
+    stewardGates.registerGates()
+
+    activeBrainstormTurns = brainstormTurns
+    admissionsOpen = true
 
     /**
      * Start a pending kickoff's first brainstorm turn — the SAME path as
@@ -246,12 +319,16 @@ const projectsPlugin: BakinPlugin = {
           await projectService.advanceKickoff(projectId, kickoff.requestId, 'pending', 'started')
           return 'started'
         }
-        const runtimeContent = buildProjectBrainstormContext(await derive(project), kickoff.message, { live: true })
-        if (readProject(projectId)?.kickoff?.state !== 'pending') return 'started'
-        const result = await brainstormTurns.start(ctx, projectId, kickoff.message, {
-          agentId: kickoff.agentId ?? project.owner,
-          runtimeContent,
+        const message = kickoff.message
+        const result = await admitTurn(async () => {
+          const runtimeContent = buildProjectBrainstormContext(await derive(project), message, { live: true })
+          if (readProject(projectId)?.kickoff?.state !== 'pending') return 'superseded' as const
+          return brainstormTurns.start(ctx, projectId, message, {
+            agentId: kickoff.agentId ?? project.owner,
+            runtimeContent,
+          })
         })
+        if (result === 'superseded') return 'started'
         if (result !== 'accepted') return 'pending'
         await projectService.advanceKickoff(projectId, kickoff.requestId, 'pending', 'started')
         return 'started'
@@ -346,14 +423,16 @@ const projectsPlugin: BakinPlugin = {
     // the tasks plugin asks for generic detail enrichment; projects owns the
     // project-specific behavior behind those extension points.
     // Linked-step completion is DERIVED from the board (D16a) — a column
-    // change writes nothing here; it only tells open project pages to refetch.
+    // change writes nothing here; it tells open project pages to refetch and
+    // schedules a debounced steward scan for work-task transitions (D21).
     ctx.hooks.register('tasks.statusChanged', (d: unknown) => {
       const taskId = (d as Record<string, unknown>).taskId
       const entry = typeof taskId === 'string' ? projectService.getProjectForTask(taskId) : undefined
       if (entry) ctx.events.emit('projects.changed', { projectId: entry.projectId, action: 'task.statusChanged', taskItemId: entry.taskItemId })
+      steward.onTaskStatusChanged(d)
     }, {
       label: 'Refresh project task state.',
-      summary: 'Tells open project pages to refetch when a linked task changes column; linked step completion is derived from the board at read time.',
+      summary: 'Tells open project pages to refetch when a linked task changes column (linked step completion is derived from the board at read time) and schedules the project steward\'s check for work tasks reaching done, blocked or review.',
       hookKind: 'event',
     })
     ctx.hooks.register('tasks.enrichDetails', async (d: unknown) => {
@@ -402,8 +481,27 @@ const projectsPlugin: BakinPlugin = {
 
     // Boot sweep (bakin#706): brainstorms whose transcript ends on a user
     // row lost their turn to a process death — stamp an honest error row.
-    try {
+    // No turn is alive at boot, so a reply gate left open ends too (D25).
+    // Only on the FIRST activation in this process: a hot reload re-runs
+    // activate() while the previous activation's turns and queued appends are
+    // still alive, and sweeping then would stamp live turns and withdraw
+    // questions whose cards are merely queued.
+    const g = globalThis as Record<string, unknown>
+    const firstActivation = g.__bakinProjectsActivated !== true
+    g.__bakinProjectsActivated = true
+    if (firstActivation) try {
       for (const project of readAllProjects()) {
+        if (project.replyPending) void inputGate.settleReply(project.id)
+        // A question must not hold the project when its card never reached
+        // the transcript (its queued batch died with the process), or when a
+        // user message after the card already ended it (the process died
+        // before the gate flipped) (D25).
+        const questionId = project.waitingOn?.questionId
+        if (questionId) {
+          const transcript = readBrainstormMessages(project.id)
+          const card = transcript.findIndex(row => row.kind === 'tool' && (row.metadata?.bakinQuestion as { id?: unknown } | undefined)?.id === questionId)
+          if (card === -1 || transcript.slice(card + 1).some(row => row.kind === 'user')) void inputGate.withdraw(project.id, questionId)
+        }
         const rows = readBrainstormMessages(project.id)
         const last = rows[rows.length - 1]
         if (last?.kind !== 'user') continue
@@ -423,8 +521,16 @@ const projectsPlugin: BakinPlugin = {
       const statusFilter = url.searchParams.get('status') as ProjectStatus | null
       let projects = readAllProjects()
       if (statusFilter) projects = projects.filter(p => p.status === statusFilter)
-      const board = await boardIndex()
+      const tasks = await ctx.tasks.list()
+      const board = new Map(tasks.map(task => [task.id, { column: task.column, title: task.title, ...(task.agent ? { agent: task.agent } : {}) }]))
       projects = projects.map(p => deriveChecklist(p, board))
+      const stewardSettings = readStewardSettings(ctx)
+      const now = new Date()
+      const today = localDay(now)
+      /** The steward's read of an Active project: is work stuck? (D29 list signal) */
+      const stuck = (p: Project) => p.status === 'active' && buildStewardDigest(p, tasks, {
+        now, stuckAfterMs: stewardSettings.stuckAfterHours * 3_600_000, steward: p.steward,
+      }).signals.some(signal => signal.kind === 'blocked' || signal.kind === 'idle-review' || signal.kind === 'stalled')
       // Per-project attention flags so list rows can show WHICH project has
       // an unseen reply / running turn (the nav badge names only the count).
       const inflight = new Set(brainstormTurns.listInFlight().map(t => t.key))
@@ -436,6 +542,11 @@ const projectsPlugin: BakinPlugin = {
           doneCount: p.tasks.filter(task => task.checked).length,
           waitingForYou: repo.readWaitingForUser(p.id),
           planUpdated: p.planUpdatedBy === 'agent' && p.planRevision > repo.readSeen(p.id).planSeenRevision,
+          needsApproval: Object.values(p.gates ?? {}).some(gate => gate.state === 'pending'),
+          stuck: stuck(p),
+          checkinsPausedToday: p.status === 'active' && stewardSettings.enabled
+            && p.steward?.runs?.date === today && p.steward.runs.count >= stewardSettings.maxRunsPerDay,
+          ...(p.stewardPaused ? { stewardPaused: true } : {}),
         })),
       })
     }
@@ -511,7 +622,21 @@ const projectsPlugin: BakinPlugin = {
       const id = url.searchParams.get('projectId') || bodyId
       if (!id) return json({ error: 'Missing id' }, 400)
       try {
+        const before = readProject(id)?.status
+        const handoff = before === 'draft' && patch.status === 'active'
+        // Start is the hand-off (D27): the lead's first check-in runs past the
+        // fingerprint gate — with no steps it breaks the plan down. Recorded
+        // durably BEFORE the status flips, so a failed or crashed first
+        // attempt is retried by the next scan (a Start that then fails leaves
+        // a harmless flag on a draft).
+        if (handoff) await steward.requestRun(id, 'handoff')
         await updateProject(id, patch, callerFromRequest(req), expected)
+        if (handoff) steward.scan(id).catch(err => log.error('steward hand-off failed; the next scan retries', err, { projectId: id }))
+        // Completing or archiving ends the steward loop: open check-ins and
+        // pending sign-offs go with it (D28).
+        if (patch.status === 'completed' || patch.status === 'archived') {
+          await stewardGates.cleanup(id, { reason: `Project ${patch.status}` })
+        }
         ctx.activity.audit('updated', 'system', { projectId: id })
         ctx.activity.log('system', `Updated project ${id}`)
         indexProject(id).catch(() => {})
@@ -536,6 +661,12 @@ const projectsPlugin: BakinPlugin = {
       // billing and resurrects the transcript sidecar (review I2).
       brainstormTurns.abort(id)
       try {
+        // The steward goes first: check-ins are paused durably (no scan or
+        // recovery can reserve another while the delete runs), the open
+        // check-in is removed (aborting a running turn) and pending sign-offs
+        // are cancelled — independently of whether work tasks are kept.
+        await projectService.setStewardPaused(id, true)
+        await stewardGates.cleanup(id, { reason: 'Project deleted' })
         if (body.deleteLinkedTasks) {
           const project = readProject(id)
           if (project) {
@@ -780,12 +911,24 @@ const projectsPlugin: BakinPlugin = {
       const project = readProject(projectId)
       if (!project) return json({ error: 'Project not found' }, 404)
       const agentId = body.agent || await getRuntimeMainAgentId(ctx)
-      const context = buildProjectBrainstormContext(await derive(project), body.prompt, { live: true })
-
-      const result = await brainstormTurns.start(ctx, projectId, body.prompt, {
-        agentId,
-        runtimeContent: context,
-      })
+      // The next user message ends an open check-in question (D25): it rides
+      // this turn's context, and the gate flips only once the turn is
+      // admitted. Sampling → admission → flip run inside the admission fence
+      // a question is posted under, so the question this reply ends is
+      // exactly the one its context carried.
+      const result = await admitTurn(() => withAdmissionFence(projectId, async () => {
+        const derived = await derive(project)
+        const pendingQuestion = readProject(projectId)?.waitingOn
+        const context = buildProjectBrainstormContext(derived, body.prompt, { live: true, ...(pendingQuestion ? { pendingQuestion } : {}) })
+        const started = await brainstormTurns.start(ctx, projectId, body.prompt, { agentId, runtimeContent: context })
+        if (started === 'accepted' && pendingQuestion) {
+          await inputGate.admitReply(projectId, pendingQuestion.questionId)
+          // The turn may have settled before the flip landed: nothing would clear it.
+          if (!brainstormTurns.isInFlight(projectId)) await inputGate.settleReply(projectId)
+        }
+        return started
+      }))
+      if (result === 'closed') return json({ error: 'Projects is restarting — try again in a moment.', code: 'restarting' }, 503)
       if (result === 'not_found') return json({ error: 'Project not found' }, 404)
       if (result === 'busy') return json({ error: 'A brainstorm turn is already running for this project' }, 409)
       return json({ ok: true, streaming: true }, 202)
@@ -798,6 +941,24 @@ const projectsPlugin: BakinPlugin = {
       if (!id) return json({ error: 'Missing projectId' }, 400)
       if (!brainstormTurns.abort(id)) return json({ error: 'No brainstorm turn in flight' }, 409)
       return json({ ok: true })
+    })
+
+    // POST /:projectId/steward/pause — the user's check-in control (D29).
+    routeHandlers.set('POST /:projectId/steward/pause', async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const id = url.searchParams.get('projectId')
+      if (!id) return json({ error: 'Missing projectId' }, 400)
+      if (callerFromRequest(req).kind === 'agent') {
+        return json({ error: 'Pausing check-ins is the user\'s decision.', code: 'agent_steward_pause' }, 403)
+      }
+      const body = await readBody<{ paused?: unknown }>(req).catch(() => ({} as { paused?: unknown }))
+      if (typeof body.paused !== 'boolean') return json({ error: 'Missing paused', code: 'invalid_request' }, 400)
+      try {
+        await projectService.setStewardPaused(id, body.paused)
+        return json({ ok: true, paused: body.paused })
+      } catch (error) {
+        return mutationFailure(error)
+      }
     })
 
     /** A project counts as unread when agent activity landed after the last view. */
@@ -1234,6 +1395,10 @@ const projectsPlugin: BakinPlugin = {
       },
     })
 
+    registerStewardTools({ ctx, repo, turns: stewardTurns, gate: inputGate })
+    stewardGates.registerTool()
+
+    steward.start()
     log.info('Projects plugin activated')
   },
 
@@ -1247,7 +1412,29 @@ const projectsPlugin: BakinPlugin = {
     log.info(`Ready — ${projects.length} projects`, byStatus)
   },
 
-  onShutdown() {
+  onSettingsChange() {
+    // The scan cadence is read when the timer starts.
+    stewardLoop?.start()
+  },
+
+  async onShutdown() {
+    stewardLoop?.stop()
+    stewardLoop = null
+    // Each activation builds its own turn service, and the next one cannot
+    // see this one's live turns: end them here (abort, then wait for each
+    // to settle — its queued out-of-turn rows flush on the way), so a hot
+    // reload never admits a turn or a steward row over a live one.
+    const turns = activeBrainstormTurns
+    activeBrainstormTurns = null
+    // Close the door, then drain admissions already preparing context.
+    admissionsOpen = false
+    await Promise.allSettled([...pendingAdmissions])
+    if (turns) {
+      await Promise.all(turns.listInFlight().map(async ({ key }) => {
+        turns.abort(key)
+        await turns.waitFor(key).catch(err => log.warn('brainstorm turn did not settle at shutdown', { projectId: key, err }))
+      }))
+    }
     activeProjectRepository = null
     resumePendingKickoffs = null
     log.info('Projects plugin shutting down')

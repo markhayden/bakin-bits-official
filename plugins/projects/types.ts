@@ -44,6 +44,62 @@ export interface ProjectKickoff {
   agentId?: string
 }
 
+/**
+ * Steward loop bookkeeping (D22). `openTaskId` + `phase` are the reservation:
+ * written under the project lock with the frozen create inputs BEFORE the
+ * board task exists, so a crash between reserve and create recovers the
+ * identical task once. Bookkeeping writes never bump `project.updated`.
+ */
+export interface ProjectStewardState {
+  openTaskId?: string
+  phase?: 'reserved' | 'created'
+  frozen?: { title: string; assignee: string; description: string }
+  reservedAt?: string
+  /** The digest fingerprint the open run was reserved for. */
+  fingerprint?: string
+  /** Work-task columns as the open run's brief saw them (what it was shown). */
+  briefColumns?: Record<string, string>
+  /** Work-task columns as the last FINISHED run left them — "newly done" is a column change, never an edit. */
+  handledColumns?: Record<string, string>
+  /** Work that transitioned INTO done (task id → when) since a run last consumed it — catches done → reopened → done. */
+  completions?: Record<string, string>
+  /** The fingerprint the last FINISHED run handled — the D20a gate. */
+  lastFingerprint?: string
+  lastStewardAt?: string
+  /** Daily cap counter, local calendar day (server tz). */
+  runs?: { date: string; count: number }
+  /** The day a cap skip was last audited (one audit event per day). */
+  capNotedOn?: string
+  /**
+   * The next eligible scan runs regardless of the fingerprint: Start's
+   * hand-off, or a sign-off decision the lead must follow up on. Durable, so
+   * a failed or crashed attempt retries; cleared when a run is reserved.
+   */
+  runNext?: 'handoff' | 'decision'
+}
+
+/** The steward asked the user something (D25); scans pause until they reply. */
+export interface ProjectWaitingOn {
+  kind: 'input'
+  questionId: string
+  question: string
+  /** The steward's bounded reasoning (≤ 1 KB), replayed into the reply turn. */
+  context?: string
+  options?: string[]
+  since: string
+}
+
+/** One sign-off gate per gateKind+subject (D26). */
+export interface ProjectGateState {
+  approvalId: string
+  generation: number
+  state: 'pending' | 'approved' | 'rejected' | 'cancelled'
+  /** The check-in task that asked — closed once the decision lands. */
+  stewardTaskId?: string
+  /** That check-in's frozen assignee: later notes speak as it (D24). */
+  stewardAgentId?: string
+}
+
 export interface ProjectFrontmatter {
   id: string
   title: string
@@ -66,6 +122,14 @@ export interface ProjectFrontmatter {
   planUpdatedAt?: string
   /** Private durable mutation receipts; omitted from browser projections. */
   operations?: (ChecklistAddOperation | ChecklistPromotionOperation)[]
+  /** Check-ins paused by the user (D29); status stays active. */
+  stewardPaused?: boolean
+  steward?: ProjectStewardState
+  waitingOn?: ProjectWaitingOn
+  /** The reply turn carrying the pending question is running (D25). */
+  replyPending?: { questionId: string }
+  /** Keyed `<gateKind>:<subject>`. */
+  gates?: Record<string, ProjectGateState>
 }
 
 export interface Project extends ProjectFrontmatter {
@@ -116,6 +180,11 @@ export interface ProjectSummary {
   waitingForYou?: boolean
   /** An agent revised the plan since the user last looked. */
   planUpdated?: boolean
+  /** Steward signals (D29): a sign-off is pending, work is stuck, the daily cap was hit, the user paused check-ins. */
+  needsApproval?: boolean
+  stuck?: boolean
+  checkinsPausedToday?: boolean
+  stewardPaused?: boolean
 }
 
 

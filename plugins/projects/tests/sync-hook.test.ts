@@ -24,6 +24,7 @@ import {
   MarkdownStorageAdapter,
   createMockRuntimeAdapter,
   createMockBakinTaskStore,
+  createTestApprovals,
 } from '../test-helpers'
 
 const testDir = join(tmpdir(), `bakin-test-projects-sync-${Date.now()}`)
@@ -100,8 +101,10 @@ function makeCtx(): CapturedCtx {
         isInFlight: mock(() => false),
         waitFor: mock(async () => {}),
         listInFlight: mock(() => []),
+        appendExternal: mock(async () => ({ status: 'appended' as const, written: Promise.resolve() })),
       })),
     },
+    approvals: createTestApprovals('projects').api,
   }
 
   return {

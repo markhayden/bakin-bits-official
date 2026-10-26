@@ -91,6 +91,7 @@ export function ProjectList() {
   // writes refresh; the first chunk of a NEW turn refreshes once so the
   // working dot appears (later chunks for an already-marked project skip).
   usePluginEvent('projects.brainstorm.done', () => { void fetchProjects() })
+  usePluginEvent('projects.brainstorm.appended', () => { void fetchProjects() })
   usePluginEvent('projects.brainstorm.error', () => { void fetchProjects() })
   usePluginEvent('projects.brainstorm.seen', () => { void fetchProjects() })
   // Plan revisions and board-driven step changes move the resume signal.

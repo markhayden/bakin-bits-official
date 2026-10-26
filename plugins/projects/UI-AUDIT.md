@@ -1,6 +1,6 @@
 # Projects UI — pattern map (projects revamp, 2026-10-25)
 
-The revamp (spec: Bakin `.claude/specs/projects-revamp.md` D7–D18) rebuilt
+The revamp (spec: Bakin `.claude/specs/projects-revamp.md` D7–D18, D27–D29) rebuilt
 Projects around one idea: the project conversation is the primary surface,
 and everything else is a tab beside it. This file maps every surface to the
 public Storybook contract it composes. Earlier audit findings (2026-09-23 —
@@ -11,7 +11,7 @@ states) still hold where noted.
 | --- | --- | --- |
 | Start screen | `conversation/timeline` — `ContainedAndEmptyStates` (empty state with suggestions); `conversation/composer` — `CanonicalUsage`; `agents/agent-select` — `SizesAndVariants` | No modal: chips pre-fill the composer, nothing is created until send; the lead picker is the composer's leading slot. |
 | Page frame | `recipes/list-detail-pages` — `ContainedDetailWorkspace` | `Page scroll="contained"` owns the gutters; the tab panel or the conversation owns the one scroller. |
-| Header | `pages/page` + `PageHeader`; `feedback/confirm-dialog` — `CanonicalUsage`, `FailedConfirmation` | One next-step button; Start/Mark complete confirm; ⋯ overflow for Archive/Details/Delete. |
+| Header | `pages/page` + `PageHeader`; `feedback/confirm-dialog` — `CanonicalUsage`, `FailedConfirmation`; `lists/list-rows` — `CanonicalUsage` (`StatusBadge`) | One next-step button; Start is the hand-off confirm (step count + "Review steps first" link to the Steps tab); Mark complete names unfinished steps; ⋯ overflow for Pause/Resume check-ins, Archive, Details, Delete; an outline `StatusBadge` "Paused" beside the status. |
 | Rename / Details | Chat's rename-dialog recipe (`Dialog` + `DialogFooter` Cancel/Save); `layout/key-value` | No inline title pattern exists, so rename uses the dialog the chat plugin uses; the footer is the standard Cancel/Save pair. |
 | Tabs | `navigation/tabs` — `UnderlineNavigation` | Controlled, URL state (`?tab`), consumer-owned `project-panel-*` panels; the Plan tab carries a `StatusMarker` when an agent revision is unseen. |
 | Conversation | `conversation/panel-and-drawer` — `DocumentDividerPanel`; `conversation/turns` — `QuestionCards` | `ConversationPanel fitParent chrome="top-divider"`; question cards answer through the panel's send. |
@@ -19,7 +19,8 @@ states) still hold where noted.
 | Plan | `content/markdown-content` — `WholeDocumentComparison`, `ManagedDocumentContext`; `forms/save-bar` — `CanonicalUsage`, `SaveFailureAndRetry`; `forms/unsaved-changes-dialog` | Edit in place on the tab (`?edit=1`), body-only draft with Use latest / Keep mine; History view (`?view=changes`) with restore. |
 | Steps | `lists/list-rows` — `CanonicalUsage`; `primitives/input-group`, `primitives/textarea`, `primitives/progress` | Board state in words; Send to board / Open task actions whose names start with their visible text; linked checkboxes read-only. |
 | Files | `lists/list-rows`; `patterns/asset-picker`; `feedback/system-state` — `ScopeAndRecovery` | Produced (derived) and Attached groups; composer paperclip uploads and attaches. |
-| List | `lists/list-rows` — `CanonicalUsage`, `InteractiveRows`; `recipes/collection-patterns` — `RowBehaviors` | One resume signal per row; archived out of "All". |
+| List | `lists/list-rows` — `CanonicalUsage`, `InteractiveRows`; `recipes/collection-patterns` — `RowBehaviors` | One resume signal per row (steward signals: Needs approval, Stuck, Check-ins paused for today) + the "Paused" badge; archived out of "All". |
+| Sign-off decision | Bakin's task `ApprovalPanel` (host, `plugin-gate` renderer) | Projects renders nothing of its own: `ctx.approvals` puts the request on the check-in (or deliverable) task's "Needs approval" card. |
 
 Focused entrypoints only: `/ui`, `/layout`, `/patterns`, `/conversation`,
 `/content`, `/navigation`, `/hooks`, `/utils`. No legacy barrel, local

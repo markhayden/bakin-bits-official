@@ -423,6 +423,8 @@ declare module '@makinbakin/sdk/types' {
     skipWorkflowReason?: string
     scheduleJobId?: string
     projectId?: string
+    /** Free-form labels; a matching models routing tag override picks this task's model. */
+    tags?: string[]
     order?: number
     createdAt?: string
     updatedAt?: string
@@ -441,6 +443,7 @@ declare module '@makinbakin/sdk/types' {
     source?: TaskSource
     workflowId?: string
     projectId?: string
+    tags?: string[]
     parentId?: string | null
     skipWorkflowReason?: string
   }
@@ -460,6 +463,8 @@ declare module '@makinbakin/sdk/types' {
     workflowId?: string
     scheduleJobId?: string
     projectId?: string
+    /** Replaces the task's tags; `[]` clears them. */
+    tags?: string[]
     parentId?: string | null
   }
 
@@ -773,11 +778,12 @@ declare module '@makinbakin/sdk/types' {
 
   export type ConversationTurnRow =
     | { kind: 'user'; ts: string; content: string; attachments?: ConversationTurnAttachment[] }
-    | { kind: 'assistant'; ts: string; turnId?: string; content: string }
+    | { kind: 'assistant'; ts: string; turnId?: string; agentId?: string; content: string }
     | {
         kind: 'tool'
         ts: string
         turnId?: string
+        agentId?: string
         callId?: string
         toolName: string
         status: 'completed' | 'failed'
@@ -817,7 +823,8 @@ declare module '@makinbakin/sdk/types' {
 
   export interface ConversationTurnServiceConfig {
     name: string
-    events: { chunk: string; done: string; error: string; started?: string }
+    /** `appended` announces rows written outside a turn by `appendExternal`. */
+    events: { chunk: string; done: string; error: string; started?: string; appended?: string }
     payload: (key: string) => Record<string, unknown>
     resolveThread: (key: string) => { agentId: string } | null | Promise<{ agentId: string } | null>
     appendRow: (key: string, row: ConversationTurnRow) => void | Promise<void>
@@ -843,6 +850,87 @@ declare module '@makinbakin/sdk/types' {
     inflightPreview(key: string): string | null
     waitFor(key: string): Promise<void>
     listInFlight(): ConversationInflightTurnInfo[]
+    /**
+     * Append rows written OUTSIDE a turn (a check-in, a question). Idle → they
+     * land now and `events.appended` fires with `notice`; a turn in flight →
+     * `status: 'queued'` at once, flushed at slot release before the next
+     * turn — `written` settles when durable, rejects on a failed write. Never
+     * await `written` from inside that conversation's own turn.
+     */
+    appendExternal(
+      ctx: ConversationTurnContext,
+      key: string,
+      rows: ConversationTurnRow[],
+      notice?: ConversationAppendNotice,
+    ): Promise<ConversationAppendResult>
+  }
+
+  export interface ConversationAppendResult {
+    status: 'appended' | 'queued'
+    written: Promise<void>
+  }
+
+  export interface ConversationAppendNotice {
+    agentId: string
+    preview: string
+  }
+
+  // ── Plugin sign-offs (ctx.approvals, spec D26) ──────────────────────
+
+  export type PluginApprovalStatus = 'pending' | 'approved' | 'rejected' | 'cancelled' | 'expired'
+
+  export interface PluginApprovalOption {
+    id: string
+    label: string
+    variant?: 'primary' | 'destructive' | 'neutral'
+  }
+
+  export interface PluginApproval {
+    approvalId: string
+    gateKind: string
+    entityId: string
+    taskId: string
+    status: PluginApprovalStatus
+    title: string
+    summary: string
+    options: PluginApprovalOption[]
+    createdAt: string
+    resolvedAt?: string
+    response?: { option: string; comment?: string; respondedAt: string; decidedBy?: string }
+  }
+
+  export interface PluginApprovalDecision {
+    option: string
+    comment?: string
+    respondedAt: string
+    decidedBy: string
+  }
+
+  export type PluginGateOwnerState = 'live' | 'orphaned' | 'unknown'
+
+  export interface PluginGateHandler {
+    ownerState(approval: PluginApproval): PluginGateOwnerState | Promise<PluginGateOwnerState>
+    onResolve(approval: PluginApproval, decision: PluginApprovalDecision): unknown | Promise<unknown>
+  }
+
+  export interface PluginApprovalRequestInput {
+    /** Deterministic, `<pluginId>:`-prefixed; an existing id is returned untouched. */
+    approvalId: string
+    gateKind: string
+    entityId: string
+    taskId: string
+    title: string
+    summary: string
+    options?: PluginApprovalOption[]
+  }
+
+  export interface PluginApprovalsAPI {
+    registerGate(gateKind: string, handler: PluginGateHandler): () => void
+    request(input: PluginApprovalRequestInput): PluginApproval
+    cancel(approvalId: string, reason: string): Promise<PluginApproval | null>
+    get(approvalId: string): PluginApproval | null
+    listPending(filter?: { entityId?: string; gateKind?: string }): PluginApproval[]
+    refusal(message: string, status?: 400 | 409): Error
   }
 
   export interface ConversationTurnsAPI {
@@ -874,6 +962,8 @@ declare module '@makinbakin/sdk/types' {
     search: SearchAPI
     /** Shared conversation turn engine — background turns for chat-like surfaces (#703). */
     conversations: ConversationTurnsAPI
+    /** This plugin's sign-off gates on Bakin's one approval primitive (D26). */
+    approvals: PluginApprovalsAPI
   }
 
   export interface BakinPlugin {
@@ -1912,6 +2002,10 @@ declare module '@makinbakin/sdk/utils' {
     readonly serializedBytes: 2048
   }
   export function parseBakinQuestion(value: unknown): import('@makinbakin/sdk/conversation').BakinQuestion | null
+  /** Validate what an agent passes for a question (before minting an id); `allowOther` defaults to true. */
+  export function validateBakinQuestionInput(value: unknown):
+    | { ok: true; value: { question: string; options: { label: string; description?: string }[]; recommended?: number; allowOther: boolean } }
+    | { ok: false; error: string }
   export function validateBakinQuestionInput(value: unknown):
     | { ok: true; value: Omit<import('@makinbakin/sdk/conversation').BakinQuestion, 'v' | 'id'> }
     | { ok: false; error: string }

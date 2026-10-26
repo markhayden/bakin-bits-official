@@ -4,7 +4,7 @@ import { useRef, type ReactNode } from 'react'
 import { Ellipsis, Trash } from 'lucide-react'
 import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Text } from '@makinbakin/sdk/ui'
 import { Inline, Stack } from '@makinbakin/sdk/layout'
-import { ListRow, ListRowActions, StatusMarker } from '@makinbakin/sdk/patterns'
+import { ListRow, ListRowActions, StatusBadge, StatusMarker } from '@makinbakin/sdk/patterns'
 import { formatAge } from '@makinbakin/sdk/utils'
 import { ProjectStatusBadge } from './project-status-badge'
 import type { ProjectSummary } from '../types'
@@ -12,14 +12,19 @@ import type { ProjectSummary } from '../types'
 type Tone = 'neutral' | 'accent' | 'attention'
 
 /**
- * The ONE resume signal a row shows (D18), by priority: the lead is waiting
- * on you › the lead is working › a new reply › the plan changed › progress.
+ * The ONE resume signal a row shows (D18, D29), by priority: a sign-off is
+ * yours to decide › the lead is waiting on you › the lead is working › a new
+ * reply › work is stuck › the plan changed › today's check-ins are used up ›
+ * progress.
  */
 export function resumeSignal(project: ProjectSummary, leadName: string): { text: string; tone: Tone; pulse?: boolean } {
+  if (project.needsApproval) return { text: 'Needs approval', tone: 'attention' }
   if (project.waitingForYou) return { text: 'Waiting for you', tone: 'attention' }
   if (project.brainstormStreaming) return { text: `${leadName} is working`, tone: 'accent', pulse: true }
   if (project.brainstormUnread) return { text: `New reply from ${leadName}`, tone: 'attention' }
+  if (project.stuck) return { text: 'Stuck', tone: 'attention' }
   if (project.planUpdated) return { text: 'Plan updated', tone: 'accent' }
+  if (project.checkinsPausedToday) return { text: 'Check-ins paused for today', tone: 'neutral' }
   if (!project.taskCount) return { text: 'No steps yet', tone: 'neutral' }
   return { text: `${project.doneCount ?? 0} of ${project.taskCount} steps done`, tone: 'neutral' }
 }
@@ -46,6 +51,9 @@ export function ProjectRow({ project, leadName, onClick, onDelete, scoreOverlay 
           </Text>
           <Inline gap="dense" wrap={false} className="shrink-0">
             <ProjectStatusBadge status={project.status} />
+            {project.status === 'active' && project.stewardPaused ? (
+              <StatusBadge tone="neutral" variant="outline" size="xs">Paused</StatusBadge>
+            ) : null}
             <ListRowActions>
               <DropdownMenu>
                 <DropdownMenuTrigger ref={actionsRef} render={<Button size="icon-xs" variant="ghost" />} aria-label={`More actions for ${title}`}>
