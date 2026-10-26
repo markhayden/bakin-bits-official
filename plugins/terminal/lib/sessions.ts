@@ -132,6 +132,12 @@ export class Sessions {
         await this.stopScreen(id)
         if (!await this.driver.alive(id)) throw new TerminalError('Terminal process has exited', 409)
         this.attach(session)
+        // A fresh attachment starts from tmux's real window, whatever the record says.
+        try { this.adoptSize(session, await this.driver.windowSize(id)) }
+        catch {
+          await this.stopScreen(id)
+          throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
+        }
       }
       return this.screens.get(id)!
     })
@@ -213,6 +219,8 @@ export class Sessions {
     if (session.state !== 'running') throw new TerminalError('Session has exited')
     if (sequence !== session.inputSequence + 1) throw new TerminalError('Input sequence is stale or out of order; do not retry ambiguous input')
     if (Buffer.byteLength(data) > 65536) throw new TerminalError('Input exceeds 64 KiB', 413)
+    // No attachment (a resize could not be reconciled): refuse before consuming, so nothing is uncertain.
+    if (!this.driver.connected(id)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
     // Consume the sequence before delivery. A transport failure is never auto-retried.
     session.inputSequence = sequence
     session.lastActivityAt = this.now()
@@ -248,18 +256,28 @@ export class Sessions {
    * tmux first (the source of truth), then the bridge PTY, the headless
    * screen and the record. If tmux refuses, read back the window it actually
    * has and make everything else match. Runs inside the queue, so input
-   * waits until the representations agree.
+   * waits until the representations agree. When they cannot be made to
+   * agree (tmux unreachable, the record unwritable), the attachment is
+   * dropped: input is refused and viewers resync, and the next attachment
+   * adopts tmux's actual window.
    */
   private async applySize(session: Session, cols: number, rows: number): Promise<Session> {
-    let size = { cols, rows }
-    if (cols !== session.cols || rows !== session.rows) {
-      try {
-        await this.driver.resize(session.id, cols, rows)
-      } catch {
+    try {
+      let size = { cols, rows }
+      if (cols !== session.cols || rows !== session.rows) {
         // A failed resize-window may still have moved the window; trust tmux.
-        size = await this.driver.windowSize(session.id).catch(() => { throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503) })
+        try { await this.driver.resize(session.id, cols, rows) }
+        catch { size = await this.driver.windowSize(session.id) }
       }
+      this.adoptSize(session, size)
+      return session
+    } catch {
+      await this.stopScreen(session.id)
+      throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
     }
+  }
+  /** Make the headless screen and the record match `size` (tmux's window). */
+  private adoptSize(session: Session, size: { cols: number; rows: number }): void {
     if (size.cols !== session.cols || size.rows !== session.rows) {
       this.screens.get(session.id)?.resize(size.cols, size.rows)
       session.cols = size.cols
@@ -267,7 +285,6 @@ export class Sessions {
       session.sizeRevision++
     }
     this.save(session)
-    return session
   }
   private startSize(principal: Principal, size?: StartSize): Pick<Session, 'cols' | 'rows' | 'sizeEpoch' | 'sizeRevision' | 'sizeAuthority'> {
     if (principal.kind === 'human' && size) {

@@ -1,18 +1,36 @@
 /**
- * A pre-mount estimate of the grid this screen's terminal pane will hold, so
- * a session starts near the size it is first seen at; the canvas fits it
- * exactly once it mounts (the creator holds the size claim). Cell metrics are
- * xterm's 13px font in the system monospace face; the chrome allowance covers
- * the workspace header, the canvas inset and, on touch screens, the key strip.
- * It carries the device kind so the header can say "Sized by phone".
+ * The grid this screen's terminal pane will hold, measured before the session
+ * exists so its program starts at the size it is first seen at (spec D3); the
+ * canvas refines it once it mounts (the creator holds the size claim). Cells
+ * are measured in xterm's own font face at this device's font; the width is
+ * the plugin's area (not the window, which includes the host's navigation);
+ * the chrome allowance covers the workspace header, the canvas inset and, on
+ * touch screens, the key strip. It carries the device kind so the header can
+ * say "Sized by phone".
  */
-import { screenDevice, type ScreenDevice } from './terminal-view'
+import { BASE_FONT, screenDevice, storedFont, type ScreenDevice } from './terminal-view'
 
-const CELL = { width: 7.8, height: 17 }
+/** xterm's default `fontFamily`; the canvas never overrides it. */
+const XTERM_FONT = 'courier-new, courier, monospace'
+const INSET = 32
 
-export function estimateTerminalSize(view: Pick<Window, 'innerWidth' | 'innerHeight' | 'matchMedia' | 'screen'> = window): { cols: number; rows: number; device: ScreenDevice } {
+/** One cell at `fontSize`, rounded the way xterm's renderer snaps cells to device pixels. */
+export function measureCell(fontSize: number, doc: Document = document, dpr = window.devicePixelRatio || 1): { width: number; height: number } {
+  const probe = doc.createElement('span')
+  probe.textContent = 'W'.repeat(32)
+  Object.assign(probe.style, { position: 'absolute', visibility: 'hidden', whiteSpace: 'pre', fontFamily: XTERM_FONT, fontSize: `${fontSize}px`, lineHeight: 'normal' })
+  doc.body.appendChild(probe)
+  const box = probe.getBoundingClientRect()
+  probe.remove()
+  return { width: Math.floor((box.width / 32) * dpr) / dpr, height: Math.ceil(box.height * dpr) / dpr }
+}
+
+export function estimateTerminalSize(
+  view: Pick<Window, 'innerWidth' | 'innerHeight' | 'matchMedia' | 'screen'> = window,
+  area: number = document.querySelector('[data-bakin-plugin="terminal"]')?.clientWidth || view.innerWidth,
+  cell: { width: number; height: number } = measureCell(storedFont() ?? BASE_FONT),
+): { cols: number; rows: number; device: ScreenDevice } {
   const touch = view.matchMedia('(pointer: coarse)').matches
-  const width = view.innerWidth - 32
   const height = view.innerHeight - 96 - (touch ? 112 : 0)
-  return { cols: Math.max(1, Math.floor(width / CELL.width)), rows: Math.max(1, Math.floor(height / CELL.height)), device: screenDevice(view) }
+  return { cols: Math.max(1, Math.floor((area - INSET) / cell.width)), rows: Math.max(1, Math.floor((height - INSET) / cell.height)), device: screenDevice(view) }
 }

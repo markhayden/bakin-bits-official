@@ -12,8 +12,8 @@ import { consumeControl, encodeTerminalKey, type TerminalInputHandle } from './t
 import { BASE_FONT, clampFont, fitWidthFont, minFont, pinchFont, reveal, screenDevice, storedFont, storeFont } from './terminal-view'
 import '@xterm/xterm/css/xterm.css'
 
-/** What the page asks of the canvas: "Fit to this device" makes this screen the size authority. */
-export interface TerminalViewHandle { fitToDevice(): boolean }
+/** What the page asks of the canvas: "Fit to this device" claims the size; refit applies a new smallest-text choice. */
+export interface TerminalViewHandle { fitToDevice(): boolean; refit(): void }
 
 export function TerminalCanvas({ session, writable, captureTab, attempt, inputEnabled, inputHandle, viewHandle, onCtrlChange, onStatus, onInput, onClaim, onSession, onSizeFrozen, onResult }: {
   inputEnabled: boolean; inputHandle: RefObject<TerminalInputHandle | null>; viewHandle: RefObject<TerminalViewHandle | null>; onCtrlChange(armed: boolean): void;
@@ -57,25 +57,45 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     return true
   }
   // Not the authority: keep the grid, fit the font to the pane's width.
-  // Converges over a few animation frames as xterm re-renders.
-  function fitFontToWidth(passes = 3): void {
+  // Cells snap to device pixels, so width is not linear in the font: estimate,
+  // render, and narrow between the largest font known to fit and the smallest
+  // known to overflow, one animation frame per try.
+  function fitFontToWidth(passes = 8, known = { fits: 0, overflows: Infinity }): void {
     const term = terminal.current
     const box = paneBox()
     const rendered = screen()
     if (!term || !box || !rendered?.clientWidth || callbacks.current.authority || callbacks.current.zoom !== undefined) return
-    const next = fitWidthFont(term.options.fontSize ?? BASE_FONT, box.width, rendered.clientWidth, minFont())
-    if (setFont(next) && passes > 0) requestAnimationFrame(() => fitFontToWidth(passes - 1))
+    const current = term.options.fontSize ?? BASE_FONT
+    const min = minFont()
+    const fits = rendered.clientWidth <= box.width
+    if (fits) known.fits = Math.max(known.fits, current)
+    else known.overflows = Math.min(known.overflows, current)
+    const estimate = fitWidthFont(current, box.width, rendered.clientWidth, min)
+    const next = Math.max(min, Math.max(known.fits, Math.min(estimate, known.overflows - 1)))
+    if (next === current || passes === 0) {
+      if (!fits && known.fits) setFont(known.fits)
+      return
+    }
+    setFont(next)
+    requestAnimationFrame(() => fitFontToWidth(passes - 1, known))
   }
-  function resizeToViewport() {
-    const term = terminal.current
+  /** The grid this pane holds at the current font, within the 40×10 floor. */
+  function proposedSize(): { cols: number; rows: number } | undefined {
     const size = fit.current?.proposeDimensions()
-    if (!size || !term || !callbacks.current.authority) return
-    const { cols, rows } = clampSize(size.cols, size.rows)
-    // Never resend a size; the session update the server pushes resizes xterm.
-    const key = `${cols}x${rows}`
+    return size ? clampSize(size.cols, size.rows) : undefined
+  }
+  function sendSize(cols: number, rows: number) {
+    const term = terminal.current
+    if (!term || !callbacks.current.authority) return
+    // Never resend a size within one claim; the session update the server pushes resizes xterm.
+    const key = `${callbacks.current.sizeEpoch} ${cols}x${rows}`
     if ((term.cols === cols && term.rows === rows) || sentSize.current === key) return
     // Only a size that actually left counts; a disconnected one is retried after the next sync.
     if (socket.current?.resize(callbacks.current.sizeEpoch, cols, rows)) sentSize.current = key
+  }
+  function resizeToViewport() {
+    const size = proposedSize()
+    if (size) sendSize(size.cols, size.rows)
   }
   /** Render this device's view: the authority fits the grid to its pane; anyone else fits the font. */
   function applyView() {
@@ -106,10 +126,13 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     const next = reveal(el, target, cell.height)
     if (next.left !== el.scrollLeft || next.top !== el.scrollTop) el.scrollTo(next.left, next.top)
   }
-  function pause() {
+  function overflows(): boolean {
     const el = pane.current
-    // Only a pane that actually overflows has anything to pan.
-    if (!el || callbacks.current.paused || (el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight)) return
+    return Boolean(el && (el.scrollWidth > el.clientWidth || el.scrollHeight > el.clientHeight))
+  }
+  /** A pan (only meaningful when the pane overflows) or a selection (always) stops the view chasing the cursor. */
+  function pause(always = false) {
+    if (callbacks.current.paused || (!always && !overflows())) return
     callbacks.current.paused = true
     setPaused(true)
   }
@@ -155,6 +178,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
         const { cols, rows } = clampSize(Math.floor(box.width / cell.width), Math.floor(box.height / cell.height))
         return socket.current?.claim(cols, rows, screenDevice()) ?? false
       },
+      refit: () => applyView(),
     }
     const leave = (event: Event) => {
       const target = event.target
@@ -183,7 +207,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     // Follow the cursor once per rendered batch, unless the operator panned away.
     let follow = 0
     term.onRender(() => { if (!follow) follow = requestAnimationFrame(() => { follow = 0; followCursor() }) })
-    term.onSelectionChange(() => { if (term.hasSelection()) pause() })
+    term.onSelectionChange(() => { if (term.hasSelection()) pause(true) })
     const url = new URL(`/api/plugins/terminal/socket?id=${encodeURIComponent(session.id)}`, window.location.href)
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
     const client = new TerminalSocketClient({
@@ -245,14 +269,18 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
   useLayoutEffect(() => { inputHandle.current?.reset() }, [inputEnabled, session.generation, session.id, attempt])
   useEffect(() => { terminal.current?.resize(session.cols, session.rows); requestAnimationFrame(applyView) }, [session.cols, session.rows])
   useEffect(() => { applyView() }, [authority, zoom])
+  // A new claim (by anyone) starts a fresh exchange: what this screen sent before is no longer known to the server.
+  useEffect(() => { sentSize.current = '' }, [authority, session.sizeEpoch])
 
   // Pinch (two fingers, or Ctrl+wheel on a trackpad) sets this device's font;
   // one-finger drags, wheels and scrollbar or arrow-key scrolling pan natively
-  // and pause cursor-follow. None of it focuses the keyboard or sends input.
+  // and pause cursor-follow. None of it focuses the keyboard or sends input:
+  // wheels are taken in the capture phase, before xterm can turn them into
+  // scrollback scrolling or (in full-screen programs) arrow keys.
   useEffect(() => {
     const el = pane.current
     if (!el) return
-    let pinch: { distance: number; font: number } | undefined
+    let pinch: { distance: number; font: number; next?: number } | undefined
     let frame = 0
     let commit: ReturnType<typeof setTimeout> | undefined
     const distance = (touches: TouchList) => Math.hypot(touches[0]!.clientX - touches[1]!.clientX, touches[0]!.clientY - touches[1]!.clientY)
@@ -266,19 +294,35 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     const move = (event: TouchEvent) => {
       if (pinch && event.touches.length === 2) {
         event.preventDefault()
-        preview(pinchFont(pinch.font, pinch.distance, distance(event.touches), minFont()))
+        pinch.next = pinchFont(pinch.font, pinch.distance, distance(event.touches), minFont())
+        preview(pinch.next)
       } else if (event.touches.length === 1) pause()
     }
     const end = (event: TouchEvent) => {
       if (!pinch || event.touches.length >= 2) return
+      // The last move may still be waiting for its frame: commit what it asked for.
+      const size = pinch.next
       pinch = undefined
       cancelAnimationFrame(frame)
-      const size = terminal.current?.options.fontSize
-      if (size !== undefined) zoomTo(size)
+      if (size === undefined) return
+      setFont(size)
+      zoomTo(size)
     }
     const wheel = (event: WheelEvent) => {
-      if (!event.ctrlKey) { pause(); return }
+      if (!event.ctrlKey) {
+        // A pane that overflows pans; one that fits leaves the wheel to the terminal.
+        // The pane scrolls itself: left alone, the browser would scroll xterm's
+        // own history viewport under the pointer instead.
+        if (!overflows()) return
+        event.preventDefault()
+        event.stopPropagation()
+        const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? el.clientHeight : 1
+        el.scrollBy(event.deltaX * unit, event.deltaY * unit)
+        pause()
+        return
+      }
       event.preventDefault()
+      event.stopPropagation()
       const size = clampFont((terminal.current?.options.fontSize ?? BASE_FONT) * (1 - event.deltaY / 100), minFont())
       setFont(size)
       clearTimeout(commit)
@@ -291,7 +335,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     el.addEventListener('touchmove', move, { passive: false })
     el.addEventListener('touchend', end)
     el.addEventListener('touchcancel', end)
-    el.addEventListener('wheel', wheel, { passive: false })
+    el.addEventListener('wheel', wheel, { passive: false, capture: true })
     el.addEventListener('keydown', key)
     el.addEventListener('pointerdown', press)
     return () => {
@@ -301,7 +345,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
       el.removeEventListener('touchmove', move)
       el.removeEventListener('touchend', end)
       el.removeEventListener('touchcancel', end)
-      el.removeEventListener('wheel', wheel)
+      el.removeEventListener('wheel', wheel, { capture: true })
       el.removeEventListener('keydown', key)
       el.removeEventListener('pointerdown', press)
     }
@@ -312,13 +356,16 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     let disposed = false
     let timer: ReturnType<typeof setTimeout>
     // The authority applies a height change at once (a phone keyboard
-    // opening) and debounces width changes (a window drag) by 100 ms.
+    // opening), at the current width, and debounces width changes (a window
+    // drag) by 100 ms. Other screens refit their font after 100 ms.
     const schedule = () => {
       if (disposed) return
       clearTimeout(timer)
-      const proposed = callbacks.current.authority ? fit.current?.proposeDimensions() : undefined
-      if (proposed && proposed.cols === terminal.current?.cols) applyView()
-      else timer = setTimeout(applyView, 100)
+      const term = terminal.current
+      const proposed = callbacks.current.authority ? proposedSize() : undefined
+      if (!term || !proposed) { timer = setTimeout(applyView, 100); return }
+      if (proposed.rows !== term.rows) sendSize(term.cols, proposed.rows)
+      if (proposed.cols !== term.cols) timer = setTimeout(applyView, 100)
     }
     // Observe the pane, not the terminal's cell grid: resizing rows must not
     // create a feedback loop, and other viewers must never resize the session.
@@ -340,7 +387,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     </div>
     {(paused || zoom !== undefined) && <div className="terminal-view-actions">
       {paused && <Button size="sm" variant="secondary" onClick={resumeFollow}><LocateFixed size={16} />Follow cursor</Button>}
-      {zoom !== undefined && <Button size="sm" variant="secondary" onClick={() => { zoomTo(undefined); resumeFollow() }}><ZoomOut size={16} />Reset view</Button>}
+      {zoom !== undefined && <Button size="sm" variant="secondary" onClick={() => zoomTo(undefined)}><ZoomOut size={16} />Reset view</Button>}
     </div>}
   </div>
 }

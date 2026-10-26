@@ -2,20 +2,30 @@
  * How one device renders a session's single real grid (spec D10). The screen
  * that sizes the session fits the grid to its pane at its own font; every
  * other screen keeps the grid and fits the FONT to its width, never below a
- * per-device minimum, then pans natively on both axes. Pinch (or Ctrl+wheel)
- * sets a per-device font that overrides the fit until "Reset view".
+ * per-device minimum (adjustable, remembered), then pans natively on both
+ * axes. Pinch (or Ctrl+wheel) sets a per-device font that overrides the fit
+ * until "Reset view". Both live in this browser's storage, which may be absent.
  */
 import type { Session } from '../lib/contracts'
 
 export const BASE_FONT = 13
 export const MAX_FONT = 32
 const ZOOM_KEY = 'bakin-terminal-font'
+const MIN_KEY = 'bakin-terminal-min-font'
+/** The choices for "Smallest text" (px). */
+export const MIN_FONTS = [8, 10, 12, 14] as const
 
 export type ScreenDevice = 'desktop' | 'phone'
 
-/** Touch screens get a larger floor: below 10px a phone grid is unreadable. */
-export function minFont(view: Pick<Window, 'matchMedia'> = window): number {
+/** This device's chosen floor, else a larger one for touch screens (below 10px a phone grid is unreadable). */
+export function minFont(view: Pick<Window, 'matchMedia'> = window, storage: () => Storage = () => window.localStorage): number {
+  const chosen = readNumber(MIN_KEY, storage)
+  if (chosen !== undefined && (MIN_FONTS as readonly number[]).includes(chosen)) return chosen
   return view.matchMedia('(pointer: coarse)').matches ? 10 : 8
+}
+
+export function storeMinFont(size: number, storage: () => Storage = () => window.localStorage): void {
+  writeNumber(MIN_KEY, size, storage)
 }
 
 /** Names this screen in "Sized by …": a coarse pointer on a small screen is a phone. */
@@ -37,23 +47,33 @@ export function pinchFont(start: number, startDistance: number, distance: number
   return clampFont(start * (distance / startDistance), min)
 }
 
-/** This device's pinched font, if any. Storage can be absent (private mode, blocked site data). */
+/** This device's pinched font, if any. */
 export function storedFont(storage: () => Storage = () => window.localStorage): number | undefined {
+  return readNumber(ZOOM_KEY, storage)
+}
+
+export function storeFont(size: number | undefined, storage: () => Storage = () => window.localStorage): void {
+  writeNumber(ZOOM_KEY, size, storage)
+}
+
+// Storage can be absent or throw (private mode, blocked site data): the view
+// still applies for this page, it just isn't remembered.
+function readNumber(key: string, storage: () => Storage): number | undefined {
   try {
-    const value = Number(storage().getItem(ZOOM_KEY))
-    return Number.isFinite(value) && value >= 6 && value <= MAX_FONT ? value : undefined
+    const raw = storage().getItem(key)
+    const value = Number(raw)
+    return raw !== null && Number.isFinite(value) && value >= 6 && value <= MAX_FONT ? value : undefined
   } catch {
-    // No storage: the view just isn't remembered.
     return undefined
   }
 }
 
-export function storeFont(size: number | undefined, storage: () => Storage = () => window.localStorage): void {
+function writeNumber(key: string, value: number | undefined, storage: () => Storage): void {
   try {
-    if (size === undefined) storage().removeItem(ZOOM_KEY)
-    else storage().setItem(ZOOM_KEY, String(size))
+    if (value === undefined) storage().removeItem(key)
+    else storage().setItem(key, String(value))
   } catch {
-    // No storage: the pinch still applies for this page, it just isn't remembered.
+    // Not remembered; see readNumber.
   }
 }
 

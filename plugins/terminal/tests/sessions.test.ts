@@ -16,13 +16,14 @@ function fixture() {
   let releasable = false
   let writeFailure: Error | undefined
   let resizeFailure: Error | undefined
+  let readBackFailure: Error | undefined
   const tmuxSizes = new Map<string, { cols: number; rows: number }>()
   const outputs = new Map<string, (data: Uint8Array) => void>()
   const driver: ProcessDriver = {
-    create: async (s) => { live.add(s.id) }, attach(s, output) { attached.add(s.id); outputs.set(s.id, output) }, connected: (id) => attached.has(id),
+    create: async (s) => { live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, output) { attached.add(s.id); outputs.set(s.id, output) }, connected: (id) => attached.has(id),
     write: async (_id, data) => { if (writeFailure) throw writeFailure; writes.push(data) },
     resize: async (id, cols, rows) => { if (resizeFailure) { tmuxSizes.set(id, { cols: 77, rows: 22 }); throw resizeFailure } tmuxSizes.set(id, { cols, rows }) },
-    windowSize: async (id) => tmuxSizes.get(id) ?? { cols: 0, rows: 0 },
+    windowSize: async (id) => { if (readBackFailure) throw readBackFailure; return tmuxSizes.get(id)! },
     title: async () => {}, alive: async (id) => live.has(id), screen: async () => '',
     terminate: async (id) => { terminated.push(id); live.delete(id) }, inUse: async () => false, detach: async (id) => { if (id) attached.delete(id); else attached.clear() },
   }
@@ -37,6 +38,7 @@ function fixture() {
     manager, writes, live, attached, terminated, releases, outputs,
     failWrites: (error: Error) => { writeFailure = error },
     failResizes: (error: Error | undefined) => { resizeFailure = error },
+    failReadBack: (error: Error | undefined) => { readBackFailure = error },
     tmuxSizes,
     allowRelease: () => { releasable = true }, disable: () => { enabled = [] }, advance: () => { now += 31 * DAY },
   }
@@ -276,3 +278,38 @@ test('a failed resize leaves every representation at tmux\'s actual window size'
   failResizes(undefined)
 })
 
+test('a resize that cannot be reconciled drops the attachment; input is refused, never marked uncertain', async () => {
+  const { manager, failResizes, failReadBack, attached, writes, tmuxSizes } = fixture()
+  const session = await manager.create({ title: 'Lost', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+  await manager.readScreen(session.id, human)
+  failResizes(new Error('resize-window failed'))
+  failReadBack(new Error('tmux unreachable'))
+  await expect(manager.resizeAs(session.id, human, session.sizeEpoch, 120, 40)).rejects.toThrow('reconnect required')
+  expect(attached.has(session.id)).toBe(false)
+  await expect(manager.writeNext(session.id, human, session.generation, 'ls\r')).rejects.toThrow('reconnect required')
+  expect(manager.get(session.id, human).inputSequence).toBe(0)
+  expect(writes).toEqual([])
+  // tmux moved after all; the next viewer sync reattaches and adopts its real window.
+  failResizes(undefined)
+  failReadBack(undefined)
+  tmuxSizes.set(session.id, { cols: 77, rows: 22 })
+  const screen = await manager.readScreen(session.id, human)
+  expect([screen.cols, screen.rows]).toEqual([77, 22])
+  expect(manager.get(session.id, human).sizeRevision).toBe(1)
+})
+
+test('a record that fails to save after tmux resized is reconciled from tmux on the next attachment', async () => {
+  const { manager, attached, tmuxSizes } = fixture()
+  const session = await manager.create({ title: 'Disk', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+  await manager.readScreen(session.id, human)
+  const save = manager.store.save.bind(manager.store)
+  let failing = true
+  manager.store.save = (next) => { if (failing) throw new Error('disk full'); save(next) }
+  await expect(manager.resizeAs(session.id, human, session.sizeEpoch, 120, 40)).rejects.toThrow('reconnect required')
+  expect(tmuxSizes.get(session.id)).toEqual({ cols: 120, rows: 40 })
+  expect(attached.has(session.id)).toBe(false)
+  failing = false
+  const screen = await manager.readScreen(session.id, human)
+  expect([screen.cols, screen.rows]).toEqual([120, 40])
+  expect(manager.store.sessions().find((stored) => stored.id === session.id)).toMatchObject({ cols: 120, rows: 40 })
+})

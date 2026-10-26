@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { fitWidthFont, MAX_FONT, pinchFont, reveal, screenDevice, sizedBy, storedFont, storeFont } from '../components/terminal-view'
+import { fitWidthFont, MAX_FONT, minFont, pinchFont, reveal, screenDevice, sizedBy, storedFont, storeFont, storeMinFont } from '../components/terminal-view'
 
 function media(coarse: boolean, width = 390, height = 844) {
   return { matchMedia: (query: string) => ({ matches: coarse && query === '(pointer: coarse)' }) as MediaQueryList, screen: { width, height } as Screen }
@@ -43,6 +43,19 @@ describe('the remembered view', () => {
     const blocked = () => { throw new Error('SecurityError') }
     expect(storedFont(blocked)).toBeUndefined()
     expect(() => storeFont(14, blocked)).not.toThrow()
+  })
+})
+
+describe('the smallest text', () => {
+  it('defaults by device and remembers a chosen floor', () => {
+    const storage = memory()
+    expect(minFont(media(true), () => storage)).toBe(10)
+    expect(minFont(media(false), () => storage)).toBe(8)
+    storeMinFont(12, () => storage)
+    expect(minFont(media(true), () => storage)).toBe(12)
+    storage.setItem('bakin-terminal-min-font', '9')
+    expect(minFont(media(true), () => storage)).toBe(10)
+    expect(minFont(media(false), () => { throw new Error('SecurityError') })).toBe(8)
   })
 })
 

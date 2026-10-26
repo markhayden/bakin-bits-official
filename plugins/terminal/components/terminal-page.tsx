@@ -255,7 +255,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     {error && <Alert tone="danger"><AlertDescription>{error}</AlertDescription></Alert>}
   </>
   const controls = session && <Inline gap="dense" wrap={false} aria-label="Terminal controls">
-            {!ended && !session.historyDeleted && <SizeControl session={session} frozen={sizeFrozen} busy={busy} onFit={() => { if (!viewHandle.current?.fitToDevice()) setError('Size not changed: the terminal is reconnecting.') }} />}
+            {!ended && !session.historyDeleted && <SizeControl session={session} frozen={sizeFrozen} busy={busy} onMinFont={() => viewHandle.current?.refit()} onFit={() => { if (!viewHandle.current?.fitToDevice()) setError('Size not changed: the terminal is reconnecting.') }} />}
             <Popover>
               <Tool label="Session details" description="View the working directory, agent assignment, and linked work." render={<PopoverTrigger render={<Button size="icon-sm" variant="ghost" aria-label="Session details" />} />}><Info size={16} /></Tool>
               <PopoverContent align="end">

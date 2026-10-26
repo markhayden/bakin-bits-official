@@ -7,6 +7,8 @@
   overflow: auto;
   overscroll-behavior: contain;
   touch-action: pan-x pan-y;
+  /* xterm's layers carry z-indexes; keep them below the view actions. */
+  isolation: isolate;
 }
 [data-bakin-plugin="terminal"] .terminal-pane:focus-visible {
   outline: 2px solid var(--bakin-color-focus-ring);

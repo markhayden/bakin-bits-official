@@ -10,6 +10,36 @@ const pane = (page: Page) => page.evaluate(() => {
   return { fit: el.dataset.fit, scrollLeft: el.scrollLeft, scrollTop: el.scrollTop, maxLeft: el.scrollWidth - el.clientWidth, maxTop: el.scrollHeight - el.clientHeight, overflowX: el.scrollWidth > el.clientWidth, overflowY: el.scrollHeight > el.clientHeight }
 })
 
+/**
+ * Touch gestures. Chromium synthesizes real ones (native scrolling included);
+ * WebKit has no gesture synthesis, so it gets dispatched touch events (which
+ * exercise the canvas's own handlers) plus the scroll a real pan would make.
+ */
+async function gestures(page: Page) {
+  const webkit = process.env.TERMINAL_BROWSER === 'webkit'
+  const cdp = webkit ? undefined : await page.context().newCDPSession(page)
+  const touch = (type: string, points: Array<{ x: number; y: number }>) => page.locator('.terminal-pane').dispatchEvent(type, {
+    touches: points.map((point, identifier) => ({ identifier, clientX: point.x, clientY: point.y })),
+    changedTouches: points.map((point, identifier) => ({ identifier, clientX: point.x, clientY: point.y })),
+  })
+  return {
+    async pan(at: { x: number; y: number }, dx: number, dy: number) {
+      if (cdp) { await cdp.send('Input.synthesizeScrollGesture', { x: at.x, y: at.y, xDistance: dx, yDistance: dy, gestureSourceType: 'touch', speed: 800 }); return }
+      await touch('touchstart', [at])
+      await touch('touchmove', [{ x: at.x + dx, y: at.y + dy }])
+      await page.locator('.terminal-pane').evaluate((el, delta) => el.scrollBy(-delta.dx, -delta.dy), { dx, dy })
+      await touch('touchend', [])
+    },
+    async pinch(at: { x: number; y: number }, scale: number) {
+      if (cdp) { await cdp.send('Input.synthesizePinchGesture', { x: at.x, y: at.y, scaleFactor: scale, gestureSourceType: 'touch', relativeSpeed: 400 }); return }
+      const spread = (half: number) => [{ x: at.x - half, y: at.y }, { x: at.x + half, y: at.y }]
+      await touch('touchstart', spread(40))
+      for (let step = 1; step <= 4; step++) await touch('touchmove', spread(40 + (40 * scale - 40) * step / 4))
+      await touch('touchend', [])
+    },
+  }
+}
+
 browserTest('one screen sizes the session; another renders the real grid, pans, pinches and follows the cursor', async () => {
   const browser = await launchChromium()
   const desk = await browser.newPage({ viewport: { width: 1440, height: 900 } })
@@ -38,7 +68,13 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     id = created.id
     expect(created.sizeAuthority).toMatchObject({ kind: 'browser', device: 'desktop' })
     await desk.locator('.xterm-helper-textarea').waitFor()
-    await deskSocket.waitFor((frame) => frame.type === 'resize')
+    // The program started at (nearly) the size the pane then fits: the fit
+    // differs by at most the engine's scrollbar allowance (a few cells).
+    const firstFit = await deskSocket.waitFor((frame) => frame.type === 'resize', 3000).catch(() => undefined)
+    if (firstFit) {
+      expect(Math.abs((firstFit.cols as number) - created.cols)).toBeLessThanOrEqual(3)
+      expect(Math.abs((firstFit.rows as number) - created.rows)).toBeLessThanOrEqual(3)
+    }
     await desk.waitForFunction(() => document.querySelector('.terminal-pane')?.getAttribute('data-fit') === 'pane')
     expect(await sizeButton(desk).getAttribute('aria-label')).toContain('sized by this device')
     // Enough lines that the phone has something to pan over vertically too.
@@ -63,7 +99,7 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     expect(await desk.evaluate(() => document.querySelector('[aria-label^="Terminal size"]')!.getAttribute('aria-label'))).toBe(deskGrid)
 
     // A one-finger pan scrolls natively, pauses follow, and never opens the keyboard or types.
-    const cdp = await phoneContext.newCDPSession(phone)
+    const touch = await gestures(phone)
     const box = (await phone.locator('.terminal-pane').boundingBox())!
     const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
     const typedBefore = phoneSocket.inputs().length
@@ -71,7 +107,7 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     // The view starts on the cursor (bottom-left after the output): pan up and right, away from it.
     expect(start.scrollLeft).toBe(0)
     expect(start.scrollTop).toBeGreaterThan(start.maxTop - 24)
-    await cdp.send('Input.synthesizeScrollGesture', { x: centre.x, y: centre.y, xDistance: -200, yDistance: 200, gestureSourceType: 'touch', speed: 800 })
+    await touch.pan(centre, -200, 200)
     await phone.getByRole('button', { name: 'Follow cursor', exact: true }).waitFor()
     expect(await phone.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea'))).toBe(false)
     expect(phoneSocket.inputs().length).toBe(typedBefore)
@@ -88,7 +124,7 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     expect(followed.scrollTop).toBe(start.scrollTop)
 
     // Pinch sets this device's font, remembered across reloads; Reset view returns to the fit.
-    await cdp.send('Input.synthesizePinchGesture', { x: centre.x, y: centre.y, scaleFactor: 2, gestureSourceType: 'touch', relativeSpeed: 400 })
+    await touch.pinch(centre, 2)
     await phone.getByRole('button', { name: 'Reset view', exact: true }).waitFor()
     const pinched = await font(phone)
     expect(pinched).toBeGreaterThan(14)
@@ -107,6 +143,28 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     await desk.waitForFunction(() => document.querySelector('[aria-label^="Terminal size"]')?.getAttribute('aria-label')?.includes('sized by phone'))
     await desk.waitForFunction(() => document.querySelector('.terminal-pane')?.getAttribute('data-fit') === 'width')
     expect(await font(desk)).toBeGreaterThan(13)
+
+    // On the desktop the phone's grid overflows vertically: the wheel pans the pane
+    // (never xterm's history or arrow keys), Ctrl+wheel zooms, and neither types.
+    const deskInputs = deskSocket.inputs().length
+    const deskBox = (await desk.locator('.terminal-pane').boundingBox())!
+    await desk.mouse.move(deskBox.x + deskBox.width / 2, deskBox.y + deskBox.height / 2)
+    const beforeWheel = await pane(desk)
+    expect(beforeWheel.overflowY).toBe(true)
+    await desk.mouse.wheel(0, -300)
+    await desk.getByRole('button', { name: 'Follow cursor', exact: true }).waitFor()
+    expect((await pane(desk)).scrollTop).toBeLessThan(beforeWheel.scrollTop)
+    const deskFont = await font(desk)
+    await desk.keyboard.down('Control')
+    await desk.mouse.wheel(0, 100)
+    await desk.keyboard.up('Control')
+    await desk.getByRole('button', { name: 'Reset view', exact: true }).waitFor()
+    expect(await font(desk)).toBeLessThan(deskFont)
+    // Reset view restores the fit but leaves follow paused until asked.
+    await desk.getByRole('button', { name: 'Reset view', exact: true }).click()
+    await desk.waitForFunction((size) => Number(document.querySelector('.terminal-pane')?.getAttribute('data-font-size')) === size, deskFont)
+    expect(await desk.getByRole('button', { name: 'Follow cursor', exact: true }).isVisible()).toBe(true)
+    expect(deskSocket.inputs().length).toBe(deskInputs)
     await phone.waitForFunction(() => document.querySelector('.terminal-pane')?.getAttribute('data-fit') === 'pane')
 
     // The phone leaving freezes the size; the desktop says so and can take it back.
