@@ -5,7 +5,7 @@ import { join } from 'path'
 import type { PluginContext, Task } from '@makinbakin/sdk/types'
 import { createTestContext } from '../test-helpers'
 import { createProjectRepository, type ProjectRepository } from '../lib/parser'
-import { createStewardLoop, STEWARD_DEFAULTS, STEWARD_TAG, type StewardLoop, type StewardSettings } from '../lib/steward/reservation'
+import { createStewardLoop, readStewardSettings, STEWARD_DEFAULTS, STEWARD_TAG, type StewardLoop, type StewardSettings } from '../lib/steward/reservation'
 import type { Project } from '../types'
 
 const root = join(tmpdir(), `projects-steward-reservation-${Date.now()}`)
@@ -213,5 +213,20 @@ describe('steward reservation', () => {
     expect(read.steward?.frozen?.assignee).toBe('pixel')
     expect(read.waitingOn?.questionId).toBe('q1')
     expect(read.gates?.['complete:project']?.state).toBe('pending')
+  })
+})
+
+describe('steward settings (D29)', () => {
+  it('the schema declares every knob with the loop\'s defaults; bad values fall back', async () => {
+    const { default: plugin } = await import('../index')
+    const fields = Object.fromEntries((plugin.settingsSchema?.fields ?? []).map(field => [field.key, field.default]))
+    expect(fields).toEqual({
+      stewardEnabled: STEWARD_DEFAULTS.enabled,
+      stewardScanMinutes: STEWARD_DEFAULTS.scanMinutes,
+      stewardStuckAfterHours: STEWARD_DEFAULTS.stuckAfterHours,
+      stewardMaxRunsPerDay: STEWARD_DEFAULTS.maxRunsPerDay,
+    })
+    ctx.getSettings = (() => ({ stewardEnabled: false, stewardScanMinutes: 0, stewardStuckAfterHours: -1, stewardMaxRunsPerDay: 'many' })) as PluginContext['getSettings']
+    expect(readStewardSettings(ctx)).toEqual({ ...STEWARD_DEFAULTS, enabled: false })
   })
 })

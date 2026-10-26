@@ -13,7 +13,7 @@ import { buildProjectBrainstormContext } from './lib/brainstorm-prompt'
 import { createStewardGates } from './lib/steward/gates'
 import { createInputGate } from './lib/steward/input-gate'
 import { buildStewardDigest } from './lib/steward/digest'
-import { createStewardLoop, localDay, readStewardSettings, type StewardLoop } from './lib/steward/reservation'
+import { createStewardLoop, localDay, readStewardSettings, STEWARD_DEFAULTS, type StewardLoop } from './lib/steward/reservation'
 import { registerStewardTools } from './lib/steward/tools'
 import type { MutationCaller, Project, ProjectBrainstormMessage, ProjectStatus, ProjectPatch, ChecklistPatch, ProducedFile } from './types'
 
@@ -132,6 +132,17 @@ const projectsPlugin: BakinPlugin = {
   navItems: [
     { id: 'projects', label: 'Projects', icon: 'FolderKanban', href: '/projects', order: 30 },
   ],
+
+  // The steward loop (D29). Check-ins are board tasks, so budget limits and
+  // tag routing (`project-steward`) apply through dispatch.
+  settingsSchema: {
+    fields: [
+      { key: 'stewardEnabled', type: 'boolean', label: 'Lead check-ins', description: 'Let each Active project\'s lead check in as work moves: send steps to the board, chase blocked work, and ask you when a decision or sign-off is needed.', default: STEWARD_DEFAULTS.enabled },
+      { key: 'stewardScanMinutes', type: 'number', label: 'Look for changes every (minutes)', description: 'How often Active projects are checked for something that needs the lead. Finished, blocked or reviewed work also triggers a look within about 30 seconds.', default: STEWARD_DEFAULTS.scanMinutes },
+      { key: 'stewardStuckAfterHours', type: 'number', label: 'Call work stuck after (hours)', description: 'A review or a project with no movement this long counts as stuck, and an unresolved situation is raised again once per this window.', default: STEWARD_DEFAULTS.stuckAfterHours },
+      { key: 'stewardMaxRunsPerDay', type: 'number', label: 'Check-ins per project per day', description: 'At most this many check-ins per project per day. When the limit is hit, the project shows "Check-ins paused for today".', default: STEWARD_DEFAULTS.maxRunsPerDay },
+    ],
+  },
 
   routes: [
     legacyRoute('GET', '/', 'List projects'),
@@ -1324,6 +1335,11 @@ const projectsPlugin: BakinPlugin = {
       byStatus[p.status] = (byStatus[p.status] || 0) + 1
     }
     log.info(`Ready — ${projects.length} projects`, byStatus)
+  },
+
+  onSettingsChange() {
+    // The scan cadence is read when the timer starts.
+    stewardLoop?.start()
   },
 
   onShutdown() {

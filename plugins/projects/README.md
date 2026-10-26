@@ -26,11 +26,13 @@ same `requestId`.
 ## The project page
 
 The header holds the title, the status badge and ONE next-step button:
-**Start project** (draft, confirmed), **Mark complete** (active; confirmed
-when steps are unfinished), **Reopen** (completed), **Unarchive** (back to
-the status it was archived from). There is no status picker. The ⋯ menu has
-Archive, Details (lead agent, created/updated, ID) and Delete. The pencil
-beside the title renames the project in a dialog.
+**Start project** (draft — the hand-off, below), **Mark complete** (active;
+when steps are unfinished it names them and asks "complete anyway?"),
+**Reopen** (completed), **Unarchive** (back to the status it was archived
+from). There is no status picker. The ⋯ menu has Pause/Resume check-ins
+(active projects; a "Paused" badge shows while paused), Archive, Details
+(lead agent, created/updated, ID) and Delete. The pencil beside the title
+renames the project in a dialog.
 
 Below it, four tabs — **Conversation · Plan · Steps · Files** (`?tab=`). A
 project opens on what matters at its stage: draft → Conversation, active →
@@ -55,7 +57,8 @@ The lead's posture follows the project's stage, from one shared builder
   definition of done are answered it drafts the plan and steps and says
   "Draft plan is ready in the Plan tab". "Just write it" skips ahead.
 - **Active — progress.** What is blocked, what is next, whether scope holds;
-  no interviewing.
+  no interviewing. Between your conversations the lead also checks in on its
+  own (below).
 - **Completed / archived — retrospective.** Answers only.
 
 The lead names the project once it understands it, unless you already did.
@@ -72,6 +75,75 @@ agent rules — declared, not verified, the same documented limit as
 approvals. The composer's agent picker is for one-off consults; the lead
 answers by default. The composer's paperclip uploads a file to the asset
 library and attaches it to the project's Files.
+
+## Check-ins (the steward)
+
+**Start project** is a hand-off: "{Lead} takes it from here — sends steps to
+the board, assigns each to the right agent or keeps it, and checks in as work
+moves. You'll be asked when a decision or sign-off is needed." The dialog
+shows the step count and a "Review steps first" link. Confirming makes the
+project active and reserves the lead's first check-in at once (with no steps
+yet, it breaks the plan down first). A reopen is not a hand-off.
+
+**When the lead checks in.** A cheap, deterministic scan (no model call)
+looks at every Active project every `stewardScanMinutes` (default 15), and
+within ~30 s when a work task reaches done, blocked or review. It reads the
+project and its board tasks into a digest of signals — blocked tasks, a review
+idle past `stewardStuckAfterHours` (default 24), steps not on the board with
+nothing in flight, work finished since the last check-in, every step done, or
+no movement at all for the window. Check-in tasks never count as work. The
+digest has a fingerprint (signal kinds, task columns, steps, plan revision —
+no timestamps); a check-in is created only when the fingerprint changed, or
+when the same unresolved situation has lasted a whole window (one re-raise
+per window). Progressing work, or a situation already handled, creates
+nothing. Paused, waiting-on-you and completion-pending projects are skipped.
+
+**A check-in is a board task** — "Check in: {project}", assigned to the
+lead, tagged `project-steward`, sourced `projects/steward/<projectId>` — so
+it gets budget gating, the watchdog, metering (dispatch work) and board
+visibility like any task, and a models tag route on `project-steward` can
+send it to a cheaper model. At most one is open per project: it is reserved
+in the project file (pre-minted id + frozen title/assignee/brief) before it
+is created, so the timer, an event, Start and a crash all converge on the same
+task. Each scan first reconciles the reservation against the board (create a
+missing reserved task; finalize a finished or deleted one). At most
+`stewardMaxRunsPerDay` (default 6) per project per local day; past that the
+row says "Check-ins paused for today".
+
+**What the lead may do on its own:** send existing steps to the board
+(keeping each or assigning the best agent), add steps or tasks that follow
+from the agreed plan, make small plan edits (snapshotted like every edit),
+re-describe or reassign blocked tasks, nudge idle reviews. **What needs
+you:** changing scope, dropping or deleting steps, spending beyond the plan,
+signing off a deliverable, completing the project. Enforced by the server:
+no status changes, no step deletion, no overwriting your title. Advisory (in
+the check-in's instructions, not enforced): scope and spend.
+
+**Check-in tools** (each takes the `taskId` from its check-in task; anything
+but the project's open check-in is refused with `not_steward`, or
+`use_ask_user` from inside the project conversation):
+
+- `bakin_exec_projects_checkin` — "Checked in: …" plus the actions taken,
+  posted to the project conversation as the lead (the check-in's own turn).
+- `bakin_exec_projects_request_input` — ONE question card in the project
+  conversation, with an attention notification and "Waiting for you" on the
+  list. Check-ins pause until you reply; your reply's turn carries the
+  question and the lead's reasoning, and the gate ends when that turn settles.
+  A newer question replaces an open one.
+- `bakin_exec_projects_request_signoff` — a Bakin approval you decide on the
+  board (the "Needs approval" card on the check-in task; the list says "Needs
+  approval"). `complete`: approve completes the project, reject sends your
+  reason to the conversation and the loop carries on. `signoff` (a
+  deliverable): approve marks it done, reject sends it back to todo with your
+  reason on the task and in the conversation. Agents can never decide.
+
+Rows written outside a conversation turn queue behind a running turn and
+land right after it — never inside it.
+
+**Completing or archiving** a project — by hand or by approving its
+completion — archives the open check-in, cancels other pending sign-offs and
+clears an open question. **Pause check-ins** (⋯) stops the loop without
+changing the status.
 
 ## Plan
 
@@ -115,9 +187,11 @@ relink, detach and preview. A file in both shows once, under Attached.
 
 ## Projects list
 
-Separated `ListRows`: each row shows the title, status and ONE resume signal
-by priority — Waiting for you (an unanswered question card) › {Lead} is
-working › New reply from {Lead} › Plan updated › "n of m steps done". "All"
+Separated `ListRows`: each row shows the title, status (+ "Paused") and ONE
+resume signal by priority — Needs approval (a pending sign-off) › Waiting
+for you (an unanswered question card) › {Lead} is working › New reply from
+{Lead} › Stuck (blocked, idle review or stalled — the check-in digest) ›
+Plan updated › Check-ins paused for today › "n of m steps done". "All"
 leaves archived projects out; they keep their own filter. A row's ⋯ menu
 deletes the project (linked board tasks and asset files are kept; a running
 conversation is stopped).
@@ -190,6 +264,15 @@ code lives separately under:
 If a project returns "not found" on one machine, first confirm the markdown file
 exists under the same `BAKIN_HOME` and that the browser URL project id matches
 the filename without `.md`.
+
+Check-in state rides the same frontmatter, strictly validated on read:
+`steward` (the open reservation — `openTaskId`, `phase`, the frozen create
+inputs — plus `lastFingerprint`/`lastStewardAt` and the day's `runs`),
+`waitingOn` / `replyPending` (an open question and its reply turn),
+`gates` (`<gateKind>:<subject>` → approval id, generation, state, the check-in
+that asked) and `stewardPaused`. Bookkeeping writes never touch `updated`.
+Settings (Settings → Projects): `stewardEnabled`, `stewardScanMinutes`,
+`stewardStuckAfterHours`, `stewardMaxRunsPerDay`.
 
 ## Asset References
 
