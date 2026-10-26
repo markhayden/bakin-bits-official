@@ -387,3 +387,22 @@ describe('review round 5 regressions', () => {
     expect(await loop.scan('p1')).toEqual({ created: expect.any(String) })
   })
 })
+
+describe('review round 6 regressions', () => {
+  it('edits and the check-in\'s own sign-off moves never earn a follow-up', async () => {
+    clock = new Date(Date.now() - HOUR)
+    writeProject()
+    await addWork('blocked')
+    const { created } = await loop.scan('p1', { force: true }) as { created: string }
+    // The steward re-describes the blocked task (updatedAt moves, the column does not)…
+    await ctx.tasks.update('work-1', { description: 'Clearer brief' })
+    // …and sends it to review for sign-off itself.
+    await ctx.tasks.move('work-1', 'review')
+    repo.writeProject({ ...repo.readProject('p1')!, gates: { 'signoff:work-1': { approvalId: 'projects:p1:signoff:work-1:1', generation: 1, state: 'pending', stewardTaskId: created } } })
+    const done = await ctx.tasks.move(created, 'done')
+    loop.onTaskStatusChanged({ taskId: created, from: 'todo', to: 'done', task: done })
+    await flushTimers()
+    expect(stewardState()?.lastFingerprint).toBeDefined()
+    expect(stewardState()?.runNext).toBeUndefined()
+  })
+})

@@ -98,6 +98,7 @@ const stewardSchema = z.object({
   frozen: z.object({ title: z.string(), assignee: z.string(), description: z.string() }).strict().optional(),
   reservedAt: z.string().optional(),
   fingerprint: z.string().optional(),
+  briefColumns: z.record(z.string(), z.string()).optional(),
   lastFingerprint: z.string().optional(),
   lastStewardAt: z.string().optional(),
   runs: z.object({ date: z.string(), count: z.number().int().min(0) }).strict().optional(),

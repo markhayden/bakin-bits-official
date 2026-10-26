@@ -385,3 +385,22 @@ describe('review round 5 regressions', () => {
     expect((await ask('again')).status).toBe(202)
   })
 })
+
+describe('review round 6 regressions', () => {
+  it('shutdown drains an /ask still preparing its context, then ends its turn; later asks are refused', async () => {
+    await setup()
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const realList = plugin.ctx.tasks.list
+    plugin.ctx.tasks.list = async (filter) => { await held; return realList(filter) }
+    holdTurns()
+    const asking = ask('hello')
+    await new Promise(resolve => setTimeout(resolve, 5))
+    const shuttingDown = projectsPlugin.onShutdown?.()
+    release()
+    await shuttingDown
+    expect((await asking).status).toBe(202)
+    expect(rows().some(row => row.kind === 'aborted')).toBe(true)
+    expect((await ask('too late')).status).toBe(503)
+  })
+})

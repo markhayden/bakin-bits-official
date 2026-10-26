@@ -172,9 +172,15 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
     // Work that finished, blocked or went to review AFTER the brief was
     // frozen was never in front of this run: it earns a follow-up rather
     // than being acknowledged by finalizing (the daily cap bounds it).
-    const briefAt = Date.parse(project.steward?.reservedAt ?? '')
-    const unseen = how === 'done' && Number.isFinite(briefAt) && tasks.some(task =>
-      !isStewardTask(task) && TRIGGER_COLUMNS.has(task.column) && Date.parse(task.updatedAt ?? '') > briefAt)
+    // An actual COLUMN change, not an edit: descriptions, reassignment and
+    // logs move `updatedAt` too. Deliverables this run itself sent to review
+    // for sign-off are its own doing, not unseen work.
+    const brief = project.steward?.briefColumns
+    const ownSignoffs = new Set(Object.entries(project.gates ?? {})
+      .filter(([key, gate]) => key.startsWith('signoff:') && gate.stewardTaskId === taskId)
+      .map(([key]) => key.slice('signoff:'.length)))
+    const unseen = how === 'done' && brief !== undefined && tasks.some(task =>
+      !isStewardTask(task) && TRIGGER_COLUMNS.has(task.column) && brief[task.id] !== task.column && !ownSignoffs.has(task.id))
     const closed = await writeSteward(projectId, current => {
       const steward = current.steward
       if (steward?.openTaskId !== taskId) return false
@@ -292,6 +298,7 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
         frozen,
         reservedAt: at.toISOString(),
         fingerprint: digest.fingerprint,
+        briefColumns: Object.fromEntries(digest.workTasks.map(task => [task.id, task.column])),
         runs: { date: today, count: runs + 1 },
       }
       repo.writeProject(current)

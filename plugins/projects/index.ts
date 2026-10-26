@@ -31,6 +31,25 @@ let resumePendingKickoffs: (() => Promise<void>) | null = null
 let stewardLoop: StewardLoop | null = null
 /** This activation's brainstorm turns — ended in onShutdown. */
 let activeBrainstormTurns: ConversationTurnService | null = null
+/**
+ * Turn admissions (an /ask or a kickoff preparing its context and starting a
+ * turn) are tracked from their first await, so shutdown can close the door,
+ * drain the ones already preparing, and only then end live turns — none can
+ * slip onto a retired turn service.
+ */
+let admissionsOpen = false
+const pendingAdmissions = new Set<Promise<unknown>>()
+
+async function admitTurn<T>(fn: () => Promise<T>): Promise<T | 'closed'> {
+  if (!admissionsOpen) return 'closed'
+  const work = fn()
+  pendingAdmissions.add(work)
+  try {
+    return await work
+  } finally {
+    pendingAdmissions.delete(work)
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -258,6 +277,7 @@ const projectsPlugin: BakinPlugin = {
     stewardGates.registerGates()
 
     activeBrainstormTurns = brainstormTurns
+    admissionsOpen = true
 
     /**
      * Start a pending kickoff's first brainstorm turn — the SAME path as
@@ -283,12 +303,16 @@ const projectsPlugin: BakinPlugin = {
           await projectService.advanceKickoff(projectId, kickoff.requestId, 'pending', 'started')
           return 'started'
         }
-        const runtimeContent = buildProjectBrainstormContext(await derive(project), kickoff.message, { live: true })
-        if (readProject(projectId)?.kickoff?.state !== 'pending') return 'started'
-        const result = await brainstormTurns.start(ctx, projectId, kickoff.message, {
-          agentId: kickoff.agentId ?? project.owner,
-          runtimeContent,
+        const message = kickoff.message
+        const result = await admitTurn(async () => {
+          const runtimeContent = buildProjectBrainstormContext(await derive(project), message, { live: true })
+          if (readProject(projectId)?.kickoff?.state !== 'pending') return 'superseded' as const
+          return brainstormTurns.start(ctx, projectId, message, {
+            agentId: kickoff.agentId ?? project.owner,
+            runtimeContent,
+          })
         })
+        if (result === 'superseded') return 'started'
         if (result !== 'accepted') return 'pending'
         await projectService.advanceKickoff(projectId, kickoff.requestId, 'pending', 'started')
         return 'started'
@@ -876,7 +900,7 @@ const projectsPlugin: BakinPlugin = {
       // admitted. Sampling → admission → flip run inside the admission fence
       // a question is posted under, so the question this reply ends is
       // exactly the one its context carried.
-      const result = await withAdmissionFence(projectId, async () => {
+      const result = await admitTurn(() => withAdmissionFence(projectId, async () => {
         const derived = await derive(project)
         const pendingQuestion = readProject(projectId)?.waitingOn
         const context = buildProjectBrainstormContext(derived, body.prompt, { live: true, ...(pendingQuestion ? { pendingQuestion } : {}) })
@@ -887,7 +911,8 @@ const projectsPlugin: BakinPlugin = {
           if (!brainstormTurns.isInFlight(projectId)) await inputGate.settleReply(projectId)
         }
         return started
-      })
+      }))
+      if (result === 'closed') return json({ error: 'Projects is restarting — try again in a moment.', code: 'restarting' }, 503)
       if (result === 'not_found') return json({ error: 'Project not found' }, 404)
       if (result === 'busy') return json({ error: 'A brainstorm turn is already running for this project' }, 409)
       return json({ ok: true, streaming: true }, 202)
@@ -1385,6 +1410,9 @@ const projectsPlugin: BakinPlugin = {
     // reload never admits a turn or a steward row over a live one.
     const turns = activeBrainstormTurns
     activeBrainstormTurns = null
+    // Close the door, then drain admissions already preparing context.
+    admissionsOpen = false
+    await Promise.allSettled([...pendingAdmissions])
     if (turns) {
       await Promise.all(turns.listInFlight().map(async ({ key }) => {
         turns.abort(key)
