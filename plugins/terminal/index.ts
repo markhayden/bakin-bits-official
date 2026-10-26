@@ -30,7 +30,7 @@ const route = (path: string, method: 'GET' | 'POST', summary: string, handler: (
 })
 
 export default definePlugin({
-  id: 'terminal', name: 'Terminal', version: '0.2.0',
+  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.1',
   routes: [
     route('/options', 'GET', 'Get terminal form defaults and available agents and tasks', async (request) => {
       const principal = human(request)
@@ -41,7 +41,7 @@ export default definePlugin({
       const principal = human(request)
       const serviceReady = await service?.ready()
       if (serviceReady) await sessions().refreshStates()
-      return Response.json({ sessions: sessions().list(principal), serviceReady, serviceMigrationRequired: await service?.migrationRequired() })
+      return Response.json({ sessions: sessions().list(principal), serviceReady, serviceUpdateRequired: await service?.updateRequired() })
     }),
     route('/sessions', 'POST', 'Create a terminal session', async (request) => { const principal = human(request); return Response.json(await sessions().create(await request.json(), principal)) }),
     route('/session', 'POST', 'Operate a terminal session', async (request) => { const principal = human(request); return Response.json(await command(sessions(), await request.json(), principal)) }),
@@ -52,7 +52,7 @@ export default definePlugin({
       const cursor = z.coerce.number().int().nonnegative().parse(url.searchParams.get('cursor') ?? 0)
       return Response.json(sessions().output(url.searchParams.get('id') ?? '', principal, cursor))
     }),
-    route('/service', 'POST', 'Set up the persistent terminal service', async (request) => { human(request); await service?.install(); await sessions().start(); return Response.json({ ready: true }) }),
+    route('/service', 'POST', 'Set up the persistent terminal service', async (request) => { human(request); await sessions().setupService(() => service!.install()); return Response.json({ ready: true }) }),
   ],
   settingsSchema: { fields: [
     { key: 'enabledAgents', label: 'Enable terminal access', description: 'Enabled agents can open and operate terminal sessions. A session is a real shell running as your user, so an enabled agent can read any file you can — including stored API keys and credentials. Enable only agents you trust with full access to this machine.', type: 'agent-toggles', default: ['main'] },
@@ -88,17 +88,48 @@ export default definePlugin({
     // Three outcomes (Bakin self-healing PR 1): every family is declared up front and every
     // instance names its subject — the Terminal page is the operator's control for all three.
     const TERMINAL_SUBJECT = { kind: 'plugin', id: 'terminal', label: 'Terminal' } as const
+    // A service update restarts the private tmux server; setup itself refuses
+    // while any session is live, so applying it never ends running work.
+    ctx.registerHealthRepairAction({
+      id: 'setup-service',
+      name: 'Apply the Terminal service update',
+      effects: { deletesUserContent: false, spendsMoney: false, widensAuthorization: false },
+      mutation: 'restart',
+      operationPlan: () => ({ stages: [{ id: 'setup', kind: 'committing', label: 'Restart the Terminal service with the update' }], pointOfNoReturn: 'setup' }),
+      async plan() {
+        if (!await service?.updateRequired()) return []
+        return [{
+          id: 'setup', actionId: 'setup-service', title: 'Apply the Terminal service update',
+          reason: 'The running Terminal service is not the one this plugin version sets up.',
+          incidentIds: [], observationIds: [], preconditions: [],
+          changes: [{ kind: 'service', target: 'terminal', action: 'update', description: 'Restart the private tmux server with the managed binary and the generated configuration' }],
+        }]
+      },
+      async apply(items, op) {
+        const item = items[0]
+        if (!item) return []
+        op.stage('setup')
+        try {
+          await sessions().setupService(() => service!.install())
+          return [{ itemId: item.id, actionId: item.actionId, status: 'applied', message: 'The Terminal service runs the current configuration.', affectedCheckIds: ['terminal.service'], changes: item.changes }]
+        } catch (error) {
+          return [{ itemId: item.id, actionId: item.actionId, status: 'failed', message: error instanceof Error ? error.message : String(error), affectedCheckIds: ['terminal.service'], changes: [] }]
+        }
+      },
+    })
     ctx.registerHealthCheck({
       id: 'service', name: 'Terminal service and retention',
       description: 'Checks persistent terminal availability and retained work needing review.',
       group: { key: 'terminal', label: 'Terminal' },
       incidents: [
         { id: 'service', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
+        { id: 'service-update', subjectKind: 'plugin', resolution: { type: 'repair', actionId: 'setup-service' }, required: 'never' },
         { id: 'maintenance', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
         { id: 'retention', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
       ],
       run: async () => {
         const ready = await service?.ready()
+        const updateRequired = Boolean(ready && await service?.updateRequired())
         const retained = sessions().list({ kind: 'human', id: 'health' }).filter((session) => session.cleanupReason)
         const observations: HealthObservationInput[] = []
         for (const [key, summary, problem] of [
@@ -113,6 +144,12 @@ export default definePlugin({
             resolution: { key: 'review', type: 'human', needs: 'decision', label: 'Open Terminal', href: '/terminal' },
           } })
         }
+        if (updateRequired) observations.push({ key: 'service-update', status: 'warning', summary: 'Terminal service update available', incident: {
+          key: 'service-update', declarationId: 'service-update', subject: TERMINAL_SUBJECT, title: 'Terminal service update available',
+          impact: 'Terminal runs an older service setup; native attach and the current terminal configuration need the update. It applies once no session is live.',
+          class: 'service_failure', disposition: 'watch',
+          resolution: { key: 'apply', type: 'repair', actionId: 'setup-service', label: 'Apply update' },
+        } })
         return { outcome: 'observed', observations: observations.length ? [observations[0]!, ...observations.slice(1)] : [{ key: 'service', status: 'healthy', summary: 'Terminal service and retention are healthy.' }] }
       },
     })

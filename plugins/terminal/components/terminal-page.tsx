@@ -31,7 +31,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const current = useRef<Session[]>([])
   const [loading, setLoading] = useState(true)
   const [serviceReady, setServiceReady] = useState(false)
-  const [serviceMigrationRequired, setServiceMigrationRequired] = useState(false)
+  const [serviceUpdateRequired, setServiceUpdateRequired] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -65,7 +65,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const refresh = useCallback(async () => {
     try {
       const known = listEpoch.current
-      const result = await api<{ sessions: Session[]; serviceReady: boolean; serviceMigrationRequired?: boolean }>('/sessions')
+      const result = await api<{ sessions: Session[]; serviceReady: boolean; serviceUpdateRequired?: boolean }>('/sessions')
       for (const session of result.sessions) update(session)
       // Deleted sessions vanish from the server list. Drop them locally, but
       // never against a response older than a session added while in flight.
@@ -74,7 +74,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
         remove((id) => !listed.has(id))
       }
       setServiceReady(result.serviceReady)
-      setServiceMigrationRequired(Boolean(result.serviceMigrationRequired))
+      setServiceUpdateRequired(Boolean(result.serviceUpdateRequired))
       setLoadError('')
     } catch (error) { setLoadError(error instanceof Error ? error.message : 'Terminal unavailable') }
     finally { setLoading(false) }
@@ -234,7 +234,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     : !serviceReady && all.length === 0 ? <SystemState kind="initial-empty" scope="page" icon={<Terminal size={32} />} title="Terminal service is not set up" description="Set up the persistent service to start using Terminal. Bakin installs tmux with this plugin. If tmux is missing, open Health and run the plugin assets repair, or run bakin install plugin-assets. If this machine cannot download it, install tmux manually." action={<Button disabled={busy} onClick={() => void setup()}><Play size={16} />Set up service</Button>} />
     : all.length === 0 ? <SystemState kind="initial-empty" scope="page" icon={<Terminal size={32} />} title="No terminals yet" description="No terminal sessions have been created." action={newTerminal} /> : undefined
   const feedback = <>
-    {serviceMigrationRequired && serviceReady && <SystemState kind="initial-empty" scope="inline" title="Terminal service update available" description="Set up service to switch to Bakin's managed tmux. Live terminal sessions must end first; setup will keep them running if any remain." action={<Button size="sm" disabled={busy} onClick={() => void setup()}>Set up service</Button>} />}
+    {serviceUpdateRequired && serviceReady && <SystemState kind="initial-empty" scope="inline" title="Terminal service update available" description="Set up service to restart Terminal on Bakin's managed tmux and current configuration. End live sessions first; setup refuses while any are running." action={<Button size="sm" disabled={busy} onClick={() => void setup()}>Set up service</Button>} />}
     {!serviceReady && all.length > 0 && <SystemState kind="error" scope="inline" title="Terminal service is unavailable" description="Open Health and run the plugin assets repair, or run bakin install plugin-assets, then set up the service." action={<Button size="sm" disabled={busy} onClick={() => void setup()}>Set up service</Button>} />}
     {loadError && all.length > 0 && <SystemState kind="error" scope="inline" title="Terminals could not be refreshed" description={loadError} action={<Button size="sm" variant="outline" onClick={() => void refresh()}><RotateCw size={16} />Retry</Button>} />}
     {error && <Alert tone="danger"><AlertDescription>{error}</AlertDescription></Alert>}

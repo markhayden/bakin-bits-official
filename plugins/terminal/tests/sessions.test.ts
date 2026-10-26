@@ -14,9 +14,12 @@ function fixture() {
   const attached = new Set<string>()
   const terminated: string[] = []
   let releasable = false
+  let writeFailure: Error | undefined
+  const outputs = new Map<string, (data: Uint8Array) => void>()
   const driver: ProcessDriver = {
-    create: async (s) => { live.add(s.id) }, attach(s) { attached.add(s.id) }, connected: (id) => attached.has(id), write: (_id, data) => { writes.push(data) },
-    resize: async () => {}, alive: async (id) => live.has(id), screen: async () => '',
+    create: async (s) => { live.add(s.id) }, attach(s, output) { attached.add(s.id); outputs.set(s.id, output) }, connected: (id) => attached.has(id),
+    write: async (_id, data) => { if (writeFailure) throw writeFailure; writes.push(data) },
+    resize: async () => {}, title: async () => {}, alive: async (id) => live.has(id), screen: async () => '',
     terminate: async (id) => { terminated.push(id); live.delete(id) }, inUse: async () => false, detach: async (id) => { if (id) attached.delete(id); else attached.clear() },
   }
   const releases: Array<{ sessionId: string; worktreePath: string; teardown?: boolean }> = []
@@ -26,7 +29,11 @@ function fixture() {
     release: async (input) => { releases.push(input); return releasable ? { ok: true } : { ok: false, error: 'Unmerged work' } },
   })
   managers.push(manager)
-  return { manager, writes, live, attached, terminated, releases, allowRelease: () => { releasable = true }, disable: () => { enabled = [] }, advance: () => { now += 31 * DAY } }
+  return {
+    manager, writes, live, attached, terminated, releases, outputs,
+    failWrites: (error: Error) => { writeFailure = error },
+    allowRelease: () => { releasable = true }, disable: () => { enabled = [] }, advance: () => { now += 31 * DAY },
+  }
 }
 const agent = { kind: 'agent', id: 'patch' } as const
 const human = { kind: 'human', id: 'browser-123456789' } as const
@@ -148,3 +155,50 @@ test('short viewports resize to one row while ownership and dimension limits sti
   for (const rows of [0, 151, 1.5]) await expect(manager.resize(session.id, human, session.generation, 20, rows)).rejects.toThrow('dimensions')
   await expect(manager.resize(session.id, agent, session.generation, 20, 1)).rejects.toThrow()
 })
+
+test('output subscribers hear each parsed chunk once it is stored, and can unsubscribe', async () => {
+  const { manager, outputs } = fixture()
+  const session = await manager.create({ title: 'Live', cwd: '/tmp', program: 'shell' }, human)
+  const heard: number[] = []
+  const unsubscribe = manager.onOutput(session.id, () => { heard.push(manager.output(session.id, human, 0).cursor) })
+  outputs.get(session.id)!(new TextEncoder().encode('hello'))
+  for (let attempt = 0; attempt < 50 && heard.length === 0; attempt++) await Bun.sleep(5)
+  expect(heard).toEqual([1])
+  unsubscribe()
+  outputs.get(session.id)!(new TextEncoder().encode(' again'))
+  await Bun.sleep(30)
+  expect(heard).toEqual([1])
+})
+
+test('a failed delivery surfaces and still consumes the sequence (never retried)', async () => {
+  const { manager, failWrites } = fixture()
+  const session = await manager.create({ title: 'Input', cwd: '/tmp', program: 'shell' }, human)
+  failWrites(new Error('Terminal control connection closed'))
+  await expect(manager.write(session.id, human, session.generation, 1, 'ls\r')).rejects.toThrow('control connection closed')
+  await expect(manager.write(session.id, human, session.generation, 1, 'ls\r')).rejects.toThrow('sequence')
+})
+
+test('nextOutput resolves on new output, on output that landed before it subscribed, and on abort', async () => {
+  const { manager, outputs } = fixture()
+  const session = await manager.create({ title: 'Wait', cwd: '/tmp', program: 'shell' }, human)
+  const controller = new AbortController()
+  const waiting = manager.nextOutput(session.id, manager.latestCursor(session.id), controller.signal, 5000)
+  outputs.get(session.id)!(new TextEncoder().encode('x'))
+  await waiting
+  expect(manager.latestCursor(session.id)).toBe(1)
+  // Output already past the cursor resolves at once.
+  await manager.nextOutput(session.id, 0, controller.signal, 5000)
+  const aborted = manager.nextOutput(session.id, manager.latestCursor(session.id), controller.signal, 5000)
+  controller.abort()
+  await aborted
+})
+
+test('service setup runs in the same queue as creation, never in the middle of one', async () => {
+  const { manager } = fixture()
+  const order: string[] = []
+  const creating = manager.create({ title: 'Racing', cwd: '/tmp', program: 'shell' }, human).then(() => order.push('created'))
+  const setup = manager.setupService(async () => { order.push('setup') })
+  await Promise.all([creating, setup])
+  expect(order).toEqual(['created', 'setup'])
+})
+

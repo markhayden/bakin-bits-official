@@ -1,12 +1,16 @@
 import type { Session } from './contracts'
 import { TerminalError } from './contracts'
+import { ControlClient } from './control'
 import { TerminalService, terminalEnvironment } from './service'
 
 export interface ProcessDriver {
   create(session: Session): Promise<void>
   attach(session: Session, output: (data: Uint8Array) => void): void
   connected(id: string): boolean
-  write(id: string, data: string): void
+  /** Resolves once tmux has accepted the bytes for the pane (not that the program read them). */
+  write(id: string, data: string): Promise<void>
+  /** Set the pane title native clients show (`@bakin_title`). */
+  title(session: Session): Promise<void>
   resize(id: string, cols: number, rows: number): Promise<void>
   alive(id: string): Promise<boolean>
   screen(id: string): Promise<string>
@@ -15,8 +19,15 @@ export interface ProcessDriver {
   detach(id?: string): Promise<void>
 }
 
+/**
+ * The hybrid bridge per session: a PTY `attach-session` client whose redraw
+ * stream is the output (and the reattach-recovery path), plus a control-mode
+ * client for input, resizes and queries. Both attach `ignore-size`: only
+ * Bakin's explicit `resize-window` sizes a session (window-size manual).
+ */
 export class TmuxProcesses implements ProcessDriver {
   private clients = new Map<string, ReturnType<typeof Bun.spawn>>()
+  private controls = new Map<string, ControlClient>()
   constructor(private service: TerminalService) {}
   async create(session: Session): Promise<void> {
     if (!await this.service.ready()) throw new TerminalError('Terminal service needs setup', 503)
@@ -25,26 +36,47 @@ export class TmuxProcesses implements ProcessDriver {
     if (!executable) throw new TerminalError(`${session.program} is not installed`, 503)
     await this.service.command(['new-session', '-d', '-s', session.id, '-x', String(session.cols), '-y', String(session.rows), '-c', session.cwd,
       '/usr/bin/env', '-i', ...Object.entries(env).map(([key, value]) => `${key}=${value}`), executable, ...(session.program === 'shell' ? ['-l'] : [])])
+    await this.title(session)
+  }
+  /** Native clients title their window from this (tmux.conf set-titles-string). */
+  async title(session: Session): Promise<void> {
+    await this.service.command(['set-option', '-t', session.id, '@bakin_title', session.title])
   }
   attach(session: Session, output: (data: Uint8Array) => void): void {
     if (this.clients.has(session.id)) return
-    const process = Bun.spawn([this.service.tmux!, '-S', this.service.socket, 'attach-session', '-t', session.id], {
+    const process = Bun.spawn([this.service.tmux!, '-S', this.service.socket, 'attach-session', '-f', 'ignore-size', '-t', session.id], {
       env: terminalEnvironment(),
       terminal: { cols: session.cols, rows: session.rows, data: (_terminal, data) => output(data) },
       stderr: 'ignore',
     })
     this.clients.set(session.id, process)
     void process.exited.then(() => { if (this.clients.get(session.id) === process) this.clients.delete(session.id) })
+    const control = ControlClient.attach(this.service.tmux!, this.service.socket, session.id, terminalEnvironment(), () => {})
+    this.controls.set(session.id, control)
+    void control.ready.catch(() => undefined)
   }
-  write(id: string, data: string): void {
-    const client = this.clients.get(id)
-    if (!client?.terminal) throw new TerminalError('Terminal attachment is disconnected', 503)
-    if (client.terminal.write(data) !== Buffer.byteLength(data)) throw new TerminalError('Terminal input was only partially delivered; do not retry this input')
+  private control(id: string): ControlClient {
+    const control = this.controls.get(id)
+    if (!control || control.isClosed) throw new TerminalError('Terminal attachment is disconnected', 503)
+    return control
   }
-  connected(id: string): boolean { return this.clients.has(id) }
+  async write(id: string, data: string): Promise<void> {
+    const control = this.control(id)
+    await control.ready
+    // Browser and agent input always reaches the program: a native client's
+    // scrollback (copy mode) is cancelled first. Each step is its own awaited
+    // command — a command that runs another (if-shell) emits extra reply
+    // blocks and would break the control client's FIFO correlation.
+    const [mode] = await control.command(['display-message', '-p', '-t', id, '#{pane_in_mode}'])
+    if (mode?.trim() === '1') await control.command(['send-keys', '-X', '-t', id, 'cancel'])
+    await control.sendKeys(id, new TextEncoder().encode(data))
+  }
+  connected(id: string): boolean { return this.clients.has(id) && !this.controls.get(id)?.isClosed }
   async resize(id: string, cols: number, rows: number): Promise<void> {
     this.clients.get(id)?.terminal?.resize(cols, rows)
-    await this.service.command(['resize-window', '-t', id, '-x', String(cols), '-y', String(rows)])
+    const control = this.control(id)
+    await control.ready
+    await control.command(['resize-window', '-t', id, '-x', String(cols), '-y', String(rows)])
   }
   async alive(id: string): Promise<boolean> {
     if (!await this.service.ready()) throw new TerminalError('Terminal service unavailable; process state is unknown', 503)
@@ -71,6 +103,9 @@ export class TmuxProcesses implements ProcessDriver {
     return Boolean(output.trim() || error.trim()) || (exit !== 0 && exit !== 1)
   }
   async detach(id?: string): Promise<void> {
+    const controls = id ? [this.controls.get(id)].filter((control) => control !== undefined) : [...this.controls.values()]
+    if (id) this.controls.delete(id); else this.controls.clear()
+    for (const control of controls) control.close()
     const clients = id ? [this.clients.get(id)].filter((client) => client !== undefined) : [...this.clients.values()]
     if (id) this.clients.delete(id); else this.clients.clear()
     for (const client of clients) { client.kill(); client.terminal?.close() }

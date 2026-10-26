@@ -200,7 +200,7 @@ browserTest('service migration remains visible and explains why live sessions bl
   const browser = await launchChromium()
   const page = await browser.newPage({ viewport: { width: 320, height: 740 } })
   try {
-    await page.route('**/api/plugins/terminal/sessions', route => route.fulfill({ json: { sessions: [], serviceReady: true, serviceMigrationRequired: true } }))
+    await page.route('**/api/plugins/terminal/sessions', route => route.fulfill({ json: { sessions: [], serviceReady: true, serviceUpdateRequired: true } }))
     await page.route('**/api/plugins/terminal/service', route => route.fulfill({ status: 409, json: { error: "Terminal still has 2 live terminal panes. End them and press Set up service again to switch to Bakin's tmux." } }))
     await page.goto(process.env.TERMINAL_PREVIEW_URL!)
     await page.getByText('Terminal service update available', { exact: true }).waitFor()

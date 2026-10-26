@@ -12,11 +12,11 @@ concurrency:
 
 env:
   # The ONE compatible Bakin SDK source both jobs build and verify against.
-  # zod externalization (bakin #948, PR #1015): the merge commit whose SDK
-  # makes zod a bare ~4.6.5 peer and whose host serves /vendor/zod.js — the
-  # contract this repo's CLIENT_EXTERNAL now matches (react19-sdk-focused-v2).
+  # Terminal multi-device (bakin #1028/#1029): the reviewed H2 stack tip
+  # whose SDK adds plugin socket routes and interactive CLI launch; repinned
+  # to the rc.45 release commit before this stack merges.
   # Pin a reviewed commit, never a moving branch.
-  BAKIN_SDK_REF: a88603c4eea9352afcb507f050c54c2a38b6becd
+  BAKIN_SDK_REF: 4f0da194e7db041d50a14baf6705e62f122d69b5
 
 jobs:
   check:

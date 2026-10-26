@@ -18,6 +18,7 @@ export interface SessionOptions {
 export class Sessions {
   private pending: Promise<unknown> = Promise.resolve()
   private screens = new Map<string, Screen>()
+  private outputListeners = new Map<string, Set<() => void>>()
   private closed = false
   constructor(readonly store: Store, private driver: ProcessDriver, private options: SessionOptions) {}
   private now(): number { return this.options.now?.() ?? Date.now() }
@@ -37,11 +38,39 @@ export class Sessions {
     authorize(session, principal, this.enabled())
     return session
   }
-  async start(): Promise<void> {
-    for (const session of this.store.sessions()) {
-      if (session.state !== 'running') continue
-      if (await this.driver.alive(session.id)) this.attach(session)
-      else { session.state = 'exited'; this.store.save(session) }
+  /** Boot: reattach live sessions (a restarted service may have lost titles). */
+  start(): Promise<void> { return this.setupService(async () => {}) }
+  /** The newest stored output cursor for a session (0 when none). */
+  latestCursor(id: string): number {
+    return this.store.output(id, Number.MAX_SAFE_INTEGER).cursor
+  }
+  /**
+   * Resolve once output past `cursor` is stored, the signal aborts, or
+   * `idleMs` passes (a keepalive for long-quiet sessions). Subscribes before
+   * re-checking the store, so output landing in between is never missed.
+   */
+  nextOutput(id: string, cursor: number, signal: AbortSignal, idleMs = 15_000): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer)
+        unsubscribe()
+        signal.removeEventListener('abort', done)
+        resolve()
+      }
+      const unsubscribe = this.onOutput(id, done)
+      const timer = setTimeout(done, idleMs)
+      signal.addEventListener('abort', done, { once: true })
+      if (signal.aborted || this.latestCursor(id) > cursor) done()
+    })
+  }
+  /** Hear about newly stored output for a session (push instead of polling). */
+  onOutput(id: string, listener: () => void): () => void {
+    let listeners = this.outputListeners.get(id)
+    if (!listeners) this.outputListeners.set(id, listeners = new Set())
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+      if (!listeners.size) this.outputListeners.delete(id)
     }
   }
   refreshStates(): Promise<void> {
@@ -63,7 +92,10 @@ export class Sessions {
       for (let offset = 0; offset < data.length; offset += 65536) {
         const chunk = data.slice(offset, offset + 65536)
         // Screen.failed exposes bounded-parser overflow to readers; a fresh attachment recovers it.
-        void screen.write(chunk, () => this.store.append(session.id, chunk)).catch(() => undefined)
+        void screen.write(chunk, () => {
+          this.store.append(session.id, chunk)
+          for (const listener of this.outputListeners.get(session.id) ?? []) listener()
+        }).catch(() => undefined)
       }
     })
   }
@@ -150,7 +182,7 @@ export class Sessions {
       session.inputSequence = sequence
       session.lastActivityAt = this.now()
       this.store.save(session)
-      this.driver.write(id, data)
+      await this.driver.write(id, data)
       return session
     })
   }
@@ -262,6 +294,22 @@ export class Sessions {
     }
   }
   sweep(): Promise<void> { return this.run(() => this.sweepUnlocked()) }
+  /**
+   * Set up (or update) the tmux service in the manager's queue, so it can
+   * never land in the middle of a session's creation, then reattach.
+   */
+  setupService(install: () => Promise<void>): Promise<void> {
+    return this.run(async () => {
+      await install()
+      for (const session of this.store.sessions()) {
+        if (session.state !== 'running') continue
+        if (await this.driver.alive(session.id)) {
+          await this.driver.title(session)
+          this.attach(session)
+        } else { session.state = 'exited'; this.store.save(session) }
+      }
+    })
+  }
   async beforeUninstall(stop: () => Promise<void>): Promise<void> {
     await this.run(async () => {
       if (this.store.sessions().some((s) => s.state !== 'completed' || s.worktreePath)) throw new TerminalError('Complete sessions and review retained worktrees before removing Terminal')
