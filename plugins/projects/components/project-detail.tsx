@@ -33,6 +33,7 @@ import { PlanTab } from './tabs/plan-tab'
 import { StepsTab } from './tabs/steps-tab'
 import { useChecklistDrafts } from '../hooks/use-checklist-drafts'
 import { usePlanDraft } from '../hooks/use-plan-draft'
+import { useProjectUploads } from '../hooks/use-project-uploads'
 import { useProjectDetail } from '../hooks/use-project-detail'
 import { useProjectHistory } from '../hooks/use-project-history'
 import { projectRequest } from '../lib/project-api'
@@ -65,6 +66,7 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
   const history = useProjectHistory(projectId, project?.body)
   const plan = usePlanDraft(projectId, project, refresh)
   const checklist = useChecklistDrafts(projectId, project?.tasks ?? EMPTY_TASKS, refresh)
+  const uploads = useProjectUploads(projectId, refresh)
   const desktop = useMediaQuery('(min-width: 1024px)')
   const [dockCollapsed, setDockCollapsed] = useCollapsedAside('projects:conversation-dock')
   const [tabParam, setTabParam] = useQueryState('tab', '')
@@ -311,6 +313,7 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
         />
       )}
       storageKey={`project:${projectId}`}
+      attachments={uploads}
       showHeader={false}
       fitParent
       chrome="top-divider"

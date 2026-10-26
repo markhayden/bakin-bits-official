@@ -1630,7 +1630,25 @@ declare module '@makinbakin/sdk/conversation' {
   export type ConversationTextTransform = (text: string) => { text: string; extras?: ReactNode }
 
   export interface ComposerHandle { isEmpty(): boolean; setText(text: string): void; focus(): void }
+  export type ComposerAttachmentStatus = 'uploading' | 'ready' | 'error'
+  export interface ComposerAttachmentItem {
+    id: string
+    name: string
+    previewUrl?: string
+    status?: ComposerAttachmentStatus
+    errorMessage?: string
+  }
+  export interface ComposerAttachments {
+    enabled: boolean
+    disabledReason?: string
+    items: readonly ComposerAttachmentItem[]
+    acceptedTypes?: readonly string[]
+    multiple?: boolean
+    onAdd: (files: File[]) => void
+    onRemove: (id: string) => void
+  }
   export interface ConversationPanelProps {
+    attachments?: ComposerAttachments
     composerHandleRef?: import('react').Ref<ComposerHandle>
     messages: readonly ConversationMessage[]
     liveChunks?: readonly ConversationChunk[] | null

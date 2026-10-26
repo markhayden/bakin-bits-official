@@ -10,7 +10,7 @@ import { createProjectRepository, PlanHistoryUnavailableError, projectToSummary 
 import { createProjectService, deriveChecklist } from './lib/project-service'
 import { ProjectMutationError } from './lib/project-mutations'
 import { buildProjectBrainstormContext } from './lib/brainstorm-prompt'
-import type { Project, ProjectBrainstormMessage, ProjectStatus, ProjectPatch, ChecklistPatch } from './types'
+import type { Project, ProjectBrainstormMessage, ProjectStatus, ProjectPatch, ChecklistPatch, ProducedFile } from './types'
 
 const log = {
   info: (...args: unknown[]) => console.info('[projects]', ...args),
@@ -42,6 +42,15 @@ function mutationFailure(error: unknown): Response {
 
 async function readBody<T>(req: Request): Promise<T> {
   return req.json() as Promise<T>
+}
+
+/** Run `work` over `items` with at most `limit` in flight. */
+async function forEachLimit<T>(items: readonly T[], limit: number, work: (item: T) => Promise<void>): Promise<void> {
+  let next = 0
+  const lane = async () => {
+    while (next < items.length) await work(items[next++]!)
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane))
 }
 
 async function getRuntimeMainAgentId(ctx: PluginContext): Promise<string> {
@@ -116,6 +125,7 @@ const projectsPlugin: BakinPlugin = {
     legacyRoute('DELETE', '/:projectId/checklist/:itemId', 'Remove checklist item'),
     legacyRoute('POST', '/:projectId/checklist/:itemId/link', 'Link checklist item to task'),
     legacyRoute('POST', '/:projectId/checklist/:itemId/promote', 'Promote item to task'),
+    legacyRoute('GET', '/:projectId/files', 'Files produced by the project\'s board tasks (derived)'),
     legacyRoute('POST', '/:projectId/assets', 'Attach asset'),
     legacyRoute('PATCH', '/:projectId/assets/:assetId', 'Relink asset reference'),
     legacyRoute('DELETE', '/:projectId/assets/:assetId', 'Detach asset'),
@@ -600,6 +610,44 @@ const projectsPlugin: BakinPlugin = {
       } catch (err) { return mutationFailure(err) }
     }
     routeHandlers.set('POST /:projectId/checklist/:itemId/promote', promoteHandler)
+
+    // GET /:projectId/files — what the project's board tasks produced (D17):
+    // derived live through the assets plugin's task index, one task per
+    // call, bounded fan-out, deduped by asset. Nothing is persisted here.
+    routeHandlers.set('GET /:projectId/files', async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const id = url.searchParams.get('projectId')
+      if (!id) return json({ error: 'Missing projectId' }, 400)
+      const project = readProject(id)
+      if (!project) return json({ error: 'Project not found' }, 404)
+      const taskIds = new Set(project.tasks.map(item => item.taskId).filter((taskId): taskId is string => Boolean(taskId)))
+      try {
+        for (const task of await ctx.tasks.list({ projectId: id })) taskIds.add(task.id)
+      } catch (err) {
+        log.warn('Could not list project tasks for files', { projectId: id, err })
+      }
+      const produced = new Map<string, ProducedFile>()
+      await forEachLimit([...taskIds], 8, async (taskId) => {
+        let rows: unknown
+        try {
+          rows = await ctx.hooks.invoke('assets.listByTask', { taskId })
+        } catch (err) {
+          log.warn('assets.listByTask failed', { projectId: id, taskId, err })
+          return
+        }
+        if (!Array.isArray(rows)) return
+        for (const row of rows as Record<string, unknown>[]) {
+          if (typeof row?.assetId !== 'string' || produced.has(row.assetId)) continue
+          produced.set(row.assetId, {
+            assetId: row.assetId,
+            type: typeof row.type === 'string' ? row.type : 'other',
+            description: typeof row.description === 'string' ? row.description : '',
+            taskId,
+          })
+        }
+      })
+      return json({ produced: [...produced.values()] })
+    })
 
     // POST /:projectId/assets — attach asset
     const attachHandler = async (req: Request) => {

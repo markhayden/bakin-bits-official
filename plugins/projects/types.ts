@@ -113,6 +113,14 @@ export interface ProjectSummary {
 }
 
 
+/** A file one of the project's board tasks produced (D17) — derived, never stored. */
+export interface ProducedFile {
+  assetId: string
+  type: string
+  description: string
+  taskId: string
+}
+
 /** A linked step's board task as the detail projection shows it. */
 export interface ResolvedBoardTask {
   column: string

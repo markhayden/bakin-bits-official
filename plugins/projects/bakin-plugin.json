@@ -168,6 +168,16 @@
         ]
       },
       {
+        "method": "GET",
+        "path": "/:projectId/files",
+        "summary": "Files produced by the project's board tasks",
+        "permissions": [
+          "storage.read",
+          "tasks.read",
+          "assets.read"
+        ]
+      },
+      {
         "method": "POST",
         "path": "/:projectId/assets",
         "summary": "Attach an asset",

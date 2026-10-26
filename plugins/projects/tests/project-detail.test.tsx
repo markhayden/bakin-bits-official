@@ -69,6 +69,7 @@ function mockFetch(id: string, over: Record<string, unknown> = {}, routes: Route
     if (routes[url]) return Response.json(await routes[url]!(init))
     if (url === `/api/plugins/projects/${id}`) return Response.json(projectPayload(id, over))
     if (url.endsWith('/history')) return Response.json({ history: [] })
+    if (url.endsWith('/files')) return Response.json({ produced: [] })
     if (url.endsWith('/brainstorm/seen')) return Response.json({ ok: true })
     throw new Error(`Unexpected fetch: ${url}`)
   }) as unknown as typeof fetch
@@ -239,6 +240,28 @@ describe('ProjectDetail brainstorm durability (bakin#703)', () => {
 })
 
 describe('Files tab', () => {
+  it('lists what the project\'s tasks produced apart from what is attached', async () => {
+    mockFetch('p-produced', {
+      status: 'completed',
+      assets: [{ assetId: 'brief', label: 'Brief' }],
+      resolvedAssets: [{ assetId: 'brief', label: 'Brief', type: 'text' }],
+    }, {
+      '/api/plugins/projects/p-produced/files': () => ({
+        produced: [
+          { assetId: 'hero', type: 'images', description: 'Hero image', taskId: 'board-a' },
+          { assetId: 'brief', type: 'text', description: 'Brief', taskId: 'board-a' },
+        ],
+      }),
+    })
+    render(<ProjectDetail projectId="p-produced" onBack={() => {}} />)
+    const produced = await screen.findByRole('list', { name: 'Produced files' })
+    expect(within(produced).getByText('Hero image')).toBeDefined()
+    // Already attached ⇒ listed once, under Attached.
+    expect(within(produced).queryByText('Brief')).toBeNull()
+    expect(within(screen.getByRole('list', { name: 'Attached files' })).getByText('Brief')).toBeDefined()
+  })
+
+
   it('previews a non-image file without an image and links to the asset', async () => {
     mockFetch('p-files', {
       status: 'completed',

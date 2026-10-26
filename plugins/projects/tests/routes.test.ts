@@ -454,6 +454,44 @@ describe('Routes', () => {
   // -------------------------------------------------------------------------
   // PUT /:projectId/checklist/:itemId/toggle — toggle item
   // -------------------------------------------------------------------------
+  describe('GET /:projectId/files (D17)', () => {
+    it('derives produced files from linked and project tasks — deduped, nothing stored', async () => {
+      writeProjectFixture('proj-files', {
+        title: 'Files',
+        tasks: [
+          { id: 't001', title: 'Design', checked: false, taskId: 'board-a' },
+          { id: 't002', title: 'Copy', checked: false, taskId: 'board-b' },
+        ],
+      })
+      plugin.ctx.tasks.list = mock(async () => [{ id: 'board-steward', title: 'Check in', column: 'todo', projectId: 'proj-files' }]) as unknown as typeof plugin.ctx.tasks.list
+      const asked: string[] = []
+      plugin.ctx.hooks.invoke = mock(async (name: string, data: unknown) => {
+        if (name !== 'assets.listByTask') return undefined
+        const taskId = (data as { taskId: string }).taskId
+        asked.push(taskId)
+        if (taskId === 'board-a') return [{ assetId: 'hero', description: 'Hero image', type: 'images' }]
+        if (taskId === 'board-b') return [{ assetId: 'hero', description: 'Hero image', type: 'images' }, { assetId: 'copy', description: '', type: 'text' }]
+        if (taskId === 'board-steward') return [{ assetId: 'digest', description: 'Weekly digest', type: 'text' }]
+        return []
+      }) as unknown as typeof plugin.ctx.hooks.invoke
+      const before = readFileSync(join(projectsDir, 'proj-files.md'), 'utf8')
+      const { status, body } = await callRoute(findRoute(plugin.routes, 'GET', '/:projectId/files')!, plugin.ctx, { searchParams: { projectId: 'proj-files' } })
+      expect(status).toBe(200)
+      expect(asked.sort()).toEqual(['board-a', 'board-b', 'board-steward'])
+      expect((body.produced as { assetId: string }[]).map(file => file.assetId).sort()).toEqual(['copy', 'digest', 'hero'])
+      expect(readFileSync(join(projectsDir, 'proj-files.md'), 'utf8')).toBe(before)
+    })
+
+    it('a failing lookup drops that task, not the response', async () => {
+      writeProjectFixture('proj-files-fail', { title: 'Files', tasks: [{ id: 't001', title: 'a', checked: false, taskId: 'board-x' }] })
+      plugin.ctx.tasks.list = mock(async () => []) as unknown as typeof plugin.ctx.tasks.list
+      plugin.ctx.hooks.invoke = mock(async () => { throw new Error('assets plugin down') }) as unknown as typeof plugin.ctx.hooks.invoke
+      const { status, body } = await callRoute(findRoute(plugin.routes, 'GET', '/:projectId/files')!, plugin.ctx, { searchParams: { projectId: 'proj-files-fail' } })
+      expect(status).toBe(200)
+      expect(body.produced).toEqual([])
+    })
+  })
+
   describe('POST /:projectId/plan/seen (D15)', () => {
     it('marks the shown revision seen — clamped to the current revision and never rewound', async () => {
       writeProjectFixture('proj-seen', { title: 'Seen', extra: { planRevision: 3 } })
