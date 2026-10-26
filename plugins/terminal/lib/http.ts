@@ -12,9 +12,13 @@ export function human(request: Request): Principal {
   return { kind: 'human', id }
 }
 
+/**
+ * Lifecycle and ownership commands. Browser input and resizes ride the
+ * viewer socket (lib/socket.ts); agents type through `agentCommand`.
+ */
 export const commandSchema = z.object({
   id: z.string().min(1).max(100),
-  operation: z.enum(['take', 'return', 'assign', 'write', 'resize', 'interrupt', 'complete', 'terminate', 'delete-history', 'delete']),
+  operation: z.enum(['take', 'return', 'assign', 'complete', 'terminate', 'delete-history', 'delete']),
   generation: z.number().int().nonnegative().optional(),
   sequence: z.number().int().positive().optional(),
   data: z.string().max(65536).optional(),
@@ -27,53 +31,29 @@ export async function command(manager: Sessions, raw: unknown, principal: Princi
   const input = commandSchema.parse(raw)
   switch (input.operation) {
     case 'take': case 'return': case 'assign': return manager.control(input.id, principal, input.operation, input.agentId)
-    case 'write': case 'interrupt':
-      if (input.generation === undefined || input.sequence === undefined) throw new TerminalError('Generation and input sequence required', 400)
-      return manager.write(input.id, principal, input.generation, input.sequence, input.operation === 'interrupt' ? '\x03' : input.data ?? '')
-    case 'resize': return manager.resize(input.id, principal, input.generation ?? -1, input.cols ?? 100, input.rows ?? 30)
     case 'complete': case 'terminate': return manager.finish(input.id, principal, input.generation ?? -1, input.operation === 'terminate')
     case 'delete-history': await manager.deleteHistory(input.id, principal); return { deleted: true }
     case 'delete': await manager.deleteSession(input.id, principal); return { deleted: true }
   }
 }
 
+const agentCommandSchema = commandSchema.extend({
+  operation: z.enum(['write', 'resize', 'interrupt', 'complete', 'terminate']),
+})
+
+/** The agent tool's session operations: explicit-sequence input plus lifecycle. */
+export async function agentCommand(manager: Sessions, raw: unknown, principal: Principal): Promise<unknown> {
+  const input = agentCommandSchema.parse(raw)
+  switch (input.operation) {
+    case 'write': case 'interrupt':
+      if (input.generation === undefined || input.sequence === undefined) throw new TerminalError('Generation and input sequence required', 400)
+      return manager.write(input.id, principal, input.generation, input.sequence, input.operation === 'interrupt' ? '\x03' : input.data ?? '')
+    case 'resize': return manager.resize(input.id, principal, input.generation ?? -1, input.cols ?? 100, input.rows ?? 30)
+    case 'complete': case 'terminate': return manager.finish(input.id, principal, input.generation ?? -1, input.operation === 'terminate')
+  }
+}
+
 export function failure(error: unknown): Response {
   const status = error instanceof TerminalError ? error.status : error instanceof z.ZodError ? 400 : 500
   return Response.json({ error: error instanceof TerminalError ? error.message : status === 400 ? 'Invalid terminal request' : 'Terminal operation failed' }, { status })
-}
-
-/** Pull-based streaming bounds a slow client's queue to one output page; output is pushed, not polled. */
-export async function stream(manager: Sessions, request: Request): Promise<Response> {
-  const principal = human(request)
-  const id = new URL(request.url).searchParams.get('id') ?? ''
-  const session = manager.get(id, principal)
-  let cursor = 0
-  let initial = true
-  let stopped = false
-  const encoder = new TextEncoder()
-  const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (stopped || request.signal.aborted) { controller.close(); return }
-      try {
-        if (initial && session.state === 'running') {
-          const snapshot = await manager.screen(id, principal)
-          cursor = snapshot.cursor
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ ...snapshot, type: 'snapshot', data: Buffer.from(snapshot.data).toString('base64') })}\n\n`))
-        } else {
-          const output = manager.output(id, principal, cursor)
-          if (output.truncated && output.session.state === 'running') throw new TerminalError('Output gap; reconnect required')
-          cursor = output.cursor
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ ...output, type: 'output' })}\n\n`))
-          await manager.nextOutput(id, cursor, request.signal)
-        }
-        initial = false
-      } catch {
-        stopped = true
-        controller.enqueue(encoder.encode('data: {"type":"error","error":"Terminal stream unavailable"}\n\n'))
-        controller.close()
-      }
-    },
-    cancel() { stopped = true },
-  }, { highWaterMark: 0 })
-  return new Response(body, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' } })
 }

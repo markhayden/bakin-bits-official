@@ -8,7 +8,7 @@ import { TerminalService } from './lib/service'
 import { TmuxProcesses } from './lib/processes'
 import { Sessions } from './lib/sessions'
 import { TerminalError, terminalSettings, type Principal } from './lib/contracts'
-import { command, failure, human, stream } from './lib/http'
+import { agentCommand, command, failure, human } from './lib/http'
 import { sessionOptions } from './lib/session-options'
 import { TerminalViewer } from './lib/socket'
 
@@ -31,7 +31,7 @@ const route = (path: string, method: 'GET' | 'POST', summary: string, handler: (
 })
 
 export default definePlugin({
-  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.1',
+  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.2',
   routes: [
     route('/options', 'GET', 'Get terminal form defaults and available agents and tasks', async (request) => {
       const principal = human(request)
@@ -46,13 +46,6 @@ export default definePlugin({
     }),
     route('/sessions', 'POST', 'Create a terminal session', async (request) => { const principal = human(request); return Response.json(await sessions().create(await request.json(), principal)) }),
     route('/session', 'POST', 'Operate a terminal session', async (request) => { const principal = human(request); return Response.json(await command(sessions(), await request.json(), principal)) }),
-    route('/stream', 'GET', 'Stream private terminal output', async (request) => stream(sessions(), request)),
-    route('/history', 'GET', 'Read bounded terminal history', async (request) => {
-      const principal = human(request)
-      const url = new URL(request.url)
-      const cursor = z.coerce.number().int().nonnegative().parse(url.searchParams.get('cursor') ?? 0)
-      return Response.json(sessions().output(url.searchParams.get('id') ?? '', principal, cursor))
-    }),
     route('/service', 'POST', 'Set up the persistent terminal service', async (request) => { human(request); await sessions().setupService(() => service!.install()); return Response.json({ ready: true }) }),
   ],
   socketRoutes: [
@@ -206,7 +199,7 @@ export default definePlugin({
           const id = z.string().min(1).parse(input.id)
           if (operation === 'screen') return { ok: true, screen: await sessions().readScreen(id, principal) }
           if (operation === 'output') return { ok: true, ...sessions().output(id, principal, z.number().int().nonnegative().parse(input.cursor ?? 0)) }
-          return { ok: true, session: await command(sessions(), { ...input, operation }, principal) }
+          return { ok: true, session: await agentCommand(sessions(), { ...input, operation }, principal) }
         } catch (error) { return { ok: false, error: error instanceof TerminalError ? error.message : 'Invalid or unavailable terminal operation' } }
       },
     })
