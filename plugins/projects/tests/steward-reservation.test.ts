@@ -343,13 +343,21 @@ describe('capBytes', () => {
 describe('review round 3 regressions', () => {
   const reserved = { openTaskId: 'task-reserved', phase: 'reserved' as const, frozen: { title: 'Check in: Launch', assignee: 'pixel', description: 'brief' } }
 
-  it('recovery never creates a check-in for a completed or paused project', async () => {
-    for (const patch of [{ status: 'completed' as const }, { stewardPaused: true }]) {
-      writeProject({ ...patch, steward: reserved })
-      await loop.reconcile('p1')
-      expect(await ctx.tasks.get('task-reserved')).toBeNull()
-      expect(stewardState()?.openTaskId).toBeUndefined()
-    }
+  it('recovery never creates a check-in for a project that is no longer active', async () => {
+    writeProject({ status: 'completed', steward: reserved })
+    await loop.reconcile('p1')
+    expect(await ctx.tasks.get('task-reserved')).toBeNull()
+    expect(stewardState()?.openTaskId).toBeUndefined()
+  })
+
+  it('a paused project keeps its unexecuted reservation; Resume recovers the same task', async () => {
+    writeProject({ stewardPaused: true, steward: reserved })
+    await loop.reconcile('p1')
+    expect(await ctx.tasks.get('task-reserved')).toBeNull()
+    expect(stewardState()).toEqual(expect.objectContaining({ openTaskId: 'task-reserved', phase: 'reserved' }))
+    repo.writeProject({ ...repo.readProject('p1')!, stewardPaused: undefined })
+    await loop.reconcile('p1')
+    expect(await ctx.tasks.get('task-reserved')).toEqual(expect.objectContaining({ description: 'brief' }))
   })
 
   it('an open check-in left on a project that stopped being active is removed', async () => {

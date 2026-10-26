@@ -28,7 +28,7 @@ import type { ProjectRepository } from '../parser'
 import { withProjectLock, type ProjectService } from '../project-service'
 import type { Project, ProjectGateState } from '../../types'
 import { isStewardTask } from './digest'
-import { serialized } from './admission'
+import { serialized, withAdmissionFence } from './admission'
 import { createStewardIdentity } from './tools'
 
 function gateQueues(): Map<string, Promise<unknown>> {
@@ -174,7 +174,10 @@ export function createStewardGates({ ctx, repo, turns, projectService }: Steward
         else await ctx.tasks.remove(openTaskId)
       }
     }
-    await withProjectLock(() => {
+    // Inside the admission fence: a question post waiting on it finds the
+    // check-in already gone (gate.open re-checks), never re-opens a gate
+    // this cleanup just cleared.
+    await withAdmissionFence(projectId, () => withProjectLock(() => {
       const project = repo.readProject(projectId)
       if (!project) return
       for (const [key, gate] of Object.entries(project.gates ?? {})) {
@@ -187,7 +190,7 @@ export function createStewardGates({ ctx, repo, turns, projectService }: Steward
       delete project.waitingOn
       delete project.replyPending
       repo.writeProject(project)
-    })
+    }))
     changed(projectId)
   }
 

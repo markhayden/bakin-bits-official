@@ -51,6 +51,8 @@ async function setup(extra: Partial<Project> = {}): Promise<void> {
   testGlobal.__bakinProjectLock = undefined
   testGlobal.__bakinProjectAdmissionFence = undefined
   testGlobal.__bakinProjectGateQueues = undefined
+  // Every case is a fresh process boot (the sweeps run on the first activation).
+  ;(globalThis as Record<string, unknown>).__bakinProjectsActivated = undefined
   dir = join(root, `case-${++n}`)
   repo = createProjectRepository(new MarkdownStorageAdapter(dir))
   repo.writeProject(project(extra))
@@ -329,6 +331,7 @@ describe('review round 3 regressions', () => {
     testGlobal.__bakinProjectIndex = undefined
     testGlobal.__bakinProjectLock = undefined
     dir = join(root, `case-${++n}`)
+    ;(globalThis as Record<string, unknown>).__bakinProjectsActivated = undefined
     repo = createProjectRepository(new MarkdownStorageAdapter(dir))
     repo.writeProject(project({ waitingOn: { kind: 'input', questionId: card.id, question: card.question, since: '2026-10-26T00:00:00Z' } }))
     repo.writeBrainstormMessages('p1', [
@@ -338,5 +341,33 @@ describe('review round 3 regressions', () => {
     ])
     plugin = await activatePlugin(projectsPlugin, dir)
     await waitUntil(() => read().waitingOn === undefined, 'answered question cleared')
+  })
+})
+
+describe('review round 4 regressions', () => {
+  it('a hot reload (second activation in the process) sweeps nothing: queued cards and live gates survive', async () => {
+    await setup({ waitingOn: { kind: 'input', questionId: 'q_cccccccccccccccc', question: 'Queued?', since: '2026-10-26T00:00:00Z' }, replyPending: undefined })
+    // setup() was this process's first activation and withdrew the card-less
+    // question; put it back as if its card were queued behind a live turn.
+    repo.writeProject({ ...read(), waitingOn: { kind: 'input', questionId: 'q_cccccccccccccccc', question: 'Queued?', since: '2026-10-26T00:00:00Z' } })
+    plugin = await activatePlugin(projectsPlugin, dir)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(read().waitingOn?.questionId).toBe('q_cccccccccccccccc')
+  })
+
+  it('a question that waited out a completion never re-opens the gate', async () => {
+    await setup()
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const { withAdmissionFence } = await import('../lib/steward/admission')
+    const blocker = withAdmissionFence('p1', () => held)
+    const posting = asSteward(tool('bakin_exec_projects_request_input'), question)
+    // The project completes (cleanup clears the check-in) while the post waits.
+    repo.writeProject({ ...read(), status: 'completed', steward: {} })
+    release()
+    await blocker
+    expect(await posting).toEqual(expect.objectContaining({ ok: false, code: 'not_steward' }))
+    expect(read().waitingOn).toBeUndefined()
+    expect(rows()).toEqual([])
   })
 })

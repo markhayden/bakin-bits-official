@@ -160,14 +160,15 @@ export function registerStewardTools({ ctx, repo, turns, gate }: StewardToolDeps
       const posted = await withAdmissionFence(project.id, async (): Promise<Posted> => {
         // The gate first: the very next user message (even one racing a queued
         // card) is this question's reply.
-        await gate.open(project.id, {
+        const opened = await gate.open(project.id, {
           kind: 'input',
           questionId: question.id,
           question: question.question,
           options: question.options.map(option => option.label),
           ...(context ? { context } : {}),
           since: new Date().toISOString(),
-        })
+        }, taskId)
+        if (!opened) return { error: { ok: false, error: 'This check-in is no longer open on an active project.', code: 'not_steward' } }
         // An unseen question must never hold the project: if the card does not
         // land (now, or when its queued batch flushes), the gate goes with it.
         const withdraw = (err: unknown) => {

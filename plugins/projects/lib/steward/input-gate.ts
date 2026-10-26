@@ -22,9 +22,14 @@ export function createInputGate(repo: ProjectRepository) {
   }
 
   return {
-    /** request_input: a newer question supersedes the open one. */
-    open(projectId: string, waiting: ProjectWaitingOn): Promise<boolean> {
+    /**
+     * request_input: a newer question supersedes the open one — only while
+     * `stewardTaskId` is still the open check-in of an active project
+     * (checked under the lock, so a completion cleanup that ran meanwhile wins).
+     */
+    open(projectId: string, waiting: ProjectWaitingOn, stewardTaskId: string): Promise<boolean> {
       return write(projectId, project => {
+        if (project.status !== 'active' || project.steward?.openTaskId !== stewardTaskId) return false
         project.waitingOn = waiting
         return true
       })

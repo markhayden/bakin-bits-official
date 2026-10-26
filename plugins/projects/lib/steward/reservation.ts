@@ -203,8 +203,10 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
     // is removed (aborting a running turn) and nothing is recovered.
     const retired = project.status !== 'active'
     if (!task) {
-      // Recovery creates nothing for a project the loop must leave alone.
-      if (steward.phase === 'reserved' && steward.frozen && !retired && !project.stewardPaused) {
+      if (steward.phase === 'reserved' && steward.frozen && !retired) {
+        // Paused: keep the reservation (a hand-off's included) — Resume
+        // recovers the very same task. Nothing is created while paused.
+        if (project.stewardPaused) return
         await createReserved(projectId, { openTaskId: taskId, frozen: steward.frozen })
         return
       }

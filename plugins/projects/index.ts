@@ -438,7 +438,14 @@ const projectsPlugin: BakinPlugin = {
     // Boot sweep (bakin#706): brainstorms whose transcript ends on a user
     // row lost their turn to a process death — stamp an honest error row.
     // No turn is alive at boot, so a reply gate left open ends too (D25).
-    try {
+    // Only on the FIRST activation in this process: a hot reload re-runs
+    // activate() while the previous activation's turns and queued appends are
+    // still alive, and sweeping then would stamp live turns and withdraw
+    // questions whose cards are merely queued.
+    const g = globalThis as Record<string, unknown>
+    const firstActivation = g.__bakinProjectsActivated !== true
+    g.__bakinProjectsActivated = true
+    if (firstActivation) try {
       for (const project of readAllProjects()) {
         if (project.replyPending) void inputGate.settleReply(project.id)
         // A question must not hold the project when its card never reached
