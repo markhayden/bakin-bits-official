@@ -406,3 +406,24 @@ describe('review round 6 regressions', () => {
     expect(stewardState()?.runNext).toBeUndefined()
   })
 })
+
+describe('review round 8 regressions', () => {
+  it('work reopened and finished again earns a check-in, though its column matches what the last run left', async () => {
+    clock = new Date(Date.now() + HOUR)
+    writeProject({ tasks: [{ id: 't001', title: 'Copy', instanceId: 'i-1', checked: false, taskId: 'work-1' }, { id: 't002', title: 'Photos', instanceId: 'i-2', checked: false, taskId: 'work-2' }] })
+    await addWork('done')
+    await ctx.tasks.create({ id: 'work-2', title: 'Photos', projectId: 'p1', column: 'inProgress' })
+    const { created } = await loop.scan('p1', { force: true }) as { created: string }
+    const finished = await ctx.tasks.move(created, 'done')
+    loop.onTaskStatusChanged({ taskId: created, from: 'todo', to: 'done', task: finished })
+    await flushTimers()
+    clock = new Date(clock.getTime() + HOUR)
+    expect(await loop.scan('p1')).toEqual({ skipped: 'no_signals' })
+    // Reopened, then finished again — no check-in in between.
+    await ctx.tasks.move('work-1', 'todo')
+    const again = await ctx.tasks.move('work-1', 'done')
+    loop.onTaskStatusChanged({ taskId: 'work-1', from: 'todo', to: 'done', task: again })
+    await flushTimers(20)
+    expect(await stewardTasks()).toHaveLength(2)
+  })
+})

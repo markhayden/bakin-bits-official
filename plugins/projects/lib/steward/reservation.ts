@@ -169,7 +169,12 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
     const tasks = await ctx.tasks.list({ projectId })
     const at = now()
     const handledColumns = Object.fromEntries(tasks.filter(task => !isStewardTask(task)).map(task => [task.id, task.column]))
-    const digest = buildStewardDigest(project, tasks, { now: at, stuckAfterMs: stuckAfterMs(), steward: { ...project.steward, lastStewardAt: at.toISOString(), handledColumns } })
+    // Completions the run could have seen are consumed; ones after its brief
+    // was frozen stay (they are new work for the next look).
+    const briefMs = Date.parse(project.steward?.reservedAt ?? '')
+    const keptCompletions = Object.fromEntries(Object.entries(project.steward?.completions ?? {})
+      .filter(([, when]) => how === 'done' && Number.isFinite(briefMs) && Date.parse(when) > briefMs))
+    const digest = buildStewardDigest(project, tasks, { now: at, stuckAfterMs: stuckAfterMs(), steward: { ...project.steward, lastStewardAt: at.toISOString(), handledColumns, completions: keptCompletions } })
     // Work that finished, blocked or went to review AFTER the brief was
     // frozen was never in front of this run: it earns a follow-up rather
     // than being acknowledged by finalizing (the daily cap bounds it).
@@ -194,7 +199,7 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
         // A foreign task never ran for this project: nothing was handled.
         ...(how === 'foreign'
           ? { ...(steward.lastFingerprint ? { lastFingerprint: steward.lastFingerprint } : {}), ...(steward.lastStewardAt ? { lastStewardAt: steward.lastStewardAt } : {}), ...(steward.handledColumns ? { handledColumns: steward.handledColumns } : {}) }
-          : { lastFingerprint: digest.fingerprint, lastStewardAt: at.toISOString(), handledColumns }),
+          : { lastFingerprint: digest.fingerprint, lastStewardAt: at.toISOString(), handledColumns, ...(Object.keys(keptCompletions).length ? { completions: keptCompletions } : {}) }),
       }
       return true
     })
@@ -359,6 +364,15 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
       return
     }
     if (!TRIGGER_COLUMNS.has(data.to)) return
+    // A transition INTO done is recorded durably: re-finishing reopened work
+    // must count even though its column matches what the last run left.
+    if (data.to === 'done' && (data as { from?: unknown }).from !== 'done') {
+      const taskId = task.id
+      writeSteward(projectId, project => {
+        project.steward = { ...project.steward, completions: { ...project.steward?.completions, [taskId]: now().toISOString() } }
+        return true
+      }).catch(err => log.error('steward completion record failed', err, { projectId }))
+    }
     if (debounces.has(projectId)) return
     const pending = setTimeout(() => {
       debounces.delete(projectId)

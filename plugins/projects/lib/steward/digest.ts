@@ -112,11 +112,12 @@ export function buildStewardDigest(project: Project, tasks: Task[], opts: Digest
   // to finished work moves updatedAt but finishes nothing). Before any run
   // has finished there is no baseline, so the timestamp stands in.
   const handled = opts.steward?.handledColumns
+  const completions = opts.steward?.completions ?? {}
   const since = ms(opts.steward?.lastStewardAt)
   push('work-done', workTasks
-    .filter(t => t.column === 'done' && (handled
+    .filter(t => t.column === 'done' && (t.id in completions || (handled
       ? handled[t.id] !== 'done'
-      : !Number.isFinite(since) || ms(t.updatedAt) > since))
+      : !Number.isFinite(since) || ms(t.updatedAt) > since)))
     .map(t => t.id))
 
   const unfinished = project.tasks.filter(step => !derivedChecked(step))

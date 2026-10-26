@@ -184,7 +184,7 @@ export function createStewardGates({ ctx, repo, turns, projectService }: Steward
         if (gate.state === 'pending' && gate.approvalId !== opts.resolvingApprovalId) project.gates![key] = { ...gate, state: 'cancelled' }
       }
       if (project.steward) {
-        const { openTaskId: _open, phase: _phase, frozen: _frozen, reservedAt: _reserved, fingerprint: _fp, briefColumns: _brief, runNext: _next, ...kept } = project.steward
+        const { openTaskId: _open, phase: _phase, frozen: _frozen, reservedAt: _reserved, fingerprint: _fp, briefColumns: _brief, runNext: _next, completions: _done, ...kept } = project.steward
         project.steward = kept
       }
       delete project.waitingOn
