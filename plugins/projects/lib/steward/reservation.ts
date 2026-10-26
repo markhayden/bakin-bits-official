@@ -194,8 +194,9 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
         ...(steward.runs ? { runs: steward.runs } : {}),
         ...(steward.capNotedOn ? { capNotedOn: steward.capNotedOn } : {}),
         // A decision that landed while this run was open, or work it never
-        // saw, still earns its follow-up.
-        ...(steward.runNext ? { runNext: steward.runNext } : unseen ? { runNext: 'decision' as const } : {}),
+        // saw (a column change, or a completion after its brief froze — e.g.
+        // reopened and finished again mid-run), still earns its follow-up.
+        ...(steward.runNext ? { runNext: steward.runNext } : unseen || Object.keys(keptCompletions).length ? { runNext: 'decision' as const } : {}),
         // A foreign task never ran for this project: nothing was handled.
         ...(how === 'foreign'
           ? { ...(steward.lastFingerprint ? { lastFingerprint: steward.lastFingerprint } : {}), ...(steward.lastStewardAt ? { lastStewardAt: steward.lastStewardAt } : {}), ...(steward.handledColumns ? { handledColumns: steward.handledColumns } : {}) }
