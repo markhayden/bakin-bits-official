@@ -1,5 +1,5 @@
 {
-  "id": "terminal", "name": "Terminal", "version": "0.4.0-dev.3", "bakin": ">=0.0.1-rc.42",
+  "id": "terminal", "name": "Terminal", "version": "0.4.0-dev.4", "bakin": ">=0.0.1-rc.42",
   "description": "Persistent shared terminals with per-agent access and retained coding worktrees.",
   "requires": {
     "bins": [
@@ -43,12 +43,39 @@
       { "method": "GET", "path": "/sessions", "summary": "List terminal sessions" },
       { "method": "POST", "path": "/sessions", "summary": "Create a terminal session" },
       { "method": "POST", "path": "/session", "summary": "Operate a terminal session" },
-      { "method": "POST", "path": "/service", "summary": "Set up the terminal service" }
+      { "method": "POST", "path": "/service", "summary": "Set up the terminal service" },
+      { "method": "POST", "path": "/cli/new", "summary": "Create a session and attach the operator's terminal" },
+      { "method": "POST", "path": "/cli/attach", "summary": "Attach the operator's terminal to a session" },
+      { "method": "POST", "path": "/cli/confirm", "summary": "Admit the launched terminal app" },
+      { "method": "GET", "path": "/cli/ls", "summary": "List sessions for the terminal" }
     ],
     "socketRoutes": [{ "path": "/socket", "summary": "Live terminal output and input for one viewer" }],
     "routes": [{ "path": "/terminal", "summary": "Terminal workspace" }, { "path": "/terminal/[sessionId]", "summary": "Terminal session" }],
     "clientRoutes": [{ "path": "/terminal", "summary": "Terminal workspace" }, { "path": "/terminal/[sessionId]", "summary": "Terminal session" }],
     "nav": [{ "id": "terminal", "label": "Terminal", "icon": "Terminal", "href": "/terminal", "order": 210, "section": "create" }],
-    "execTools": [{ "name": "bakin_exec_terminal_session", "summary": "Operate assigned terminal sessions" }]
+    "execTools": [{ "name": "bakin_exec_terminal_session", "summary": "Operate assigned terminal sessions" }],
+    "cliCommands": [
+      {
+        "name": "terminal:new", "usage": "bakin terminal new", "summary": "Start a session here and continue it in this terminal",
+        "description": "Starts a session in the current directory (a shell unless --program says otherwise) and attaches this terminal to it. Detach with Ctrl-b d; the session keeps running in Bakin.",
+        "args": [
+          { "name": "title", "type": "string", "summary": "Session title (default: the directory name)" },
+          { "name": "program", "type": "string", "values": ["shell", "claude", "codex"], "summary": "Program to run (default: shell)" },
+          { "name": "worktree", "type": "boolean", "summary": "Work in a new isolated git worktree" },
+          { "name": "agent", "type": "string", "summary": "Assign a Bakin agent (you keep control)" }
+        ],
+        "dispatch": { "type": "apiRoute", "method": "POST", "path": "/cli/new", "launch": { "bin": "tmux", "refuseEnv": ["TMUX"] } }
+      },
+      {
+        "name": "terminal:attach", "usage": "bakin terminal attach <ref>", "summary": "Continue a session in this terminal",
+        "description": "<ref> is a session id, a unique id prefix of at least 8 characters, or an exact title. Detach with Ctrl-b d.",
+        "args": [{ "name": "ref", "type": "string", "positional": true, "required": true, "summary": "Session id, id prefix, or title" }],
+        "dispatch": { "type": "apiRoute", "method": "POST", "path": "/cli/attach", "launch": { "bin": "tmux", "refuseEnv": ["TMUX"] } }
+      },
+      {
+        "name": "terminal:ls", "usage": "bakin terminal ls", "summary": "List terminal sessions", "args": [],
+        "dispatch": { "type": "apiRoute", "method": "GET", "path": "/cli/ls" }
+      }
+    ]
   }
 }

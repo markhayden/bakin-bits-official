@@ -10,9 +10,10 @@
  *   anyone else or an older epoch) · pong
  * server → client: sync { epoch, session, snapshot, cursor } (atomic: the
  *   snapshot and the cursor it was taken at, plus generation, consumed input
- *   sequence and size on `session`, and `sizeFrozen`) · binary output ·
- *   session { session } · presence { sizeFrozen } (the sizing screen
- *   disconnected or came back: the size holds while it is away) ·
+ *   sequence and size on `session`, plus `sizeFrozen` and `nativeClients`)
+ *   · binary output · session { session } · presence { sizeFrozen,
+ *   nativeClients } (the sizing screen disconnected or came back — the size
+ *   holds while it is away — or a terminal app attached or left) ·
  *   result { viewerSeq, status: accepted | rejected | uncertain, error? } ·
  *   ping · error { error }
  *
@@ -25,6 +26,7 @@
  */
 import { z } from 'zod'
 import type { PluginSocket } from '@makinbakin/sdk/types'
+import type { NativeClient } from './processes'
 import { DeliveryUncertainError, screenDevice, TerminalError, type Principal, type Session, type SizeClaimant } from './contracts'
 
 export const ACK_WINDOW = 256 * 1024
@@ -49,6 +51,8 @@ export interface ViewerManager {
   outputPage(id: string, principal: Principal, cursor: number, limit?: number): { session: Session; cursor: number; data: Buffer; truncated: boolean }
   nextOutput(id: string, cursor: number, signal: AbortSignal): Promise<void>
   onSessionChange(id: string, listener: (session: Session) => void): () => void
+  nativeClients(id: string): NativeClient[]
+  onNatives(id: string, listener: () => void): () => void
   writeNext(id: string, principal: Principal, generation: number, data: string): Promise<Session>
   claim(id: string, principal: Principal, cols: number, rows: number, claimant: SizeClaimant): Promise<Session>
   resizeAs(id: string, principal: Principal, epoch: number, cols: number, rows: number): Promise<Session>
@@ -78,13 +82,14 @@ export class TerminalViewer {
   private sent = 0
   private acked = 0
   private lastViewerSeq = 0
-  private sentFrozen: boolean | undefined
+  private sentPresence: string | undefined
   private closed = false
   private wake: (() => void) | undefined
   private evict: ReturnType<typeof setTimeout> | undefined
   private heartbeat: ReturnType<typeof setInterval> | undefined
   private lastHeard: number
   private unsubscribe: (() => void) | undefined
+  private unsubscribeNatives: (() => void) | undefined
   private readonly abort = new AbortController()
   private static epochs = 0
 
@@ -117,6 +122,7 @@ export class TerminalViewer {
     clearTimeout(this.evict)
     clearInterval(this.heartbeat)
     this.unsubscribe?.()
+    this.unsubscribeNatives?.()
     this.wake?.()
     if (this.principal) {
       const key = `${this.sessionId} ${this.principal.id}`
@@ -164,23 +170,33 @@ export class TerminalViewer {
 
   private window(): number { return this.options.ackWindow ?? ACK_WINDOW }
 
-  /** The size holds while the browser that sizes it is not connected. */
+  /** The size holds while the screen or terminal app that sizes it is not connected. */
   private frozen(session: Session): boolean {
     const authority = session.sizeAuthority
+    if (authority?.kind === 'native') return !this.manager.nativeClients(session.id).some((client) => `native:${client.pid}` === authority.viewer)
     return authority?.kind === 'browser' && !viewers.has(`${session.id} ${authority.viewer}`)
   }
 
-  /** Tell this viewer when the size freezes or thaws (only on change; sync carries the first value). */
+  private presenceOf(session: Session): { sizeFrozen: boolean; nativeClients: number } {
+    return { sizeFrozen: this.frozen(session), nativeClients: this.manager.nativeClients(session.id).length }
+  }
+
+  /** Tell this viewer when the size freezes or thaws, or terminal apps come and go (only on change; sync carries the first value). */
   private presence(session: Session): void {
-    const sizeFrozen = this.frozen(session)
-    if (sizeFrozen === this.sentFrozen) return
-    this.sentFrozen = sizeFrozen
-    this.send({ type: 'presence', sizeFrozen })
+    const presence = this.presenceOf(session)
+    const key = JSON.stringify(presence)
+    if (key === this.sentPresence) return
+    this.sentPresence = key
+    this.send({ type: 'presence', ...presence })
   }
 
   /** A screen of this session connected or left: it may be the one that sizes it. */
   authorityMoved(clientId: string): void {
-    if (!this.principal || this.principal.id === clientId) return
+    if (this.principal?.id !== clientId) this.refreshPresence()
+  }
+
+  private refreshPresence(): void {
+    if (!this.principal) return
     try { this.presence(this.manager.get(this.sessionId, this.principal)) }
     catch (error) { this.failed(error) }
   }
@@ -199,6 +215,7 @@ export class TerminalViewer {
       this.send({ type: 'session', session })
       this.presence(session)
     })
+    this.unsubscribeNatives = this.manager.onNatives(this.sessionId, () => this.refreshPresence())
     if (await this.sync()) void this.pump()
   }
 
@@ -218,13 +235,15 @@ export class TerminalViewer {
       if (session.state === 'running') {
         const snapshot = await this.manager.screen(this.sessionId, this.principal!)
         this.cursor = snapshot.cursor
-        this.sentFrozen = this.frozen(snapshot.session)
-        this.send({ type: 'sync', epoch: this.epoch, session: snapshot.session, snapshot: Buffer.from(snapshot.data).toString('base64'), cursor: snapshot.cursor, sizeFrozen: this.sentFrozen })
+        const presence = this.presenceOf(snapshot.session)
+        this.sentPresence = JSON.stringify(presence)
+        this.send({ type: 'sync', epoch: this.epoch, session: snapshot.session, snapshot: Buffer.from(snapshot.data).toString('base64'), cursor: snapshot.cursor, ...presence })
       } else {
         // Ended sessions replay their retained output from the start.
         this.cursor = 0
-        this.sentFrozen = this.frozen(session)
-        this.send({ type: 'sync', epoch: this.epoch, session, snapshot: '', cursor: 0, sizeFrozen: this.sentFrozen })
+        const presence = this.presenceOf(session)
+        this.sentPresence = JSON.stringify(presence)
+        this.send({ type: 'sync', epoch: this.epoch, session, snapshot: '', cursor: 0, ...presence })
       }
       return true
     } catch (error) {

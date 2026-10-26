@@ -11,6 +11,7 @@ import { TerminalError, terminalSettings, type Principal } from './lib/contracts
 import { agentCommand, command, creatingScreen, failure, human } from './lib/http'
 import { sessionOptions } from './lib/session-options'
 import { TerminalViewer } from './lib/socket'
+import { attachBody, confirmBody, createAndLaunch, launch, newBody, operator, resolveRef, sessionTable } from './lib/cli'
 
 let manager: Sessions | undefined
 let service: TerminalService | undefined
@@ -31,7 +32,7 @@ const route = (path: string, method: 'GET' | 'POST', summary: string, handler: (
 })
 
 export default definePlugin({
-  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.3',
+  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.4',
   routes: [
     route('/options', 'GET', 'Get terminal form defaults and available agents and tasks', async (request) => {
       const principal = human(request)
@@ -42,7 +43,8 @@ export default definePlugin({
       const principal = human(request)
       const serviceReady = await service?.ready()
       if (serviceReady) await sessions().refreshStates()
-      return Response.json({ sessions: sessions().list(principal), serviceReady, serviceUpdateRequired: await service?.updateRequired() })
+      const list = sessions().list(principal).map((session) => ({ ...session, nativeClients: sessions().nativeClients(session.id).length }))
+      return Response.json({ sessions: list, serviceReady, serviceUpdateRequired: await service?.updateRequired() })
     }),
     route('/sessions', 'POST', 'Create a terminal session', async (request) => {
       const principal = human(request)
@@ -59,6 +61,27 @@ export default definePlugin({
         return Response.json({ defaultSize: { cols: session.cols, rows: session.rows } })
       }
       return Response.json(await command(sessions(), body, principal))
+    }),
+    // bakin terminal new | attach | ls: continue a session in a terminal app (lib/cli.ts).
+    route('/cli/new', 'POST', 'Create a session and attach this terminal to it', async (request) => {
+      const principal = operator(request)
+      return Response.json(await createAndLaunch(sessions(), newBody.parse(await request.json()), principal))
+    }),
+    route('/cli/attach', 'POST', 'Attach this terminal to a session', async (request) => {
+      const principal = operator(request)
+      const { params } = attachBody.parse(await request.json())
+      return Response.json(await launch(sessions(), resolveRef(sessions().list(principal), params.ref).id, principal))
+    }),
+    route('/cli/confirm', 'POST', 'Admit the launched terminal app', async (request) => {
+      operator(request)
+      const { token, pid } = confirmBody.parse(await request.json())
+      await sessions().confirmAttach(token, pid)
+      return Response.json({ admitted: true })
+    }),
+    route('/cli/ls', 'GET', 'List sessions for the terminal', async (request) => {
+      const principal = operator(request)
+      if (await service?.ready()) await sessions().refreshStates()
+      return Response.json(sessionTable(sessions().list(principal), (id) => sessions().nativeClients(id)))
     }),
     route('/service', 'POST', 'Set up the persistent terminal service', async (request) => { human(request); await sessions().setupService(() => service!.install()); return Response.json({ ready: true }) }),
   ],
@@ -196,7 +219,7 @@ export default definePlugin({
           title: z.string().optional().describe('create: a short human-readable name for the session.'),
           cwd: z.string().optional().describe('create: absolute working directory.'),
           program: z.enum(['shell', 'claude', 'codex']).optional().describe('create: program to launch (default shell).'),
-          checkout: z.enum(['isolated', 'existing']).optional().describe('create (coding programs): new isolated git worktree (default) or the existing checkout at cwd.'),
+          checkout: z.enum(['isolated', 'existing']).optional().describe('create: a new isolated git worktree or the existing checkout at cwd (default: isolated for coding programs, existing for a shell).'),
           taskId: z.string().optional().describe('create: link the session to a Bakin task id.'),
           generation: z.number().int().optional().describe('write, interrupt: the `generation` from your latest response for this session.'),
           sequence: z.number().int().optional().describe('write: the latest `inputSequence` + 1. Consumed once — never reuse or guess it.'),

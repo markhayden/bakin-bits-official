@@ -2,12 +2,17 @@ import { randomUUID } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
 import { relative, isAbsolute } from 'node:path'
 import { authorize, createSchema, DAY, DeliveryUncertainError, TerminalError, type CreateInput, type Principal, type Session, type SizeClaimant, type TerminalSettings } from './contracts'
-import type { ProcessDriver } from './processes'
+import type { NativeClient, ProcessDriver } from './processes'
 import { claimSize, clampSize, nextSize } from './sizing'
 import { Screen } from './screen'
 import { Store } from './store'
 
 interface WorktreeResult { ok: boolean; error?: string; worktreePath?: string }
+/** How long a launched terminal app has to confirm its pid (spec D7). */
+export const RESERVATION_MS = 15_000
+/** A minted, single-use permission for one terminal app to attach. */
+interface Reservation { sessionId: string; generation: number; expires: number; pid?: number }
+const nativeViewer = (pid: number) => `native:${pid}`
 /** The creating screen's grid and what kind of screen it is (it holds the size claim). */
 export type StartSize = { cols: number; rows: number } & SizeClaimant
 
@@ -24,6 +29,12 @@ export class Sessions {
   private screens = new Map<string, Screen>()
   private outputListeners = new Map<string, Set<() => void>>()
   private sessionListeners = new Map<string, Set<(session: Session) => void>>()
+  private reservations = new Map<string, Reservation>()
+  /** Admitted terminal apps by session, keyed by tmux client pid. */
+  private natives = new Map<string, Map<number, NativeClient>>()
+  private nativeListeners = new Map<string, Set<() => void>>()
+  private reconciling = new Set<string>()
+  private timers = new Set<ReturnType<typeof setTimeout>>()
   private closed = false
   constructor(readonly store: Store, private driver: ProcessDriver, private options: SessionOptions) {}
   private now(): number { return this.options.now?.() ?? Date.now() }
@@ -41,6 +52,8 @@ export class Sessions {
       if (!listeners.size) this.sessionListeners.delete(id)
     }
   }
+  /** Settles once everything queued so far has run. */
+  idle(): Promise<void> { return this.pending.then(() => undefined) }
   private enabled(): string[] { return (this.options.settings().enabledAgents ?? []).map((agent) => agent.id) }
   private run<T>(work: () => Promise<T>): Promise<T> {
     const next = this.pending.then(() => { if (this.closed) throw new TerminalError('Terminal manager is shutting down', 503); return work() })
@@ -112,11 +125,14 @@ export class Sessions {
     this.attachUnreconciled(session)
     try {
       this.adoptSize(session, await this.driver.windowSize(session.id))
-      return true
     } catch {
       await this.stopScreen(session.id)
       return false
     }
+    // Terminal apps already attached (one left over from before a restart, or
+    // a raw attach while nobody watched) meet the same admission check.
+    await this.reconcileClients(session.id).catch(() => undefined)
+    return true
   }
   private attachUnreconciled(session: Session): void {
     if (this.screens.has(session.id)) return
@@ -132,7 +148,7 @@ export class Sessions {
           for (const listener of this.outputListeners.get(session.id) ?? []) listener()
         }).catch(() => undefined)
       }
-    })
+    }, () => this.clientsChanged(session.id))
   }
   private async stopScreen(id: string): Promise<void> {
     const screen = this.screens.get(id)
@@ -143,14 +159,17 @@ export class Sessions {
   private ensureScreen(id: string, principal: Principal): Promise<Screen> {
     return this.run(async () => {
       const session = this.get(id, principal)
-      if (session.state !== 'running') throw new TerminalError('Live terminal screen unavailable', 503)
-      if (!this.driver.connected(id) || this.screens.get(id)?.failed || !this.screens.has(id)) {
-        await this.stopScreen(id)
-        if (!await this.driver.alive(id)) throw new TerminalError('Terminal process has exited', 409)
-        if (!await this.attach(session)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
-      }
+      await this.ensureAttached(session)
       return this.screens.get(id)!
     })
+  }
+  private async ensureAttached(session: Session): Promise<void> {
+    if (session.state !== 'running') throw new TerminalError('Live terminal screen unavailable', 503)
+    if (!this.driver.connected(session.id) || this.screens.get(session.id)?.failed || !this.screens.has(session.id)) {
+      await this.stopScreen(session.id)
+      if (!await this.driver.alive(session.id)) throw new TerminalError('Terminal process has exited', 409)
+      if (!await this.attach(session)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
+    }
   }
   /**
    * `size` is the creating screen's grid (a human's pane or terminal); it
@@ -174,7 +193,7 @@ export class Sessions {
         ...this.startSize(principal, size),
         createdAt: this.now(), lastActivityAt: this.now(),
       }
-      if (input.program !== 'shell' && input.checkout === 'isolated') {
+      if ((input.checkout ?? (input.program === 'shell' ? 'existing' : 'isolated')) === 'isolated') {
         await this.sweepUnlocked()
         if (this.store.sessions().filter((s) => s.worktreePath).length >= (this.options.settings().maxWorktrees ?? 10)) throw new TerminalError('Retained worktree limit reached; review unfinished work before creating another')
         const result = await this.options.prepare({ repoPath: cwd, sessionId: session.id, agent: agentId ?? 'human' })
@@ -204,8 +223,12 @@ export class Sessions {
       } else if (operation === 'return') {
         authorize(session, principal, this.enabled(), true, session.generation)
         if (!session.agentId || !this.enabled().includes(session.agentId)) throw new TerminalError('No enabled agent is assigned')
+        this.dropReservations(id)
+        // The agent drives alone: terminal apps are detached first (Bakin's bridge and control clients stay).
+        await this.detachNatives(id)
         session.owner = { kind: 'agent', id: session.agentId }
       } else session.owner = principal
+      this.dropReservations(id)
       session.generation++
       session.inputSequence = 0
       session.lastActivityAt = this.now()
@@ -304,6 +327,121 @@ export class Sessions {
     }
     const fallback = this.options.settings().defaultSize ?? { cols: 200, rows: 60 }
     return { ...clampSize(fallback.cols, fallback.rows), sizeEpoch: 0, sizeRevision: 0 }
+  }
+  /**
+   * Let one terminal app attach (spec D7): a single-use reservation bound to
+   * this generation, confirmed by the launched tmux client's pid. Any client
+   * that matches no reservation is detached, including a raw `tmux attach`.
+   */
+  reserveAttach(id: string, principal: Principal): Promise<{ session: Session; token: string; args: string[] }> {
+    return this.run(async () => {
+      if (principal.kind !== 'human') throw new TerminalError('Only the human attaches a terminal app', 403)
+      const session = this.get(id, principal)
+      if (session.state !== 'running') throw new TerminalError('Session has exited')
+      if (session.owner.kind !== 'human') throw new TerminalError('An agent is driving this session. Take control first')
+      // The control client must be watching before tmux attaches.
+      await this.ensureAttached(session)
+      const token = randomUUID()
+      this.reservations.set(token, { sessionId: id, generation: session.generation, expires: this.now() + RESERVATION_MS })
+      // Unconfirmed by then, its waiting client (if any) is detached.
+      const timer = setTimeout(() => { this.timers.delete(timer); this.clientsChanged(id) }, RESERVATION_MS + 50)
+      this.timers.add(timer)
+      return { session, token, args: this.driver.attachArgs(id) }
+    })
+  }
+  confirmAttach(token: string, pid: number): Promise<void> {
+    return this.run(async () => {
+      const reservation = this.reservations.get(token)
+      if (!reservation || reservation.pid !== undefined) throw new TerminalError('This attach is no longer valid; run the command again', 409)
+      const session = this.store.sessions().find((entry) => entry.id === reservation.sessionId)
+      if (reservation.expires < this.now()) {
+        this.reservations.delete(token)
+        throw new TerminalError('This attach expired; run the command again', 409)
+      }
+      if (!session || session.generation !== reservation.generation || session.owner.kind !== 'human') {
+        this.reservations.delete(token)
+        throw new TerminalError('Control changed; run the command again', 409)
+      }
+      reservation.pid = pid
+      await this.reconcileClients(session.id)
+    })
+  }
+  /** The terminal apps admitted to a session right now. */
+  nativeClients(id: string): NativeClient[] { return [...this.natives.get(id)?.values() ?? []] }
+  /** Hear when a terminal app is admitted, resizes, or leaves. */
+  onNatives(id: string, listener: () => void): () => void {
+    let listeners = this.nativeListeners.get(id)
+    if (!listeners) this.nativeListeners.set(id, listeners = new Set())
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+      if (!listeners.size) this.nativeListeners.delete(id)
+    }
+  }
+  /** tmux saw a client attach, resize or leave: reconcile once in the queue (repeat signals coalesce). */
+  private clientsChanged(id: string): void {
+    if (this.closed || this.reconciling.has(id)) return
+    this.reconciling.add(id)
+    void this.run(async () => {
+      this.reconciling.delete(id)
+      await this.reconcileClients(id)
+    }).catch(() => undefined)
+  }
+  /**
+   * Admit clients with a confirmed reservation, hold them while a reservation
+   * waits for its confirm, detach everything else, and follow the app that
+   * sizes the session. Runs in the queue.
+   */
+  private async reconcileClients(id: string): Promise<void> {
+    const session = this.store.sessions().find((entry) => entry.id === id)
+    if (!session || session.state !== 'running') return
+    for (const [token, reservation] of this.reservations) if (reservation.expires < this.now()) this.reservations.delete(token)
+    const admitted = this.natives.get(id) ?? new Map<number, NativeClient>()
+    const next = new Map<number, NativeClient>()
+    let newest: NativeClient | undefined
+    for (const client of await this.driver.clients(id)) {
+      if (admitted.has(client.pid)) { next.set(client.pid, client); continue }
+      const match = [...this.reservations].find(([, reservation]) => reservation.sessionId === id && reservation.pid === client.pid && reservation.generation === session.generation)
+      if (match && session.owner.kind === 'human') {
+        this.reservations.delete(match[0])
+        next.set(client.pid, client)
+        newest = client
+        continue
+      }
+      if ([...this.reservations.values()].some((reservation) => reservation.sessionId === id && reservation.pid === undefined)) continue
+      await this.driver.detachClient(client.name)
+    }
+    const changed = next.size !== admitted.size || [...next].some(([pid, client]) => {
+      const before = admitted.get(pid)
+      return !before || before.cols !== client.cols || before.rows !== client.rows
+    })
+    this.natives.set(id, next)
+    // The newest admitted app claims the size; the app holding the claim is followed.
+    if (newest) Object.assign(session, claimSize(session, nativeViewer(newest.pid), { kind: 'native' }))
+    const authority = session.sizeAuthority
+    const sizer = authority?.kind === 'native' ? [...next.values()].find((client) => nativeViewer(client.pid) === authority.viewer) : undefined
+    if (sizer) {
+      const size = clampSize(sizer.cols, sizer.rows)
+      await this.applySize(session, size.cols, size.rows)
+    } else if (newest) this.save(session)
+    if (changed) for (const listener of this.nativeListeners.get(id) ?? []) listener()
+  }
+  private dropReservations(id: string): void {
+    for (const [token, reservation] of this.reservations) if (reservation.sessionId === id) this.reservations.delete(token)
+  }
+  /** Detach every admitted terminal app and wait until tmux reports them gone. */
+  private async detachNatives(id: string): Promise<void> {
+    const admitted = this.natives.get(id)
+    if (!admitted?.size) return
+    for (const client of admitted.values()) await this.driver.detachClient(client.name)
+    for (let attempt = 0; ; attempt++) {
+      const remaining = (await this.driver.clients(id)).filter((client) => admitted.has(client.pid))
+      if (!remaining.length) break
+      if (attempt >= 40) throw new TerminalError('A terminal app is still attached; close it and try again', 503)
+      await Bun.sleep(50)
+    }
+    this.natives.set(id, new Map())
+    for (const listener of this.nativeListeners.get(id) ?? []) listener()
   }
   finish(id: string, principal: Principal, _generation: number, terminate: boolean): Promise<Session> {
     return this.run(async () => {
@@ -431,6 +569,8 @@ export class Sessions {
     })
   }
   async shutdown(): Promise<void> {
+    for (const timer of this.timers) clearTimeout(timer)
+    this.timers.clear()
     await this.pending
     this.closed = true
     await this.driver.detach()

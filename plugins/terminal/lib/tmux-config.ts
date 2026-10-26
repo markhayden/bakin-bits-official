@@ -23,6 +23,10 @@ export function tmuxConfig(): string {
     'set -g set-clipboard on',
     'set -g set-titles on',
     "set -g set-titles-string 'Bakin · #{@bakin_title}'",
+    // A terminal app that sizes a session is followed: this hook marks every
+    // client resize (attach included) on the session, and Bakin's control
+    // client subscribes to the mark, then reads list-clients.
+    "set-hook -g client-resized 'set-option -F @bakin_client \"#{client_pid} #{client_width}x#{client_height}\"'",
     // Browser input arrives through send-keys and never meets a key table;
     // this minimal prefix table is for native clients only. Nothing here can
     // add a pane or window: one pane per session is a Bakin invariant.

@@ -4,7 +4,8 @@ export const createSchema = z.object({
   title: z.string().trim().min(1).max(100),
   cwd: z.string().min(1).max(4096),
   program: z.enum(['shell', 'claude', 'codex']).default('shell'),
-  checkout: z.enum(['isolated', 'existing']).default('isolated'),
+  /** Default: an isolated worktree for coding programs, the existing checkout for a shell. */
+  checkout: z.enum(['isolated', 'existing']).optional(),
   agentId: z.string().min(1).max(100).optional(),
   taskId: z.string().min(1).max(100).optional(),
   projectId: z.string().min(1).max(100).optional(),
@@ -67,6 +68,14 @@ export function terminalSettings(raw: Record<string, unknown>): TerminalSettings
     maxWorktrees: bounded(raw.maxWorktrees, 10, 100),
     idleDays: bounded(raw.idleDays, 30, 365),
   }
+}
+/** The eight characters after `terminal-`: enough to tell sessions apart, short enough to type. */
+export function shortId(session: Pick<Session, 'id'>): string {
+  return session.id.replace(/^terminal-/, '').slice(0, 8)
+}
+/** Continue a session in a terminal app (spec D6): the full id, so it never becomes ambiguous. */
+export function attachCommand(session: Pick<Session, 'id'>): string {
+  return `bakin terminal attach ${session.id} --as human`
 }
 export const DAY = 86_400_000
 export class TerminalError extends Error {
