@@ -313,3 +313,15 @@ test('a record that fails to save after tmux resized is reconciled from tmux on 
   expect([screen.cols, screen.rows]).toEqual([120, 40])
   expect(manager.store.sessions().find((stored) => stored.id === session.id)).toMatchObject({ cols: 120, rows: 40 })
 })
+
+test('reattaching after setup adopts tmux\'s window, even when the stored record is stale', async () => {
+  const { manager, tmuxSizes, live } = fixture()
+  const session = await manager.create({ title: 'Restart', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+  // tmux moved, but the record never heard (a save that failed before a restart).
+  tmuxSizes.set(session.id, { cols: 120, rows: 40 })
+  live.add(session.id)
+  await manager.setupService(async () => {})
+  const screen = await manager.readScreen(session.id, human)
+  expect([screen.cols, screen.rows]).toEqual([120, 40])
+  expect(manager.store.sessions().find((stored) => stored.id === session.id)).toMatchObject({ cols: 120, rows: 40 })
+})

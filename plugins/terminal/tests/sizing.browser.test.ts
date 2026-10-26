@@ -179,3 +179,38 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     await browser.close()
   }
 }, 60_000)
+
+for (const renderer of ['webgl', 'dom'] as const) {
+  browserTest(`a new session starts at the grid its creator's pane fits (${renderer} renderer)`, async () => {
+    const browser = await launchChromium()
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+    page.setDefaultTimeout(10000)
+    // Without WebGL2 the canvas falls back to the DOM renderer, whose cells stay fractional.
+    if (renderer === 'dom') await page.addInitScript(() => {
+      const getContext = HTMLCanvasElement.prototype.getContext
+      HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, kind: string, ...args: unknown[]) {
+        if (kind === 'webgl' || kind === 'webgl2') return null
+        return Reflect.apply(getContext, this, [kind, ...args])
+      } as typeof getContext
+    })
+    const socket = await viewerSocket(page)
+    const endpoint = new URL('/api/plugins/terminal/session', process.env.TERMINAL_PREVIEW_URL!).href
+    let id: string | undefined
+    try {
+      await page.goto(process.env.TERMINAL_PREVIEW_URL!)
+      await page.getByRole('button', { name: 'New terminal' }).first().click()
+      await page.getByRole('textbox', { name: 'Working directory' }).fill('/tmp')
+      const creation = page.waitForResponse((response) => response.url().endsWith('/terminal/sessions') && response.request().method() === 'POST')
+      await page.getByRole('button', { name: 'Start terminal', exact: true }).click()
+      const created = await (await creation).json()
+      id = created.id
+      await page.locator('.xterm-screen').waitFor()
+      // Within the engine's scrollbar allowance of what the mounted pane fits.
+      const fitted = await socket.waitFor((frame) => frame.type === 'resize', 2000).catch(() => undefined)
+      if (fitted) expect(Math.abs((fitted.cols as number) - created.cols)).toBeLessThanOrEqual(3)
+    } finally {
+      if (id) await page.request.post(endpoint, { headers: { 'X-Bakin-Terminal-Client': 'sizing-browser-test-0002' }, data: { id, operation: 'terminate' } }).catch(() => undefined)
+      await browser.close()
+    }
+  }, 30000)
+}

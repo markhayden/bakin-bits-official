@@ -14,15 +14,31 @@ import { BASE_FONT, screenDevice, storedFont, type ScreenDevice } from './termin
 const XTERM_FONT = 'courier-new, courier, monospace'
 const INSET = 32
 
-/** One cell at `fontSize`, rounded the way xterm's renderer snaps cells to device pixels. */
-export function measureCell(fontSize: number, doc: Document = document, dpr = window.devicePixelRatio || 1): { width: number; height: number } {
+/**
+ * One cell at `fontSize`, rounded the way the renderer the canvas will use
+ * rounds it: the WebGL renderer snaps cell widths down to device pixels; the
+ * DOM fallback (no WebGL2) keeps them fractional.
+ */
+export function measureCell(fontSize: number, doc: Document = document, dpr = window.devicePixelRatio || 1, snaps = webglAvailable(doc)): { width: number; height: number } {
   const probe = doc.createElement('span')
   probe.textContent = 'W'.repeat(32)
   Object.assign(probe.style, { position: 'absolute', visibility: 'hidden', whiteSpace: 'pre', fontFamily: XTERM_FONT, fontSize: `${fontSize}px`, lineHeight: 'normal' })
   doc.body.appendChild(probe)
   const box = probe.getBoundingClientRect()
   probe.remove()
-  return { width: Math.floor((box.width / 32) * dpr) / dpr, height: Math.ceil(box.height * dpr) / dpr }
+  const width = box.width / 32
+  return { width: snaps ? Math.floor(width * dpr) / dpr : width, height: Math.ceil(box.height * dpr) / dpr }
+}
+
+let webgl: boolean | undefined
+/** Whether the canvas's WebGL renderer can start here (it needs WebGL2). Asked once. */
+function webglAvailable(doc: Document): boolean {
+  if (webgl === undefined) {
+    const context = doc.createElement('canvas').getContext('webgl2')
+    webgl = Boolean(context)
+    context?.getExtension('WEBGL_lose_context')?.loseContext()
+  }
+  return webgl
 }
 
 export function estimateTerminalSize(

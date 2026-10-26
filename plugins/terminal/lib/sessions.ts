@@ -102,7 +102,23 @@ export class Sessions {
       }
     })
   }
-  private attach(session: Session): void {
+  /**
+   * Attach and adopt tmux's actual window before anything reads or writes
+   * through the attachment (the record may be stale: a resize whose save
+   * failed, a crash). False when tmux cannot say: the attachment is dropped
+   * again, and the next viewer sync retries.
+   */
+  private async attach(session: Session): Promise<boolean> {
+    this.attachUnreconciled(session)
+    try {
+      this.adoptSize(session, await this.driver.windowSize(session.id))
+      return true
+    } catch {
+      await this.stopScreen(session.id)
+      return false
+    }
+  }
+  private attachUnreconciled(session: Session): void {
     if (this.screens.has(session.id)) return
     const screen = new Screen(session.cols, session.rows)
     this.screens.set(session.id, screen)
@@ -131,13 +147,7 @@ export class Sessions {
       if (!this.driver.connected(id) || this.screens.get(id)?.failed || !this.screens.has(id)) {
         await this.stopScreen(id)
         if (!await this.driver.alive(id)) throw new TerminalError('Terminal process has exited', 409)
-        this.attach(session)
-        // A fresh attachment starts from tmux's real window, whatever the record says.
-        try { this.adoptSize(session, await this.driver.windowSize(id)) }
-        catch {
-          await this.stopScreen(id)
-          throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
-        }
+        if (!await this.attach(session)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
       }
       return this.screens.get(id)!
     })
@@ -178,7 +188,8 @@ export class Sessions {
       await this.driver.create(session)
       session.state = 'running'
       this.save(session)
-      this.attach(session)
+      // Unreconciled, the session stays detached; the first viewer sync retries.
+      await this.attach(session)
       return session
     })
   }
@@ -406,7 +417,8 @@ export class Sessions {
         if (session.state !== 'running') continue
         if (await this.driver.alive(session.id)) {
           await this.driver.title(session)
-          this.attach(session)
+          // Unreconciled, the session stays detached; the first viewer sync retries.
+          await this.attach(session)
         } else { session.state = 'exited'; this.save(session) }
       }
     })

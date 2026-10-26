@@ -68,12 +68,14 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     const current = term.options.fontSize ?? BASE_FONT
     const min = minFont()
     const fits = rendered.clientWidth <= box.width
-    if (fits) known.fits = Math.max(known.fits, current)
-    else known.overflows = Math.min(known.overflows, current)
+    // A font below this device's minimum is never a candidate, even one that fits.
+    if (fits && current >= min) known.fits = Math.max(known.fits, current)
+    if (!fits) known.overflows = Math.min(known.overflows, current)
     const estimate = fitWidthFont(current, box.width, rendered.clientWidth, min)
-    const next = Math.max(min, Math.max(known.fits, Math.min(estimate, known.overflows - 1)))
+    const next = Math.max(min, known.fits, Math.min(estimate, known.overflows - 1))
     if (next === current || passes === 0) {
-      if (!fits && known.fits) setFont(known.fits)
+      // Out of tries on an overflowing size: settle on the best that fit (else the minimum, which pans).
+      if (!fits) setFont(Math.max(min, known.fits))
       return
     }
     setFont(next)
@@ -267,7 +269,12 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     }
   }, [session.id, attempt])
   useLayoutEffect(() => { inputHandle.current?.reset() }, [inputEnabled, session.generation, session.id, attempt])
-  useEffect(() => { terminal.current?.resize(session.cols, session.rows); requestAnimationFrame(applyView) }, [session.cols, session.rows])
+  // A new grid: other screens refit their font to it. The authority's own
+  // pane did not change (its pending width waits out its debounce).
+  useEffect(() => {
+    terminal.current?.resize(session.cols, session.rows)
+    if (!callbacks.current.authority) requestAnimationFrame(applyView)
+  }, [session.cols, session.rows])
   useEffect(() => { applyView() }, [authority, zoom])
   // A new claim (by anyone) starts a fresh exchange: what this screen sent before is no longer known to the server.
   useEffect(() => { sentSize.current = '' }, [authority, session.sizeEpoch])
