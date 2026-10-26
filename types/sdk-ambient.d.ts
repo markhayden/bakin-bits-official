@@ -1114,9 +1114,21 @@ declare module '@makinbakin/sdk/patterns' {
     label?: string
     labelledBy?: string
   }>
+  export type PageAsideWidth = 'nav' | 'session' | 'conversation'
+  export type PageAsideSide = 'start' | 'end'
+  export interface PageAsideCollapsible {
+    collapsed: boolean
+    onCollapsedChange: (collapsed: boolean) => void
+    collapsedMode?: 'strip' | 'content'
+    expandLabel?: string
+    strip?: ReactNode
+  }
   export const PageAside: ComponentType<PatternProps & {
     label?: string
     labelledBy?: string
+    collapsible?: PageAsideCollapsible
+    width?: PageAsideWidth
+    side?: PageAsideSide
   }>
   export function useCollapsedAside(storageKey: string): [boolean, (collapsed: boolean) => void]
   export type PageCanvasOrientation = 'vertical' | 'horizontal'
@@ -1531,9 +1543,27 @@ declare module '@makinbakin/sdk/conversation' {
     meta?: Meta
   }
 
+  /** A structured question an agent asked (`bakin_exec_ask_user`), carried on a tool row's `metadata.bakinQuestion`. */
+  export interface BakinQuestion {
+    v: 1
+    id: string
+    question: string
+    options: { label: string; description?: string }[]
+    recommended?: number
+    allowOther: boolean
+  }
+  export type QuestionState = 'open' | 'answered' | 'skipped'
+  export type QuestionAnswer =
+    | { kind: 'option'; index: number }
+    | { kind: 'other'; text: string }
+    | { kind: 'unsure' }
+  /** The user message a question-card answer sends (and the fold recognises). */
+  export function formatQuestionAnswer(question: BakinQuestion, answer: QuestionAnswer, note?: string): string
+
   export interface ConversationThreadOptions<Meta = unknown, Attachment = unknown> {
     threadKey: string
-    events: { chunk: string; done: string; error: string }
+    /** `appended` refetches out-of-turn rows while the thread is idle. */
+    events: { chunk: string; done: string; error: string; appended?: string }
     keyOf: (payload: Record<string, unknown>) => unknown
     load: (key: string) => Promise<ConversationThreadLoad<Meta> | null>
     post: (key: string, content: string, attachments?: Attachment[]) => Promise<{ ok: boolean; status?: number; error?: string }>
@@ -1569,7 +1599,7 @@ declare module '@makinbakin/sdk/conversation' {
   export interface ConversationAttentionConfig {
     pluginId: string
     navItemId: string
-    events: { done: string; error: string; started?: string; refresh?: [string] | [string, string] }
+    events: { done: string; error: string; started?: string; appended?: string; refresh?: [string] | [string, string] }
     keyOf: (payload: Record<string, unknown>) => string
     visibleKey: () => string
     refreshTotals: () => Promise<ConversationAttentionTotals | null>
@@ -1635,6 +1665,10 @@ declare module '@makinbakin/sdk/conversation' {
 
   export const Conversation: ComponentType<{
     turns: readonly unknown[]
+    /** Sends a question card's formatted answer; omit for read-only transcripts. */
+    onAnswerQuestion?: (text: string) => void
+    /** A turn is in flight; question cards hold input. */
+    busy?: boolean
     agent?: ConversationAgent
     resolveAgent?: (agentId?: string) => ConversationAgent | undefined
     emptyState?: ReactNode
@@ -1845,6 +1879,19 @@ declare module '@makinbakin/sdk/utils' {
   export function createTurnRecorder(options: { turnId: string; agentId?: string; now?: () => string }): TurnRecorder
   export const SUMMARY_MAX_CHARS: number
   export const PREVIEW_MAX_CHARS: number
+  /** Structured-question validation at a plugin's server boundary. */
+  export const QUESTION_LIMITS: {
+    readonly question: 200
+    readonly label: 60
+    readonly description: 160
+    readonly minOptions: 2
+    readonly maxOptions: 5
+    readonly serializedBytes: 2048
+  }
+  export function parseBakinQuestion(value: unknown): import('@makinbakin/sdk/conversation').BakinQuestion | null
+  export function validateBakinQuestionInput(value: unknown):
+    | { ok: true; value: Omit<import('@makinbakin/sdk/conversation').BakinQuestion, 'v' | 'id'> }
+    | { ok: false; error: string }
   export function formatDateTime(timestamp: string): string
 }
 

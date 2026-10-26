@@ -1,5 +1,5 @@
 import React from 'react'
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useImperativeHandle } from 'react'
 import { usePluginEvent, useNavBadge, toast, useAgent, useRouter } from './hooks.js'
 
 // Focused conversation-kit stubs mirroring `@makinbakin/sdk/conversation`.
@@ -13,13 +13,27 @@ function messageText(message, transformText) {
   if (message.kind === 'assistant') {
     return transformText ? transformText(message.content).text : message.content
   }
-  if (message.kind === 'tool') return `${message.toolName}${message.summary ? `: ${message.summary}` : ''}`
+  if (message.kind === 'tool') {
+    const question = message.metadata?.bakinQuestion
+    if (question?.question) return `Asked: ${question.question}`
+    return `${message.toolName}${message.summary ? `: ${message.summary}` : ''}`
+  }
   if (message.kind === 'error') return message.message
   if (message.kind === 'aborted') return 'Stopped'
   return ''
 }
 
+// Mirrors the kit: a card answer is an ordinary readable user message.
+export function formatQuestionAnswer(question, answer, note) {
+  const choice = answer.kind === 'option'
+    ? question.options[answer.index]?.label ?? ''
+    : answer.kind === 'other' ? answer.text.trim() : 'Not sure — help me choose'
+  const trimmedNote = note?.trim()
+  return `**${question.question}** → ${choice}${trimmedNote ? `\n\n${trimmedNote}` : ''}`
+}
+
 export function ConversationPanel({
+  composerHandleRef,
   chrome,
   autoFocus,
   className,
@@ -38,6 +52,12 @@ export function ConversationPanel({
   transformText,
 }) {
   const [draft, setDraft] = useState('')
+  const inputRef = useRef(null)
+  useImperativeHandle(composerHandleRef, () => ({
+    isEmpty: () => draft.trim() === '',
+    setText: text => setDraft(text),
+    focus: () => inputRef.current?.focus(),
+  }), [draft])
   const liveText = (liveChunks ?? [])
     .filter((chunk) => chunk.type === 'text')
     .map((chunk) => chunk.content ?? '')
@@ -72,6 +92,7 @@ export function ConversationPanel({
     agentControl ?? null,
     !readOnly && onSend
       ? React.createElement('textarea', {
+        ref: inputRef,
         'aria-label': placeholder,
         'data-testid': 'chat-input',
         value: draft,
@@ -228,6 +249,14 @@ export function useConversationThread(options) {
   })
   usePluginEvent(events.error, payload => {
     if (optionsRef.current.keyOf(payload) === activeKeyRef.current) settle(payload)
+  })
+
+  const streamingRef = useRef(streaming)
+  streamingRef.current = streaming
+  usePluginEvent(events.appended ?? '__conv_thread_no_appended__', payload => {
+    if (optionsRef.current.keyOf(payload) !== activeKeyRef.current) return
+    if (streamingRef.current) return
+    void loadTranscript()
   })
 
   const send = useCallback(async (content, attachments) => {
