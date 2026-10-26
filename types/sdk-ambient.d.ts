@@ -1712,6 +1712,8 @@ declare module '@makinbakin/sdk/conversation' {
     className?: string
   }>
   export const Composer: ComponentType<Record<string, unknown>>
+  /** Seed a composer's persisted draft for a storage key. */
+  export function writeComposerDraft(storageKey: string, value: string): void
   export const ThinkingIndicator: ComponentType<{ label?: string }>
 }
 

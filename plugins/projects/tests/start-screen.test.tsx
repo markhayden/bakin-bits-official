@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 
+import { composerDrafts } from '@makinbakin/sdk/conversation'
 import { StartScreen } from '../components/start-screen'
 import { fallbackTitle } from '../lib/start'
 
@@ -86,6 +87,20 @@ describe('StartScreen failure with newer text', () => {
     await act(async () => { fail() })
     expect(input().value).toBe('More detail typed meanwhile')
     expect(screen.getByText('Projects is restarting.')).toBeDefined()
+  })
+})
+
+describe('StartScreen retry after an edit', () => {
+  it('re-sends the original payload unchanged and keeps the edit as the project\'s draft', async () => {
+    responses = [() => Response.json({ error: 'Lost response' }, { status: 503 })]
+    render(<StartScreen />)
+    await send('Original idea')
+    await send('Original idea, with more detail')
+    const [first, retry] = bodies()
+    expect(retry).toEqual(first)
+    expect(retry.firstMessage).toBe('Original idea')
+    expect((composerDrafts as Map<string, string>).get('project:p1')).toBe('Original idea, with more detail')
+    expect(push).toHaveBeenCalledWith('/projects/p1')
   })
 })
 

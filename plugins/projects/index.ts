@@ -239,6 +239,12 @@ const projectsPlugin: BakinPlugin = {
         const project = readProject(projectId)
         const kickoff = project?.kickoff
         if (!project || kickoff?.state !== 'pending' || !kickoff.message) return
+        // The engine persists the user row BEFORE accepting: a transcript is
+        // proof the turn was already accepted (e.g. the `started` write failed).
+        if (readBrainstormMessages(projectId).length > 0) {
+          await projectService.advanceKickoff(projectId, kickoff.requestId, 'pending', 'started')
+          return
+        }
         const runtimeContent = buildProjectBrainstormContext(await derive(project), kickoff.message, { live: true })
         if (readProject(projectId)?.kickoff?.state !== 'pending') return
         const result = await brainstormTurns.start(ctx, projectId, kickoff.message, {

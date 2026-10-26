@@ -1025,6 +1025,18 @@ describe('Routes', () => {
         expect(streamMock).toHaveBeenCalledTimes(1)
       })
 
+      it('a pending receipt whose turn was already accepted is settled by the next attempt, not restarted', async () => {
+        writeProjectFixture('proj-accepted-retry', {
+          title: 'Accepted', status: 'draft',
+          extra: { kickoff: { requestId: 'req-retry-0001', state: 'pending', message: 'Plan my garden', agentId: 'main' } },
+        })
+        writeFileSync(join(projectsDir, 'proj-accepted-retry.brainstorm.json'), JSON.stringify([{ kind: 'user', ts: '2026-10-25T00:00:00.000Z', content: 'Plan my garden' }]))
+        const streamMock = mockRuntimeStream(['Sure.'])
+        await callRoute(createRoute(), plugin.ctx, { body: { requestId: 'req-retry-0001', title: 'Accepted', firstMessage: 'Plan my garden' } })
+        expect(streamMock).not.toHaveBeenCalled()
+        expect((await readViaTool('proj-accepted-retry')).kickoff).toMatchObject({ state: 'started' })
+      })
+
       it('rejects a malformed request identity', async () => {
         const { status, body } = await callRoute(createRoute(), plugin.ctx, { body: { ...kickoffBody, requestId: 'x' } })
         expect(status).toBe(400)

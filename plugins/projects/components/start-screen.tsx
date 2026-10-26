@@ -10,7 +10,7 @@ import { useMemo, useRef, useState } from 'react'
 import { ArrowLeft, TriangleAlert } from 'lucide-react'
 import { Alert, AlertDescription, Button } from '@makinbakin/sdk/ui'
 import { AgentSelect, Page, PageBody, PageComposer, PageHeader } from '@makinbakin/sdk/patterns'
-import { Composer, ConversationEmptyState, type ComposerHandle } from '@makinbakin/sdk/conversation'
+import { Composer, ConversationEmptyState, writeComposerDraft, type ComposerHandle } from '@makinbakin/sdk/conversation'
 import { useAgentList, useMainAgentId } from '@makinbakin/sdk/hooks'
 import { useRouter } from '@makinbakin/sdk/navigation'
 import { projectRequest } from '../lib/project-api'
@@ -29,28 +29,28 @@ export function StartScreen({ onBack }: { onBack?: () => void }) {
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const composer = useRef<ComposerHandle | null>(null)
-  // Minted when the user presses send and reused by every retry of that
-  // send, so a lost response can never create a second project (D8).
-  const requestId = useRef<string | null>(null)
+  // The first send's payload, minted when the user presses send. Every retry
+  // re-sends it UNCHANGED (same requestId, same message), so a lost response
+  // can never create a second project or silently drop an edit (D8).
+  const pending = useRef<{ requestId: string; message: string } | null>(null)
   const leadId = lead ?? mainAgentId
 
   const create = async (content: string) => {
     setCreating(true)
     setError(null)
-    requestId.current ??= crypto.randomUUID()
+    pending.current ??= { requestId: crypto.randomUUID(), message: content }
+    const { requestId, message } = pending.current
     try {
       const result = await projectRequest('', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          requestId: requestId.current,
-          title: fallbackTitle(content),
-          owner: leadId,
-          firstMessage: content,
-        }),
+        body: JSON.stringify({ requestId, title: fallbackTitle(message), owner: leadId, firstMessage: message }),
       }) as { id?: unknown }
       if (typeof result.id !== 'string' || !result.id) throw new Error('Projects did not return the new project.')
-      requestId.current = null
+      pending.current = null
+      // Text edited after the first attempt is not lost: it waits in the
+      // project's composer as a draft.
+      if (content !== message) writeComposerDraft(`project:${result.id}`, content)
       router.push(`/projects/${encodeURIComponent(result.id)}`)
     } catch (err) {
       // The composer cleared its draft on send — put the text back, unless
