@@ -20,7 +20,7 @@ import { useQueryState, useRouter } from "@makinbakin/sdk/navigation"
 import { useSearch } from "@makinbakin/sdk/hooks"
 import { useDebug, usePluginEvent } from "@makinbakin/sdk/hooks"
 import { ProjectRow } from './project-row'
-import { NewProjectDialog } from './new-project-dialog'
+import { StartScreen } from './start-screen'
 import type { ProjectSummary, ProjectStatus } from '../types'
 
 interface ScoreInfo {
@@ -41,9 +41,6 @@ export function ProjectList() {
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [newProjectOpen, setNewProjectOpen] = useState(false)
-  const [creatingProject, setCreatingProject] = useState(false)
-  const [createError, setCreateError] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<ProjectSummary | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -126,10 +123,7 @@ export function ProjectList() {
     return projects.filter(p => p.title.toLowerCase().includes(q))
   }, [projects, search, searchHook.results, scoreMap])
 
-  const handleNew = () => {
-    setCreateError(null)
-    setNewProjectOpen(true)
-  }
+  const handleNew = () => router.push('/projects/new')
 
   const handleDeleteProject = async () => {
     if (!deleteTarget || deleting) return
@@ -154,30 +148,9 @@ export function ProjectList() {
     }
   }
 
-  const handleCreateProject = async (title: string) => {
-    setCreatingProject(true)
-    setCreateError(null)
-    try {
-      const res = await fetch('/api/plugins/projects/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title }),
-      })
-      if (!res.ok) {
-        const text = await res.text().catch(() => '')
-        throw new Error(text || `Failed to create project (${res.status})`)
-      }
-      const data = await res.json()
-      if (typeof data.id !== 'string' || !data.id) {
-        throw new Error('Project create response did not include an id')
-      }
-      setNewProjectOpen(false)
-      router.push(`/projects/${data.id}/edit`)
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setCreatingProject(false)
-    }
+  // No projects at all: the list IS the start screen (D18).
+  if (!loading && !loadError && status === 'all' && !search && projects.length === 0) {
+    return <StartScreen />
   }
 
   return (
@@ -202,7 +175,7 @@ export function ProjectList() {
         actions={(
           <Button ref={newProjectButtonRef} onClick={handleNew}>
             <Plus className="size-bakin-4" />
-            New Project
+            New project
           </Button>
         )}
       />
@@ -263,7 +236,7 @@ export function ProjectList() {
               action={status === 'all' ? (
                 <Button onClick={handleNew}>
                   <Plus className="size-bakin-4" />
-                  New Project
+                  New project
                 </Button>
               ) : undefined}
             />
@@ -309,15 +282,6 @@ export function ProjectList() {
         }}
       />
 
-      <NewProjectDialog
-        open={newProjectOpen}
-        creating={creatingProject}
-        error={createError}
-        onConfirm={handleCreateProject}
-        onCancel={() => {
-          if (!creatingProject) setNewProjectOpen(false)
-        }}
-      />
     </Page>
   )
 }

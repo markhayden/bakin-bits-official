@@ -354,33 +354,13 @@ describe('ProjectList', () => {
     })
   })
 
-  it('creates a titled project before opening the edit view', async () => {
+  it('New project opens the start screen — no modal, nothing created', async () => {
     render(<ProjectList />)
-
-    await waitFor(() => {
-      expect(screen.getByText('New Project')).toBeDefined()
-    })
-
-    fireEvent.click(screen.getByText('New Project'))
-    const titleInput = screen.getByPlaceholderText('Project title...')
-    const createButton = screen.getByText('Create Project') as HTMLButtonElement
-    expect(createButton.disabled).toBe(true)
-
-    fireEvent.change(titleInput, { target: { value: 'Website Refresh' } })
-    expect((screen.getByText('Create Project') as HTMLButtonElement).disabled).toBe(false)
-    fireEvent.click(screen.getByText('Create Project'))
-
-    await waitFor(() => {
-      expect(routerPushSpy).toHaveBeenCalledWith('/projects/created-project/edit')
-    })
-
+    fireEvent.click(await screen.findByRole('button', { name: 'New project' }))
+    expect(routerPushSpy).toHaveBeenCalledWith('/projects/new')
+    expect(screen.queryByRole('dialog')).toBeNull()
     const fetchCalls = (fetchMock as unknown as { mock: { calls: unknown[][] } }).mock.calls
-    const createCall = fetchCalls.find(([url, init]) => (
-      url === '/api/plugins/projects/'
-      && (init as RequestInit | undefined)?.method === 'POST'
-    ))
-    expect(createCall).toBeDefined()
-    expect(JSON.parse(String((createCall?.[1] as RequestInit).body))).toEqual({ title: 'Website Refresh' })
+    expect(fetchCalls.some(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toBe(false)
   })
 
   it('preserves progress, item counts, and live brainstorm attention in each row', async () => {
@@ -531,7 +511,7 @@ describe('ProjectList', () => {
     expect((within(dialog).getByRole('button', { name: 'Delete project' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('shows the standard empty state after deleting the final project', async () => {
+  it('shows the start screen after deleting the final project', async () => {
     render(<ProjectList />)
     for (const project of fixtureProjects) {
       const dialog = await requestDelete(project.title)
@@ -540,8 +520,8 @@ describe('ProjectList', () => {
       })
       expect(screen.queryByRole('dialog')).toBeNull()
     }
-    expect(screen.getByText('0 shown')).toBeDefined()
-    expect(screen.getByText('No projects yet')).toBeDefined()
+    // With no projects left, the list IS the start screen (D18).
+    expect(screen.getByRole('heading', { name: 'What kind of project is on your mind?' })).toBeDefined()
     expect(screen.queryByRole('list', { name: 'Projects' })).toBeNull()
   })
 })

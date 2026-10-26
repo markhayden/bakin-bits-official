@@ -118,28 +118,54 @@ export function Conversation({ turns = [] }) {
     React.createElement('div', { key: i }, turn.kind === 'user' ? turn.content : null)))
 }
 
-export function Composer({ onSend, placeholder }) {
+export function Composer({ onSend, placeholder, inputLabel, busy, handleRef, leadingSlot }) {
   const [draft, setDraft] = useState('')
-  return React.createElement('textarea', {
-    'aria-label': placeholder,
-    'data-testid': 'chat-input',
-    value: draft,
-    onChange: event => setDraft(event.target.value),
-    onKeyDown: event => {
-      if (event.key === 'Enter' && !event.shiftKey) {
-        event.preventDefault()
-        const value = event.currentTarget.value.trim()
-        if (value) {
-          setDraft('')
-          void onSend?.(value)
+  const inputRef = useRef(null)
+  useImperativeHandle(handleRef, () => ({
+    isEmpty: () => draft.trim() === '',
+    setText: text => setDraft(text),
+    focus: () => inputRef.current?.focus(),
+  }), [draft])
+  return React.createElement(
+    'div',
+    { 'data-testid': 'composer', 'data-busy': busy ? 'true' : undefined },
+    leadingSlot ?? null,
+    React.createElement('textarea', {
+      ref: inputRef,
+      'aria-label': inputLabel ?? placeholder,
+      placeholder,
+      'data-testid': 'chat-input',
+      value: draft,
+      onChange: event => setDraft(event.target.value),
+      onKeyDown: event => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault()
+          const value = event.currentTarget.value.trim()
+          // The real composer clears its draft before handing the text off.
+          if (value && !busy) {
+            setDraft('')
+            void onSend?.(value)
+          }
         }
-      }
-    },
-  })
+      },
+    }),
+  )
 }
 
-export function ConversationEmptyState({ title, description }) {
-  return React.createElement('div', { 'data-testid': 'conversation-empty' }, title, description)
+export function ConversationEmptyState({ title, description, suggestions, onSuggestion }) {
+  return React.createElement(
+    'section',
+    { 'data-testid': 'conversation-empty', 'aria-label': title },
+    React.createElement('h2', null, title),
+    description ? React.createElement('p', null, description) : null,
+    onSuggestion && suggestions?.length
+      ? React.createElement('div', null, ...suggestions.map(suggestion => React.createElement(
+          'button',
+          { key: suggestion, type: 'button', onClick: () => onSuggestion(suggestion) },
+          suggestion,
+        )))
+      : null,
+  )
 }
 
 export function ThinkingIndicator({ label = 'thinking' }) {

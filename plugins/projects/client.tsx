@@ -8,10 +8,11 @@
 import { registerPlugin } from '@makinbakin/sdk'
 import type { NavItem } from '@makinbakin/sdk'
 import { useRouter } from '@makinbakin/sdk/navigation'
-import { Suspense, useEffect } from 'react'
+import { Suspense } from 'react'
 import { ProjectList } from './components/project-list'
 import { ProjectDetail } from './components/project-detail'
 import { BrainstormBadgeProvider } from './components/brainstorm-badge-provider'
+import { StartScreen } from './components/start-screen'
 
 const navItems: NavItem[] = [
   {
@@ -40,12 +41,11 @@ function ProjectsIndexRoute() {
 
 function ProjectsNewRoute() {
   const router = useRouter()
-
-  useEffect(() => {
-    router.replace('/projects')
-  }, [router])
-
-  return null
+  return (
+    <Suspense>
+      <StartScreen onBack={() => router.push('/projects')} />
+    </Suspense>
+  )
 }
 
 export function ProjectDetailRoute({ params, id, pathname }: PluginRouteProps) {
