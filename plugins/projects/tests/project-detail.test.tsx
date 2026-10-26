@@ -192,6 +192,30 @@ describe('Plan updated (D15)', () => {
     expect(within(diff).getByText('seen version')).toBeDefined()
   })
 
+  it('the baseline holds for the whole visit while the lead keeps revising', async () => {
+    const live = { ...agentRevision }
+    const snapshots = [...history.history]
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : String(input)
+      if (url === '/api/plugins/projects/p-hold') return Response.json(projectPayload('p-hold', live))
+      if (url === '/api/plugins/projects/p-hold/history') return Response.json({ history: snapshots })
+      if (url.endsWith('/plan/seen')) { live.planSeenRevision = live.planRevision; return Response.json({ ok: true }) }
+      if (url.endsWith('/brainstorm/seen')) return Response.json({ ok: true })
+      if (url.endsWith('/files')) return Response.json({ produced: [] })
+      throw new Error(`Unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+    render(<ProjectDetail projectId="p-hold" onBack={() => {}} />)
+    const review = await screen.findByRole('button', { name: 'Review changes' })
+    await act(async () => { fireEvent.click(review) })
+    await within(await screen.findByTestId('plan-history-diff')).findByText('seen version')
+    // Another agent revision lands while the user is still reviewing.
+    snapshots.push({ ts: '2026-10-25T09:45:00.000Z', author: 'agent', body: 'latest plan', revision: 3 })
+    Object.assign(live, { body: 'newest plan', planRevision: 4 })
+    await act(async () => { emitPluginEvent({ event: 'projects.changed', projectId: 'p-hold' }) })
+    await within(screen.getByTestId('plan-history-diff')).findByText('newest plan')
+    expect(within(screen.getByTestId('plan-history-diff')).getByText('seen version')).toBeDefined()
+  })
+
   it('a user\'s own revision raises nothing', async () => {
     mockFetch('p-own', { ...agentRevision, planUpdatedBy: 'user' })
     render(<ProjectDetail projectId="p-own" onBack={() => {}} />)
@@ -220,6 +244,21 @@ describe('ProjectDetail brainstorm durability (bakin#703)', () => {
     // The lead answers unless the user picked a one-off consult.
     expect(askBodies).toEqual([{ projectId: 'p-703', prompt: 'What next?', agent: 'main' }])
     await act(async () => { resolvePost() })
+  })
+
+  it('answering the lead\'s question card sends the formatted answer to the lead', async () => {
+    const asks: unknown[] = []
+    const question = { v: 1, id: 'q_0123456789abcdef', question: 'Which inbox?', options: [{ label: 'Personal' }, { label: 'Work' }], recommended: 0, allowOther: true }
+    mockFetch('p-ask', {
+      brainstormMessages: [
+        { kind: 'user', ts: '2026-10-25T10:00:00.000Z', content: 'help me clean my inbox' },
+        { kind: 'tool', ts: '2026-10-25T10:00:01.000Z', toolName: 'bakin_exec_ask_user', status: 'completed', metadata: { bakinQuestion: question } },
+      ],
+    }, { '/api/plugins/projects/p-ask/ask': (init) => { asks.push(JSON.parse(String(init?.body))); return { ok: true } } })
+    render(<ProjectDetail projectId="p-ask" onBack={() => {}} />)
+    const work = await screen.findByRole('button', { name: 'Work' })
+    await act(async () => { fireEvent.click(work) })
+    expect(asks).toEqual([{ projectId: 'p-ask', prompt: '**Which inbox?** → Work', agent: 'main' }])
   })
 
   it('rehydrates a mid-flight turn on mount and keeps streaming over the bus', async () => {
@@ -273,6 +312,16 @@ describe('Files tab', () => {
     const dialog = await screen.findByRole('dialog', { name: /Launch brief/ })
     expect(within(dialog).queryByRole('img')).toBeNull()
     expect(within(dialog).getByRole('link', { name: 'Open asset' }).getAttribute('href')).toBe('/assets/20260531-brief-abc12345')
+  })
+
+  it('produced files reload when the project signals a board change', async () => {
+    let filesCalls = 0
+    mockFetch('p-reload', { status: 'completed' }, { '/api/plugins/projects/p-reload/files': () => { filesCalls++; return { produced: [] } } })
+    render(<ProjectDetail projectId="p-reload" onBack={() => {}} />)
+    await screen.findByText('Nothing produced yet')
+    const before = filesCalls
+    await act(async () => { emitPluginEvent({ event: 'projects.changed', projectId: 'p-reload', action: 'task.statusChanged' }) })
+    await waitFor(() => expect(filesCalls).toBeGreaterThan(before))
   })
 
   it('offers relink and detach for a missing file', async () => {

@@ -47,7 +47,6 @@ let promoteItemToTask: ProjectService['promoteItemToTask']
 let attachAsset: ProjectService['attachAsset']
 let relinkAsset: ProjectService['relinkAsset']
 let detachAsset: ProjectService['detachAsset']
-let autoUnlinkTask: ProjectService['autoUnlinkTask']
 let rebuildIndex: ProjectService['rebuildIndex']
 let getProjectForTask: ProjectService['getProjectForTask']
 let getProjectTitleForTask: ProjectService['getProjectTitleForTask']
@@ -143,7 +142,6 @@ beforeEach(() => {
     attachAsset,
     relinkAsset,
     detachAsset,
-    autoUnlinkTask,
     rebuildIndex,
     getProjectForTask,
     getProjectTitleForTask,
@@ -315,7 +313,7 @@ describe('removeChecklistItem', () => {
     const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['A', 'B'] })
     await markChecklistItem(id, 't001', true)
 
-    await removeChecklistItem(id, 't001')
+    await removeChecklistItem(id, 't001', USER)
     const project = readProject(id)
     expect(project!.tasks).toHaveLength(1)
     expect(project!.tasks[0].title).toBe('B')
@@ -428,13 +426,13 @@ describe('derived linked-step completion (D16a)', () => {
   })
 })
 
-describe('autoUnlinkTask', () => {
-  it('unlinks and unchecks when board task is deleted', async () => {
+describe('unlinkMissingTask', () => {
+  it('unlinks and unchecks a step whose board task is gone', async () => {
     const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['Unlink'] })
     await linkChecklistItem(id, 't001', 'board01')
     rebuildIndex()
 
-    await autoUnlinkTask('board01')
+    await service.unlinkMissingTask(id, 'board01')
 
     const project = readProject(id)
     expect(project!.tasks[0].taskId).toBeUndefined()
@@ -599,7 +597,7 @@ describe('plan revisions (D15)', () => {
     await updateProject(id, { body: 'v3' }, USER)
     expect(readProject(id)).toMatchObject({ planRevision: 2, planUpdatedBy: 'user' })
     expect(repo.readPlanHistory(id).map(s => [s.body, s.revision])).toEqual([['v1', 0], ['v2', 1]])
-    await service.restorePlanVersion(id, 0)
+    await service.restorePlanVersion(id, 0, USER)
     expect(readProject(id)).toMatchObject({ body: 'v1', planRevision: 3, planUpdatedBy: 'user' })
     // The user's own edits are seen by definition.
     expect(repo.readSeen(id).planSeenRevision).toBe(3)
@@ -613,6 +611,23 @@ describe('plan revisions (D15)', () => {
     expect(history[0]).toMatchObject({ revision: 0, body: 'seen body' })
     expect(history).toHaveLength(21)
     expect(history.at(-1)).toMatchObject({ revision: 24 })
+  })
+
+  it('a whitespace-only difference is not a revision', async () => {
+    const { id } = await createProject({ titleSource: 'user', title: 'Trim', body: 'v1' })
+    await service.applyProjectPlan(id, { body: 'agent edit\n' }, AGENT)
+    await service.applyProjectPlan(id, { body: 'agent edit\n' }, AGENT)
+    await service.applyProjectPlan(id, { body: '  agent edit  ' }, AGENT)
+    expect(readProject(id)).toMatchObject({ body: 'agent edit', planRevision: 1 })
+  })
+
+  it('a failed commit never marks the user\'s edit seen', async () => {
+    const { id } = await createProject({ titleSource: 'user', title: 'Fail', body: 'v1' })
+    const write = repo.writeProject
+    repo.writeProject = () => { throw new Error('disk full') }
+    await expect(updateProject(id, { body: 'v2' }, USER)).rejects.toThrow('disk full')
+    repo.writeProject = write
+    expect(repo.readSeen(id).planSeenRevision).toBe(0)
   })
 
   it('brainstorm-seen and plan-seen share the sidecar without clobbering each other', async () => {
@@ -666,15 +681,15 @@ describe('plan history (bakin#703)', () => {
     await service.applyProjectPlan(id, { body: 'second' }, AGENT)
     await service.applyProjectPlan(id, { body: 'third' }, AGENT)
 
-    await service.restorePlanVersion(id, 0) // back to 'first'
+    await service.restorePlanVersion(id, 0, USER) // back to 'first'
     expect(repo.readProject(id)?.body).toBe('first')
     const history = repo.readPlanHistory(id)
     // first, second, then 'third' pushed by the restore itself.
     expect(history.map((s) => s.body)).toEqual(['first', 'second', 'third'])
     expect(history[2]).toMatchObject({ author: 'user' })
 
-    await expect(service.restorePlanVersion(id, 99)).rejects.toThrow(/No plan snapshot/)
-    await expect(service.restorePlanVersion('ghost', 0)).rejects.toThrow(/not found/i)
+    await expect(service.restorePlanVersion(id, 99, USER)).rejects.toThrow(/No plan snapshot/)
+    await expect(service.restorePlanVersion('ghost', 0, USER)).rejects.toThrow(/not found/i)
   })
 
   it('deleting a project removes its history sidecar', async () => {

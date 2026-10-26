@@ -367,6 +367,22 @@ describe('ProjectList', () => {
     expect(fetchCalls.some(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toBe(false)
   })
 
+  it('the empty-list start screen stays mounted when the new project appears mid-create', async () => {
+    const saved = fixtureProjects.splice(0, fixtureProjects.length)
+    try {
+      render(<ProjectList />)
+      await screen.findByRole('heading', { name: 'What kind of project is on your mind?' })
+      // The create's projects.changed refresh reveals the project before its POST resolves.
+      fixtureProjects.push(saved[0]!)
+      await act(async () => { emitPluginEvent({ event: 'projects.changed', projectId: saved[0]!.id }) })
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+      expect(screen.getByRole('heading', { name: 'What kind of project is on your mind?' })).toBeDefined()
+      expect(screen.queryByRole('list', { name: 'Projects' })).toBeNull()
+    } finally {
+      fixtureProjects.splice(0, fixtureProjects.length, ...saved)
+    }
+  })
+
   it('All leaves archived projects out', async () => {
     fixtureProjects.push({ id: 'p4', title: 'Old Archive', owner: 'main', status: 'archived', progress: 0, taskCount: 0, updated: '2026-01-01T00:00:00Z' } as typeof fixtureProjects[number])
     try {

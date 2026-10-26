@@ -10,7 +10,7 @@ import { createProjectRepository, PlanHistoryUnavailableError, projectToSummary 
 import { createProjectService, deriveChecklist } from './lib/project-service'
 import { ProjectMutationError } from './lib/project-mutations'
 import { buildProjectBrainstormContext } from './lib/brainstorm-prompt'
-import type { Project, ProjectBrainstormMessage, ProjectStatus, ProjectPatch, ChecklistPatch, ProducedFile } from './types'
+import type { MutationCaller, Project, ProjectBrainstormMessage, ProjectStatus, ProjectPatch, ChecklistPatch, ProducedFile } from './types'
 
 const log = {
   info: (...args: unknown[]) => console.info('[projects]', ...args),
@@ -38,6 +38,19 @@ function mutationFailure(error: unknown): Response {
   if (error instanceof ProjectMutationError) return json({ error: error.message, code: error.code, conflicts: error.conflicts }, error.status)
   log.error('Project mutation failed', error)
   return json({ error: error instanceof PlanHistoryUnavailableError ? error.message : 'Project could not be saved. Try again.', code: 'storage_error' }, 500)
+}
+
+/**
+ * Who is calling a REST mutation (D9a): the Projects UI declares the
+ * operator (`OPERATOR_DECLARATION_HEADERS`); a request from an agent context
+ * (`X-Bakin-Agent-Context`) or with no declaration is held to the agent
+ * rules. Declared, not verified — the HTTP API has no authentication, the
+ * same documented limit as approvals.
+ */
+function callerFromRequest(req: Request): MutationCaller {
+  const agent = req.headers.get('x-bakin-agent-context')
+  if (agent !== null) return { kind: 'agent', agentId: agent.trim() || 'unknown' }
+  return req.headers.get('x-bakin-operator') === 'declared' ? { kind: 'user' } : { kind: 'agent', agentId: 'unknown' }
 }
 
 async function readBody<T>(req: Request): Promise<T> {
@@ -215,15 +228,27 @@ const projectsPlugin: BakinPlugin = {
      * or the boot sweep can never start it twice; a busy engine leaves it
      * pending for the next attempt.
      */
+    // In-process admission: one start attempt per project at a time. The
+    // receipt is re-read after the awaits, so a retry that lost the race to
+    // a completed start never starts the turn again.
+    const startingKickoffs = new Set<string>()
     async function startKickoff(projectId: string): Promise<void> {
-      const project = readProject(projectId)
-      const kickoff = project?.kickoff
-      if (!project || kickoff?.state !== 'pending' || !kickoff.message) return
-      const result = await brainstormTurns.start(ctx, projectId, kickoff.message, {
-        agentId: kickoff.agentId ?? project.owner,
-        runtimeContent: buildProjectBrainstormContext(await derive(project), kickoff.message, { live: true }),
-      })
-      if (result === 'accepted') await projectService.advanceKickoff(projectId, kickoff.requestId, 'pending', 'started')
+      if (startingKickoffs.has(projectId)) return
+      startingKickoffs.add(projectId)
+      try {
+        const project = readProject(projectId)
+        const kickoff = project?.kickoff
+        if (!project || kickoff?.state !== 'pending' || !kickoff.message) return
+        const runtimeContent = buildProjectBrainstormContext(await derive(project), kickoff.message, { live: true })
+        if (readProject(projectId)?.kickoff?.state !== 'pending') return
+        const result = await brainstormTurns.start(ctx, projectId, kickoff.message, {
+          agentId: kickoff.agentId ?? project.owner,
+          runtimeContent,
+        })
+        if (result === 'accepted') await projectService.advanceKickoff(projectId, kickoff.requestId, 'pending', 'started')
+      } finally {
+        startingKickoffs.delete(projectId)
+      }
     }
 
     resumePendingKickoffs = async () => {
@@ -412,9 +437,18 @@ const projectsPlugin: BakinPlugin = {
       const url = new URL(req.url, 'http://localhost')
       const id = url.searchParams.get('projectId') || url.searchParams.get('id')
       if (!id) return json({ error: 'Missing id parameter' }, 400)
-      const project = readProject(id)
+      let project = readProject(id)
       if (!project) return json({ error: 'Project not found' }, 404)
-      const { operations: _operations, ...resolvedProject } = await resolveLinkedTaskStatuses(project)
+      let resolved = await resolveLinkedTaskStatuses(project)
+      // No task-deletion event reaches plugins, so a step whose board task is
+      // gone is unlinked here, durably — otherwise it stays read-only forever.
+      const missing = Object.entries(resolved.resolvedTasks).filter(([, task]) => task === null).map(([taskId]) => taskId)
+      if (missing.length) {
+        for (const taskId of missing) await projectService.unlinkMissingTask(id, taskId)
+        project = readProject(id) ?? project
+        resolved = await resolveLinkedTaskStatuses(project)
+      }
+      const { operations: _operations, ...resolvedProject } = resolved
       // Sample the flag before the preview: if the turn settles between the
       // two reads we return streaming:false with no text (honest), never
       // text without the flag.
@@ -471,7 +505,7 @@ const projectsPlugin: BakinPlugin = {
       const id = url.searchParams.get('projectId') || bodyId
       if (!id) return json({ error: 'Missing id' }, 400)
       try {
-        await updateProject(id, patch, { kind: 'user' }, expected)
+        await updateProject(id, patch, callerFromRequest(req), expected)
         ctx.activity.audit('updated', 'system', { projectId: id })
         ctx.activity.log('system', `Updated project ${id}`)
         indexProject(id).catch(() => {})
@@ -575,7 +609,7 @@ const projectsPlugin: BakinPlugin = {
         const projectId = url.searchParams.get('projectId') || body.projectId
         const taskItemId = url.searchParams.get('itemId') || body.taskItemId
         if (!projectId || !taskItemId) return json({ error: 'Missing projectId or taskItemId' }, 400)
-        await removeChecklistItem(projectId, taskItemId, body.expectedInstanceId)
+        await removeChecklistItem(projectId, taskItemId, callerFromRequest(req), body.expectedInstanceId)
         ctx.activity.audit('checklist.removed', 'system', { projectId })
         ctx.activity.log('system', 'Removed checklist item from project', { taskId: projectId })
         indexProject(projectId).catch(() => {})
@@ -824,7 +858,7 @@ const projectsPlugin: BakinPlugin = {
       const body = await readBody<{ expectedTs?: string }>(req).catch(() => ({} as { expectedTs?: string }))
       if (!id || !Number.isInteger(index) || index < 0) return json({ error: 'Missing projectId or index' }, 400)
       try {
-        const { changed } = await projectService.restorePlanVersion(id, index, body.expectedTs)
+        const { changed } = await projectService.restorePlanVersion(id, index, callerFromRequest(req), body.expectedTs)
         indexProject(id).catch(() => {})
         return json({ ok: true, changed })
       } catch (err) {

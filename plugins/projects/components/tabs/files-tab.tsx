@@ -26,6 +26,7 @@ import {
 import { AssetPicker, ConfirmDialog, ListRow, ListRowActions, ListRows, StatusBadge } from '@makinbakin/sdk/patterns'
 import type { AssetPickerCollection } from '@makinbakin/sdk/patterns'
 import { PluginLink } from '@makinbakin/sdk/navigation'
+import { usePluginEvent } from '@makinbakin/sdk/hooks'
 import { projectRequest } from '../../lib/project-api'
 import type { ProducedFile, ProjectDetailData, ResolvedProjectAsset as ResolvedAsset } from '../../types'
 
@@ -127,6 +128,9 @@ function useProducedFiles(projectId: string, version: string) {
     }
   }, [projectId])
   useEffect(() => { void load() }, [load, version])
+  // A board task finishing changes what was produced without rewriting the
+  // project file, so the project-changed signal reloads too.
+  usePluginEvent('projects.changed', (payload) => { if (payload.projectId === projectId) void load() })
   return { state, retry: load }
 }
 

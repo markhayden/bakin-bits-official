@@ -82,6 +82,25 @@ describe('ProjectHeader', () => {
     expect(screen.queryByRole('dialog', { name: 'Rename project' })).toBeNull()
   })
 
+  it('the rename expects the title from when the dialog opened, not a later refresh', async () => {
+    const view = renderHeader()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Rename project' })) })
+    // A background rename lands while the dialog is open.
+    view.rerender(<ProjectHeader project={project({ title: 'Agent renamed' })} agents={agents} onBack={() => {}} onChanged={onChanged} onDelete={() => {}} />)
+    const input = within(screen.getByRole('dialog', { name: 'Rename project' })).getByRole('textbox')
+    await act(async () => { fireEvent.change(input, { target: { value: 'Mine' } }) })
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter' }) })
+    expect(bodies()).toEqual([{ title: 'Mine', expected: { title: 'Inbox cleanup' } }])
+  })
+
+  it('a confirmation expects the status it was offered from', async () => {
+    const view = renderHeader()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start project' })) })
+    view.rerender(<ProjectHeader project={project({ status: 'active' })} agents={agents} onBack={() => {}} onChanged={onChanged} onDelete={() => {}} />)
+    await act(async () => { fireEvent.click(within(screen.getByRole('dialog', { name: 'Start project?' })).getByRole('button', { name: 'Start project' })) })
+    expect(bodies()).toEqual([{ status: 'active', expected: { status: 'draft' } }])
+  })
+
   it('a rename conflict stays in the dialog with the error', async () => {
     fetchMock.mockImplementationOnce(async () => Response.json({ error: 'Some fields changed while you were editing.' }, { status: 409 }))
     renderHeader()

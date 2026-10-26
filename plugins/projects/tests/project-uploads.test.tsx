@@ -30,3 +30,24 @@ it('a failed upload stays on its chip with the reason', async () => {
   await waitFor(() => expect(view.result.current.items[0]?.status).toBe('error'))
   expect(view.result.current.items[0]?.errorMessage).toBe('File "big.mov" exceeds 50MB limit')
 })
+
+it('removing a chip mid-upload cancels it — nothing attaches', async () => {
+  const calls: string[] = []
+  let release!: () => void
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    calls.push(`${init?.method} ${url}`)
+    if (url === '/api/plugins/assets/upload') {
+      await new Promise<void>(resolve => { release = resolve })
+      if (init?.signal?.aborted) throw new DOMException('aborted', 'AbortError')
+      return Response.json({ ok: true, assetId: 'a1' })
+    }
+    return Response.json({ ok: true })
+  }) as typeof fetch
+  const view = renderHook(() => useProjectUploads('p1', async () => {}))
+  await act(async () => { view.result.current.onAdd([new File(['x'], 'draft.md', { type: 'text/markdown' })]) })
+  const id = view.result.current.items[0]!.id
+  await act(async () => { view.result.current.onRemove(id) })
+  await act(async () => { release() })
+  expect(view.result.current.items).toHaveLength(0)
+  expect(calls).toEqual(['POST /api/plugins/assets/upload'])
+})

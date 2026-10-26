@@ -12,7 +12,7 @@ import { SaveBar, SegmentedControl } from '@makinbakin/sdk/patterns'
 import type { FormEvent } from 'react'
 import type { ProjectHistory } from '../../hooks/use-project-history'
 import type { PlanDraftModel } from '../../hooks/use-plan-draft'
-import type { ProjectDetailData } from '../../types'
+import type { PlanSnapshot, ProjectDetailData } from '../../types'
 import { PlanHistoryPanel } from '../plan-history'
 import { ProjectEditor } from '../project-editor'
 import { RenderedPlan } from '../rendered-plan'
@@ -30,6 +30,7 @@ export function PlanTab({
   view,
   onViewChange,
   compareRevision,
+  baselineSnapshot,
   onRestored,
 }: {
   project: ProjectDetailData
@@ -41,6 +42,8 @@ export function PlanTab({
   onViewChange: (view: PlanView) => void
   /** The seen baseline "Review changes" compares against. */
   compareRevision?: number
+  /** That baseline's body, kept in case retention evicts it mid-review. */
+  baselineSnapshot?: PlanSnapshot
   onRestored: () => Promise<unknown>
 }) {
   const [hints, setHints] = useState(() => {
@@ -115,7 +118,7 @@ export function PlanTab({
         </div>
       </div>
       {view === 'changes' ? (
-        <PlanHistoryPanel projectId={project.id} currentBody={project.body} historyState={history} compareRevision={compareRevision} onRestored={async () => { await onRestored() }} />
+        <PlanHistoryPanel projectId={project.id} currentBody={project.body} historyState={history} compareRevision={compareRevision} baselineSnapshot={baselineSnapshot} onRestored={async () => { await onRestored() }} />
       ) : project.body.trim() ? (
         <RenderedPlan historyState={history} body={project.body} hintsEnabled={hints} />
       ) : (

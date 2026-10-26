@@ -40,6 +40,8 @@ export interface HeaderAgent {
 
 interface NextStep {
   label: string
+  /** The status this step was offered from — the write's expected value. */
+  from: ProjectStatus
   to: ProjectStatus
   /** A confirmation to show first, or none for a direct step. */
   confirm?: { title: string; description: ReactNode; confirmLabel: string }
@@ -51,6 +53,7 @@ export function nextStepFor(project: Pick<ProjectDetailData, 'status' | 'tasks' 
     case 'draft':
       return {
         label: 'Start project',
+        from: 'draft',
         to: 'active',
         confirm: {
           title: 'Start project?',
@@ -62,6 +65,7 @@ export function nextStepFor(project: Pick<ProjectDetailData, 'status' | 'tasks' 
       const open = project.tasks.filter(task => !task.checked).length
       return {
         label: 'Mark complete',
+        from: 'active',
         to: 'completed',
         ...(open > 0 ? {
           confirm: {
@@ -73,9 +77,9 @@ export function nextStepFor(project: Pick<ProjectDetailData, 'status' | 'tasks' 
       }
     }
     case 'completed':
-      return { label: 'Reopen', to: 'active' }
+      return { label: 'Reopen', from: 'completed', to: 'active' }
     case 'archived':
-      return { label: 'Unarchive', to: project.archivedFrom ?? 'draft' }
+      return { label: 'Unarchive', from: 'archived', to: project.archivedFrom ?? 'draft' }
   }
 }
 
@@ -107,11 +111,13 @@ export function ProjectHeader({
       body: JSON.stringify({ ...patch, expected }),
     })
 
-  const transition = async (to: ProjectStatus, fromDialog: boolean) => {
+  // `from` is the status the action was OFFERED from, captured when it was
+  // shown — a refresh in between must make the write conflict, not clobber.
+  const transition = async (from: ProjectStatus, to: ProjectStatus, fromDialog: boolean) => {
     setBusy(true)
     setConfirmError(null)
     try {
-      await put({ status: to }, { status: project.status })
+      await put({ status: to }, { status: from })
       setConfirming(null)
       await onChanged()
     } catch (error) {
@@ -128,7 +134,7 @@ export function ProjectHeader({
       setConfirmError(null)
       setConfirming(next)
     } else {
-      void transition(next.to, false)
+      void transition(next.from, next.to, false)
     }
   }
 
@@ -167,7 +173,7 @@ export function ProjectHeader({
         overflowActions={(
           <>
             {project.status !== 'archived' ? (
-              <DropdownMenuItem onClick={() => { void transition('archived', false) }}>
+              <DropdownMenuItem onClick={() => { void transition(project.status, 'archived', false) }}>
                 <Archive aria-hidden="true" />
                 Archive
               </DropdownMenuItem>
@@ -193,7 +199,7 @@ export function ProjectHeader({
         confirmTone="primary"
         busy={busy}
         error={confirmError}
-        onConfirm={() => { if (confirming) void transition(confirming.to, true) }}
+        onConfirm={() => { if (confirming) void transition(confirming.from, confirming.to, true) }}
         onCancel={() => { if (!busy) setConfirming(null) }}
       />
 
@@ -201,8 +207,8 @@ export function ProjectHeader({
         <RenameDialog
           title={project.title}
           onCancel={() => setRenaming(false)}
-          onSave={async (title) => {
-            await put({ title }, { title: project.title })
+          onSave={async (title, baseline) => {
+            await put({ title }, { title: baseline })
             setRenaming(false)
             await onChanged()
           }}
@@ -217,8 +223,8 @@ export function ProjectHeader({
           <LeadPicker
             project={project}
             agents={agents}
-            onSave={async (owner) => {
-              await put({ owner }, { owner: project.owner })
+            onSave={async (owner, baseline) => {
+              await put({ owner }, { owner: baseline })
               await onChanged()
             }}
           />
@@ -238,7 +244,10 @@ export function ProjectHeader({
 }
 
 /** Rename through the kit form recipe (the chat precedent): Enter saves, Esc cancels. */
-function RenameDialog({ title, onCancel, onSave }: { title: string; onCancel: () => void; onSave: (title: string) => Promise<void> }) {
+function RenameDialog({ title, onCancel, onSave }: { title: string; onCancel: () => void; onSave: (title: string, baseline: string) => Promise<void> }) {
+  // The title as it was when the dialog opened is the expected value: a
+  // rename that lands meanwhile conflicts instead of being overwritten.
+  const [baseline] = useState(title)
   const [draft, setDraft] = useState(title)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -246,11 +255,11 @@ function RenameDialog({ title, onCancel, onSave }: { title: string; onCancel: ()
 
   const commit = async () => {
     if (!trimmed || saving) return
-    if (trimmed === title) { onCancel(); return }
+    if (trimmed === baseline) { onCancel(); return }
     setSaving(true)
     setError(null)
     try {
-      await onSave(trimmed)
+      await onSave(trimmed, baseline)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'The title could not be saved. Try again.')
     } finally {
@@ -285,7 +294,7 @@ function RenameDialog({ title, onCancel, onSave }: { title: string; onCancel: ()
 }
 
 /** "Lead agent" is the UI name for the stored owner (D13). */
-function LeadPicker({ project, agents, onSave }: { project: ProjectDetailData; agents: readonly HeaderAgent[]; onSave: (owner: string) => Promise<void> }) {
+function LeadPicker({ project, agents, onSave }: { project: ProjectDetailData; agents: readonly HeaderAgent[]; onSave: (owner: string, baseline: string) => Promise<void> }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   return (
@@ -300,7 +309,7 @@ function LeadPicker({ project, agents, onSave }: { project: ProjectDetailData; a
           if (owner === project.owner) return
           setSaving(true)
           setError(null)
-          onSave(owner)
+          onSave(owner, project.owner)
             .catch(err => setError(err instanceof Error ? err.message : 'The lead agent could not be changed.'))
             .finally(() => setSaving(false))
         }}

@@ -44,6 +44,7 @@ export function ProjectList() {
   const [loadError, setLoadError] = useState<string | null>(null)
   // Every project the server returned, archived included — zero means none at all.
   const [total, setTotal] = useState(0)
+  const [startScreen, setStartScreen] = useState(false)
   const agentList = useAgentList()
   const agentNames = useMemo(() => new Map(agentList.map(agent => [agent.id, agent.name ?? agent.id])), [agentList])
   const [deleteTarget, setDeleteTarget] = useState<ProjectSummary | null>(null)
@@ -157,10 +158,12 @@ export function ProjectList() {
     }
   }
 
-  // No projects at all: the list IS the start screen (D18).
-  if (!loading && !loadError && status === 'all' && !search && total === 0) {
-    return <StartScreen />
-  }
+  // No projects at all: the list IS the start screen (D18). Once shown it
+  // stays until navigation — the create's own projects.changed refresh must
+  // not unmount the composer while its request is still in flight.
+  const showStart = startScreen || (!loading && !loadError && status === 'all' && !search && total === 0)
+  if (showStart && !startScreen) setStartScreen(true)
+  if (showStart) return <StartScreen />
 
   return (
     <Page>

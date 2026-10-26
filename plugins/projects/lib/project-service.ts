@@ -139,19 +139,20 @@ export interface ProjectService {
   updateProject(id: string, updates: UpdateProjectOpts, caller: MutationCaller, expected?: UpdateProjectOpts): Promise<void>
   applyProjectPlan(id: string, updates: ApplyProjectPlanOpts, caller: MutationCaller): Promise<ApplyProjectPlanResult>
   /** Restore a plan snapshot by history index; snapshots the current body first (bakin#703). */
-  restorePlanVersion(id: string, index: number, expectedTs?: string): Promise<{ changed: boolean }>
+  restorePlanVersion(id: string, index: number, caller: MutationCaller, expectedTs?: string): Promise<{ changed: boolean }>
   deleteProject(id: string, agent?: string): Promise<void>
   addChecklistItem(projectId: string, title: string, requestId?: string): Promise<{ taskItemId: string; deleted?: boolean }>
   markChecklistItem(projectId: string, taskItemId: string, checked: boolean, expectedInstanceId?: string): Promise<{ progress: number }>
   updateChecklistItem(projectId: string, taskItemId: string, updates: { title?: string; description?: string }, expected?: { title?: string; description?: string }, expectedInstanceId?: string): Promise<void>
-  removeChecklistItem(projectId: string, taskItemId: string, expectedInstanceId?: string): Promise<void>
+  removeChecklistItem(projectId: string, taskItemId: string, caller: MutationCaller, expectedInstanceId?: string): Promise<void>
   linkChecklistItem(projectId: string, taskItemId: string, boardTaskId: string): Promise<void>
   attachAsset(projectId: string, assetId: string, label?: string): Promise<void>
   relinkAsset(projectId: string, oldAssetId: string, newAssetId: string, label?: string): Promise<void>
   detachAsset(projectId: string, assetId: string): Promise<void>
   updateAssetLabel(projectId: string, assetId: string, label: string): Promise<void>
   promoteItemToTask(projectId: string, taskItemId: string, opts?: PromoteItemOpts): Promise<{ taskId: string }>
-  autoUnlinkTask(boardTaskId: string): Promise<void>
+  /** Unlink a step whose board task no longer exists (read-path reconciliation). */
+  unlinkMissingTask(projectId: string, boardTaskId: string): Promise<void>
   resolveLinkedTaskStatuses(project: Project): Promise<Project & {
     resolvedTasks: Record<string, ResolvedBoardTask | null>
     resolvedAssets: ResolvedAsset[]
@@ -175,19 +176,26 @@ function assertCallerMay(project: Project, patch: { title?: string; status?: Pro
 
 /**
  * The ONE committed-body write (D15): snapshots the prior body with the
- * revision it was, then bumps the revision. No-op writes change nothing. A
- * user's own edit is seen by definition, so it advances the seen baseline.
+ * revision it was, then bumps the revision. Bodies are stored trimmed, so a
+ * write that only differs in surrounding whitespace is a no-op. Callers
+ * persist the project, THEN mark a user's own edit seen (markOwnEditSeen) —
+ * never before the commit lands.
  */
 function commitBody(repo: ProjectRepository, project: Project, body: string, author: 'agent' | 'user'): boolean {
-  if (body === project.body) return false
+  const next = body.trim()
+  if (next === project.body) return false
   const now = new Date().toISOString()
   repo.appendPlanSnapshot(project.id, { ts: now, author, body: project.body, revision: project.planRevision })
-  project.body = body
+  project.body = next
   project.planRevision += 1
   project.planUpdatedBy = author
   project.planUpdatedAt = now
-  if (author === 'user') repo.updateSeen(project.id, { planSeenRevision: project.planRevision })
   return true
+}
+
+/** A user's own committed edit is seen by definition (after the write). */
+function markOwnEditSeen(repo: ProjectRepository, project: Project, author: 'agent' | 'user'): void {
+  if (author === 'user') repo.updateSeen(project.id, { planSeenRevision: project.planRevision })
 }
 
 function callerName(caller: MutationCaller, project: Project): string {
@@ -214,6 +222,16 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
 
   async function derive<P extends Project>(project: P): Promise<P> {
     return deriveChecklist(project, await boardIndex())
+  }
+
+  /** Progress after a committed write — the stored value if the board can't be read. */
+  async function committedProgress(project: Project): Promise<number> {
+    try {
+      return (await derive(project)).progress
+    } catch (err) {
+      log.warn('Board read failed after a committed write; reporting stored progress', { projectId: project.id, err })
+      return computeProgress(project.tasks)
+    }
   }
 
   function rebuildIndex(): void {
@@ -323,11 +341,12 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
         else delete project.archivedFrom
         project.status = patch.status
       }
-      if (patch.body !== undefined) commitBody(repo, project, patch.body, caller.kind)
+      const bodyChanged = patch.body !== undefined && commitBody(repo, project, patch.body, caller.kind)
       if (patch.owner !== undefined) project.owner = patch.owner
       project.updated = new Date().toISOString()
       project.progress = computeProgress(project.tasks)
       repo.writeProject(project)
+      if (bodyChanged) markOwnEditSeen(repo, project, caller.kind)
       ctx.activity.audit('updated', callerName(caller, project), { id, ...updates })
       broadcast({ type: 'project.updated', id, title: project.title })
     })
@@ -362,15 +381,16 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       }
       if (updates.owner !== undefined) project.owner = updates.owner
       // Every plan edit is snapshotted (visible diff + restore) and bumps the revision.
-      if (updates.body !== undefined) {
-        commitBody(repo, project, updates.body, caller.kind)
-      } else if (updates.appendBody !== undefined) {
-        commitBody(repo, project, [project.body.trimEnd(), updates.appendBody.trim()].filter(Boolean).join('\n\n'), caller.kind)
-      }
+      const bodyChanged = updates.body !== undefined
+        ? commitBody(repo, project, updates.body, caller.kind)
+        : updates.appendBody !== undefined
+          ? commitBody(repo, project, [project.body.trimEnd(), updates.appendBody.trim()].filter(Boolean).join('\n\n'), caller.kind)
+          : false
 
       project.updated = new Date().toISOString()
       project.progress = computeProgress(project.tasks)
       repo.writeProject(project)
+      if (bodyChanged) markOwnEditSeen(repo, project, caller.kind)
 
       ctx.activity.audit('plan.applied', callerName(caller, project), {
         id,
@@ -395,8 +415,10 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       }
       return { result, project }
     })
-    // Progress is derived from the live board, read outside the lock.
-    return { ...result, progress: (await derive(project)).progress }
+    // Progress is derived from the live board, read outside the lock. The
+    // write already committed: a failed board read must not report failure
+    // (a retry would duplicate the steps and appended plan).
+    return { ...result, progress: await committedProgress(project) }
   }
 
   async function deleteProject(id: string, agent?: string): Promise<void> {
@@ -461,7 +483,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       return project
     })
     // Read the board outside the lock: task APIs can re-enter Projects.
-    return { progress: (await derive(project)).progress }
+    return { progress: await committedProgress(project) }
   }
 
   async function updateChecklistItem(projectId: string, taskItemId: string, updates: { title?: string; description?: string }, expected?: { title?: string; description?: string }, expectedInstanceId?: string): Promise<void> {
@@ -482,7 +504,10 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     })
   }
 
-  async function removeChecklistItem(projectId: string, taskItemId: string, expectedInstanceId?: string): Promise<void> {
+  async function removeChecklistItem(projectId: string, taskItemId: string, caller: MutationCaller, expectedInstanceId?: string): Promise<void> {
+    if (caller.kind === 'agent') {
+      throw new ProjectMutationError('Agents cannot delete steps — removing work from the plan is the user\'s decision.', 403, 'agent_step_delete')
+    }
     return withProjectLock(() => {
       const project = repo.readProject(projectId)
       if (!project) throw new Error(`Project not found: ${projectId}`)
@@ -660,22 +685,19 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     })
   }
 
-  async function autoUnlinkTask(boardTaskId: string): Promise<void> {
-    const entry = getIndex().get(boardTaskId)
-    if (!entry) return
-    log.info('Auto-unlinking deleted task', { boardTaskId, ...entry })
+  async function unlinkMissingTask(projectId: string, boardTaskId: string): Promise<void> {
     await withProjectLock(() => {
-      const project = repo.readProject(entry.projectId)
-      if (!project) return
-      const item = project.tasks.find(t => t.id === entry.taskItemId)
-      if (!item || item.taskId !== boardTaskId) return
+      const project = repo.readProject(projectId)
+      const item = project?.tasks.find(t => t.taskId === boardTaskId)
+      if (!project || !item) return
       item.taskId = undefined
       item.checked = false
       project.updated = new Date().toISOString()
       project.progress = computeProgress(project.tasks)
       repo.writeProject(project)
       getIndex().delete(boardTaskId)
-      broadcast({ type: 'project.checklist_changed', projectId: entry.projectId, action: 'unlink', taskItemId: entry.taskItemId })
+      ctx.activity.audit('checklist.unlinked', 'system', { projectId, taskItemId: item.id, boardTaskId, reason: 'board_task_missing' })
+      broadcast({ type: 'project.checklist_changed', projectId, action: 'unlink', taskItemId: item.id })
     })
   }
 
@@ -715,7 +737,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
    * Restore a plan-history snapshot (bakin#703). The current body is
    * snapshotted first, so restore itself is never destructive.
    */
-  async function restorePlanVersion(id: string, index: number, expectedTs?: string): Promise<{ changed: boolean }> {
+  async function restorePlanVersion(id: string, index: number, caller: MutationCaller, expectedTs?: string): Promise<{ changed: boolean }> {
     return withProjectLock(() => {
       const project = repo.readProject(id)
       if (!project) throw new Error(`Project not found: ${id}`)
@@ -728,9 +750,10 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       if (expectedTs !== undefined && snapshot.ts !== expectedTs) {
         throw new Error('History changed since the list was loaded — refresh and retry')
       }
-      if (!commitBody(repo, project, snapshot.body, 'user')) return { changed: false }
+      if (!commitBody(repo, project, snapshot.body, caller.kind)) return { changed: false }
       project.updated = new Date().toISOString()
       repo.writeProject(project)
+      markOwnEditSeen(repo, project, caller.kind)
       ctx.activity.audit('plan.restored', project.owner, { id, snapshotTs: snapshot.ts })
       broadcast({ type: 'project.updated', id, title: project.title })
       return { changed: true }
@@ -760,7 +783,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     detachAsset,
     updateAssetLabel,
     promoteItemToTask,
-    autoUnlinkTask,
+    unlinkMissingTask,
     resolveLinkedTaskStatuses,
   }
 }

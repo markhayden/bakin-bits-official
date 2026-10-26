@@ -74,6 +74,9 @@ async function waitForKickoff(projectId: string, state: string): Promise<void> {
   await waitUntil(async () => ((await readViaTool(projectId)).kickoff as { state?: string } | undefined)?.state === state, { label: `kickoff ${state}` })
 }
 
+/** The Projects UI declares the operator on every mutation (D9a). */
+const OPERATOR = { 'X-Bakin-Operator': 'declared' }
+
 async function readViaTool(projectId: string): Promise<Record<string, unknown>> {
   const result = await callTool(findTool(plugin.execTools, 'bakin_exec_projects_get')!, { projectId })
   return result.project as Record<string, unknown>
@@ -329,6 +332,7 @@ describe('Routes', () => {
       const { status, body } = await callRoute(route, plugin.ctx, {
         searchParams: { projectId: 'proj-upd' },
         body: { title: 'New Title', status: 'active' },
+        headers: OPERATOR,
       })
       expect(status).toBe(200)
       expect(body.ok).toBe(true)
@@ -337,7 +341,7 @@ describe('Routes', () => {
     it('archive remembers the prior status and unarchive forgets it (D11)', async () => {
       writeProjectFixture('proj-archive', { title: 'Archive me', status: 'active' })
       const route = findRoute(plugin.routes, 'PUT', '/:projectId')!
-      const put = (status: string, expected: string) => callRoute(route, plugin.ctx, { searchParams: { projectId: 'proj-archive' }, body: { status, expected: { status: expected } } })
+      const put = (status: string, expected: string) => callRoute(route, plugin.ctx, { searchParams: { projectId: 'proj-archive' }, body: { status, expected: { status: expected } }, headers: OPERATOR })
       expect((await put('archived', 'active')).status).toBe(200)
       expect(await readViaTool('proj-archive')).toMatchObject({ status: 'archived', archivedFrom: 'active' })
       expect((await put('active', 'archived')).status).toBe(200)
@@ -346,10 +350,23 @@ describe('Routes', () => {
       expect(project.archivedFrom).toBeUndefined()
     })
 
+    it('an agent-origin or undeclared REST caller is held to the agent rules', async () => {
+      writeProjectFixture('proj-rest-agent', { title: 'Typed by me', status: 'draft' })
+      const route = findRoute(plugin.routes, 'PUT', '/:projectId')!
+      const fromAgent = await callRoute(route, plugin.ctx, {
+        searchParams: { projectId: 'proj-rest-agent' }, body: { status: 'completed' },
+        headers: { 'X-Bakin-Agent-Context': 'scout', 'X-Bakin-Operator': 'declared' },
+      })
+      expect(fromAgent).toMatchObject({ status: 403, body: { code: 'agent_status' } })
+      const undeclared = await callRoute(route, plugin.ctx, { searchParams: { projectId: 'proj-rest-agent' }, body: { title: 'Agent idea' } })
+      expect(undeclared).toMatchObject({ status: 409, body: { code: 'title_locked' } })
+      expect(await readViaTool('proj-rest-agent')).toMatchObject({ title: 'Typed by me', status: 'draft' })
+    })
+
     it('a user rename claims the title (titleSource user)', async () => {
       writeProjectFixture('proj-upd-src', { title: 'Agent named', titleSource: 'agent' })
       const route = findRoute(plugin.routes, 'PUT', '/:projectId')!
-      await callRoute(route, plugin.ctx, { searchParams: { projectId: 'proj-upd-src' }, body: { title: 'Mine now' } })
+      await callRoute(route, plugin.ctx, { searchParams: { projectId: 'proj-upd-src' }, body: { title: 'Mine now' }, headers: OPERATOR })
       const project = await readViaTool('proj-upd-src')
       expect(project).toMatchObject({ title: 'Mine now', titleSource: 'user' })
     })
@@ -517,6 +534,17 @@ describe('Routes', () => {
     })
   })
 
+  describe('GET /:projectId — missing board tasks', () => {
+    it('a step whose board task is gone is unlinked durably, so it can be edited again', async () => {
+      writeProjectFixture('proj-gone', { title: 'Gone', tasks: [{ id: 't001', title: 'Was linked', checked: true, taskId: 'board-deleted' }] })
+      plugin.ctx.tasks.list = mock(async () => []) as unknown as typeof plugin.ctx.tasks.list
+      const { body } = await callRoute(findRoute(plugin.routes, 'GET', '/:projectId')!, plugin.ctx, { searchParams: { projectId: 'proj-gone' } })
+      expect(body.project.tasks[0]).toMatchObject({ id: 't001', checked: false })
+      expect(body.project.tasks[0].taskId).toBeUndefined()
+      expect(readFileSync(join(projectsDir, 'proj-gone.md'), 'utf8')).not.toContain('board-deleted')
+    })
+  })
+
   describe('POST /:projectId/plan/seen (D15)', () => {
     it('marks the shown revision seen — clamped to the current revision and never rewound', async () => {
       writeProjectFixture('proj-seen', { title: 'Seen', extra: { planRevision: 3 } })
@@ -617,8 +645,11 @@ describe('Routes', () => {
 
       const route = findRoute(plugin.routes, 'DELETE', '/:projectId/checklist/:itemId')!
       expect(route).toBeDefined()
+      const fromAgent = await callRoute(route, plugin.ctx, { searchParams: { projectId: 'proj-rmi', itemId: 't002' } })
+      expect(fromAgent).toMatchObject({ status: 403, body: { code: 'agent_step_delete' } })
       const { status, body } = await callRoute(route, plugin.ctx, {
         searchParams: { projectId: 'proj-rmi', itemId: 't002' },
+        headers: OPERATOR,
       })
       expect(status).toBe(200)
       expect(body.ok).toBe(true)
@@ -952,6 +983,25 @@ describe('Routes', () => {
         await projectsPlugin.onReady!()
         expect(streamMock).not.toHaveBeenCalled()
         expect((await readViaTool('proj-accepted')).kickoff).toEqual({ requestId: 'req-accept-0001', state: 'settled' })
+      })
+
+      it('a retry that arrives while the first start is still building context never starts a second turn', async () => {
+        const streamMock = mockRuntimeStream(['On it.'])
+        const realList = plugin.ctx.tasks.list
+        // The first start awaits a slow board read (context building).
+        let slow = true
+        plugin.ctx.tasks.list = (async (...args: Parameters<typeof realList>) => {
+          if (slow) { slow = false; await new Promise(resolve => setTimeout(resolve, 40)) }
+          return realList(...args)
+        }) as typeof realList
+        const settled = nextSettle()
+        const first = callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        await new Promise(resolve => setTimeout(resolve, 5))
+        const second = callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        await Promise.all([first, second])
+        await settled
+        await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        expect(streamMock).toHaveBeenCalledTimes(1)
       })
 
       it('rejects a malformed request identity', async () => {
@@ -1419,6 +1469,7 @@ describe('Routes', () => {
       await callRoute(putRoute, plugin.ctx, {
         searchParams: { projectId: 'proj-hist' },
         body: { body: 'edited body' },
+        headers: OPERATOR,
       })
 
       const historyRoute = findRoute(plugin.routes, 'GET', '/:projectId/history')!
@@ -1429,6 +1480,7 @@ describe('Routes', () => {
       const restoreRoute = findRoute(plugin.routes, 'POST', '/:projectId/history/:index/restore')!
       const restored = await callRoute(restoreRoute, plugin.ctx, {
         searchParams: { projectId: 'proj-hist', index: '0' },
+        headers: OPERATOR,
       })
       expect(restored.status).toBe(200)
 
@@ -1629,6 +1681,14 @@ describe('Exec Tools', () => {
       expect(result.ok).toBe(false)
       expect(result.error).toMatch(/user named this project/)
       expect(await readViaTool('proj-apply-locked')).toMatchObject({ title: 'Typed by me', status: 'draft', tasks: [] })
+    })
+
+    it('a board read failing after the commit still reports success (no duplicate on retry)', async () => {
+      writeProjectFixture('proj-apply-board-down', { title: 'Plan', titleSource: 'agent', tasks: [] })
+      plugin.ctx.tasks.list = mock(async () => { throw new Error('board offline') }) as unknown as typeof plugin.ctx.tasks.list
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_apply_plan')!
+      const result = await callTool(tool, { projectId: 'proj-apply-board-down', appendBody: 'More', checklistItems: ['One'] })
+      expect(result).toMatchObject({ ok: true, progress: 0 })
     })
 
     it('names a fallback-titled project and records the agent', async () => {

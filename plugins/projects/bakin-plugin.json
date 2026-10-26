@@ -474,15 +474,6 @@
         }
       },
       {
-        "name": "projects:remove-item",
-        "usage": "bakin projects remove-item <projectId> <taskItemId>",
-        "summary": "Remove a checklist item",
-        "dispatch": {
-          "type": "execTool",
-          "name": "bakin_exec_projects_remove_item"
-        }
-      },
-      {
         "name": "projects:link-item",
         "usage": "bakin projects link-item <projectId> <taskItemId> <taskId>",
         "summary": "Link a checklist item to a task",

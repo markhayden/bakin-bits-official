@@ -33,7 +33,7 @@ it('replays a lost add response across service restart and concurrent requests',
 
 it('does not resurrect a deleted add result or confuse a reused display ID', async () => {
   const first = await service.addChecklistItem(id, 'Original', 'request-one')
-  await service.removeChecklistItem(id, first.taskItemId)
+  await service.removeChecklistItem(id, first.taskItemId, USER)
   const replacement = await service.addChecklistItem(id, 'Replacement', 'request-two')
   expect(replacement.taskItemId).toBe(first.taskItemId)
   expect(await service.addChecklistItem(id, 'Original', 'request-one')).toMatchObject({ taskItemId: first.taskItemId, deleted: true })
@@ -54,7 +54,7 @@ it('commits the receipt with its item and can retry a failed replacement', async
 it('retains receipts for deleted items without silently accepting corrupt metadata', async () => {
   for (let i = 0; i < 30; i++) {
     const result = await service.addChecklistItem(id, `Task ${i}`, `request-${i}`)
-    await service.removeChecklistItem(id, result.taskItemId)
+    await service.removeChecklistItem(id, result.taskItemId, USER)
   }
   const project = repo.readProject(id)!
   expect(parseProject(serializeProject(project)).operations).toHaveLength(30)
@@ -110,7 +110,7 @@ it('does not link a replacement item or resurrect a deleted project after creati
   const create = setup.ctx.tasks.create
   setup.ctx.tasks.create = async input => {
     const task = await create(input)
-    await service.removeChecklistItem(id, taskItemId)
+    await service.removeChecklistItem(id, taskItemId, USER)
     await service.addChecklistItem(id, 'Replacement')
     return task
   }
@@ -129,7 +129,7 @@ it('rejects a foreign task collision and never recreates a deleted completed pro
   setup.ctx.tasks.get = get
   const result = await service.promoteItemToTask(id, taskItemId)
   await setup.ctx.tasks.remove(result.taskId)
-  await service.autoUnlinkTask(result.taskId)
+  await service.unlinkMissingTask(id, result.taskId)
   await expect(service.promoteItemToTask(id, taskItemId)).rejects.toMatchObject({ status: 409 })
   expect(await setup.ctx.tasks.list()).toHaveLength(0)
 })

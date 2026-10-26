@@ -83,9 +83,27 @@ export function ConversationPanel({
     },
     readOnly && readOnlyNotice ? readOnlyNotice : null,
     messages.length === 0 && !liveText ? emptyState : null,
-    ...messages.map((message, index) =>
-      React.createElement('div', { key: index, 'data-conv-kind': message.kind }, messageText(message, transformText)),
-    ),
+    ...messages.map((message, index) => {
+      const question = message.kind === 'tool' ? message.metadata?.bakinQuestion : undefined
+      if (question?.question && Array.isArray(question.options)) {
+        // Mirrors the kit: a card is answerable only while nothing came after
+        // it, never while a turn streams, and its answer is a normal send.
+        const answered = messages.slice(index + 1).some(row => row.kind === 'user')
+        const interactive = !answered && !streaming && !readOnly && onSend
+        return React.createElement(
+          'div',
+          { key: index, 'data-conv-kind': 'tool', 'data-conv-question': '', 'data-state': answered ? 'settled' : 'open' },
+          React.createElement('p', null, question.question),
+          ...question.options.map((option, optionIndex) => React.createElement('button', {
+            key: option.label,
+            type: 'button',
+            disabled: !interactive,
+            onClick: () => { void onSend(formatQuestionAnswer(question, { kind: 'option', index: optionIndex })) },
+          }, option.label)),
+        )
+      }
+      return React.createElement('div', { key: index, 'data-conv-kind': message.kind }, messageText(message, transformText))
+    }),
     ...extras,
     liveText ? React.createElement('div', { 'data-testid': 'live-text' }, liveText) : null,
     streaming ? React.createElement('div', { 'data-testid': 'thinking' }, 'thinking…') : null,

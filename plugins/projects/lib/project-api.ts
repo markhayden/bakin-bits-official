@@ -1,3 +1,4 @@
+import { OPERATOR_DECLARATION_HEADERS } from '@makinbakin/sdk/utils'
 import { PROJECT_STATUSES } from '../types'
 import type { ProjectDetailData } from '../types'
 
@@ -8,11 +9,19 @@ export class ProjectApiError extends Error {
   }
 }
 
-/** One JSON/error boundary for detail reads and subsequent typed mutations. */
+/**
+ * One JSON/error boundary for detail reads and typed mutations. Every
+ * mutation from this UI declares the operator (D9a): the server holds
+ * undeclared callers to the agent rules.
+ */
 export async function projectRequest(path: string, init?: RequestInit): Promise<unknown> {
   let response: Response
+  const method = (init?.method ?? 'GET').toUpperCase()
+  const request = method === 'GET' || method === 'HEAD'
+    ? init
+    : { ...init, headers: { ...OPERATOR_DECLARATION_HEADERS, ...(init?.headers as Record<string, string> | undefined) } }
   try {
-    response = await fetch(`/api/plugins/projects/${path}`, init)
+    response = await fetch(`/api/plugins/projects/${path}`, request)
   } catch (error) {
     if (init?.signal?.aborted) throw error
     throw new ProjectApiError('Could not reach Projects. Check your connection and retry.', 0, 'network_error')

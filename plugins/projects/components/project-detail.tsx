@@ -35,7 +35,7 @@ import { useProjectUploads } from '../hooks/use-project-uploads'
 import { useProjectDetail } from '../hooks/use-project-detail'
 import { useProjectHistory } from '../hooks/use-project-history'
 import { projectRequest } from '../lib/project-api'
-import type { ProjectStatus, ProjectTask } from '../types'
+import type { PlanSnapshot, ProjectStatus, ProjectTask } from '../types'
 
 const EMPTY_TASKS: ProjectTask[] = []
 
@@ -99,20 +99,33 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
 
   // ── "Plan updated" (D15): an agent wrote a revision the user has not seen.
   const planUnseen = Boolean(project && project.planUpdatedBy === 'agent' && project.planRevision > (project.planSeenRevision ?? 0))
-  // Opening the Plan tab captures the comparison baseline for this view
-  // FIRST, then marks the current revision seen.
+  // Opening the Plan tab captures the comparison baseline for this VISIT
+  // first — later revisions while it stays open never move it — then marks
+  // the current revision seen. The baseline body is kept client-side too, so
+  // history retention can never evict it mid-review.
   const [planBaseline, setPlanBaseline] = useState<number | undefined>(undefined)
+  const [baselineSnapshot, setBaselineSnapshot] = useState<PlanSnapshot | undefined>(undefined)
   const planRevision = project?.planRevision
   const seenRevision = project?.planSeenRevision ?? 0
   useEffect(() => {
-    if (tab !== 'plan' || planRevision === undefined || planRevision <= seenRevision) return
-    setPlanBaseline(seenRevision)
+    if (tab !== 'plan') {
+      setPlanBaseline(undefined)
+      setBaselineSnapshot(undefined)
+      return
+    }
+    if (planRevision === undefined || planRevision <= seenRevision) return
+    setPlanBaseline(current => current ?? seenRevision)
     void projectRequest(`${encodeURIComponent(projectId)}/plan/seen`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ revision: planRevision }),
     }).then(() => refresh()).catch(() => {})
   }, [tab, planRevision, seenRevision, projectId, refresh])
+  useEffect(() => {
+    if (planBaseline === undefined || baselineSnapshot?.revision === planBaseline) return
+    const kept = history.history?.find(snapshot => snapshot.revision === planBaseline)
+    if (kept) setBaselineSnapshot(kept)
+  }, [planBaseline, baselineSnapshot, history.history])
   const reviewPlanChanges = () => {
     selectTab('plan')
     setViewParam('changes')
@@ -348,6 +361,7 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
       view={viewParam === 'changes' ? 'changes' : 'rendered'}
       onViewChange={next => setViewParam(next === 'changes' ? 'changes' : '')}
       compareRevision={planBaseline}
+      baselineSnapshot={baselineSnapshot}
       onRestored={refresh}
     />
   ) : tab === 'steps' ? (

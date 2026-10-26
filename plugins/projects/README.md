@@ -64,7 +64,12 @@ Agent writes pass ONE authority check: agents never change lifecycle status
 (the `status` parameter is gone from `bakin_exec_projects_update` and
 `_apply_plan`), never overwrite a title you typed (`titleSource: 'user'` —
 refused with `title_locked`), and never delete steps (there is no agent
-remove tool). The composer's agent picker is for one-off consults; the lead
+remove tool). REST follows the same rule: the Projects UI declares the
+operator (`X-Bakin-Operator: declared`, the SDK's
+`OPERATOR_DECLARATION_HEADERS`) on every mutation, and a caller from an agent
+context (`X-Bakin-Agent-Context`) or without the declaration is held to the
+agent rules — declared, not verified, the same documented limit as
+approvals. The composer's agent picker is for one-off consults; the lead
 answers by default. The composer's paperclip uploads a file to the asset
 library and attaches it to the project's Files.
 
@@ -96,7 +101,9 @@ while its board task is done or archived, so reopening the task unchecks it.
 `deriveChecklist(project, board)` is the one source of `checked`/`progress`
 for the detail, list, brainstorm context, task enrichment, search and tool
 returns. Toggling a linked step — UI, REST or tools — is refused with
-`linked_step`. A board column change only tells open pages to refresh.
+`linked_step`. A board column change only tells open pages to refresh. No
+task-deletion event reaches plugins, so loading a project unlinks (durably)
+any step whose board task is gone, and it becomes a normal step again.
 
 ## Files
 
