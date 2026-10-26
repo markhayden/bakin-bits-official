@@ -85,7 +85,7 @@ test('agents cannot resize, screen reads carry the grid, and the operator can sa
   } as unknown as PluginContext
   try {
     await plugin.activate(context)
-    const operations = (tools[0]!.parameters as { operation: { options: string[] } }).operation.options
+    const operations = (tools[0]!.parameters as unknown as { operation: { options: string[] } }).operation.options
     expect(operations).not.toContain('resize')
     const route = plugin.routes!.find((entry) => entry.path === '/session' && entry.method === 'POST')!
     const response = await route.handler(new Request('http://localhost/session', {

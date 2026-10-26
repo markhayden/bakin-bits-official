@@ -2,11 +2,11 @@ import { describe, expect, it } from 'bun:test'
 import { claimSize, FLOOR, nextSize } from '../lib/sizing'
 import type { Session } from '../lib/contracts'
 
-const base = { cols: 100, rows: 30, sizeEpoch: 3, sizeRevision: 7, sizeAuthority: { viewer: 'desk-0123456789abcdef', kind: 'browser' } } as Session
+const base = { cols: 100, rows: 30, sizeEpoch: 3, sizeRevision: 7, sizeAuthority: { viewer: 'desk-0123456789abcdef', kind: 'browser', device: 'desktop' } } as Session
 
 describe('claimSize', () => {
   it('hands authority to the claiming viewer and opens a new epoch', () => {
-    expect(claimSize(base, 'phone-0123456789abcdef', 'browser')).toEqual({ sizeAuthority: { viewer: 'phone-0123456789abcdef', kind: 'browser' }, sizeEpoch: 4 })
+    expect(claimSize(base, 'phone-0123456789abcdef', { kind: 'browser', device: 'phone' })).toEqual({ sizeAuthority: { viewer: 'phone-0123456789abcdef', kind: 'browser', device: 'phone' }, sizeEpoch: 4 })
   })
 })
 

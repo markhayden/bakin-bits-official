@@ -235,9 +235,9 @@ test('session-change listeners hear every saved change', async () => {
 
 test('sessions start sized: the creating screen for a human, the configured default for an agent', async () => {
   const { manager } = fixture()
-  const mine = await manager.create({ title: 'Mine', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20 })
+  const mine = await manager.create({ title: 'Mine', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'phone' })
   expect([mine.cols, mine.rows, mine.sizeEpoch, mine.sizeRevision]).toEqual([64, 20, 1, 0])
-  expect(mine.sizeAuthority).toEqual({ viewer: human.id, kind: 'browser' })
+  expect(mine.sizeAuthority).toEqual({ viewer: human.id, kind: 'browser', device: 'phone' })
   const theirs = await manager.create({ title: 'Agent', cwd: '/tmp', program: 'shell' }, agent)
   expect([theirs.cols, theirs.rows, theirs.sizeEpoch]).toEqual([200, 60, 0])
   expect(theirs.sizeAuthority).toBeUndefined()
@@ -248,27 +248,28 @@ test('any human may claim, even while an agent drives; a former authority is sta
   const session = await manager.create({ title: 'Shared', cwd: '/tmp', program: 'shell', agentId: 'patch' }, agent)
   const desk = { kind: 'human', id: 'desk-0123456789abcdef' } as const
   const phone = { kind: 'human', id: 'phone-0123456789abcdef' } as const
-  const claimed = await manager.claim(session.id, desk, 180, 50)
+  const claimed = await manager.claim(session.id, desk, 180, 50, { kind: 'browser', device: 'desktop' })
+  expect(claimed.sizeAuthority).toEqual({ viewer: desk.id, kind: 'browser', device: 'desktop' })
   expect([claimed.cols, claimed.rows, claimed.sizeEpoch, claimed.sizeRevision]).toEqual([180, 50, 1, 1])
   expect(claimed.owner).toEqual(agent)
   expect(tmuxSizes.get(session.id)).toEqual({ cols: 180, rows: 50 })
-  const phoneClaim = await manager.claim(session.id, phone, 44, 30)
+  const phoneClaim = await manager.claim(session.id, phone, 44, 30, { kind: 'browser', device: 'phone' })
   await expect(manager.resizeAs(session.id, desk, claimed.sizeEpoch, 200, 60)).rejects.toThrow('Another device is sizing this session')
   const followed = await manager.resizeAs(session.id, phone, phoneClaim.sizeEpoch, 44, 24)
   expect([followed.cols, followed.rows, followed.sizeRevision]).toEqual([44, 24, 3])
-  await expect(manager.claim(session.id, agent, 100, 30)).rejects.toThrow()
+  await expect(manager.claim(session.id, agent, 100, 30, { kind: 'browser', device: 'desktop' })).rejects.toThrow()
 })
 
 test('claims clamp to the 40x10 floor', async () => {
   const { manager } = fixture()
-  const session = await manager.create({ title: 'Tiny', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20 })
-  const claimed = await manager.claim(session.id, human, 25, 4)
+  const session = await manager.create({ title: 'Tiny', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+  const claimed = await manager.claim(session.id, human, 25, 4, { kind: 'browser', device: 'phone' })
   expect([claimed.cols, claimed.rows]).toEqual([40, 10])
 })
 
 test('a failed resize leaves every representation at tmux\'s actual window size', async () => {
   const { manager, failResizes } = fixture()
-  const session = await manager.create({ title: 'Flaky', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20 })
+  const session = await manager.create({ title: 'Flaky', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
   failResizes(new Error('resize-window failed'))
   const reconciled = await manager.resizeAs(session.id, human, session.sizeEpoch, 120, 40)
   expect([reconciled.cols, reconciled.rows]).toEqual([77, 22])

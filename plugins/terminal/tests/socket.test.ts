@@ -8,7 +8,7 @@ const CLIENT = 'browser-0123456789abcdef'
 function session(overrides: Partial<Session> = {}): Session {
   return {
     id: 's1', title: 'Live', cwd: '/tmp', program: 'shell', owner: { kind: 'human', id: 'x' }, generation: 1, inputSequence: 0,
-    cols: 100, rows: 30, state: 'running', createdAt: 0, lastActivityAt: 0, ...overrides,
+    cols: 100, rows: 30, sizeEpoch: 0, sizeRevision: 0, state: 'running', createdAt: 0, lastActivityAt: 0, ...overrides,
   }
 }
 
@@ -284,17 +284,48 @@ describe('TerminalViewer', () => {
   it('routes claim and epoch-checked resize to the manager and reports a refused size quietly', async () => {
     const { manager } = fakeManager()
     const calls: string[] = []
-    manager.claim = async (_id, principal, cols, rows) => { calls.push(`claim ${principal.id} ${cols}x${rows}`); return manager.get('s1', principal) }
+    manager.claim = async (_id, principal, cols, rows, authority) => { calls.push(`claim ${principal.id} ${cols}x${rows} ${authority.kind}/${authority.kind === 'browser' ? authority.device : ''}`); return manager.get('s1', principal) }
     manager.resizeAs = async (_id, _principal, epoch) => { calls.push(`resize @${epoch}`); throw new TerminalError('Another device is sizing this session', 409) }
     const peer = fakeSocket()
     new TerminalViewer(manager, peer.socket, 's1', options)
     peer.client({ type: 'hello', clientId: CLIENT })
     await until(() => peer.of('sync').length === 1, 'sync')
-    peer.client({ type: 'claim', cols: 120, rows: 40 })
+    peer.client({ type: 'claim', cols: 120, rows: 40, device: 'phone' })
     peer.client({ type: 'resize', epoch: 2, cols: 100, rows: 30 })
     await until(() => peer.of('size-refused').length === 1, 'refusal')
-    expect(calls).toEqual([`claim ${CLIENT} 120x40`, 'resize @2'])
+    expect(calls).toEqual([`claim ${CLIENT} 120x40 browser/phone`, 'resize @2'])
     expect(peer.state.closed).toBeNull()
   })
-})
 
+  it('tells viewers when the sizing screen disconnects (the size freezes) and comes back', async () => {
+    const AUTHORITY = 'desk-0123456789abcdef'
+    const { manager } = fakeManager(session({ sizeEpoch: 1, sizeRevision: 0, sizeAuthority: { viewer: AUTHORITY, kind: 'browser', device: 'desktop' } }))
+    const watcher = fakeSocket()
+    new TerminalViewer(manager, watcher.socket, 's1', options)
+    watcher.client({ type: 'hello', clientId: CLIENT })
+    await until(() => watcher.of('sync').length === 1, 'watcher sync')
+    expect(watcher.of('sync')[0]!.sizeFrozen).toBe(true)
+    const desk = fakeSocket()
+    new TerminalViewer(manager, desk.socket, 's1', options)
+    desk.client({ type: 'hello', clientId: AUTHORITY })
+    await until(() => watcher.of('presence').length === 1, 'authority arrived')
+    expect(watcher.of('presence')[0]).toEqual({ type: 'presence', sizeFrozen: false })
+    await until(() => desk.of('sync').length === 1, 'authority sync')
+    expect(desk.of('sync')[0]!.sizeFrozen).toBe(false)
+    desk.socket.close(1000)
+    await until(() => watcher.of('presence').length === 2, 'authority left')
+    expect(watcher.of('presence')[1]).toEqual({ type: 'presence', sizeFrozen: true })
+  })
+
+  it('re-evaluates the freeze when another screen claims the size', async () => {
+    const { manager, change } = fakeManager(session({ sizeEpoch: 1, sizeRevision: 0, sizeAuthority: { viewer: 'gone-0123456789abcdef', kind: 'browser', device: 'phone' } }))
+    const peer = fakeSocket()
+    new TerminalViewer(manager, peer.socket, 's1', options)
+    peer.client({ type: 'hello', clientId: CLIENT })
+    await until(() => peer.of('sync').length === 1, 'sync')
+    expect(peer.of('sync')[0]!.sizeFrozen).toBe(true)
+    change({ sizeEpoch: 2, sizeAuthority: { viewer: CLIENT, kind: 'browser', device: 'desktop' } })
+    await until(() => peer.of('presence').length === 1, 'thawed by the claim')
+    expect(peer.of('presence')[0]).toEqual({ type: 'presence', sizeFrozen: false })
+  })
+})

@@ -1,6 +1,6 @@
 import { z } from 'zod'
-import { TerminalError, type Principal } from './contracts'
-import type { Sessions } from './sessions'
+import { screenDevice, TerminalError, type Principal } from './contracts'
+import type { Sessions, StartSize } from './sessions'
 
 export function human(request: Request): Principal {
   const origin = request.headers.get('origin')
@@ -10,6 +10,12 @@ export function human(request: Request): Principal {
     throw new TerminalError('Same-origin Terminal client required', 403)
   }
   return { kind: 'human', id }
+}
+
+/** POST /sessions `size`: the creating screen's grid, so the program starts at the size it is seen at. */
+export function creatingScreen(raw: unknown): StartSize | undefined {
+  const size = z.object({ cols: z.number().int(), rows: z.number().int(), device: screenDevice }).safeParse(raw)
+  return size.success ? { ...size.data, kind: 'browser' } : undefined
 }
 
 /**

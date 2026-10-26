@@ -4,12 +4,15 @@
  * exactly once it mounts (the creator holds the size claim). Cell metrics are
  * xterm's 13px font in the system monospace face; the chrome allowance covers
  * the workspace header, the canvas inset and, on touch screens, the key strip.
+ * It carries the device kind so the header can say "Sized by phone".
  */
+import { screenDevice, type ScreenDevice } from './terminal-view'
+
 const CELL = { width: 7.8, height: 17 }
 
-export function estimateTerminalSize(view: { innerWidth: number; innerHeight: number; matchMedia(query: string): { matches: boolean } } = window): { cols: number; rows: number } {
+export function estimateTerminalSize(view: Pick<Window, 'innerWidth' | 'innerHeight' | 'matchMedia' | 'screen'> = window): { cols: number; rows: number; device: ScreenDevice } {
   const touch = view.matchMedia('(pointer: coarse)').matches
   const width = view.innerWidth - 32
   const height = view.innerHeight - 96 - (touch ? 112 : 0)
-  return { cols: Math.max(1, Math.floor(width / CELL.width)), rows: Math.max(1, Math.floor(height / CELL.height)) }
+  return { cols: Math.max(1, Math.floor(width / CELL.width)), rows: Math.max(1, Math.floor(height / CELL.height)), device: screenDevice(view) }
 }

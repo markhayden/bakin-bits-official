@@ -8,7 +8,7 @@ import { TerminalService } from './lib/service'
 import { TmuxProcesses } from './lib/processes'
 import { Sessions } from './lib/sessions'
 import { TerminalError, terminalSettings, type Principal } from './lib/contracts'
-import { agentCommand, command, failure, human } from './lib/http'
+import { agentCommand, command, creatingScreen, failure, human } from './lib/http'
 import { sessionOptions } from './lib/session-options'
 import { TerminalViewer } from './lib/socket'
 
@@ -31,7 +31,7 @@ const route = (path: string, method: 'GET' | 'POST', summary: string, handler: (
 })
 
 export default definePlugin({
-  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.2',
+  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.3',
   routes: [
     route('/options', 'GET', 'Get terminal form defaults and available agents and tasks', async (request) => {
       const principal = human(request)
@@ -47,9 +47,7 @@ export default definePlugin({
     route('/sessions', 'POST', 'Create a terminal session', async (request) => {
       const principal = human(request)
       const body = await request.json() as Record<string, unknown>
-      // The creating screen's grid, so the program starts at the size it is seen at.
-      const size = z.object({ cols: z.number().int(), rows: z.number().int() }).safeParse(body.size)
-      return Response.json(await sessions().create(body, principal, size.success ? size.data : undefined))
+      return Response.json(await sessions().create(body, principal, creatingScreen(body.size)))
     }),
     route('/session', 'POST', 'Operate a terminal session', async (request) => {
       const principal = human(request)

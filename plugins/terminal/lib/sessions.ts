@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
 import { relative, isAbsolute } from 'node:path'
-import { authorize, createSchema, DAY, DeliveryUncertainError, TerminalError, type CreateInput, type Principal, type Session, type TerminalSettings } from './contracts'
+import { authorize, createSchema, DAY, DeliveryUncertainError, TerminalError, type CreateInput, type Principal, type Session, type SizeClaimant, type TerminalSettings } from './contracts'
 import type { ProcessDriver } from './processes'
-import { claimSize, clampSize, nextSize, type SizeAuthority } from './sizing'
+import { claimSize, clampSize, nextSize } from './sizing'
 import { Screen } from './screen'
 import { Store } from './store'
 
 interface WorktreeResult { ok: boolean; error?: string; worktreePath?: string }
+/** The creating screen's grid and what kind of screen it is (it holds the size claim). */
+export type StartSize = { cols: number; rows: number } & SizeClaimant
+
 export interface SessionOptions {
   settings(): TerminalSettings
   prepare(input: { repoPath: string; sessionId: string; agent: string }): Promise<WorktreeResult | undefined>
@@ -138,7 +141,7 @@ export class Sessions {
    * makes that viewer the size authority. Without one — agents — the session
    * starts at the configured default with nobody sizing it yet.
    */
-  create(raw: unknown, principal: Principal, size?: { cols: number; rows: number; kind?: SizeAuthority['kind'] }): Promise<Session> {
+  create(raw: unknown, principal: Principal, size?: StartSize): Promise<Session> {
     return this.run(async () => {
       const input = createSchema.parse(raw)
       this.list(principal)
@@ -222,12 +225,12 @@ export class Sessions {
     return session
   }
   /** Make `principal`'s screen the size authority and fit the grid to it (any human; spec D2). */
-  claim(id: string, principal: Principal, cols: number, rows: number, kind: SizeAuthority['kind'] = 'browser'): Promise<Session> {
+  claim(id: string, principal: Principal, cols: number, rows: number, claimant: SizeClaimant): Promise<Session> {
     return this.run(async () => {
       if (principal.kind !== 'human') throw new TerminalError('Only the human sizes terminal sessions', 403)
       const session = this.get(id, principal)
       if (session.state !== 'running') throw new TerminalError('Session has exited')
-      Object.assign(session, claimSize(session, principal.id, kind))
+      Object.assign(session, claimSize(session, principal.id, claimant))
       const size = clampSize(cols, rows)
       return this.applySize(session, size.cols, size.rows)
     })
@@ -266,8 +269,11 @@ export class Sessions {
     this.save(session)
     return session
   }
-  private startSize(principal: Principal, size?: { cols: number; rows: number; kind?: SizeAuthority['kind'] }): Pick<Session, 'cols' | 'rows' | 'sizeEpoch' | 'sizeRevision' | 'sizeAuthority'> {
-    if (principal.kind === 'human' && size) return { ...clampSize(size.cols, size.rows), sizeEpoch: 1, sizeRevision: 0, sizeAuthority: { viewer: principal.id, kind: size.kind ?? 'browser' } }
+  private startSize(principal: Principal, size?: StartSize): Pick<Session, 'cols' | 'rows' | 'sizeEpoch' | 'sizeRevision' | 'sizeAuthority'> {
+    if (principal.kind === 'human' && size) {
+      const { cols, rows, ...claimant } = size
+      return { ...clampSize(cols, rows), sizeEpoch: 1, sizeRevision: 0, sizeAuthority: { viewer: principal.id, ...claimant } }
+    }
     const fallback = this.options.settings().defaultSize ?? { cols: 200, rows: 60 }
     return { ...clampSize(fallback.cols, fallback.rows), sizeEpoch: 0, sizeRevision: 0 }
   }

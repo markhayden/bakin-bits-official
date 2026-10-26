@@ -11,6 +11,9 @@ export const createSchema = z.object({
 })
 export type CreateInput = z.infer<typeof createSchema>
 export type Principal = { kind: 'human'; id: string } | { kind: 'agent'; id: string }
+/** What kind of screen claims the size: it names the authority in the header ("Sized by phone"). */
+export const screenDevice = z.enum(['desktop', 'phone'])
+export type SizeClaimant = { kind: 'browser'; device: z.infer<typeof screenDevice> } | { kind: 'native' }
 export interface Session {
   revision?: number
   id: string
@@ -26,7 +29,7 @@ export interface Session {
   cols: number
   rows: number
   /** The viewer that sizes the grid (spec D2); absent until someone claims. */
-  sizeAuthority?: { viewer: string; kind: 'browser' | 'native' }
+  sizeAuthority?: { viewer: string } & SizeClaimant
   /** Bumped by every claim; a resize must carry the current epoch. */
   sizeEpoch: number
   /** Bumped by every actual dimension change; agents re-read after it moves. */
