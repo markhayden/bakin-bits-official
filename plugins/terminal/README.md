@@ -38,15 +38,22 @@ or API billing.
 4. Create a session. Coding CLIs default to an isolated Git worktree; **Existing
    checkout** is explicit. Shell sessions use the supplied working directory.
 
-If tmux is missing or damaged, open Health and run the plugin assets repair, or
-run `bakin install plugin-assets`. Terminal picks up the repaired executable
-without a Bakin restart. A manually installed tmux is a fallback.
+Terminal runs only Bakin's managed tmux (`~/.bakin/bin/tmux`); a tmux on
+`PATH` (Homebrew or manual) is never used. If it is missing or damaged, open
+Health and run the plugin assets repair, or run `bakin install plugin-assets`.
+Terminal picks up the repaired executable without a Bakin restart.
 
-Upgrading an existing Homebrew-backed service shows **Terminal service update
-available**. End its live sessions, then choose **Set up service** to switch its
-LaunchAgent to the managed binary. Setup refuses to restart live sessions or a
-service whose process state cannot be verified. Output and worktree records are
-retained. Linux is not supported by this release.
+The service's configuration comes from the plugin (`lib/tmux-config.ts`), and
+setup records a fingerprint of the binary pin, configuration and program
+arguments only after the restarted service is verified ready. When the
+running service is not the one this plugin version sets up (another binary,
+another configuration, or no verified fingerprint), Terminal and Health show
+**Terminal service update available**: end live sessions, then choose **Set up
+service** (or Health's **Apply update**). Setup refuses while any session is
+live, naming those sessions, and refuses a service whose process state cannot
+be verified. Restarting the service drops retained tmux panes and their
+in-memory scrollback; output Bakin stored and worktree records are kept. Linux
+is not supported by this release.
 
 New Terminal loads the runtime agent roster and active tasks, plus named project
 choices when Projects is installed. Disabled agents remain visible but cannot

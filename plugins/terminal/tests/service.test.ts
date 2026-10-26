@@ -1,30 +1,33 @@
 import { afterAll, afterEach, beforeEach, describe, it, expect, mock, spyOn } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const home = mkdtempSync(join(tmpdir(), 'terminal-service-test-'))
 mock.module('node:os', () => ({ homedir: () => home, tmpdir }))
 const { TerminalService, terminalEnvironment } = await import('../lib/service')
+const { tmuxConfig } = await import('../lib/tmux-config')
 afterAll(() => rmSync(home, { recursive: true, force: true }))
 const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!
 let root: string
 let service: InstanceType<typeof TerminalService>
-let resolved: string | null
 let running: boolean
 let loaded: boolean
 let panes: string
 let paneError: boolean
 let commands: string[][]
 let restoreSpawn: () => void
-let restoreWhich: () => void
+const managedTmux = join(home, '.bakin/bin/tmux')
+function installManagedTmux() {
+  mkdirSync(join(home, '.bakin/bin'), { recursive: true })
+  writeFileSync(managedTmux, '#!/bin/sh\n', { mode: 0o755 })
+}
 
 beforeEach(() => {
   Object.defineProperty(process, 'platform', { value: 'darwin' })
   root = mkdtempSync(join(home, 'data-'))
-  resolved = join(home, '.bakin/bin/tmux')
+  installManagedTmux()
   running = true; loaded = true; panes = ''; paneError = false; commands = []
-  const which = spyOn(Bun, 'which').mockImplementation(() => resolved)
   const spawn = spyOn(Bun, 'spawn').mockImplementation(((args: string[]) => {
     commands.push(args)
     let output = '', error = '', exit = 0
@@ -36,20 +39,21 @@ beforeEach(() => {
       if (args[1] === 'bootout') { running = false; loaded = false }
       if (args[1] === 'bootstrap') { running = true; loaded = true }
     } else if (args.includes('show-options')) exit = running ? 0 : 1
-    else if (args.includes('list-sessions')) output = panes ? 'test\n' : ''
+    else if (args.includes('list-sessions')) output = panes ? [...new Set(panes.trim().split('\n').map(line => line.split(' ')[0]))].join('\n') + '\n' : ''
     else if (args.includes('list-panes')) {
       output = panes
       if (paneError) { exit = 1; error = 'cannot inspect panes' }
     }
     return { stdout: new Response(output).body, stderr: new Response(error).body, exited: Promise.resolve(exit) }
   }) as typeof Bun.spawn)
-  restoreSpawn = () => spawn.mockRestore(); restoreWhich = () => which.mockRestore()
+  restoreSpawn = () => spawn.mockRestore()
   service = new TerminalService(root)
 })
 afterEach(() => {
-  restoreSpawn(); restoreWhich()
+  restoreSpawn()
   Object.defineProperty(process, 'platform', originalPlatform)
   rmSync(join(home, 'Library'), { recursive: true, force: true })
+  rmSync(join(home, '.bakin'), { recursive: true, force: true })
   rmSync(root, { recursive: true, force: true })
   rmSync(join(service.socket, '..'), { recursive: true, force: true })
 })
@@ -72,29 +76,59 @@ describe('terminal service managed binary', () => {
       else process.env.ANTHROPIC_API_KEY = previous
     }
   })
-  it('resolves a repaired binary on the same service instance', () => {
-    resolved = null
-    expect(service.tmux).toBeNull()
-    resolved = join(home, '.bakin/bin/tmux')
-    expect(service.tmux).toBe(resolved)
+  it('resolves only the managed binary, and picks up a repair on the same instance', () => {
+    rmSync(managedTmux)
+    const which = spyOn(Bun, 'which').mockImplementation(() => '/opt/homebrew/bin/tmux')
+    try {
+      expect(service.tmux).toBeNull()
+      installManagedTmux()
+      expect(service.tmux).toBe(managedTmux)
+    } finally { which.mockRestore() }
   })
-  it('migrates an idle Homebrew service to the absolute managed path', async () => {
+  it('migrates an idle Homebrew service to the managed binary and the generated config', async () => {
     oldPlist()
-    expect(await service.migrationRequired()).toBe(true)
+    expect(await service.updateRequired()).toBe(true)
     await service.install()
-    expect(readFileSync(plistPath(), 'utf8')).toContain(`<string>${resolved}</string>`)
+    expect(readFileSync(plistPath(), 'utf8')).toContain(`<string>${managedTmux}</string>`)
+    expect(readFileSync(join(root, 'tmux.conf'), 'utf8')).toBe(tmuxConfig())
     expect(commands.filter(args => args[0] === 'launchctl').map(args => args[1])).toEqual(['bootout', 'bootstrap'])
-    expect(await service.migrationRequired()).toBe(false)
+    expect(await service.updateRequired()).toBe(false)
   })
-  it('leaves the service and plist untouched when any live pane remains', async () => {
-    oldPlist(); panes = '0\n1\n0\n'
+  it('requires an update when the running service has no verified fingerprint, even on the managed path', async () => {
+    await service.install()
+    rmSync(join(root, 'service.json'))
+    expect(await service.updateRequired()).toBe(true)
+    commands = []
+    await service.install()
+    expect(commands.filter(args => args[0] === 'launchctl').map(args => args[1])).toEqual(['bootout', 'bootstrap'])
+    expect(await service.updateRequired()).toBe(false)
+  })
+  it('requires an update when the recorded fingerprint differs from the desired one', async () => {
+    await service.install()
+    writeFileSync(join(root, 'service.json'), JSON.stringify({ fingerprint: 'stale' }))
+    expect(await service.updateRequired()).toBe(true)
+  })
+  it('records nothing when the restarted service never becomes ready', async () => {
+    oldPlist()
+    const spawn = Bun.spawn as unknown as { mockImplementation: (fn: unknown) => void }
+    const original = (Bun.spawn as unknown as { getMockImplementation: () => (args: string[]) => unknown }).getMockImplementation()
+    spawn.mockImplementation((args: string[]) => {
+      if (args.includes('show-options') && commands.some(c => c[1] === 'bootstrap')) { commands.push(args); return { stdout: new Response('').body, stderr: new Response('').body, exited: Promise.resolve(1) } }
+      return original(args)
+    })
+    await expect(service.install()).rejects.toThrow('did not become ready')
+    expect(existsSync(join(root, 'service.json'))).toBe(false)
+    expect(await service.updateRequired()).toBe(true)
+  })
+  it('leaves the service and plist untouched when any live pane remains, naming the sessions', async () => {
+    oldPlist(); panes = 'terminal-a 0\nterminal-b 1\nterminal-c 0\n'
     const before = readFileSync(plistPath(), 'utf8')
-    await expect(service.install()).rejects.toThrow('2 live terminal panes')
+    await expect(service.install()).rejects.toThrow('2 live terminal sessions (terminal-a, terminal-c)')
     expect(readFileSync(plistPath(), 'utf8')).toBe(before)
     expect(commands.some(args => args[0] === 'launchctl')).toBe(false)
   })
   it('fails closed when pane state cannot be verified', async () => {
-    oldPlist(); panes = '0\n'; paneError = true
+    oldPlist(); panes = 'terminal-a 0\n'; paneError = true
     await expect(service.install()).rejects.toThrow('cannot inspect panes')
     expect(commands.some(args => args[1] === 'bootout')).toBe(false)
   })
@@ -109,7 +143,7 @@ describe('terminal service managed binary', () => {
     expect(commands.filter(args => args[1] === 'bootstrap')).toHaveLength(1)
   })
   it('reports the Bakin repair when tmux is missing', async () => {
-    resolved = null
+    rmSync(managedTmux)
     await expect(service.install()).rejects.toThrow('bakin install plugin-assets')
   })
 })

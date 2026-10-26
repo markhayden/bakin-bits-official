@@ -758,6 +758,69 @@ declare module '@makinbakin/sdk/types' {
     autoFix?: boolean
   }
 
+  // Repair actions (bakin explicit repair protocol): plan → canonical items → apply inside an operation.
+  export interface HealthRepairEffects {
+    deletesUserContent: boolean
+    spendsMoney: boolean
+    widensAuthorization: boolean
+    restartsService?: 'search-engine' | 'bakin' | 'runtime'
+    resolves?: string[]
+  }
+  export type HealthRepairMutation = 'upgrade' | 'sync' | 'reinstall' | 'restart' | 'rebuild' | 'delete' | 'policy' | 'none'
+  export interface HealthRepairChange {
+    kind: 'file' | 'setting' | 'service' | 'runtime' | 'task' | 'other'
+    target: string
+    action: 'create' | 'update' | 'delete' | 'install' | 'invoke'
+    description: string
+  }
+  export type HealthRepairTarget =
+    | { type: 'incidents' | 'observations'; reportId: string; ids: [string, ...string[]] }
+    | { type: 'all_actionable'; reportId: string }
+  export interface HealthRepairPlanItemInput {
+    id: string
+    actionId: string
+    title: string
+    reason: string
+    effects?: HealthRepairEffects
+    incidentIds: string[]
+    observationIds: string[]
+    preconditions: unknown[]
+    changes: HealthRepairChange[]
+  }
+  export interface HealthRepairPlanItem extends Omit<HealthRepairPlanItemInput, 'effects'> {
+    localId: string
+    effects: HealthRepairEffects
+    mode: 'self-heal' | 'one-click'
+  }
+  export interface HealthRepairApplyResult {
+    itemId: string
+    actionId: string
+    status: 'applied' | 'skipped' | 'failed'
+    message: string
+    affectedCheckIds: string[]
+    changes: HealthRepairChange[]
+  }
+  export interface OperationPlan {
+    stages: Array<{ id: string; kind: string; label: string }>
+    pointOfNoReturn?: string
+  }
+  /** The operation context a repair reports through (stage order follows its plan). */
+  export interface RepairOperationContext {
+    stage(id: string): void
+    skip(id: string, reason: string): void
+    item(stage: string, item: { id: string; label: string; status: string }): void
+  }
+  export interface HealthRepairActionDefinition {
+    id: string
+    name: string
+    effects: HealthRepairEffects
+    mutation: HealthRepairMutation
+    plan(target: HealthRepairTarget): Promise<HealthRepairPlanItemInput[]>
+    operationPlan(items: HealthRepairPlanItem[]): OperationPlan
+    resources?: string[]
+    apply(items: HealthRepairPlanItem[], op: RepairOperationContext): Promise<HealthRepairApplyResult[]>
+  }
+
   export type FormFieldType = 'string' | 'text' | 'number' | 'boolean' | 'select' | 'agent' | 'agent-toggles' | 'skill' | 'list'
   export interface PluginSettingsSchema {
     fields: Array<Record<string, unknown> & { type: FormFieldType; key: string; label: string }>
@@ -865,6 +928,8 @@ declare module '@makinbakin/sdk/types' {
     registerNodeType<T = unknown>(def: PluginNodeTypeInput<T>): string
     registerNotificationChannel(def: PluginNotificationChannelInput): string
     registerHealthCheck(def: PluginHealthCheckInput): string
+    /** Register an owner-local repair action — BEFORE any check whose incidents name it. */
+    registerHealthRepairAction(def: HealthRepairActionDefinition): string
     watchFiles(patterns: string[]): void
     getSettings<T = Record<string, unknown>>(): T
     updateSettings(patch: Record<string, unknown>): void
