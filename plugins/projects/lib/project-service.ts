@@ -153,6 +153,11 @@ export interface ProjectService {
   promoteItemToTask(projectId: string, taskItemId: string, opts?: PromoteItemOpts): Promise<{ taskId: string }>
   /** Unlink a step whose board task no longer exists (read-path reconciliation). */
   unlinkMissingTask(projectId: string, boardTaskId: string): Promise<void>
+  /**
+   * No task-deletion event reaches plugins: every read that hands steps to a
+   * user or agent unlinks the ones whose board task is gone, durably.
+   */
+  reconcileLinks(projectId: string): Promise<Project | null>
   resolveLinkedTaskStatuses(project: Project): Promise<Project & {
     resolvedTasks: Record<string, ResolvedBoardTask | null>
     resolvedAssets: ResolvedAsset[]
@@ -614,7 +619,10 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       const item = project.tasks.find(t => t.id === taskItemId)
       if (!item) throw new ProjectMutationError(`Checklist item not found: ${taskItemId}`, 404, 'not_found')
       const keyed = opts.requestId ? project.operations?.find(operation => operation.requestId === opts.requestId) : undefined
-      const prior = keyed ?? project.operations?.find(operation => operation.kind === 'promote-checklist' && operation.instanceId === item.instanceId)
+      if (keyed?.kind === 'promote-checklist' && keyed.retired) {
+        throw new ProjectMutationError('That board task was deleted. Send the step to the board again.', 409, 'promotion_retired')
+      }
+      const prior = keyed ?? project.operations?.find(operation => operation.kind === 'promote-checklist' && operation.instanceId === item.instanceId && !operation.retired)
       if (prior) {
         if (prior.kind !== 'promote-checklist' || prior.instanceId !== item.instanceId || prior.taskItemId !== taskItemId
           || prior.assignee !== opts.assignee || prior.workflowId !== opts.workflowId || prior.skipWorkflowReason !== opts.skipWorkflowReason) {
@@ -692,6 +700,11 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       if (!project || !item) return
       item.taskId = undefined
       item.checked = false
+      // Retire the completed promotion: a fresh Send to board may run again,
+      // while a late retry of the old request still conflicts.
+      for (const operation of project.operations ?? []) {
+        if (operation.kind === 'promote-checklist' && operation.taskId === boardTaskId) operation.retired = true
+      }
       project.updated = new Date().toISOString()
       project.progress = computeProgress(project.tasks)
       repo.writeProject(project)
@@ -699,6 +712,17 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       ctx.activity.audit('checklist.unlinked', 'system', { projectId, taskItemId: item.id, boardTaskId, reason: 'board_task_missing' })
       broadcast({ type: 'project.checklist_changed', projectId, action: 'unlink', taskItemId: item.id })
     })
+  }
+
+  async function reconcileLinks(projectId: string): Promise<Project | null> {
+    const project = repo.readProject(projectId)
+    if (!project) return null
+    const linked = project.tasks.map(item => item.taskId).filter((taskId): taskId is string => Boolean(taskId))
+    if (!linked.length) return project
+    const board = await boardIndex()
+    const missing = linked.filter(taskId => !board.has(taskId))
+    for (const taskId of missing) await unlinkMissingTask(projectId, taskId)
+    return missing.length ? repo.readProject(projectId) : project
   }
 
   async function resolveLinkedTaskStatuses(project: Project): Promise<Project & {
@@ -784,6 +808,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     updateAssetLabel,
     promoteItemToTask,
     unlinkMissingTask,
+    reconcileLinks,
     resolveLinkedTaskStatuses,
   }
 }

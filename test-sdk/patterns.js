@@ -47,7 +47,10 @@ export const PageAside = ({ children, label, labelledBy, collapsible, width, sid
     collapsible && collapsed ? collapsible.strip ?? null : null,
   )
 }
-export function useCollapsedAside() { return React.useState(false) }
+export function useCollapsedAside(storageKey) {
+  const override = globalThis.__bakinTestSdkHooks?.useCollapsedAside
+  return override ? override(storageKey) : React.useState(false)
+}
 export const PageCanvas = ({ children, orientation, ...props }) => React.createElement('div', props, children)
 export const PageTimeline = ({ children, live, label, labelledBy, ...props }) => React.createElement(
   'div',

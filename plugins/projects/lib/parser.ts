@@ -87,6 +87,7 @@ const operationsSchema = z.array(z.discriminatedUnion('kind', [z.object({
   title: z.string().min(1), taskItemId: z.string().min(1), instanceId: z.string().uuid(),
   taskId: z.string().min(1), assignee: z.string().optional(), workflowId: z.string().optional(),
   skipWorkflowReason: z.string().optional(), phase: z.enum(['reserved', 'complete']),
+  retired: z.literal(true).optional(),
 }).strict()]))
 
 export function parseProject(content: string): Project {
@@ -236,10 +237,12 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
     const cached = lastAgentTsCache.get(id)
     if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached
     const rows = readBrainstormMessages(id)
-    const ts = [...rows].reverse().find(r => r.kind === 'assistant' || r.kind === 'error')?.ts ?? null
+    // A turn that ends on a question card is agent activity too (D6a).
+    const isQuestion = (row: ProjectBrainstormMessage) => row.kind === 'tool' && parseBakinQuestion(row.metadata?.bakinQuestion) !== null
+    const ts = [...rows].reverse().find(r => r.kind === 'assistant' || r.kind === 'error' || isQuestion(r))?.ts ?? null
     let lastUser = -1
     for (let i = rows.length - 1; i >= 0; i--) if (rows[i]!.kind === 'user') { lastUser = i; break }
-    const waiting = rows.slice(lastUser + 1).some(row => row.kind === 'tool' && parseBakinQuestion(row.metadata?.bakinQuestion) !== null)
+    const waiting = rows.slice(lastUser + 1).some(isQuestion)
     const entry = { mtimeMs: stat.mtimeMs, size: stat.size, ts, waiting }
     lastAgentTsCache.set(id, entry)
     return entry

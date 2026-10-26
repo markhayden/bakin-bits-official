@@ -185,9 +185,10 @@ const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
       text: async () => '',
     }
   }
+  const status = new URL(url, 'http://localhost').searchParams.get('status')
   return {
     ok: true,
-    json: async () => ({ projects: fixtureProjects }),
+    json: async () => ({ projects: status ? fixtureProjects.filter(project => project.status === status) : fixtureProjects }),
     text: async () => '',
   }
 }) as unknown as typeof fetch
@@ -381,6 +382,16 @@ describe('ProjectList', () => {
     } finally {
       fixtureProjects.splice(0, fixtureProjects.length, ...saved)
     }
+  })
+
+  it('an empty filter never latches the start screen', async () => {
+    render(<ProjectList />)
+    await screen.findByRole('list', { name: 'Projects' })
+    await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Completed' })) })
+    await screen.findByText('No completed projects')
+    await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'All' })) })
+    expect(await screen.findByRole('list', { name: 'Projects' })).toBeDefined()
+    expect(screen.queryByRole('heading', { name: 'What kind of project is on your mind?' })).toBeNull()
   })
 
   it('All leaves archived projects out', async () => {

@@ -71,6 +71,7 @@ export function ProjectList() {
       if (requestVersion === listRequestVersion.current) {
         setProjects(status === 'all' ? data.projects.filter((project: ProjectSummary) => project.status !== 'archived') : data.projects)
         setTotal(data.projects.length)
+        if (status === 'all' && data.projects.length === 0) setStartScreen(true)
         setLoadError(null)
       }
     } catch (err) {
@@ -150,6 +151,7 @@ export function ProjectList() {
       setLoading(false)
       setProjects(current => current.filter(project => project.id !== deleteTarget.id))
       setTotal(current => Math.max(0, current - 1))
+      if (total <= 1) setStartScreen(true)
       setDeleteTarget(null)
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : 'Could not delete project. Please try again.')
@@ -158,12 +160,11 @@ export function ProjectList() {
     }
   }
 
-  // No projects at all: the list IS the start screen (D18). Once shown it
-  // stays until navigation — the create's own projects.changed refresh must
-  // not unmount the composer while its request is still in flight.
-  const showStart = startScreen || (!loading && !loadError && status === 'all' && !search && total === 0)
-  if (showStart && !startScreen) setStartScreen(true)
-  if (showStart) return <StartScreen />
+  // No projects at all: the list IS the start screen (D18). It latches from a
+  // completed unfiltered empty response and stays until navigation — the
+  // create's own projects.changed refresh must not unmount the composer while
+  // its request is still in flight.
+  if (startScreen) return <StartScreen />
 
   return (
     <Page>

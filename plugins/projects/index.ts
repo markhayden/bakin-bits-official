@@ -437,18 +437,9 @@ const projectsPlugin: BakinPlugin = {
       const url = new URL(req.url, 'http://localhost')
       const id = url.searchParams.get('projectId') || url.searchParams.get('id')
       if (!id) return json({ error: 'Missing id parameter' }, 400)
-      let project = readProject(id)
+      const project = await projectService.reconcileLinks(id)
       if (!project) return json({ error: 'Project not found' }, 404)
-      let resolved = await resolveLinkedTaskStatuses(project)
-      // No task-deletion event reaches plugins, so a step whose board task is
-      // gone is unlinked here, durably — otherwise it stays read-only forever.
-      const missing = Object.entries(resolved.resolvedTasks).filter(([, task]) => task === null).map(([taskId]) => taskId)
-      if (missing.length) {
-        for (const taskId of missing) await projectService.unlinkMissingTask(id, taskId)
-        project = readProject(id) ?? project
-        resolved = await resolveLinkedTaskStatuses(project)
-      }
-      const { operations: _operations, ...resolvedProject } = resolved
+      const { operations: _operations, ...resolvedProject } = await resolveLinkedTaskStatuses(project)
       // Sample the flag before the preview: if the turn settles between the
       // two reads we return streaming:false with no text (honest), never
       // text without the flag.
@@ -458,6 +449,7 @@ const projectsPlugin: BakinPlugin = {
         project: {
           ...resolvedProject,
           planSeenRevision: repo.readSeen(id).planSeenRevision,
+          brainstormUnread: hasUnseenBrainstormReply(id),
           brainstormMessages: readBrainstormMessages(id),
           // Server-seeded in-flight flag + streamed-so-far text — a remount
           // mid-turn rehydrates the indicator AND the reply's beginning.
@@ -901,7 +893,7 @@ const projectsPlugin: BakinPlugin = {
         projectId: z.string().describe('Project ID'),
       },
       handler: async (params: Record<string, unknown>) => {
-        const project = readProject(params.projectId as string)
+        const project = await projectService.reconcileLinks(params.projectId as string)
         if (!project) return { ok: false, error: `Project not found: ${params.projectId}` }
         return { ok: true, project: await resolveLinkedTaskStatuses(project) }
       },
@@ -1028,6 +1020,7 @@ const projectsPlugin: BakinPlugin = {
       },
       handler: async (params: Record<string, unknown>) => {
         try {
+          await projectService.reconcileLinks(params.projectId as string)
           const result = await markChecklistItem(
             params.projectId as string,
             params.taskItemId as string,
@@ -1169,6 +1162,7 @@ const projectsPlugin: BakinPlugin = {
         const itemId = params.itemId as string
         const checked = params.checked as boolean
         try {
+          await projectService.reconcileLinks(projectId)
           const result = await markChecklistItem(projectId, itemId, checked)
           ctx.activity.audit('checklist.toggled', 'system', { projectId, checked })
           indexProject(projectId).catch(() => {})

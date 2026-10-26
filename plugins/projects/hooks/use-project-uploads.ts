@@ -31,11 +31,17 @@ export function useProjectUploads(projectId: string, onAttached: () => Promise<u
       const result = await res.json().catch(() => ({})) as { ok?: boolean; assetId?: string; error?: string }
       if (!res.ok || !result.ok || !result.assetId) throw new Error(result.error ?? `Upload failed (${res.status}).`)
       if (controller.signal.aborted) return
-      await projectRequest(`${encodeURIComponent(projectId)}/assets`, {
+      const attachPath = `${encodeURIComponent(projectId)}/assets`
+      await projectRequest(attachPath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ assetId: result.assetId, label: file.name }),
       })
+      if (controller.signal.aborted) {
+        // Removed while attaching: take the reference back off the project.
+        await projectRequest(`${attachPath}/${encodeURIComponent(result.assetId)}`, { method: 'DELETE' }).catch(() => {})
+        return
+      }
       update(id, null)
       toast(`Attached ${file.name} to the project's files`, 'success')
       await onAttached()

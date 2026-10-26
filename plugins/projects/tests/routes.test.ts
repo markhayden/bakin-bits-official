@@ -493,6 +493,8 @@ describe('Routes', () => {
       const byId = Object.fromEntries((body.projects as Record<string, unknown>[]).map(p => [p.id, p]))
       expect(byId['proj-waiting']).toMatchObject({ waitingForYou: true, planUpdated: true, doneCount: 1, taskCount: 2 })
       expect(byId['proj-answered']).toMatchObject({ waitingForYou: false, planUpdated: false })
+      // A turn that ends on a question counts as an unseen reply too.
+      expect(byId['proj-waiting']).toMatchObject({ brainstormUnread: true })
     })
   })
 
@@ -545,6 +547,17 @@ describe('Routes', () => {
     })
   })
 
+  describe('missing board tasks reach agents too', () => {
+    it('projects_get and mark_item reconcile a deleted board task instead of locking the step', async () => {
+      writeProjectFixture('proj-tool-gone', { title: 'Gone', tasks: [{ id: 't001', title: 'Was linked', checked: false, taskId: 'board-deleted' }] })
+      plugin.ctx.tasks.list = mock(async () => []) as unknown as typeof plugin.ctx.tasks.list
+      const project = await readViaTool('proj-tool-gone')
+      expect((project.tasks as { taskId?: string }[])[0]!.taskId).toBeUndefined()
+      const mark = await callTool(findTool(plugin.execTools, 'bakin_exec_projects_mark_item')!, { projectId: 'proj-tool-gone', taskItemId: 't001', checked: true })
+      expect(mark).toMatchObject({ ok: true, progress: 100 })
+    })
+  })
+
   describe('POST /:projectId/plan/seen (D15)', () => {
     it('marks the shown revision seen — clamped to the current revision and never rewound', async () => {
       writeProjectFixture('proj-seen', { title: 'Seen', extra: { planRevision: 3 } })
@@ -564,6 +577,7 @@ describe('Routes', () => {
       writeProjectFixture('proj-linked-tog', {
         title: 'Linked', tasks: [{ id: 't001', title: 'Linked', checked: false, taskId: 'board-x' }],
       })
+      plugin.ctx.tasks.list = mock(async () => [{ id: 'board-x', title: 'Linked', column: 'todo' }]) as unknown as typeof plugin.ctx.tasks.list
       const route = findRoute(plugin.routes, 'PUT', '/:projectId/checklist/:itemId/toggle')!
       const { status, body } = await callRoute(route, plugin.ctx, {
         searchParams: { projectId: 'proj-linked-tog', itemId: 't001' }, body: { checked: true },

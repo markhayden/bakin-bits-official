@@ -113,19 +113,27 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
       setBaselineSnapshot(undefined)
       return
     }
-    if (planRevision === undefined || planRevision <= seenRevision) return
-    setPlanBaseline(current => current ?? seenRevision)
-    void projectRequest(`${encodeURIComponent(projectId)}/plan/seen`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ revision: planRevision }),
-    }).then(() => refresh()).catch(() => {})
-  }, [tab, planRevision, seenRevision, projectId, refresh])
+    if (planRevision !== undefined && planRevision > seenRevision) setPlanBaseline(current => current ?? seenRevision)
+  }, [tab, planRevision, seenRevision])
+  // Keep the baseline body BEFORE marking anything seen: once the revision is
+  // seen, retention no longer pins that snapshot.
+  const baselineReady = planBaseline !== undefined && (
+    baselineSnapshot?.revision === planBaseline
+    || (history.history !== null && !history.loading && !history.history.some(snapshot => snapshot.revision === planBaseline))
+  )
   useEffect(() => {
     if (planBaseline === undefined || baselineSnapshot?.revision === planBaseline) return
     const kept = history.history?.find(snapshot => snapshot.revision === planBaseline)
     if (kept) setBaselineSnapshot(kept)
   }, [planBaseline, baselineSnapshot, history.history])
+  useEffect(() => {
+    if (tab !== 'plan' || !baselineReady || planRevision === undefined || planRevision <= seenRevision) return
+    void projectRequest(`${encodeURIComponent(projectId)}/plan/seen`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ revision: planRevision }),
+    }).then(() => refresh()).catch(() => {})
+  }, [tab, baselineReady, planRevision, seenRevision, projectId, refresh])
   const reviewPlanChanges = () => {
     selectTab('plan')
     setViewParam('changes')
@@ -191,6 +199,11 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
     setUnread(false)
     markSeen()
   }, [panelVisible, markSeen])
+  // An unseen reply from before this visit shows on the collapsed dock too.
+  const hydratedUnread = project?.brainstormUnread === true
+  useEffect(() => {
+    if (hydratedUnread && !panelVisibleRef.current) setUnread(true)
+  }, [hydratedUnread])
 
   // Mid-turn plan/step edits land as tool activity — refresh immediately.
   usePluginEvent('projects.changed', (payload) => { if (payload.projectId === projectId) void refresh() })

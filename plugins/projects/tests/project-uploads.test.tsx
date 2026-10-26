@@ -51,3 +51,21 @@ it('removing a chip mid-upload cancels it — nothing attaches', async () => {
   expect(view.result.current.items).toHaveLength(0)
   expect(calls).toEqual(['POST /api/plugins/assets/upload'])
 })
+
+it('removing a chip while it attaches takes the reference back off the project', async () => {
+  const calls: string[] = []
+  let releaseAttach!: () => void
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    calls.push(`${init?.method} ${url}`)
+    if (url === '/api/plugins/assets/upload') return Response.json({ ok: true, assetId: 'a1' })
+    if (init?.method === 'POST') await new Promise<void>(resolve => { releaseAttach = resolve })
+    return Response.json({ ok: true })
+  }) as typeof fetch
+  const view = renderHook(() => useProjectUploads('p1', async () => {}))
+  await act(async () => { view.result.current.onAdd([new File(['x'], 'late.md', { type: 'text/markdown' })]) })
+  await waitFor(() => expect(calls).toContain('POST /api/plugins/projects/p1/assets'))
+  const id = view.result.current.items[0]!.id
+  await act(async () => { view.result.current.onRemove(id) })
+  await act(async () => { releaseAttach() })
+  await waitFor(() => expect(calls).toContain('DELETE /api/plugins/projects/p1/assets/a1'))
+})

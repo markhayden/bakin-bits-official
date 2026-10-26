@@ -120,18 +120,25 @@ it('does not link a replacement item or resurrect a deleted project after creati
   expect(await setup.ctx.tasks.list()).toHaveLength(1)
 })
 
-it('rejects a foreign task collision and never recreates a deleted completed promotion', async () => {
+it('rejects a foreign task collision without creating a task', async () => {
   const { taskItemId } = await service.addChecklistItem(id, 'Promote')
   const get = setup.ctx.tasks.get
   setup.ctx.tasks.get = async taskId => ({ id: taskId, projectId: 'foreign', source: {} }) as never
   await expect(service.promoteItemToTask(id, taskItemId)).rejects.toMatchObject({ status: 409 })
   expect(await setup.ctx.tasks.list()).toHaveLength(0)
   setup.ctx.tasks.get = get
-  const result = await service.promoteItemToTask(id, taskItemId)
+})
+
+it('after its board task is deleted, a fresh promotion works while a late retry of the old one still conflicts', async () => {
+  const { taskItemId } = await service.addChecklistItem(id, 'Promote')
+  const result = await service.promoteItemToTask(id, taskItemId, { requestId: 'first-request' })
   await setup.ctx.tasks.remove(result.taskId)
   await service.unlinkMissingTask(id, result.taskId)
-  await expect(service.promoteItemToTask(id, taskItemId)).rejects.toMatchObject({ status: 409 })
+  await expect(service.promoteItemToTask(id, taskItemId, { requestId: 'first-request' })).rejects.toMatchObject({ status: 409, code: 'promotion_retired' })
   expect(await setup.ctx.tasks.list()).toHaveLength(0)
+  const again = await service.promoteItemToTask(id, taskItemId)
+  expect(again.taskId).not.toBe(result.taskId)
+  expect(await setup.ctx.tasks.list()).toHaveLength(1)
 })
 
 

@@ -146,6 +146,8 @@ export interface ResolvedProjectAsset extends ProjectAsset {
 export interface ProjectDetailData extends Project {
   /** The plan revision the user last viewed (D15). */
   planSeenRevision?: number
+  /** An agent reply landed after the user last viewed the conversation. */
+  brainstormUnread?: boolean
   resolvedTasks: Record<string, ResolvedBoardTask | null>
   resolvedAssets: ResolvedProjectAsset[]
   brainstormMessages?: ProjectBrainstormMessage[]
@@ -174,4 +176,6 @@ export interface ChecklistPromotionOperation {
   workflowId?: string
   skipWorkflowReason?: string
   phase: 'reserved' | 'complete'
+  /** The board task was deleted: a retry of THIS request conflicts, a fresh one may promote again. */
+  retired?: true
 }

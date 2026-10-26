@@ -123,6 +123,14 @@ describe('ProjectDetail shell', () => {
     expect(composers()).toHaveLength(1)
   })
 
+  it('an unseen reply from before the visit marks a remembered-collapsed dock', async () => {
+    ;(globalThis as unknown as { __bakinTestSdkHooks: Record<string, unknown> }).__bakinTestSdkHooks.useCollapsedAside = () => React.useState(true)
+    mockFetch('p-unread', { status: 'active', brainstormUnread: true })
+    render(<ProjectDetail projectId="p-unread" onBack={() => {}} />)
+    await screen.findByTestId('project-checklist')
+    expect(await screen.findByLabelText('Unread reply')).toBeDefined()
+  })
+
   it('mobile: no dock; an Ask button switches to the conversation', async () => {
     desktop = false
     mockFetch('p-mobile', { status: 'active' })
@@ -190,6 +198,9 @@ describe('Plan updated (D15)', () => {
     // The comparison baseline is the version the user last saw (revision 1).
     const diff = await screen.findByTestId('plan-history-diff')
     expect(within(diff).getByText('seen version')).toBeDefined()
+    // The baseline is read BEFORE the revision is marked seen.
+    const calls = (globalThis.fetch as unknown as { mock: { calls: [string][] } }).mock.calls.map(([url]) => String(url))
+    expect(calls.findIndex(url => url.endsWith('/history'))).toBeLessThan(calls.findIndex(url => url.endsWith('/plan/seen')))
   })
 
   it('the baseline holds for the whole visit while the lead keeps revising', async () => {
