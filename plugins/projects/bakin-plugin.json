@@ -240,6 +240,14 @@
         ]
       },
       {
+        "method": "POST",
+        "path": "/:projectId/plan/seen",
+        "summary": "Mark a plan revision as seen",
+        "permissions": [
+          "storage.write"
+        ]
+      },
+      {
         "method": "GET",
         "path": "/:projectId/history",
         "summary": "Plan body snapshot history (oldest first)",

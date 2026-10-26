@@ -586,6 +586,45 @@ assets:
   })
 })
 
+describe('plan revisions (D15)', () => {
+  it('bumps only on committed body changes — restores included — and records who wrote it', async () => {
+    const { id } = await createProject({ titleSource: 'user', title: 'Rev', body: 'v1' })
+    expect(readProject(id)!.planRevision).toBe(0)
+    await service.applyProjectPlan(id, { body: 'v2' }, AGENT)
+    expect(readProject(id)).toMatchObject({ planRevision: 1, planUpdatedBy: 'agent' })
+    await updateProject(id, { body: 'v2' }, USER)                 // no-op
+    await updateProject(id, { title: 'Renamed' }, USER)            // body untouched
+    await service.applyProjectPlan(id, { checklistItems: ['x'] }, AGENT)
+    expect(readProject(id)!.planRevision).toBe(1)
+    await updateProject(id, { body: 'v3' }, USER)
+    expect(readProject(id)).toMatchObject({ planRevision: 2, planUpdatedBy: 'user' })
+    expect(repo.readPlanHistory(id).map(s => [s.body, s.revision])).toEqual([['v1', 0], ['v2', 1]])
+    await service.restorePlanVersion(id, 0)
+    expect(readProject(id)).toMatchObject({ body: 'v1', planRevision: 3, planUpdatedBy: 'user' })
+    // The user's own edits are seen by definition.
+    expect(repo.readSeen(id).planSeenRevision).toBe(3)
+  })
+
+  it('the snapshot at the seen revision survives the history cap while it is the baseline', async () => {
+    const { id } = await createProject({ titleSource: 'user', title: 'Pinned', body: 'seen body' })
+    repo.updateSeen(id, { planSeenRevision: 0 })
+    for (let i = 1; i <= 25; i++) await service.applyProjectPlan(id, { body: `agent v${i}` }, AGENT)
+    const history = repo.readPlanHistory(id)
+    expect(history[0]).toMatchObject({ revision: 0, body: 'seen body' })
+    expect(history).toHaveLength(21)
+    expect(history.at(-1)).toMatchObject({ revision: 24 })
+  })
+
+  it('brainstorm-seen and plan-seen share the sidecar without clobbering each other', async () => {
+    const { id } = await createProject({ titleSource: 'user', title: 'Seen' })
+    repo.updateSeen(id, { lastSeenAt: '2026-10-25T00:00:00.000Z' })
+    repo.updateSeen(id, { planSeenRevision: 4 })
+    expect(repo.readSeen(id)).toEqual({ lastSeenAt: '2026-10-25T00:00:00.000Z', planSeenRevision: 4 })
+    repo.updateSeen(id, { lastSeenAt: '2026-10-26T00:00:00.000Z' })
+    expect(repo.readSeen(id).planSeenRevision).toBe(4)
+  })
+})
+
 describe('plan history (bakin#703)', () => {
   it('snapshots the PRIOR body on agent and user edits, with attribution; no-op writes never snapshot', async () => {
     const { id } = await createProject({ titleSource: 'user', title: 'History', body: 'v1' })

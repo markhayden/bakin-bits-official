@@ -442,6 +442,20 @@ describe('Routes', () => {
   // -------------------------------------------------------------------------
   // PUT /:projectId/checklist/:itemId/toggle — toggle item
   // -------------------------------------------------------------------------
+  describe('POST /:projectId/plan/seen (D15)', () => {
+    it('marks the shown revision seen — clamped to the current revision and never rewound', async () => {
+      writeProjectFixture('proj-seen', { title: 'Seen', extra: { planRevision: 3 } })
+      const route = findRoute(plugin.routes, 'POST', '/:projectId/plan/seen')!
+      const call = (revision: unknown) => callRoute(route, plugin.ctx, { searchParams: { projectId: 'proj-seen' }, body: { revision } })
+      expect((await call(2)).body.planSeenRevision).toBe(2)
+      expect((await call(1)).body.planSeenRevision).toBe(2)
+      expect((await call(9)).body.planSeenRevision).toBe(3)
+      expect((await call('x')).status).toBe(400)
+      const detail = await callRoute(findRoute(plugin.routes, 'GET', '/:projectId')!, plugin.ctx, { searchParams: { projectId: 'proj-seen' } })
+      expect(detail.body.project).toMatchObject({ planRevision: 3, planSeenRevision: 3 })
+    })
+  })
+
   describe('PUT /:projectId/checklist/:itemId/toggle', () => {
     it('refuses a linked step (it completes from its board task) via REST and both tools', async () => {
       writeProjectFixture('proj-linked-tog', {

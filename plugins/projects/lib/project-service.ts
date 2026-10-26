@@ -173,6 +173,23 @@ function assertCallerMay(project: Project, patch: { title?: string; status?: Pro
   }
 }
 
+/**
+ * The ONE committed-body write (D15): snapshots the prior body with the
+ * revision it was, then bumps the revision. No-op writes change nothing. A
+ * user's own edit is seen by definition, so it advances the seen baseline.
+ */
+function commitBody(repo: ProjectRepository, project: Project, body: string, author: 'agent' | 'user'): boolean {
+  if (body === project.body) return false
+  const now = new Date().toISOString()
+  repo.appendPlanSnapshot(project.id, { ts: now, author, body: project.body, revision: project.planRevision })
+  project.body = body
+  project.planRevision += 1
+  project.planUpdatedBy = author
+  project.planUpdatedAt = now
+  if (author === 'user') repo.updateSeen(project.id, { planSeenRevision: project.planRevision })
+  return true
+}
+
 function callerName(caller: MutationCaller, project: Project): string {
   return caller.kind === 'agent' ? caller.agentId : project.owner
 }
@@ -234,6 +251,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
         status: 'draft',
         created: now,
         updated: now,
+        planRevision: 0,
         owner: opts.owner || 'main',
         tasks: taskItems,
         assets: [],
@@ -263,7 +281,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       const kickoff: ProjectKickoff = { requestId: opts.requestId, state: 'pending', message, agentId: opts.owner }
       repo.writeProject({
         id, title, titleSource: 'fallback', status: 'draft', created: now, updated: now,
-        owner: opts.owner, tasks: [], assets: [], body: '', progress: 0, kickoff,
+        owner: opts.owner, tasks: [], assets: [], body: '', progress: 0, kickoff, planRevision: 0,
       })
       ctx.activity.audit('created', opts.owner, { id, title })
       broadcast({ type: 'project.created', id, title })
@@ -296,16 +314,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
         project.titleSource = caller.kind
       }
       if (patch.status !== undefined) project.status = patch.status
-      if (patch.body !== undefined && patch.body !== project.body) {
-        // Snapshot the PRIOR body before it changes (bakin#703) — no-op
-        // writes never snapshot.
-        repo.appendPlanSnapshot(id, {
-          ts: new Date().toISOString(),
-          author: caller.kind,
-          body: project.body,
-        })
-        project.body = patch.body
-      }
+      if (patch.body !== undefined) commitBody(repo, project, patch.body, caller.kind)
       if (patch.owner !== undefined) project.owner = patch.owner
       project.updated = new Date().toISOString()
       project.progress = computeProgress(project.tasks)
@@ -343,16 +352,11 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
         project.titleSource = caller.kind
       }
       if (updates.owner !== undefined) project.owner = updates.owner
-      const priorBody = project.body
+      // Every plan edit is snapshotted (visible diff + restore) and bumps the revision.
       if (updates.body !== undefined) {
-        project.body = updates.body
+        commitBody(repo, project, updates.body, caller.kind)
       } else if (updates.appendBody !== undefined) {
-        project.body = [project.body.trimEnd(), updates.appendBody.trim()].filter(Boolean).join('\n\n')
-      }
-      if (project.body !== priorBody) {
-        // Snapshot the PRIOR body (bakin#703) — every agent edit is
-        // visible in the plan history and revertable.
-        repo.appendPlanSnapshot(id, { ts: new Date().toISOString(), author: caller.kind, body: priorBody })
+        commitBody(repo, project, [project.body.trimEnd(), updates.appendBody.trim()].filter(Boolean).join('\n\n'), caller.kind)
       }
 
       project.updated = new Date().toISOString()
@@ -715,9 +719,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       if (expectedTs !== undefined && snapshot.ts !== expectedTs) {
         throw new Error('History changed since the list was loaded — refresh and retry')
       }
-      if (snapshot.body === project.body) return { changed: false }
-      repo.appendPlanSnapshot(id, { ts: new Date().toISOString(), author: 'user', body: project.body })
-      project.body = snapshot.body
+      if (!commitBody(repo, project, snapshot.body, 'user')) return { changed: false }
       project.updated = new Date().toISOString()
       repo.writeProject(project)
       ctx.activity.audit('plan.restored', project.owner, { id, snapshotTs: snapshot.ts })

@@ -55,6 +55,13 @@ export interface ProjectFrontmatter {
   tasks: ProjectTask[]
   assets: ProjectAsset[]
   kickoff?: ProjectKickoff
+  /**
+   * Plan revision (D15): bumps on every COMMITTED body change (no-op writes
+   * never do; restores do). Absent in pre-revamp files ⇒ 0.
+   */
+  planRevision: number
+  planUpdatedBy?: 'agent' | 'user'
+  planUpdatedAt?: string
   /** Private durable mutation receipts; omitted from browser projections. */
   operations?: (ChecklistAddOperation | ChecklistPromotionOperation)[]
 }
@@ -77,6 +84,16 @@ export interface PlanSnapshot {
   ts: string
   author: 'agent' | 'user'
   body: string
+  /** The plan revision this body WAS (D15); absent on pre-revamp snapshots. */
+  revision?: number
+}
+
+/** Per-project "what the user has seen" sidecar; fields merge on write. */
+export interface ProjectSeen {
+  /** Last view of the brainstorm (unread replies). */
+  lastSeenAt: string | null
+  /** Plan revision the user last viewed — the "Plan updated" baseline (D15). */
+  planSeenRevision: number
 }
 
 export interface ProjectSummary {

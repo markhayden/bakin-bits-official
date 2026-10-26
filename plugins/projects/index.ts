@@ -173,6 +173,7 @@ const projectsPlugin: BakinPlugin = {
     legacyRoute('POST', '/:projectId/ask/abort', 'Abort the in-flight brainstorm turn'),
     legacyRoute('GET', '/brainstorm/attention', 'Brainstorm attention totals (unread + in-flight)'),
     legacyRoute('POST', '/:projectId/brainstorm/seen', 'Mark a project brainstorm as seen'),
+    legacyRoute('POST', '/:projectId/plan/seen', 'Mark a plan revision as seen (the "Plan updated" baseline)'),
     legacyRoute('GET', '/:projectId/history', 'Plan body snapshot history (oldest first)'),
     legacyRoute('POST', '/:projectId/history/:index/restore', 'Restore a plan snapshot (snapshots current first)'),
   ],
@@ -459,6 +460,7 @@ const projectsPlugin: BakinPlugin = {
       return json({
         project: {
           ...resolvedProject,
+          planSeenRevision: repo.readSeen(id).planSeenRevision,
           brainstormMessages: readBrainstormMessages(id),
           // Server-seeded in-flight flag + streamed-so-far text — a remount
           // mid-turn rehydrates the indicator AND the reply's beginning.
@@ -757,7 +759,7 @@ const projectsPlugin: BakinPlugin = {
     function hasUnseenBrainstormReply(id: string): boolean {
       const lastAgentTs = repo.readLastAgentActivityTs(id)
       if (!lastAgentTs) return false
-      const seenAt = repo.readBrainstormSeen(id)
+      const seenAt = repo.readSeen(id).lastSeenAt
       return !seenAt || lastAgentTs > seenAt
     }
 
@@ -778,8 +780,24 @@ const projectsPlugin: BakinPlugin = {
       const id = url.searchParams.get('projectId')
       if (!id) return json({ error: 'Missing projectId' }, 400)
       if (!readProject(id)) return json({ error: 'Project not found' }, 404)
-      repo.writeBrainstormSeen(id, new Date().toISOString())
+      repo.updateSeen(id, { lastSeenAt: new Date().toISOString() })
       return json({ ok: true })
+    })
+
+    // POST /:projectId/plan/seen — viewing the Plan tab marks the revision it
+    // showed as seen (D15). Monotonic: a stale tab never rewinds the baseline.
+    routeHandlers.set('POST /:projectId/plan/seen', async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const id = url.searchParams.get('projectId')
+      if (!id) return json({ error: 'Missing projectId' }, 400)
+      const project = readProject(id)
+      if (!project) return json({ error: 'Project not found' }, 404)
+      const body = await readBody<{ revision?: unknown }>(req).catch(() => ({} as { revision?: unknown }))
+      if (!Number.isInteger(body.revision) || (body.revision as number) < 0) return json({ error: 'Missing revision', code: 'invalid_request' }, 400)
+      const revision = Math.min(body.revision as number, project.planRevision)
+      const seen = repo.readSeen(id)
+      if (revision > seen.planSeenRevision) repo.updateSeen(id, { planSeenRevision: revision })
+      return json({ ok: true, planSeenRevision: Math.max(revision, seen.planSeenRevision) })
     })
 
     // GET /:projectId/history — plan snapshots, oldest first (bakin#703).

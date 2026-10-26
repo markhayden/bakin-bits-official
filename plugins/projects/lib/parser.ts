@@ -7,7 +7,7 @@
 import type { StorageAdapter } from '@makinbakin/sdk/types'
 import { dump, load } from 'js-yaml'
 import { z } from 'zod'
-import { TITLE_SOURCES, type PlanSnapshot, type Project, type ProjectFrontmatter, type ProjectTask, type ProjectAsset, type ProjectBrainstormMessage, type ProjectSummary, type TitleSource } from '../types'
+import { TITLE_SOURCES, type PlanSnapshot, type Project, type ProjectFrontmatter, type ProjectTask, type ProjectAsset, type ProjectBrainstormMessage, type ProjectSeen, type ProjectSummary, type TitleSource } from '../types'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -126,6 +126,9 @@ export function parseProject(content: string): Project {
     tasks,
     assets,
     ...(raw.kickoff === undefined ? {} : { kickoff: kickoffSchema.parse(raw.kickoff) }),
+    planRevision: Number.isInteger(raw.planRevision) && (raw.planRevision as number) >= 0 ? raw.planRevision as number : 0,
+    ...(raw.planUpdatedBy === 'agent' || raw.planUpdatedBy === 'user' ? { planUpdatedBy: raw.planUpdatedBy } : {}),
+    ...(typeof raw.planUpdatedAt === 'string' ? { planUpdatedAt: raw.planUpdatedAt } : {}),
     ...(raw.operations === undefined ? {} : { operations: operationsSchema.parse(raw.operations) }),
   }
 
@@ -177,10 +180,12 @@ export interface ProjectRepository {
   writeProject(project: Project): void
   readBrainstormMessages(id: string): ProjectBrainstormMessage[]
   writeBrainstormMessages(id: string, messages: ProjectBrainstormMessage[]): void
-  readBrainstormSeen(id: string): string | null
-  writeBrainstormSeen(id: string, lastSeenAt: string): void
+  readSeen(id: string): ProjectSeen
+  /** Merge fields into the seen sidecar — brainstorm and plan views share it. */
+  updateSeen(id: string, patch: Partial<ProjectSeen>): void
   readLastAgentActivityTs(id: string): string | null
   readPlanHistory(id: string): PlanSnapshot[]
+  /** Append one snapshot; retention keeps the newest PLAN_HISTORY_CAP plus the seen baseline. */
   appendPlanSnapshot(id: string, snapshot: PlanSnapshot): void
   deleteProjectFile(id: string): boolean
   projectStoragePath(id: string): string
@@ -216,6 +221,20 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
     }
   }
 
+  function readSeen(id: string): ProjectSeen {
+    const seen: ProjectSeen = { lastSeenAt: null, planSeenRevision: 0 }
+    const content = storage.read(projectBrainstormSeenPath(id))
+    if (!content) return seen
+    try {
+      const parsed = JSON.parse(content) as { lastSeenAt?: unknown; planSeenRevision?: unknown }
+      if (typeof parsed.lastSeenAt === 'string') seen.lastSeenAt = parsed.lastSeenAt
+      if (Number.isInteger(parsed.planSeenRevision) && (parsed.planSeenRevision as number) >= 0) seen.planSeenRevision = parsed.planSeenRevision as number
+    } catch {
+      // A corrupt sidecar reads as never-seen; the next view rewrites it.
+    }
+    return seen
+  }
+
   function readPlanHistory(id: string): PlanSnapshot[] {
     try {
       const content = storage.read(projectHistoryPath(id))
@@ -223,7 +242,8 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
       const parsed: unknown = JSON.parse(content)
       if (!Array.isArray(parsed) || !parsed.every(value => value && typeof value === 'object'
         && typeof value.ts === 'string' && Number.isFinite(Date.parse(value.ts))
-        && (value.author === 'user' || value.author === 'agent') && typeof value.body === 'string')) {
+        && (value.author === 'user' || value.author === 'agent') && typeof value.body === 'string'
+        && (value.revision === undefined || Number.isInteger(value.revision)))) {
         throw new Error('Invalid plan history payload')
       }
       return parsed as PlanSnapshot[]
@@ -262,20 +282,11 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
       storage.write(projectBrainstormPath(id), JSON.stringify(messages.slice(-BRAINSTORM_ROW_CAP), null, 2))
     },
 
-    /** When the user last viewed this project's brainstorm (null = never). */
-    readBrainstormSeen(id: string): string | null {
-      const content = storage.read(projectBrainstormSeenPath(id))
-      if (!content) return null
-      try {
-        const parsed = JSON.parse(content) as { lastSeenAt?: unknown }
-        return typeof parsed.lastSeenAt === 'string' ? parsed.lastSeenAt : null
-      } catch {
-        return null
-      }
-    },
+    readSeen,
 
-    writeBrainstormSeen(id: string, lastSeenAt: string): void {
-      storage.write(projectBrainstormSeenPath(id), JSON.stringify({ lastSeenAt }))
+    updateSeen(id: string, patch: Partial<ProjectSeen>): void {
+      const next = { ...readSeen(id), ...patch }
+      storage.write(projectBrainstormSeenPath(id), JSON.stringify(next))
     },
 
     /** Timestamp of the last assistant/error row, mtime-cached. */
@@ -298,7 +309,13 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
 
     /** Append one snapshot (oldest first), dropping past the cap. */
     appendPlanSnapshot(id: string, snapshot: PlanSnapshot): void {
-      const history = [...readPlanHistory(id), snapshot].slice(-PLAN_HISTORY_CAP)
+      const all = [...readPlanHistory(id), snapshot]
+      // The snapshot at the seen revision is the "Review changes" baseline
+      // (D15): it survives the cap for as long as it is the baseline.
+      const baseline = readSeen(id).planSeenRevision
+      const newest = all.slice(-PLAN_HISTORY_CAP)
+      const pinned = all.slice(0, -PLAN_HISTORY_CAP).find(entry => entry.revision === baseline)
+      const history = pinned ? [pinned, ...newest] : newest
       storage.write(projectHistoryPath(id), JSON.stringify(history, null, 2))
     },
 
