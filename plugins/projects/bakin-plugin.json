@@ -1,7 +1,7 @@
 {
   "id": "projects",
   "name": "Projects",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "bakin": ">=0.0.1-rc.45",
   "description": "Project management with specs, checklists, task linking, and agent access via MCP tools",
   "contentFiles": [],
