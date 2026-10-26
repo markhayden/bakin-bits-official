@@ -29,7 +29,8 @@ function getProjectLock(): { queue: Promise<void> } {
   return g.__bakinProjectLock as { queue: Promise<void> }
 }
 
-function withProjectLock<T>(fn: () => T | Promise<T>): Promise<T> {
+/** The ONE project-file lock — every read-modify-write of a project runs inside it. */
+export function withProjectLock<T>(fn: () => T | Promise<T>): Promise<T> {
   const lock = getProjectLock()
   const next = lock.queue.then(fn, fn) as Promise<T>
   lock.queue = next.then(() => {}, () => {})

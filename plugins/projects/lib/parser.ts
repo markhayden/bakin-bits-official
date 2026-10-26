@@ -90,6 +90,35 @@ const operationsSchema = z.array(z.discriminatedUnion('kind', [z.object({
   retired: z.literal(true).optional(),
 }).strict()]))
 
+// Steward loop state (D22, D25, D26, D29). Strict: a hand-edited or
+// corrupted record must fail loudly, never half-drive the loop.
+const stewardSchema = z.object({
+  openTaskId: z.string().min(1).optional(),
+  phase: z.enum(['reserved', 'created']).optional(),
+  frozen: z.object({ title: z.string(), assignee: z.string(), description: z.string() }).strict().optional(),
+  reservedAt: z.string().optional(),
+  fingerprint: z.string().optional(),
+  lastFingerprint: z.string().optional(),
+  lastStewardAt: z.string().optional(),
+  runs: z.object({ date: z.string(), count: z.number().int().min(0) }).strict().optional(),
+  capNotedOn: z.string().optional(),
+}).strict()
+
+const waitingOnSchema = z.object({
+  kind: z.literal('input'),
+  questionId: z.string().min(1),
+  question: z.string().min(1),
+  context: z.string().optional(),
+  options: z.array(z.string()).optional(),
+  since: z.string(),
+}).strict()
+
+const gatesSchema = z.record(z.string(), z.object({
+  approvalId: z.string().min(1),
+  generation: z.number().int().min(1),
+  state: z.enum(['pending', 'approved', 'rejected', 'cancelled']),
+}).strict())
+
 export function parseProject(content: string): Project {
   // Split on YAML frontmatter fences
   const fenceRe = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/
@@ -133,6 +162,11 @@ export function parseProject(content: string): Project {
     ...(typeof raw.planUpdatedAt === 'string' ? { planUpdatedAt: raw.planUpdatedAt } : {}),
     ...(raw.archivedFrom === 'draft' || raw.archivedFrom === 'active' || raw.archivedFrom === 'completed' ? { archivedFrom: raw.archivedFrom } : {}),
     ...(raw.operations === undefined ? {} : { operations: operationsSchema.parse(raw.operations) }),
+    ...(raw.stewardPaused === true ? { stewardPaused: true } : {}),
+    ...(raw.steward === undefined ? {} : { steward: stewardSchema.parse(raw.steward) }),
+    ...(raw.waitingOn === undefined ? {} : { waitingOn: waitingOnSchema.parse(raw.waitingOn) }),
+    ...(raw.replyPending === undefined ? {} : { replyPending: z.object({ questionId: z.string().min(1) }).strict().parse(raw.replyPending) }),
+    ...(raw.gates === undefined ? {} : { gates: gatesSchema.parse(raw.gates) }),
   }
 
   return {

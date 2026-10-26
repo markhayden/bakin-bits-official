@@ -10,6 +10,7 @@ import { createProjectRepository, PlanHistoryUnavailableError, projectToSummary 
 import { createProjectService, deriveChecklist } from './lib/project-service'
 import { ProjectMutationError } from './lib/project-mutations'
 import { buildProjectBrainstormContext } from './lib/brainstorm-prompt'
+import { createStewardLoop, type StewardLoop } from './lib/steward/reservation'
 import type { MutationCaller, Project, ProjectBrainstormMessage, ProjectStatus, ProjectPatch, ChecklistPatch, ProducedFile } from './types'
 
 const log = {
@@ -21,6 +22,8 @@ const log = {
 let activeProjectRepository: ReturnType<typeof createProjectRepository> | null = null
 /** Bound in activate(); onReady resumes kickoffs a crash left pending (D8). */
 let resumePendingKickoffs: (() => Promise<void>) | null = null
+/** The steward loop's timer starts in activate() and stops in onShutdown (D20). */
+let stewardLoop: StewardLoop | null = null
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -156,6 +159,9 @@ const projectsPlugin: BakinPlugin = {
     const repo = createProjectRepository(ctx.storage)
     activeProjectRepository = repo
     const projectService = createProjectService(ctx, repo)
+    stewardLoop?.stop()
+    const steward = createStewardLoop({ ctx, repo })
+    stewardLoop = steward
     const {
       createProject,
       updateProject,
@@ -346,14 +352,16 @@ const projectsPlugin: BakinPlugin = {
     // the tasks plugin asks for generic detail enrichment; projects owns the
     // project-specific behavior behind those extension points.
     // Linked-step completion is DERIVED from the board (D16a) — a column
-    // change writes nothing here; it only tells open project pages to refetch.
+    // change writes nothing here; it tells open project pages to refetch and
+    // schedules a debounced steward scan for work-task transitions (D21).
     ctx.hooks.register('tasks.statusChanged', (d: unknown) => {
       const taskId = (d as Record<string, unknown>).taskId
       const entry = typeof taskId === 'string' ? projectService.getProjectForTask(taskId) : undefined
       if (entry) ctx.events.emit('projects.changed', { projectId: entry.projectId, action: 'task.statusChanged', taskItemId: entry.taskItemId })
+      steward.onTaskStatusChanged(d)
     }, {
       label: 'Refresh project task state.',
-      summary: 'Tells open project pages to refetch when a linked task changes column; linked step completion is derived from the board at read time.',
+      summary: 'Tells open project pages to refetch when a linked task changes column (linked step completion is derived from the board at read time) and schedules the project steward\'s check for work tasks reaching done, blocked or review.',
       hookKind: 'event',
     })
     ctx.hooks.register('tasks.enrichDetails', async (d: unknown) => {
@@ -1234,6 +1242,7 @@ const projectsPlugin: BakinPlugin = {
       },
     })
 
+    steward.start()
     log.info('Projects plugin activated')
   },
 
@@ -1248,6 +1257,8 @@ const projectsPlugin: BakinPlugin = {
   },
 
   onShutdown() {
+    stewardLoop?.stop()
+    stewardLoop = null
     activeProjectRepository = null
     resumePendingKickoffs = null
     log.info('Projects plugin shutting down')
