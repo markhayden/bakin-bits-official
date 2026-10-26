@@ -7,7 +7,11 @@ import type {
   BakinPlugin,
   ExecToolDefinition,
   FileBackedContentTypeDefinition,
+  PluginApproval,
+  PluginApprovalOption,
+  PluginApprovalsAPI,
   PluginContext,
+  PluginGateHandler,
   PluginHealthCheckInput,
   RuntimeChatChunk,
   SearchQueryParams,
@@ -36,6 +40,28 @@ type TurnCtx = { runtime: any; events: { emit: (event: string, data?: Record<str
 function createTestTurnService(config: TurnConfig, meteredTurns: Array<Record<string, unknown>>) {
   const inflight = new Map<string, { promise: Promise<unknown>; controller: AbortController; agentId: string; turnId: string; startedAt: number }>()
   const previews = new Map<string, string>()
+  // Out-of-turn rows (appendExternal): queued while a turn runs, flushed at
+  // slot release before the next admission — the engine's contract.
+  type Batch = { rows: any[]; notice?: Record<string, unknown>; resolve: () => void; reject: (err: unknown) => void }
+  const pending = new Map<string, Batch[]>()
+
+  const writeBatch = async (ctx: TurnCtx, key: string, batch: Omit<Batch, 'resolve' | 'reject'>) => {
+    for (const row of batch.rows) await config.appendRow(key, row)
+    if (config.events.appended) ctx.events.emit(config.events.appended, { ...config.payload(key), ...(batch.notice ? { notice: batch.notice } : {}) })
+  }
+
+  const flushPending = async (ctx: TurnCtx, key: string) => {
+    const batches = pending.get(key) ?? []
+    pending.delete(key)
+    for (const batch of batches) {
+      try {
+        await writeBatch(ctx, key, batch)
+        batch.resolve()
+      } catch (err) {
+        batch.reject(err)
+      }
+    }
+  }
 
   const runTurn = async (ctx: TurnCtx, key: string, agentId: string, content: string, controller: AbortController, turnId: string, opts?: Record<string, any>) => {
     const recorder = createTurnRecorder({ turnId })
@@ -119,7 +145,10 @@ function createTestTurnService(config: TurnConfig, meteredTurns: Array<Record<st
       if (config.events.started) ctx.events.emit(config.events.started, { ...config.payload(key), agentId })
       entry.promise = runTurn(ctx, key, agentId, content, controller, turnId, opts)
         .finally(() => { inflight.delete(key); previews.delete(key) })
-        .then(outcome => config.hooks?.onSettled?.({ ctx, key, outcome }))
+        .then(async (outcome) => {
+          await flushPending(ctx, key)
+          return config.hooks?.onSettled?.({ ctx, key, outcome })
+        })
       return 'accepted'
     },
     abort(key: string) {
@@ -132,6 +161,20 @@ function createTestTurnService(config: TurnConfig, meteredTurns: Array<Record<st
     inflightPreview: (key: string) => (inflight.has(key) ? (previews.get(key) ?? '') : null),
     waitFor: async (key: string) => { await (inflight.get(key)?.promise ?? Promise.resolve()) },
     listInFlight: () => [...inflight.entries()].map(([key, t]) => ({ key, agentId: t.agentId, turnId: t.turnId, startedAt: t.startedAt })),
+    async appendExternal(ctx: TurnCtx, key: string, rows: any[], notice?: Record<string, unknown>) {
+      const batch = { rows: structuredClone(rows), ...(notice ? { notice: structuredClone(notice) } : {}) }
+      if (inflight.has(key)) {
+        let resolve!: () => void
+        let reject!: (err: unknown) => void
+        const written = new Promise<void>((res, rej) => { resolve = res; reject = rej })
+        // A rejection nobody awaited must not crash the test run.
+        written.catch(() => {})
+        pending.set(key, [...(pending.get(key) ?? []), { ...batch, resolve, reject }])
+        return { status: 'queued' as const, written }
+      }
+      await writeBatch(ctx, key, batch)
+      return { status: 'appended' as const, written: Promise.resolve() }
+    },
   }
 }
 
@@ -289,6 +332,11 @@ export function createMockRuntimeAdapter(): AgentRuntimeAdapter {
   }
 }
 
+const isDoneColumn = (column: string) => column === 'done' || column === 'archived'
+
+/** The public shape, as the host's toPluginTask projects it: `checked` is derived from the column. */
+const toPublicTask = (task: Task): Task => structuredClone({ ...task, checked: isDoneColumn(task.column) })
+
 function createEmptyTask(input: TaskCreateInput): Task {
   const now = new Date().toISOString()
   return {
@@ -306,6 +354,7 @@ function createEmptyTask(input: TaskCreateInput): Task {
     workflowId: input.workflowId,
     skipWorkflowReason: input.skipWorkflowReason,
     projectId: input.projectId,
+    ...(input.tags?.length ? { tags: [...input.tags] } : {}),
     parentId: input.parentId,
     createdAt: now,
     updatedAt: now,
@@ -313,47 +362,205 @@ function createEmptyTask(input: TaskCreateInput): Task {
   }
 }
 
-export function createMockBakinTaskStore(seed: Task[] = []): TaskService {
+export interface TaskStatusChange {
+  taskId: string
+  title: string
+  from: string
+  to: string
+  task: Task
+}
+
+/**
+ * Mirrors the host's plugin task service: duplicate ids are refused, `checked`
+ * is derived from the column (a `checked` patch is a column move), and every
+ * real column change notifies `onStatusChanged` exactly once, after the write
+ * and off the writer's stack — the host's `tasks.statusChanged` chokepoint.
+ */
+export function createMockBakinTaskStore(
+  seed: Task[] = [],
+  opts: { onStatusChanged?: (change: TaskStatusChange) => void | Promise<void> } = {},
+): TaskService {
   const tasks = new Map(seed.map(task => [task.id, structuredClone(task)]))
+
+  const write = (current: Task, patch: Partial<Task>): Task => {
+    const next: Task = { ...current, ...patch, updatedAt: new Date().toISOString() }
+    if ('tags' in patch && !patch.tags?.length) delete next.tags
+    tasks.set(next.id, structuredClone(next))
+    if (next.column !== current.column && opts.onStatusChanged) {
+      const change = { taskId: next.id, title: next.title, from: current.column, to: next.column, task: toPublicTask(next) }
+      void Promise.resolve().then(() => opts.onStatusChanged?.(change))
+    }
+    return toPublicTask(next)
+  }
 
   return {
     create: mock(async (input) => {
+      if (input.id && tasks.has(input.id)) throw new Error(`Task already exists: ${input.id}`)
       const task = createEmptyTask(input)
       tasks.set(task.id, structuredClone(task))
-      return structuredClone(task)
+      return toPublicTask(task)
     }),
     update: mock(async (id, patch) => {
       const current = tasks.get(id)
       if (!current) throw new Error(`Task not found: ${id}`)
-      const next = { ...current, ...patch, updatedAt: new Date().toISOString() }
-      tasks.set(id, structuredClone(next))
-      return structuredClone(next)
+      const { checked, ...rest } = patch
+      return write(current, { ...rest, ...(checked !== undefined ? { column: checked ? 'done' : 'todo' } : {}) })
     }),
     move: mock(async (id, column) => {
       const current = tasks.get(id)
       if (!current) throw new Error(`Task not found: ${id}`)
-      const next = { ...current, column, updatedAt: new Date().toISOString() }
-      tasks.set(id, structuredClone(next))
-      return structuredClone(next)
+      return write(current, { column })
     }),
     remove: mock(async (id) => {
       tasks.delete(id)
     }),
     get: mock(async (id) => {
       const task = tasks.get(id)
-      return task ? structuredClone(task) : null
+      return task ? toPublicTask(task) : null
     }),
     list: mock(async (filter = {}) => Array.from(tasks.values())
       .filter(task => !filter.column || task.column === filter.column)
       .filter(task => !filter.agent || task.agent === filter.agent)
       .filter(task => !filter.projectId || task.projectId === filter.projectId)
-      .map(task => structuredClone(task))),
+      .map(toPublicTask)),
     appendLog: mock(async (id, entry) => {
       const current = tasks.get(id)
       if (!current) throw new Error(`Task not found: ${id}`)
       current.log = [...(current.log ?? []), entry]
       current.updatedAt = new Date().toISOString()
     }),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ctx.approvals (spec D26) — the host's namespacing + resolve rules over an
+// in-memory store. Mirrors packages/core/src/approvals/plugin-api.ts and its
+// memory backend in the bakin repo (those are internal, not on the SDK).
+// ---------------------------------------------------------------------------
+
+export class ApprovalRefusal extends Error {
+  constructor(message: string, readonly status: 400 | 409) {
+    super(message)
+    this.name = 'ApprovalRefusal'
+  }
+}
+
+const DEFAULT_GATE_OPTIONS: PluginApprovalOption[] = [
+  { id: 'approve', label: 'Approve', variant: 'primary' },
+  { id: 'reject', label: 'Reject', variant: 'destructive' },
+]
+const OPTION_ID = /^[A-Za-z0-9_-]{1,64}$/
+
+export interface TestApprovals {
+  api: PluginApprovalsAPI
+  /**
+   * Decide like the operator: runs the registered gate (a refusal leaves the
+   * approval pending and rethrows), then records the decision. A reject needs
+   * a reason, as on the host's default settings.
+   */
+  resolve(approvalId: string, option: string, comment?: string): Promise<PluginApproval>
+  /** Every record, decided or not — for assertions. */
+  all(): PluginApproval[]
+}
+
+export function createTestApprovals(pluginId: string): TestApprovals {
+  const prefix = `${pluginId}:`
+  const records = new Map<string, PluginApproval>()
+  const gates = new Map<string, PluginGateHandler>()
+  const resolving = new Set<string>()
+  const text = (field: string, value: unknown) => {
+    if (typeof value !== 'string' || !value.trim()) throw new Error(`ctx.approvals.request: ${field} is required`)
+    return value
+  }
+  const validOptions = (options: PluginApprovalOption[]) => {
+    if (options.length > 10) throw new Error('ctx.approvals.request: at most 10 options')
+    const seen = new Set<string>()
+    for (const o of options) {
+      if (!OPTION_ID.test(o.id)) throw new Error(`ctx.approvals.request: option id "${o.id}" is not transport-safe`)
+      if (seen.has(o.id)) throw new Error(`ctx.approvals.request: option id "${o.id}" is offered twice`)
+      if (!o.label?.trim()) throw new Error(`ctx.approvals.request: option "${o.id}" needs a label`)
+      seen.add(o.id)
+    }
+    return options
+  }
+
+  const api: PluginApprovalsAPI = {
+    registerGate(gateKind, handler) {
+      text('gateKind', gateKind)
+      gates.set(gateKind, handler)
+      return () => { if (gates.get(gateKind) === handler) gates.delete(gateKind) }
+    },
+    request(input) {
+      const approvalId = text('approvalId', input.approvalId)
+      if (!approvalId.startsWith(prefix) || approvalId.length === prefix.length) {
+        throw new Error(`ctx.approvals.request: approvalId must start with "${prefix}" — got "${approvalId}"`)
+      }
+      const existing = records.get(approvalId)
+      if (existing) return structuredClone(existing)
+      const record: PluginApproval = {
+        approvalId,
+        gateKind: text('gateKind', input.gateKind),
+        entityId: text('entityId', input.entityId),
+        taskId: text('taskId', input.taskId),
+        status: 'pending',
+        title: text('title', input.title),
+        summary: input.summary ?? '',
+        options: structuredClone(input.options?.length ? validOptions(input.options) : DEFAULT_GATE_OPTIONS),
+        createdAt: new Date().toISOString(),
+      }
+      records.set(approvalId, record)
+      return structuredClone(record)
+    },
+    async cancel(approvalId) {
+      const record = records.get(approvalId)
+      if (!record) return null
+      if (record.status === 'pending') {
+        records.set(approvalId, { ...record, status: 'cancelled', resolvedAt: new Date().toISOString() })
+      }
+      return structuredClone(records.get(approvalId)!)
+    },
+    get: (approvalId) => {
+      const record = records.get(approvalId)
+      return record ? structuredClone(record) : null
+    },
+    listPending: (filter = {}) => [...records.values()]
+      .filter(r => r.status === 'pending')
+      .filter(r => !filter.entityId || r.entityId === filter.entityId)
+      .filter(r => !filter.gateKind || r.gateKind === filter.gateKind)
+      .map(r => structuredClone(r)),
+    refusal: (message, status = 409) => new ApprovalRefusal(message, status),
+  }
+
+  return {
+    api,
+    all: () => [...records.values()].map(r => structuredClone(r)),
+    async resolve(approvalId, option, comment) {
+      const record = records.get(approvalId)
+      if (!record || record.status !== 'pending') throw new Error(`No pending approval "${approvalId}"`)
+      const gate = gates.get(record.gateKind)
+      if (!gate) throw new Error(`No gate registered for ${pluginId}/${record.gateKind}`)
+      if (!record.options.some(o => o.id === option)) throw new ApprovalRefusal(`"${option}" is not an option on this approval`, 400)
+      if (option === 'reject' && !comment?.trim()) throw new ApprovalRefusal('A reject reason is required', 400)
+      if (resolving.has(approvalId)) throw new Error(`Approval "${approvalId}" is already being resolved`)
+      resolving.add(approvalId)
+      const respondedAt = new Date().toISOString()
+      try {
+        await gate.onResolve(structuredClone(record), { option, ...(comment ? { comment } : {}), respondedAt, decidedBy: 'Declared in UI' })
+      } finally {
+        resolving.delete(approvalId)
+      }
+      // The host's compare-and-set: the decision lands only on a still-pending record.
+      const current = records.get(approvalId)
+      if (current?.status !== 'pending') throw new Error(`Approval "${approvalId}" is no longer pending (${current?.status ?? 'deleted'})`)
+      const resolved: PluginApproval = {
+        ...current,
+        status: option === 'reject' ? 'rejected' : 'approved',
+        resolvedAt: respondedAt,
+        response: { option, respondedAt, decidedBy: 'Declared in UI', ...(comment !== undefined ? { comment } : {}) },
+      }
+      records.set(approvalId, resolved)
+      return structuredClone(resolved)
+    },
   }
 }
 
@@ -365,6 +572,8 @@ export interface ActivatedPlugin {
   fileBackedContentTypes: FileBackedContentTypeDefinition[]
   /** Turns metered through declarative ctx.conversations metering (#703). */
   meteredTurns: Array<Record<string, unknown>>
+  /** The operator's side of ctx.approvals (resolve, inspect). */
+  approvals: TestApprovals
 }
 
 export function createTestContext(pluginId: string, testDir: string): ActivatedPlugin {
@@ -376,6 +585,16 @@ export function createTestContext(pluginId: string, testDir: string): ActivatedP
   const storage = new MarkdownStorageAdapter(testDir)
   const events = new BakinEventBus()
   const meteredTurns: Array<Record<string, unknown>> = []
+  const approvals = createTestApprovals(pluginId)
+  // A working hook registry: what a plugin registers is what callAll reaches
+  // (the task store fires tasks.statusChanged through it, like the host).
+  const hookHandlers = new Map<string, Array<(data: unknown) => unknown>>()
+  const callAll = async (name: string, data: unknown) => {
+    // Like the host registry: one failing handler never stops the others.
+    for (const handler of hookHandlers.get(name) ?? []) {
+      try { await handler(data) } catch { /* the host logs and continues */ }
+    }
+  }
   let seededResults: SearchResult[] = []
   let seededAggregations: SearchResponse['aggregations'] = undefined
 
@@ -407,7 +626,7 @@ export function createTestContext(pluginId: string, testDir: string): ActivatedP
     events,
     pluginId,
     runtime: createMockRuntimeAdapter(),
-    tasks: createMockBakinTaskStore(),
+    tasks: createMockBakinTaskStore([], { onStatusChanged: change => ctx.hooks.callAll('tasks.statusChanged', { ...change }) }),
     assets: {
       createAsset: mock(async () => ({ assetId: 'test-asset', version: 1 })),
       getAsset: mock(async () => null),
@@ -458,15 +677,19 @@ export function createTestContext(pluginId: string, testDir: string): ActivatedP
       })),
     },
     hooks: {
-      register: mock(() => () => {}),
+      register: mock((name: string, handler: (data: unknown) => unknown) => {
+        hookHandlers.set(name, [...(hookHandlers.get(name) ?? []), handler])
+        return () => hookHandlers.set(name, (hookHandlers.get(name) ?? []).filter(h => h !== handler))
+      }) as unknown as PluginContext['hooks']['register'],
       call: mock(async <T>(_name: string, data: T): Promise<T> => data) as PluginContext['hooks']['call'],
-      callAll: mock(async () => {}),
+      callAll: mock(callAll) as unknown as PluginContext['hooks']['callAll'],
       has: mock(() => false),
       invoke: mock(async () => undefined),
     },
     conversations: {
       createTurnService: (config) => createTestTurnService(config as unknown as TurnConfig, meteredTurns) as ReturnType<PluginContext['conversations']['createTurnService']>,
     },
+    approvals: approvals.api,
   }
 
   return {
@@ -475,6 +698,7 @@ export function createTestContext(pluginId: string, testDir: string): ActivatedP
     execTools,
     fileBackedContentTypes,
     meteredTurns,
+    approvals,
     seedResults: (results, aggregations) => {
       seededResults = results
       seededAggregations = aggregations
