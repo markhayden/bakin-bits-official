@@ -16,7 +16,7 @@ env:
   # whose SDK adds plugin socket routes and interactive CLI launch; repinned
   # to the rc.45 release commit before this stack merges.
   # Pin a reviewed commit, never a moving branch.
-  BAKIN_SDK_REF: 4f0da194e7db041d50a14baf6705e62f122d69b5
+  BAKIN_SDK_REF: 0928763608e1f8c66974d5e58ead2f19a09c4f04
 
 jobs:
   check:
