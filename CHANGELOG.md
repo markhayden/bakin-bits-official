@@ -8,6 +8,10 @@ on a per-plugin basis: each plugin tags its own releases as
 
 ## [Unreleased]
 
+### Fixed
+- `projects` (0.12.1): the manifest no longer declares the removed
+  `/projects/[id]/edit` route.
+
 ### Changed
 - `projects` (0.12.0, requires Bakin `>=0.0.1-rc.45`): the projects revamp
   (Bakin `.claude/specs/projects-revamp.md`).
