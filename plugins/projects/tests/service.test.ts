@@ -25,7 +25,7 @@ function clearIndex() {
   ;(globalThis as any).__bakinProjectLock = undefined
 }
 
-import { createProjectService, type ProjectService } from '../../../plugins/projects/lib/project-service'
+import { createProjectService, deriveChecklist, type ProjectService } from '../../../plugins/projects/lib/project-service'
 import { createProjectRepository, type ProjectRepository } from '../../../plugins/projects/lib/parser'
 import { MarkdownStorageAdapter } from '../test-helpers'
 import type { PluginContext } from '@makinbakin/sdk/types'
@@ -47,7 +47,6 @@ let promoteItemToTask: ProjectService['promoteItemToTask']
 let attachAsset: ProjectService['attachAsset']
 let relinkAsset: ProjectService['relinkAsset']
 let detachAsset: ProjectService['detachAsset']
-let autoCheckLinkedItem: ProjectService['autoCheckLinkedItem']
 let autoUnlinkTask: ProjectService['autoUnlinkTask']
 let rebuildIndex: ProjectService['rebuildIndex']
 let getProjectForTask: ProjectService['getProjectForTask']
@@ -144,7 +143,6 @@ beforeEach(() => {
     attachAsset,
     relinkAsset,
     detachAsset,
-    autoCheckLinkedItem,
     autoUnlinkTask,
     rebuildIndex,
     getProjectForTask,
@@ -389,21 +387,44 @@ describe('rebuildIndex / getProjectForTask / getProjectTitleForTask', () => {
 // Auto-check / Auto-unlink
 // ---------------------------------------------------------------------------
 
-describe('autoCheckLinkedItem', () => {
-  it('checks the linked item when board task completes', async () => {
-    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['Auto'] })
+describe('derived linked-step completion (D16a)', () => {
+  const board = (column: string) => new Map([['board01', { column, title: 'Board task' }]])
+
+  it('a linked step follows its board task both ways; standalone steps keep their flag', async () => {
+    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['Linked', 'Standalone'] })
     await linkChecklistItem(id, 't001', 'board01')
-    rebuildIndex()
+    await markChecklistItem(id, 't002', true)
+    const stored = readProject(id)!
 
-    await autoCheckLinkedItem('board01')
-
-    const project = readProject(id)
-    expect(project!.tasks[0].checked).toBe(true)
+    const done = deriveChecklist(stored, board('done'))
+    expect(done.tasks.map(t => t.checked)).toEqual([true, true])
+    expect(done.progress).toBe(100)
+    // Reopened on the board ⇒ unchecked again; nothing was written.
+    expect(deriveChecklist(stored, board('in-progress')).tasks[0]!.checked).toBe(false)
+    // Board task missing ⇒ unchecked.
+    expect(deriveChecklist(stored, new Map()).tasks[0]!.checked).toBe(false)
+    expect(deriveChecklist(stored, board('archived')).tasks[0]!.checked).toBe(true)
   })
 
-  it('no-ops for unlinked board tasks', async () => {
-    await autoCheckLinkedItem('unlinked')
-    // Should not throw
+  it('the stored flag on a linked step is ignored', async () => {
+    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['Linked'] })
+    await linkChecklistItem(id, 't001', 'board01')
+    const stored = readProject(id)!
+    stored.tasks[0]!.checked = true
+    expect(deriveChecklist(stored, board('todo')).tasks[0]!.checked).toBe(false)
+  })
+
+  it('marking a linked step is refused with linked_step', async () => {
+    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['Linked'] })
+    await linkChecklistItem(id, 't001', 'board01')
+    await expect(markChecklistItem(id, 't001', true)).rejects.toMatchObject({ status: 409, code: 'linked_step' })
+  })
+
+  it('markChecklistItem returns progress derived from the live board', async () => {
+    // The mock board has board02 in done.
+    const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['Linked done', 'Standalone'] })
+    await linkChecklistItem(id, 't001', 'board02')
+    expect(await markChecklistItem(id, 't002', true)).toEqual({ progress: 100 })
   })
 })
 
@@ -411,7 +432,6 @@ describe('autoUnlinkTask', () => {
   it('unlinks and unchecks when board task is deleted', async () => {
     const { id } = await createProject({ titleSource: 'user', title: 'P', tasks: ['Unlink'] })
     await linkChecklistItem(id, 't001', 'board01')
-    await markChecklistItem(id, 't001', true)
     rebuildIndex()
 
     await autoUnlinkTask('board01')
@@ -642,8 +662,8 @@ describe('independent project lifecycle', () => {
     const { id } = await createProject({ titleSource: 'user', title: 'Plan', tasks: ['Linked'] })
     await updateProject(id, { status: 'active' }, USER)
     await linkChecklistItem(id, 't001', 'board02')
-    await autoCheckLinkedItem('board02')
-    expect(readProject(id)?.progress).toBe(100)
-    expect(readProject(id)?.status).toBe('active')
+    const derived = await service.derive(readProject(id)!)
+    expect(derived.progress).toBe(100)
+    expect(derived.status).toBe('active')
   })
 })

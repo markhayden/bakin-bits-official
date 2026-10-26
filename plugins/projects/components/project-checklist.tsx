@@ -21,7 +21,8 @@ function TaskItem({ item, resolved, model }: { item: ProjectTask; resolved: { co
   const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void model.saveDescription(item.id) }
   return <ListRow>
     <div className="flex min-w-0 flex-wrap items-start gap-bakin-2">
-      <Checkbox checked={item.checked} disabled={busy} onCheckedChange={(checked: boolean) => { void model.mutate(item, 'toggle', checked === true) }} aria-label={`Complete ${item.title}`} />
+      {/* A linked step completes from its board task (D16a): read-only here. */}
+      <Checkbox checked={item.checked} disabled={busy || Boolean(item.taskId)} onCheckedChange={(checked: boolean) => { void model.mutate(item, 'toggle', checked === true) }} aria-label={item.taskId ? `${item.title} completes from its board task` : `Complete ${item.title}`} />
       <Button type="button" variant="ghost" size="inline" aria-expanded={expanded} onClick={() => setExpanded(!expanded)} className="min-w-0 flex-1">
         <ChevronRight aria-hidden="true" className={`shrink-0 ${expanded ? 'rotate-90' : ''}`} />
         <Text size="meta" tone={item.checked ? 'muted' : 'default'} className={`min-w-0 whitespace-normal break-words ${item.checked ? 'line-through' : ''}`}>{item.title}</Text>

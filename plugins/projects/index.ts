@@ -7,7 +7,7 @@ import { defineRoute } from '@makinbakin/sdk'
 import type { BakinPlugin, PluginContext, RuntimeAgent } from '@makinbakin/sdk/types'
 import { conversationThreadId } from '@makinbakin/sdk/utils'
 import { createProjectRepository, PlanHistoryUnavailableError, projectToSummary } from './lib/parser'
-import { createProjectService } from './lib/project-service'
+import { createProjectService, deriveChecklist } from './lib/project-service'
 import { ProjectMutationError } from './lib/project-mutations'
 import type { Project, ProjectBrainstormMessage, ProjectStatus, ProjectPatch, ChecklistPatch } from './types'
 
@@ -196,7 +196,8 @@ const projectsPlugin: BakinPlugin = {
       detachAsset,
       rebuildIndex,
       resolveLinkedTaskStatuses,
-      autoCheckLinkedItem,
+      boardIndex,
+      derive,
     } = projectService
     const readProject = repo.readProject
     const readAllProjects = repo.readAllProjects
@@ -240,8 +241,9 @@ const projectsPlugin: BakinPlugin = {
 
     // ─── Search Content Type Registration ─────────────────────────────
 
-    /** Convert a project to a search document */
-    function projectToSearchDoc(project: Project): Record<string, unknown> {
+    /** Convert a project to a search document (progress derived from the board). */
+    async function projectToSearchDoc(raw: Project): Promise<Record<string, unknown>> {
+      const project = await derive(raw)
       return {
         title: project.title,
         body: project.body,
@@ -279,7 +281,7 @@ const projectsPlugin: BakinPlugin = {
       reindex: async function* () {
         const projects = readAllProjects()
         for (const project of projects) {
-          yield { key: project.id, doc: projectToSearchDoc(project) }
+          yield { key: project.id, doc: await projectToSearchDoc(project) }
         }
       },
       verifyExists: async (key: string) => {
@@ -292,7 +294,7 @@ const projectsPlugin: BakinPlugin = {
       try {
         const project = readProject(projectId)
         if (project) {
-          await ctx.search.index(projectId, projectToSearchDoc(project))
+          await ctx.search.index(projectId, await projectToSearchDoc(project))
         }
       } catch (err) {
         log.warn('Failed to index project', { projectId, error: err instanceof Error ? err.message : String(err) })
@@ -302,25 +304,26 @@ const projectsPlugin: BakinPlugin = {
     // Register task extension hooks. Core emits task lifecycle events and
     // the tasks plugin asks for generic detail enrichment; projects owns the
     // project-specific behavior behind those extension points.
-    ctx.hooks.register('tasks.statusChanged', async (d: unknown) => {
-      const data = d as Record<string, unknown>
-      const to = String(data.to ?? '').toLowerCase()
-      if (to !== 'done' && to !== 'archived') return
-      const taskId = data.taskId as string | undefined
-      if (taskId) await autoCheckLinkedItem(taskId)
+    // Linked-step completion is DERIVED from the board (D16a) — a column
+    // change writes nothing here; it only tells open project pages to refetch.
+    ctx.hooks.register('tasks.statusChanged', (d: unknown) => {
+      const taskId = (d as Record<string, unknown>).taskId
+      const entry = typeof taskId === 'string' ? projectService.getProjectForTask(taskId) : undefined
+      if (entry) ctx.events.emit('projects.changed', { projectId: entry.projectId, action: 'task.statusChanged', taskItemId: entry.taskItemId })
     }, {
-      label: 'Sync project task state.',
-      summary: 'Updates linked project checklist items when a task moves into a completed state. Use it to keep project progress in sync with task lifecycle events.',
+      label: 'Refresh project task state.',
+      summary: 'Tells open project pages to refetch when a linked task changes column; linked step completion is derived from the board at read time.',
       hookKind: 'event',
     })
-    ctx.hooks.register('tasks.enrichDetails', (d: unknown) => {
+    ctx.hooks.register('tasks.enrichDetails', async (d: unknown) => {
       const data = d as Record<string, unknown>
       const task = data.task as Record<string, unknown> | undefined
       const projectId = task?.projectId as string | undefined
       if (!projectId) return data
 
-      const project = readProject(projectId)
-      if (!project) return data
+      const stored = readProject(projectId)
+      if (!stored) return data
+      const project = await derive(stored)
 
       return {
         ...data,
@@ -379,6 +382,8 @@ const projectsPlugin: BakinPlugin = {
       const statusFilter = url.searchParams.get('status') as ProjectStatus | null
       let projects = readAllProjects()
       if (statusFilter) projects = projects.filter(p => p.status === statusFilter)
+      const board = await boardIndex()
+      projects = projects.map(p => deriveChecklist(p, board))
       // Per-project attention flags so list rows can show WHICH project has
       // an unseen reply / running turn (the nav badge names only the count).
       const inflight = new Set(brainstormTurns.listInFlight().map(t => t.key))
@@ -667,7 +672,7 @@ const projectsPlugin: BakinPlugin = {
       const project = readProject(projectId)
       if (!project) return json({ error: 'Project not found' }, 404)
       const agentId = body.agent || await getRuntimeMainAgentId(ctx)
-      const context = buildProjectBrainstormContext(project, body.prompt)
+      const context = buildProjectBrainstormContext(await derive(project), body.prompt)
 
       const result = await brainstormTurns.start(ctx, projectId, body.prompt, {
         agentId,
@@ -769,7 +774,8 @@ const projectsPlugin: BakinPlugin = {
         if (params.status) {
           projects = projects.filter(p => p.status === params.status)
         }
-        return { ok: true, projects: projects.map(projectToSummary) }
+        const board = await boardIndex()
+        return { ok: true, projects: projects.map(p => projectToSummary(deriveChecklist(p, board))) }
       },
     })
 
@@ -900,20 +906,24 @@ const projectsPlugin: BakinPlugin = {
     ctx.registerExecTool({
       name: 'bakin_exec_projects_mark_item',
       label: 'Marked project item',
-      description: 'Mark a checklist item as checked (done) or unchecked. Returns updated progress percentage.',
+      description: 'Mark a standalone checklist item as checked (done) or unchecked. Steps linked to a board task complete from that task and are refused (linked_step). Returns updated progress percentage.',
       parameters: {
         projectId: z.string().describe('Project ID'),
         taskItemId: z.string().describe('Checklist item ID (e.g., t001)'),
         checked: z.boolean().describe('true to mark as done, false to uncheck'),
       },
       handler: async (params: Record<string, unknown>) => {
-        const result = await markChecklistItem(
-          params.projectId as string,
-          params.taskItemId as string,
-          params.checked as boolean,
-        )
-        indexProject(params.projectId as string).catch(() => {})
-        return { ok: true, ...result }
+        try {
+          const result = await markChecklistItem(
+            params.projectId as string,
+            params.taskItemId as string,
+            params.checked as boolean,
+          )
+          indexProject(params.projectId as string).catch(() => {})
+          return { ok: true, ...result }
+        } catch (err: unknown) {
+          return { ok: false, error: (err as Error).message, ...(err instanceof ProjectMutationError ? { code: err.code } : {}) }
+        }
       },
     })
 
@@ -1034,7 +1044,7 @@ const projectsPlugin: BakinPlugin = {
       name: 'bakin_exec_projects_toggle_item',
       label: 'Toggled project item',
       activityDuplicate: true,
-      description: 'Toggle a checklist item checked/unchecked by item ID. Returns updated progress percentage.',
+      description: 'Toggle a standalone checklist item checked/unchecked by item ID. Steps linked to a board task complete from that task and are refused (linked_step). Returns updated progress percentage.',
       parameters: {
         projectId: z.string().describe('Project ID'),
         itemId: z.string().describe('Checklist item ID (e.g., t001)'),
@@ -1044,10 +1054,14 @@ const projectsPlugin: BakinPlugin = {
         const projectId = params.projectId as string
         const itemId = params.itemId as string
         const checked = params.checked as boolean
-        const result = await markChecklistItem(projectId, itemId, checked)
-        ctx.activity.audit('checklist.toggled', 'system', { projectId, checked })
-        indexProject(projectId).catch(() => {})
-        return { ok: true, ...result }
+        try {
+          const result = await markChecklistItem(projectId, itemId, checked)
+          ctx.activity.audit('checklist.toggled', 'system', { projectId, checked })
+          indexProject(projectId).catch(() => {})
+          return { ok: true, ...result }
+        } catch (err: unknown) {
+          return { ok: false, error: (err as Error).message, ...(err instanceof ProjectMutationError ? { code: err.code } : {}) }
+        }
       },
     })
 
@@ -1095,7 +1109,7 @@ const projectsPlugin: BakinPlugin = {
         const project = readProject(projectId)
         if (!project) return { ok: false, error: `Project not found: ${projectId}` }
 
-        const context = buildProjectBrainstormContext(project, message)
+        const context = buildProjectBrainstormContext(await derive(project), message)
 
         try {
           const agentId = (params.agent as string) || await getRuntimeMainAgentId(ctx)

@@ -4,7 +4,7 @@
  * registered HTTP route and MCP exec tool.
  */
 import { describe, it, expect, beforeEach, afterAll, mock } from 'bun:test'
-import { mkdirSync, rmSync, writeFileSync, existsSync } from 'fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { dump } from 'js-yaml'
@@ -429,6 +429,21 @@ describe('Routes', () => {
   // PUT /:projectId/checklist/:itemId/toggle — toggle item
   // -------------------------------------------------------------------------
   describe('PUT /:projectId/checklist/:itemId/toggle', () => {
+    it('refuses a linked step (it completes from its board task) via REST and both tools', async () => {
+      writeProjectFixture('proj-linked-tog', {
+        title: 'Linked', tasks: [{ id: 't001', title: 'Linked', checked: false, taskId: 'board-x' }],
+      })
+      const route = findRoute(plugin.routes, 'PUT', '/:projectId/checklist/:itemId/toggle')!
+      const { status, body } = await callRoute(route, plugin.ctx, {
+        searchParams: { projectId: 'proj-linked-tog', itemId: 't001' }, body: { checked: true },
+      })
+      expect(status).toBe(409)
+      expect(body.code).toBe('linked_step')
+      const mark = await callTool(findTool(plugin.execTools, 'bakin_exec_projects_mark_item')!, { projectId: 'proj-linked-tog', taskItemId: 't001', checked: true })
+      const toggle = await callTool(findTool(plugin.execTools, 'bakin_exec_projects_toggle_item')!, { projectId: 'proj-linked-tog', itemId: 't001', checked: true })
+      expect([mark.code, toggle.code]).toEqual(['linked_step', 'linked_step'])
+    })
+
     it('toggles a checklist item', async () => {
       writeProjectFixture('proj-tog', {
         title: 'Toggle Project',
@@ -1842,7 +1857,7 @@ describe('Registration', () => {
       expect.any(Function),
       expect.objectContaining({
         hookKind: 'event',
-        label: 'Sync project task state.',
+        label: 'Refresh project task state.',
       }),
     )
     expect(plugin.ctx.hooks.register).toHaveBeenCalledWith(
@@ -1853,6 +1868,24 @@ describe('Registration', () => {
         label: 'Add project task context.',
       }),
     )
+  })
+
+  it('a linked task changing column only announces the owning project (no write)', async () => {
+    writeProjectFixture('proj-hook', { title: 'Hooked', tasks: [{ id: 't001', title: 'Linked', checked: false }] })
+    // Linking through the route keeps the task → project index current.
+    await callRoute(findRoute(plugin.routes, 'POST', '/:projectId/checklist/:itemId/link')!, plugin.ctx, {
+      searchParams: { projectId: 'proj-hook', itemId: 't001' },
+      body: { taskId: 'board-hook' },
+    })
+    const handler = (plugin.ctx.hooks.register as ReturnType<typeof mock>).mock.calls
+      .find(call => call[0] === 'tasks.statusChanged')![1] as (data: unknown) => unknown
+    const changes: Record<string, unknown>[] = []
+    plugin.ctx.events.on('projects.changed', (_event: string, data: Record<string, unknown>) => { changes.push(data) })
+    const before = readFileSync(join(projectsDir, 'proj-hook.md'), 'utf8')
+    await handler({ taskId: 'board-hook', from: 'todo', to: 'done' })
+    await handler({ taskId: 'not-linked', from: 'todo', to: 'done' })
+    expect(changes).toEqual([expect.objectContaining({ projectId: 'proj-hook', action: 'task.statusChanged' })])
+    expect(readFileSync(join(projectsDir, 'proj-hook.md'), 'utf8')).toBe(before)
   })
 
   it('watches project files', () => {

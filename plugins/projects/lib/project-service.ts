@@ -96,7 +96,30 @@ export interface ResolvedAsset {
   missing?: boolean
 }
 
+/** Board columns that complete a linked step (D16a). */
+const DONE_COLUMNS = new Set(['done', 'archived'])
+
+/** Linked board tasks by id: the evidence `deriveChecklist` reads. */
+export type BoardTaskIndex = ReadonlyMap<string, { column: string; title: string }>
+
+/**
+ * THE single source of `checked` and `progress` for every projection (D16a):
+ * a linked step is checked exactly while its board task sits in a done
+ * column (reopened ⇒ unchecked, missing ⇒ unchecked); only standalone steps
+ * keep their stored flag.
+ */
+export function deriveChecklist<P extends Project>(project: P, board: BoardTaskIndex): P {
+  const tasks = project.tasks.map(item => item.taskId
+    ? { ...item, checked: DONE_COLUMNS.has(board.get(item.taskId)?.column ?? '') }
+    : item)
+  return { ...project, tasks, progress: computeProgress(tasks) }
+}
+
 export interface ProjectService {
+  /** One board read for any number of projections. */
+  boardIndex(): Promise<BoardTaskIndex>
+  /** A project with its checklist derived from the live board. */
+  derive<P extends Project>(project: P): Promise<P>
   rebuildIndex(): void
   getProjectForTask(boardTaskId: string): TaskLinkEntry | undefined
   getProjectTitleForTask(boardTaskId: string): string | null
@@ -116,7 +139,6 @@ export interface ProjectService {
   detachAsset(projectId: string, assetId: string): Promise<void>
   updateAssetLabel(projectId: string, assetId: string, label: string): Promise<void>
   promoteItemToTask(projectId: string, taskItemId: string, opts?: PromoteItemOpts): Promise<{ taskId: string }>
-  autoCheckLinkedItem(boardTaskId: string): Promise<void>
   autoUnlinkTask(boardTaskId: string): Promise<void>
   resolveLinkedTaskStatuses(project: Project): Promise<Project & {
     resolvedTasks: Record<string, { column: string; title: string } | null>
@@ -150,6 +172,15 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
   function broadcast(data: Record<string, unknown>): void {
     const { type, ...payload } = data
     ctx.events.emit('projects.changed', { ...payload, projectId: payload.projectId ?? payload.id, action: type })
+  }
+
+  async function boardIndex(): Promise<BoardTaskIndex> {
+    const tasks = await ctx.tasks.list()
+    return new Map(tasks.map(task => [task.id, { column: String(task.column).toLowerCase(), title: task.title }]))
+  }
+
+  async function derive<P extends Project>(project: P): Promise<P> {
+    return deriveChecklist(project, await boardIndex())
   }
 
   function rebuildIndex(): void {
@@ -238,7 +269,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
   }
 
   async function applyProjectPlan(id: string, updates: ApplyProjectPlanOpts, caller: MutationCaller): Promise<ApplyProjectPlanResult> {
-    return withProjectLock(() => {
+    const { result, project } = await withProjectLock(() => {
       if (updates.body !== undefined && updates.appendBody !== undefined) {
         throw new Error('Provide either body or appendBody, not both')
       }
@@ -293,9 +324,8 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
         broadcast({ type: 'project.checklist_changed', projectId: id, action: 'add', taskItemId: item.id })
       }
 
-      return {
+      const result: Omit<ApplyProjectPlanResult, 'progress'> = {
         addedItems,
-        progress: project.progress,
         updated: {
           title: updates.title !== undefined,
           body: updates.body !== undefined || updates.appendBody !== undefined,
@@ -303,7 +333,10 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
           checklistItems: addedItems.length > 0,
         },
       }
+      return { result, project }
     })
+    // Progress is derived from the live board, read outside the lock.
+    return { ...result, progress: (await derive(project)).progress }
   }
 
   async function deleteProject(id: string, agent?: string): Promise<void> {
@@ -351,19 +384,24 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
   }
 
   async function markChecklistItem(projectId: string, taskItemId: string, checked: boolean, expectedInstanceId?: string): Promise<{ progress: number }> {
-    return withProjectLock(() => {
+    const project = await withProjectLock(() => {
       const project = repo.readProject(projectId)
-      if (!project) throw new Error(`Project not found: ${projectId}`)
+      if (!project) throw new ProjectMutationError(`Project not found: ${projectId}`, 404, 'not_found')
       const item = project.tasks.find(t => t.id === taskItemId)
-      if (!item) throw new Error(`Checklist item not found: ${taskItemId}`)
+      if (!item) throw new ProjectMutationError(`Checklist item not found: ${taskItemId}`, 404, 'not_found')
       assertItemIdentity(item, expectedInstanceId)
+      if (item.taskId) {
+        throw new ProjectMutationError('This step completes from its board task — move the task instead.', 409, 'linked_step')
+      }
       item.checked = checked
       project.updated = new Date().toISOString()
       project.progress = computeProgress(project.tasks)
       repo.writeProject(project)
       broadcast({ type: 'project.checklist_changed', projectId, action: 'mark', taskItemId, checked })
-      return { progress: project.progress }
+      return project
     })
+    // Read the board outside the lock: task APIs can re-enter Projects.
+    return { progress: (await derive(project)).progress }
   }
 
   async function updateChecklistItem(projectId: string, taskItemId: string, updates: { title?: string; description?: string }, expected?: { title?: string; description?: string }, expectedInstanceId?: string): Promise<void> {
@@ -562,14 +600,6 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     })
   }
 
-  async function autoCheckLinkedItem(boardTaskId: string): Promise<void> {
-    const entry = getIndex().get(boardTaskId)
-    if (!entry) return
-    log.info('Auto-checking project item', { boardTaskId, ...entry })
-    await markChecklistItem(entry.projectId, entry.taskItemId, true)
-    broadcast({ type: 'project.checklist_auto_checked', ...entry, boardTaskId })
-  }
-
   async function autoUnlinkTask(boardTaskId: string): Promise<void> {
     const entry = getIndex().get(boardTaskId)
     if (!entry) return
@@ -593,13 +623,10 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     resolvedTasks: Record<string, { column: string; title: string } | null>
     resolvedAssets: ResolvedAsset[]
   }> {
-    const linkedIds = project.tasks.map(item => item.taskId).filter((id): id is string => Boolean(id))
+    const board = await boardIndex()
     const resolved: Record<string, { column: string; title: string } | null> = {}
-    const boardTasks = await ctx.tasks.list()
-
-    for (const taskId of linkedIds) {
-      const task = boardTasks.find(t => t.id === taskId)
-      resolved[taskId] = task ? { column: task.column, title: task.title } : null
+    for (const item of project.tasks) {
+      if (item.taskId) resolved[item.taskId] = board.get(item.taskId) ?? null
     }
 
     const resolvedAssets = await Promise.all(project.assets.map(async (asset) => {
@@ -621,7 +648,7 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       }
     }))
 
-    return { ...project, resolvedTasks: resolved, resolvedAssets }
+    return { ...deriveChecklist(project, board), resolvedTasks: resolved, resolvedAssets }
   }
 
   /**
@@ -653,6 +680,8 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
   }
 
   return {
+    boardIndex,
+    derive,
     rebuildIndex,
     restorePlanVersion,
     getProjectForTask,
@@ -671,7 +700,6 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     detachAsset,
     updateAssetLabel,
     promoteItemToTask,
-    autoCheckLinkedItem,
     autoUnlinkTask,
     resolveLinkedTaskStatuses,
   }
