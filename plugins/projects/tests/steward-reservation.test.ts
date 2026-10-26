@@ -339,3 +339,24 @@ describe('capBytes', () => {
     expect(capBytes('short', 100, 'x')).toBe('short')
   })
 })
+
+describe('review round 3 regressions', () => {
+  const reserved = { openTaskId: 'task-reserved', phase: 'reserved' as const, frozen: { title: 'Check in: Launch', assignee: 'pixel', description: 'brief' } }
+
+  it('recovery never creates a check-in for a completed or paused project', async () => {
+    for (const patch of [{ status: 'completed' as const }, { stewardPaused: true }]) {
+      writeProject({ ...patch, steward: reserved })
+      await loop.reconcile('p1')
+      expect(await ctx.tasks.get('task-reserved')).toBeNull()
+      expect(stewardState()?.openTaskId).toBeUndefined()
+    }
+  })
+
+  it('an open check-in left on a project that stopped being active is removed', async () => {
+    writeProject({ status: 'archived', steward: { ...reserved, phase: 'created' } })
+    await ctx.tasks.create({ id: 'task-reserved', title: 'Check in', projectId: 'p1', source: { pluginId: 'projects', entityType: 'steward', entityId: 'p1' } })
+    await loop.reconcile('p1')
+    expect(await ctx.tasks.get('task-reserved')).toBeNull()
+    expect(stewardState()?.openTaskId).toBeUndefined()
+  })
+})

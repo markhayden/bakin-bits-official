@@ -11,6 +11,7 @@ import { createProjectService, deriveChecklist } from './lib/project-service'
 import { ProjectMutationError } from './lib/project-mutations'
 import { buildProjectBrainstormContext } from './lib/brainstorm-prompt'
 import { createStewardGates } from './lib/steward/gates'
+import { withAdmissionFence } from './lib/steward/admission'
 import { createInputGate } from './lib/steward/input-gate'
 import { buildStewardDigest } from './lib/steward/digest'
 import { createStewardLoop, localDay, readStewardSettings, STEWARD_DEFAULTS, type StewardLoop } from './lib/steward/reservation'
@@ -440,11 +441,15 @@ const projectsPlugin: BakinPlugin = {
     try {
       for (const project of readAllProjects()) {
         if (project.replyPending) void inputGate.settleReply(project.id)
-        // A question whose card never reached the transcript (its queued
-        // batch died with the process) must not hold the project (D25).
+        // A question must not hold the project when its card never reached
+        // the transcript (its queued batch died with the process), or when a
+        // user message after the card already ended it (the process died
+        // before the gate flipped) (D25).
         const questionId = project.waitingOn?.questionId
-        if (questionId && !readBrainstormMessages(project.id).some(row => row.kind === 'tool' && (row.metadata?.bakinQuestion as { id?: unknown } | undefined)?.id === questionId)) {
-          void inputGate.withdraw(project.id, questionId)
+        if (questionId) {
+          const transcript = readBrainstormMessages(project.id)
+          const card = transcript.findIndex(row => row.kind === 'tool' && (row.metadata?.bakinQuestion as { id?: unknown } | undefined)?.id === questionId)
+          if (card === -1 || transcript.slice(card + 1).some(row => row.kind === 'user')) void inputGate.withdraw(project.id, questionId)
         }
         const rows = readBrainstormMessages(project.id)
         const last = rows[rows.length - 1]
@@ -605,9 +610,11 @@ const projectsPlugin: BakinPlugin = {
       // billing and resurrects the transcript sidecar (review I2).
       brainstormTurns.abort(id)
       try {
-        // The steward goes first: its open check-in is removed (aborting a
-        // running turn) and pending sign-offs are cancelled — independently
-        // of whether the work tasks are kept.
+        // The steward goes first: check-ins are paused durably (no scan or
+        // recovery can reserve another while the delete runs), the open
+        // check-in is removed (aborting a running turn) and pending sign-offs
+        // are cancelled — independently of whether work tasks are kept.
+        await projectService.setStewardPaused(id, true)
         await stewardGates.cleanup(id, { reason: 'Project deleted' })
         if (body.deleteLinkedTasks) {
           const project = readProject(id)
@@ -854,35 +861,24 @@ const projectsPlugin: BakinPlugin = {
       if (!project) return json({ error: 'Project not found' }, 404)
       const agentId = body.agent || await getRuntimeMainAgentId(ctx)
       // The next user message ends an open check-in question (D25): it rides
-      // this turn's context, and the gate flips only once the turn is admitted.
-      // Sampled AFTER the board read, right before admission, so a question
-      // posted while this request was reading the board is still the one
-      // this message answers.
-      const derived = await derive(project)
-      const pendingQuestion = readProject(projectId)?.waitingOn
-      const context = buildProjectBrainstormContext(derived, body.prompt, { live: true, ...(pendingQuestion ? { pendingQuestion } : {}) })
-
-      const result = await brainstormTurns.start(ctx, projectId, body.prompt, {
-        agentId,
-        runtimeContent: context,
-      })
-      if (result === 'not_found') return json({ error: 'Project not found' }, 404)
-      if (result === 'busy') return json({ error: 'A brainstorm turn is already running for this project' }, 409)
-      // The gate ends with THIS message when its card precedes it in the
-      // transcript (D25) — including a card that landed after the context was
-      // sampled, while the engine was admitting the turn.
-      const waiting = readProject(projectId)?.waitingOn
-      if (waiting) {
-        const rows = readBrainstormMessages(projectId)
-        let lastUser = -1
-        for (let i = rows.length - 1; i >= 0; i--) if (rows[i]!.kind === 'user') { lastUser = i; break }
-        const card = rows.findIndex(row => row.kind === 'tool' && (row.metadata?.bakinQuestion as { id?: unknown } | undefined)?.id === waiting.questionId)
-        if (waiting.questionId === pendingQuestion?.questionId || (card !== -1 && card < lastUser)) {
-          await inputGate.admitReply(projectId, waiting.questionId)
+      // this turn's context, and the gate flips only once the turn is
+      // admitted. Sampling → admission → flip run inside the admission fence
+      // a question is posted under, so the question this reply ends is
+      // exactly the one its context carried.
+      const result = await withAdmissionFence(projectId, async () => {
+        const derived = await derive(project)
+        const pendingQuestion = readProject(projectId)?.waitingOn
+        const context = buildProjectBrainstormContext(derived, body.prompt, { live: true, ...(pendingQuestion ? { pendingQuestion } : {}) })
+        const started = await brainstormTurns.start(ctx, projectId, body.prompt, { agentId, runtimeContent: context })
+        if (started === 'accepted' && pendingQuestion) {
+          await inputGate.admitReply(projectId, pendingQuestion.questionId)
           // The turn may have settled before the flip landed: nothing would clear it.
           if (!brainstormTurns.isInFlight(projectId)) await inputGate.settleReply(projectId)
         }
-      }
+        return started
+      })
+      if (result === 'not_found') return json({ error: 'Project not found' }, 404)
+      if (result === 'busy') return json({ error: 'A brainstorm turn is already running for this project' }, 409)
       return json({ ok: true, streaming: true }, 202)
     })
 

@@ -17,7 +17,7 @@ import type { Project } from '../types'
 const root = join(tmpdir(), `projects-steward-gates-${Date.now()}`)
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 
-const testGlobal = globalThis as typeof globalThis & { __bakinProjectIndex?: unknown; __bakinProjectLock?: unknown }
+const testGlobal = globalThis as typeof globalThis & { __bakinProjectIndex?: unknown; __bakinProjectLock?: unknown; __bakinProjectAdmissionFence?: unknown; __bakinProjectGateQueues?: unknown }
 const OPERATOR = { 'X-Bakin-Operator': 'declared' }
 const STEWARD_TASK = 'task-steward-1'
 const COMPLETE_ID = 'projects:p1:complete:project:1'
@@ -37,6 +37,8 @@ let n = 0
 async function setup(): Promise<void> {
   testGlobal.__bakinProjectIndex = undefined
   testGlobal.__bakinProjectLock = undefined
+  testGlobal.__bakinProjectAdmissionFence = undefined
+  testGlobal.__bakinProjectGateQueues = undefined
   const dir = join(root, `case-${++n}`)
   repo = createProjectRepository(new MarkdownStorageAdapter(dir))
   const project: Project = {
@@ -345,5 +347,53 @@ describe('review round 2 regressions', () => {
     await syncGateStates(plugin.ctx, repo, 'p1')
     expect(read().gates?.['complete:project']?.state).toBe('cancelled')
     expect(stewardEligibility(read())).not.toBe('completion_pending')
+  })
+})
+
+describe('review round 3 regressions', () => {
+  beforeEach(setup)
+
+  it('a failed close of the asking check-in keeps the gate pending; the retry closes it', async () => {
+    const { approvalId } = await signoff({ gateKind: 'signoff', subjectTaskId: 'work-1', summary: 'Copy is ready' })
+    const realMove = plugin.ctx.tasks.move
+    plugin.ctx.tasks.move = async (id, col) => {
+      if (id === STEWARD_TASK) throw new Error('board offline')
+      return realMove(id, col)
+    }
+    await expect(plugin.approvals.resolve(approvalId as string, 'approve')).rejects.toThrow('board offline')
+    expect(read().gates?.['signoff:work-1']?.state).toBe('pending')
+    plugin.ctx.tasks.move = realMove
+    await plugin.approvals.resolve(approvalId as string, 'approve')
+    expect(await column(STEWARD_TASK)).toBe('done')
+  })
+
+  it('gate operations serialize across a hot reload (the queue outlives one activation)', async () => {
+    const { approvalId } = await signoff({ gateKind: 'signoff', subjectTaskId: 'work-1', summary: 'Copy is ready' })
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const realGet = plugin.ctx.tasks.get
+    let first = true
+    plugin.ctx.tasks.get = async (id) => {
+      if (first && id === 'work-1') { first = false; await held }
+      return realGet(id)
+    }
+    const deciding = plugin.approvals.resolve(approvalId as string, 'approve')
+    await new Promise(resolve => setTimeout(resolve, 5))
+    // A second activation's cleanup must queue behind the first one's decision.
+    const turns = plugin.ctx.conversations.createTurnService({
+      name: 'x', events: { chunk: 'c', done: 'd', error: 'e' }, payload: () => ({}), resolveThread: () => null, appendRow: () => {}, threadId: () => '',
+    })
+    const reloaded = createStewardGates({ ctx: plugin.ctx, repo, turns, projectService: { updateProject: async () => {} } })
+    const cleaning = reloaded.cleanup('p1', { reason: 'Project completed' })
+    release()
+    expect((await deciding).status).toBe('approved')
+    await cleaning
+    expect(plugin.ctx.approvals.get(approvalId as string)?.status).toBe('approved')
+  })
+
+  it('a delete fences the loop: no check-in can be reserved while it runs', async () => {
+    const res = await callRoute(findRoute(plugin.routes, 'DELETE', '/:projectId')!, plugin.ctx, { path: '/p1', searchParams: { projectId: 'p1' }, body: { deleteLinkedTasks: true }, headers: OPERATOR })
+    expect(res.status).toBe(200)
+    expect((await plugin.ctx.tasks.list({ projectId: 'p1' })).filter(t => t.source?.entityType === 'steward')).toEqual([])
   })
 })

@@ -192,13 +192,19 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
   async function reconcile(projectId: string): Promise<void> {
     if (stopped) return
     await syncGateStates(ctx, repo, projectId)
-    const steward = repo.readProject(projectId)?.steward
+    const project = repo.readProject(projectId)
+    const steward = project?.steward
     const taskId = steward?.openTaskId
-    if (!taskId) return
+    if (!project || !taskId) return
     const task: Task | null = await ctx.tasks.get(taskId)
     if (stopped) return
+    // A project that stopped being Active (a completion or archive whose
+    // cleanup never finished, e.g. a crash) keeps no check-in: the open one
+    // is removed (aborting a running turn) and nothing is recovered.
+    const retired = project.status !== 'active'
     if (!task) {
-      if (steward.phase === 'reserved' && steward.frozen) {
+      // Recovery creates nothing for a project the loop must leave alone.
+      if (steward.phase === 'reserved' && steward.frozen && !retired && !project.stewardPaused) {
         await createReserved(projectId, { openTaskId: taskId, frozen: steward.frozen })
         return
       }
@@ -207,6 +213,11 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
     }
     if (!isStewardTask(task, projectId)) {
       await finalize(projectId, taskId, 'foreign')
+      return
+    }
+    if (retired && !OPEN_EXCLUDED.has(task.column)) {
+      await ctx.tasks.remove(taskId)
+      await finalize(projectId, taskId, 'abandoned')
       return
     }
     if (steward.phase === 'reserved') {

@@ -12,12 +12,13 @@
  * append, so they never splice into a running brainstorm turn.
  */
 import { z } from 'zod'
-import type { ConversationTurnRow, ConversationTurnService, PluginContext } from '@makinbakin/sdk/types'
+import type { ConversationTurnRow, ConversationTurnService, ExecToolResult, PluginContext } from '@makinbakin/sdk/types'
 import { validateBakinQuestionInput, QUESTION_LIMITS } from '@makinbakin/sdk/utils'
 import type { ProjectRepository } from '../parser'
 import type { Project } from '../../types'
 import { isStewardTask } from './digest'
 import type { InputGate } from './input-gate'
+import { withAdmissionFence } from './admission'
 import { capBytes } from './prompt'
 
 const log = {
@@ -152,40 +153,49 @@ export function registerStewardTools({ ctx, repo, turns, gate }: StewardToolDeps
       const context = typeof params.context === 'string' && params.context.trim()
         ? capBytes(params.context.trim(), STEWARD_CONTEXT_MAX_BYTES, 'context')
         : undefined
-      // The gate first: the very next user message (even one racing a queued
-      // card) is this question's reply.
-      await gate.open(project.id, {
-        kind: 'input',
-        questionId: question.id,
-        question: question.question,
-        options: question.options.map(option => option.label),
-        ...(context ? { context } : {}),
-        since: new Date().toISOString(),
+      // Gate + card under the admission fence: a reply being admitted right
+      // now either already carried an earlier question or finishes before
+      // this one exists (D25).
+      type Posted = { error: ExecToolResult } | { status: 'appended' | 'queued' }
+      const posted = await withAdmissionFence(project.id, async (): Promise<Posted> => {
+        // The gate first: the very next user message (even one racing a queued
+        // card) is this question's reply.
+        await gate.open(project.id, {
+          kind: 'input',
+          questionId: question.id,
+          question: question.question,
+          options: question.options.map(option => option.label),
+          ...(context ? { context } : {}),
+          since: new Date().toISOString(),
+        })
+        // An unseen question must never hold the project: if the card does not
+        // land (now, or when its queued batch flushes), the gate goes with it.
+        const withdraw = (err: unknown) => {
+          log.warn('steward question failed to persist; withdrawing its gate', { projectId: project.id, err })
+          return gate.withdraw(project.id, question.id)
+        }
+        let result: Awaited<ReturnType<typeof turns.appendExternal>>
+        try {
+          result = await turns.appendExternal(turnCtx, project.id, [{
+            kind: 'tool',
+            ts: new Date().toISOString(),
+            turnId: `steward:${taskId}`,
+            agentId,
+            toolName: 'bakin_exec_projects_request_input',
+            status: 'completed',
+            summary: question.question,
+            metadata: { bakinQuestion: question },
+          }], { agentId, preview: question.question })
+        } catch (err) {
+          await withdraw(err)
+          return { error: { ok: false, error: 'The question could not be posted. Try again.', code: 'append_failed' } }
+        }
+        result.written.catch(withdraw)
+        const status = result.status
+        return { status }
       })
-      // An unseen question must never hold the project: if the card does not
-      // land (now, or when its queued batch flushes), the gate goes with it.
-      const withdraw = (err: unknown) => {
-        log.warn('steward question failed to persist; withdrawing its gate', { projectId: project.id, err })
-        return gate.withdraw(project.id, question.id)
-      }
-      let result: Awaited<ReturnType<typeof turns.appendExternal>>
-      try {
-        result = await turns.appendExternal(turnCtx, project.id, [{
-          kind: 'tool',
-          ts: new Date().toISOString(),
-          turnId: `steward:${taskId}`,
-          agentId,
-          toolName: 'bakin_exec_projects_request_input',
-          status: 'completed',
-          summary: question.question,
-          metadata: { bakinQuestion: question },
-        }], { agentId, preview: question.question })
-      } catch (err) {
-        await withdraw(err)
-        return { ok: false, error: 'The question could not be posted. Try again.', code: 'append_failed' }
-      }
-      result.written.catch(withdraw)
-      const status = result.status
+      if ('error' in posted) return posted.error
+      const { status } = posted
       ctx.events.emit('projects.changed', { projectId: project.id, action: 'steward.waiting' })
       ctx.activity.audit('steward.request_input', agentId, { projectId: project.id, taskId, questionId: question.id })
       return { ok: true, questionId: question.id, status, message: 'Posted. Finish this check-in now — the user\'s reply starts the next conversation turn.' }

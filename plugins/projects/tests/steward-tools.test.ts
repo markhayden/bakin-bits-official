@@ -18,7 +18,7 @@ import type { Project } from '../types'
 const root = join(tmpdir(), `projects-steward-tools-${Date.now()}`)
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 
-const testGlobal = globalThis as typeof globalThis & { __bakinProjectIndex?: unknown; __bakinProjectLock?: unknown }
+const testGlobal = globalThis as typeof globalThis & { __bakinProjectIndex?: unknown; __bakinProjectLock?: unknown; __bakinProjectAdmissionFence?: unknown; __bakinProjectGateQueues?: unknown }
 const OPERATOR = { 'X-Bakin-Operator': 'declared' }
 const STEWARD_TASK = 'task-steward-1'
 
@@ -49,6 +49,8 @@ function project(extra: Partial<Project> = {}): Project {
 async function setup(extra: Partial<Project> = {}): Promise<void> {
   testGlobal.__bakinProjectIndex = undefined
   testGlobal.__bakinProjectLock = undefined
+  testGlobal.__bakinProjectAdmissionFence = undefined
+  testGlobal.__bakinProjectGateQueues = undefined
   dir = join(root, `case-${++n}`)
   repo = createProjectRepository(new MarkdownStorageAdapter(dir))
   repo.writeProject(project(extra))
@@ -241,22 +243,25 @@ describe('boot sweep', () => {
 describe('review round 1 regressions', () => {
   beforeEach(() => setup())
 
-  it('a question posted while /ask reads the board still rides that reply', async () => {
+  it('a question posted while /ask is admitting waits for it — and stays open for the NEXT message', async () => {
     const realList = plugin.ctx.tasks.list
-    let posted = false
+    let posting: Promise<unknown> | null = null
     plugin.ctx.tasks.list = async (filter) => {
-      if (!posted) {
-        posted = true
-        await asSteward(tool('bakin_exec_projects_request_input'), question)
-      }
+      posting ??= asSteward(tool('bakin_exec_projects_request_input'), question)
       return realList(filter)
     }
     const turn = holdTurns()
-    expect((await ask('Drop it')).status).toBe(202)
-    expect(turn.contents[0]).toContain('Pending question from your last check-in')
-    expect(read().waitingOn).toBeUndefined()
-    expect(read().replyPending).toBeDefined()
+    expect((await ask('unrelated')).status).toBe(202)
+    await posting
+    // That reply never carried the question, so it does not end it…
+    expect(turn.contents[0]).not.toContain('Pending question')
+    expect(read().waitingOn?.question).toBe(question.question)
+    expect(read().replyPending).toBeUndefined()
     turn.release()
+    await waitUntil(async () => (await ask('Drop it')).status === 202, 'next reply admitted')
+    // …the next one does, with the question in its context.
+    expect(turn.contents.at(-1)).toContain('Pending question from your last check-in')
+    expect(read().waitingOn).toBeUndefined()
   })
 
   it('a card that fails to land withdraws its gate — immediately', async () => {
@@ -292,21 +297,46 @@ describe('review round 2 regressions', () => {
     await waitUntil(() => read().waitingOn === undefined, 'lost question withdrawn')
   })
 
-  it('a card landing while the engine admits the reply is ended by that reply', async () => {
+  it('a question can never land between a reply\'s context and its admission', async () => {
     await setup()
     const realList = plugin.ctx.runtime.agents.list
     let calls = 0
+    let posting: Promise<Record<string, unknown>> | null = null
     plugin.ctx.runtime.agents.list = (async () => {
-      // Call 1 is /ask choosing the agent (before the question is sampled);
-      // call 2 is the engine's resolveThread at admission — after it.
-      if (++calls === 2) await asSteward(tool('bakin_exec_projects_request_input'), question)
+      // Call 1 is /ask choosing the agent; call 2 is the engine's
+      // resolveThread at admission — after the context was built.
+      if (++calls === 2) posting = asSteward(tool('bakin_exec_projects_request_input'), question)
       return realList()
     }) as typeof plugin.ctx.runtime.agents.list
     const turn = holdTurns()
     expect((await ask('my reply')).status).toBe(202)
-    expect(read().waitingOn).toBeUndefined()
-    expect(read().replyPending).toBeDefined()
+    expect(await posting).toEqual(expect.objectContaining({ ok: true }))
+    expect(read().waitingOn).toBeDefined()
+    expect(turn.contents[0]).not.toContain('Pending question')
     turn.release()
-    await waitUntil(() => read().replyPending === undefined, 'gate cleared')
+    // The card lands AFTER the reply (queued behind its turn), so the
+    // transcript and the still-open gate agree.
+    await waitUntil(() => rows().some(r => r.kind === 'tool'), 'card flushed')
+    const kinds = rows().map(r => r.kind)
+    expect(kinds.indexOf('tool')).toBeGreaterThan(kinds.indexOf('user'))
+    expect(read().waitingOn).toBeDefined()
+  })
+})
+
+describe('review round 3 regressions', () => {
+  it('boot clears a question a later user message already answered', async () => {
+    const card = { v: 1, id: 'q_bbbbbbbbbbbbbbbb', question: 'Drop it?', options: [{ label: 'Yes' }, { label: 'No' }], allowOther: true }
+    testGlobal.__bakinProjectIndex = undefined
+    testGlobal.__bakinProjectLock = undefined
+    dir = join(root, `case-${++n}`)
+    repo = createProjectRepository(new MarkdownStorageAdapter(dir))
+    repo.writeProject(project({ waitingOn: { kind: 'input', questionId: card.id, question: card.question, since: '2026-10-26T00:00:00Z' } }))
+    repo.writeBrainstormMessages('p1', [
+      { kind: 'tool', ts: '2026-10-26T00:00:00Z', toolName: 'bakin_exec_projects_request_input', status: 'completed', metadata: { bakinQuestion: card } },
+      { kind: 'user', ts: '2026-10-26T00:01:00Z', content: '**Drop it?** → Yes' },
+      { kind: 'assistant', ts: '2026-10-26T00:02:00Z', content: 'Dropped.' },
+    ])
+    plugin = await activatePlugin(projectsPlugin, dir)
+    await waitUntil(() => read().waitingOn === undefined, 'answered question cleared')
   })
 })

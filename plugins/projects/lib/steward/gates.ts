@@ -28,7 +28,14 @@ import type { ProjectRepository } from '../parser'
 import { withProjectLock, type ProjectService } from '../project-service'
 import type { Project, ProjectGateState } from '../../types'
 import { isStewardTask } from './digest'
+import { serialized } from './admission'
 import { createStewardIdentity } from './tools'
+
+function gateQueues(): Map<string, Promise<unknown>> {
+  const g = globalThis as Record<string, unknown>
+  if (!g.__bakinProjectGateQueues) g.__bakinProjectGateQueues = new Map<string, Promise<unknown>>()
+  return g.__bakinProjectGateQueues as Map<string, Promise<unknown>>
+}
 
 const log = {
   warn: (...args: unknown[]) => console.warn('[projects:steward]', ...args),
@@ -96,14 +103,10 @@ export function createStewardGates({ ctx, repo, turns, projectService }: Steward
    * cleanup or a late request. Held across task APIs; the global project
    * lock is only ever taken INSIDE it, never the other way round.
    */
-  const gateQueues = new Map<string, Promise<unknown>>()
   function withGateLock<T>(projectId: string, fn: () => Promise<T>): Promise<T> {
-    const prior = gateQueues.get(projectId) ?? Promise.resolve()
-    const next = prior.then(fn, fn)
-    const tail = next.then(() => {}, () => {})
-    gateQueues.set(projectId, tail)
-    void tail.then(() => { if (gateQueues.get(projectId) === tail) gateQueues.delete(projectId) })
-    return next
+    // On globalThis (like the project lock): a hot reload keeps serializing
+    // against operations the previous activation still has in flight.
+    return serialized(gateQueues, projectId, fn)
   }
 
   /** Write the gate's terminal state (and anything riding with it) — last, after every effect landed. */
@@ -281,8 +284,10 @@ export function createStewardGates({ ctx, repo, turns, projectService }: Steward
       // The check-in that asked is over once the decision is made; the
       // decision itself earns the lead a follow-up look (runNext), so
       // finalizing that check-in never swallows it.
-      await settleGate(project.id, key, approval.approvalId, decision.option === 'approve' ? 'approved' : 'rejected', followUp)
       await moveTask(gate.stewardTaskId, 'done')
+      // Last, so a failed effect (the close above included) leaves the gate
+      // pending and the retry redoes it.
+      await settleGate(project.id, key, approval.approvalId, decision.option === 'approve' ? 'approved' : 'rejected', followUp)
       changed(project.id)
     })
   }

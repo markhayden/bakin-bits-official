@@ -16,7 +16,7 @@ import type { Project, ProjectSummary } from '../types'
 const root = join(tmpdir(), `projects-steward-routes-${Date.now()}`)
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 
-const testGlobal = globalThis as typeof globalThis & { __bakinProjectIndex?: unknown; __bakinProjectLock?: unknown }
+const testGlobal = globalThis as typeof globalThis & { __bakinProjectIndex?: unknown; __bakinProjectLock?: unknown; __bakinProjectAdmissionFence?: unknown; __bakinProjectGateQueues?: unknown }
 const OPERATOR = { 'X-Bakin-Operator': 'declared' }
 
 let plugin: ActivatedPlugin
@@ -34,6 +34,8 @@ function project(id: string, extra: Partial<Project> = {}): Project {
 beforeEach(async () => {
   testGlobal.__bakinProjectIndex = undefined
   testGlobal.__bakinProjectLock = undefined
+  testGlobal.__bakinProjectAdmissionFence = undefined
+  testGlobal.__bakinProjectGateQueues = undefined
   const dir = join(root, `case-${++n}`)
   repo = createProjectRepository(new MarkdownStorageAdapter(dir))
   plugin = await activatePlugin(projectsPlugin, dir)
