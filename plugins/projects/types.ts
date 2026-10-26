@@ -59,6 +59,8 @@ export interface ProjectStewardState {
   fingerprint?: string
   /** Work-task columns as the open run's brief saw them (what it was shown). */
   briefColumns?: Record<string, string>
+  /** Work-task columns as the last FINISHED run left them — "newly done" is a column change, never an edit. */
+  handledColumns?: Record<string, string>
   /** The fingerprint the last FINISHED run handled — the D20a gate. */
   lastFingerprint?: string
   lastStewardAt?: string

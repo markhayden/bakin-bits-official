@@ -169,3 +169,14 @@ describe('steward run decision', () => {
     expect(stewardEligibility(rejected)).toBeNull()
   })
 })
+
+describe('review round 7 regressions', () => {
+  it('editing finished work raises nothing; work that newly reached done does', () => {
+    const p = project({ tasks: [step('t001', { taskId: 'a' }), step('t002', { taskId: 'b' })], steward: { lastStewardAt: ago(5), handledColumns: { a: 'done', b: 'review' } } })
+    // `a` was already done when the last run finished — an edit after it is not new work.
+    const tasks = [task('a', 'done', { updatedAt: ago(1) }), task('b', 'inProgress')]
+    expect(buildStewardDigest(p, tasks, { now: NOW, stuckAfterMs: STUCK, steward: p.steward }).signals.map(s => s.kind)).toEqual([])
+    const reached = [task('a', 'done', { updatedAt: ago(1) }), task('b', 'done', { updatedAt: ago(1) })]
+    expect(buildStewardDigest(p, reached, { now: NOW, stuckAfterMs: STUCK, steward: p.steward }).signals.find(s => s.kind === 'work-done')?.refs).toEqual(['b'])
+  })
+})

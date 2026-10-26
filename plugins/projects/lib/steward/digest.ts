@@ -107,10 +107,16 @@ export function buildStewardDigest(project: Project, tasks: Task[], opts: Digest
   const inFlight = workTasks.some(t => IN_FLIGHT_COLUMNS.has(t.column))
   if (!inFlight) push('unpromoted', unpromoted.map(step => step.id))
 
-  // Follow-on judgement: work finished since the steward last looked.
+  // Follow-on judgement: work that REACHED done since the steward last
+  // looked — a column change against what the last run left behind (an edit
+  // to finished work moves updatedAt but finishes nothing). Before any run
+  // has finished there is no baseline, so the timestamp stands in.
+  const handled = opts.steward?.handledColumns
   const since = ms(opts.steward?.lastStewardAt)
   push('work-done', workTasks
-    .filter(t => t.column === 'done' && (!Number.isFinite(since) || ms(t.updatedAt) > since))
+    .filter(t => t.column === 'done' && (handled
+      ? handled[t.id] !== 'done'
+      : !Number.isFinite(since) || ms(t.updatedAt) > since))
     .map(t => t.id))
 
   const unfinished = project.tasks.filter(step => !derivedChecked(step))

@@ -168,7 +168,8 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
     if (!project) return
     const tasks = await ctx.tasks.list({ projectId })
     const at = now()
-    const digest = buildStewardDigest(project, tasks, { now: at, stuckAfterMs: stuckAfterMs(), steward: { ...project.steward, lastStewardAt: at.toISOString() } })
+    const handledColumns = Object.fromEntries(tasks.filter(task => !isStewardTask(task)).map(task => [task.id, task.column]))
+    const digest = buildStewardDigest(project, tasks, { now: at, stuckAfterMs: stuckAfterMs(), steward: { ...project.steward, lastStewardAt: at.toISOString(), handledColumns } })
     // Work that finished, blocked or went to review AFTER the brief was
     // frozen was never in front of this run: it earns a follow-up rather
     // than being acknowledged by finalizing (the daily cap bounds it).
@@ -192,8 +193,8 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
         ...(steward.runNext ? { runNext: steward.runNext } : unseen ? { runNext: 'decision' as const } : {}),
         // A foreign task never ran for this project: nothing was handled.
         ...(how === 'foreign'
-          ? { ...(steward.lastFingerprint ? { lastFingerprint: steward.lastFingerprint } : {}), ...(steward.lastStewardAt ? { lastStewardAt: steward.lastStewardAt } : {}) }
-          : { lastFingerprint: digest.fingerprint, lastStewardAt: at.toISOString() }),
+          ? { ...(steward.lastFingerprint ? { lastFingerprint: steward.lastFingerprint } : {}), ...(steward.lastStewardAt ? { lastStewardAt: steward.lastStewardAt } : {}), ...(steward.handledColumns ? { handledColumns: steward.handledColumns } : {}) }
+          : { lastFingerprint: digest.fingerprint, lastStewardAt: at.toISOString(), handledColumns }),
       }
       return true
     })

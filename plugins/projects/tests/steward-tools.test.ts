@@ -404,3 +404,13 @@ describe('review round 6 regressions', () => {
     expect((await ask('too late')).status).toBe(503)
   })
 })
+
+describe('review round 7 regressions', () => {
+  it('a steward row after shutdown is refused, never written through the retired turn service', async () => {
+    await setup()
+    const checkin = tool('bakin_exec_projects_checkin')
+    await projectsPlugin.onShutdown?.()
+    expect(await asSteward(checkin, { projectId: 'p1', taskId: STEWARD_TASK, summary: 'late' })).toEqual(expect.objectContaining({ ok: false, code: 'append_failed' }))
+    expect(rows()).toEqual([])
+  })
+})

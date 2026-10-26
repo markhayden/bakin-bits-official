@@ -110,13 +110,19 @@ export function registerStewardTools({ ctx, repo, turns, gate }: StewardToolDeps
         .slice(0, MAX_ACTIONS)
         .map(action => `- ${clip(action, ACTION_MAX)}`)
       const { project, taskId, agentId } = steward.identity
-      const status = await append(project.id, [{
+      let status: 'appended' | 'queued'
+      try {
+        status = await append(project.id, [{
         kind: 'assistant',
         ts: new Date().toISOString(),
         turnId: `steward:${taskId}`,
         agentId,
-        content: [`Checked in: ${summary}`, ...actions].join('\n'),
-      }])
+          content: [`Checked in: ${summary}`, ...actions].join('\n'),
+        }])
+      } catch (err) {
+        log.warn('check-in could not be posted', { projectId: project.id, err })
+        return { ok: false, error: 'The check-in could not be posted. Try again.', code: 'append_failed' }
+      }
       ctx.activity.audit('steward.checkin', agentId, { projectId: project.id, taskId, actions: actions.length })
       return { ok: true, status }
     },

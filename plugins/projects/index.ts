@@ -273,7 +273,23 @@ const projectsPlugin: BakinPlugin = {
 
     // Sign-off gates ride Bakin's approvals; registered in activate() so a
     // hot reload re-binds them (D26).
-    const stewardGates = createStewardGates({ ctx, repo, turns: brainstormTurns, projectService })
+    // Steward rows (check-ins, questions, sign-off notes) are turn admissions
+    // too: tracked so shutdown drains them, refused once it has begun — never
+    // written through a retired turn service over the next one's live turn.
+    const stewardTurns = new Proxy(brainstormTurns, {
+      get(target, prop) {
+        if (prop === 'appendExternal') {
+          return async (...args: Parameters<ConversationTurnService['appendExternal']>) => {
+            const result = await admitTurn(() => target.appendExternal(...args))
+            if (result === 'closed') throw new Error('Projects is restarting')
+            return result
+          }
+        }
+        const value = Reflect.get(target, prop) as unknown
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    const stewardGates = createStewardGates({ ctx, repo, turns: stewardTurns, projectService })
     stewardGates.registerGates()
 
     activeBrainstormTurns = brainstormTurns
@@ -1379,7 +1395,7 @@ const projectsPlugin: BakinPlugin = {
       },
     })
 
-    registerStewardTools({ ctx, repo, turns: brainstormTurns, gate: inputGate })
+    registerStewardTools({ ctx, repo, turns: stewardTurns, gate: inputGate })
     stewardGates.registerTool()
 
     steward.start()
