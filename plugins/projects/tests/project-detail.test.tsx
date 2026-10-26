@@ -80,13 +80,13 @@ const selectedTab = () => screen.getAllByRole('tab').find(tab => tab.getAttribut
 
 describe('ProjectDetail shell', () => {
   it('a draft opens on the Conversation tab with the transcript and one composer', async () => {
-    mockFetch('p-draft', {
+    mockFetch('proj-draft', {
       brainstormMessages: [
         { kind: 'user', ts: '2026-05-09T10:00:01.000Z', content: 'What did we decide?' },
         { kind: 'assistant', ts: '2026-05-09T10:00:02.000Z', agentId: 'main', content: 'Keep the launch plan focused.' },
       ],
     })
-    render(<ProjectDetail projectId="p-draft" onBack={() => {}} />)
+    render(<ProjectDetail projectId="proj-draft" onBack={() => {}} />)
     await screen.findByText('Keep the launch plan focused.')
     expect(selectedTab()).toBe('Conversation')
     expect(screen.getByRole('tablist', { name: 'Project sections' })).toBeDefined()
@@ -97,8 +97,8 @@ describe('ProjectDetail shell', () => {
 
   it('opens on what matters at each stage', async () => {
     for (const [status, tab] of [['active', 'Steps'], ['completed', 'Files'], ['archived', 'Plan']] as const) {
-      mockFetch(`p-${status}`, { status })
-      render(<ProjectDetail projectId={`p-${status}`} onBack={() => {}} />)
+      mockFetch(`proj-${status}`, { status })
+      render(<ProjectDetail projectId={`proj-${status}`} onBack={() => {}} />)
       await screen.findByRole('tablist', { name: 'Project sections' })
       expect(selectedTab()).toBe(tab)
       cleanup()
@@ -106,8 +106,8 @@ describe('ProjectDetail shell', () => {
   })
 
   it('desktop: other tabs dock the conversation; collapsing unmounts it; exactly one composer throughout', async () => {
-    mockFetch('p-dock', { status: 'active' })
-    render(<ProjectDetail projectId="p-dock" onBack={() => {}} />)
+    mockFetch('proj-dock', { status: 'active' })
+    render(<ProjectDetail projectId="proj-dock" onBack={() => {}} />)
     await screen.findByTestId('project-checklist')
     const dock = screen.getByRole('complementary', { name: 'Project conversation' })
     expect(within(dock).getAllByTestId('chat-input')).toHaveLength(1)
@@ -125,16 +125,16 @@ describe('ProjectDetail shell', () => {
 
   it('an unseen reply from before the visit marks a remembered-collapsed dock', async () => {
     ;(globalThis as unknown as { __bakinTestSdkHooks: Record<string, unknown> }).__bakinTestSdkHooks.useCollapsedAside = () => React.useState(true)
-    mockFetch('p-unread', { status: 'active', brainstormUnread: true })
-    render(<ProjectDetail projectId="p-unread" onBack={() => {}} />)
+    mockFetch('proj-unread', { status: 'active', brainstormUnread: true })
+    render(<ProjectDetail projectId="proj-unread" onBack={() => {}} />)
     await screen.findByTestId('project-checklist')
     expect(await screen.findByLabelText('Unread reply')).toBeDefined()
   })
 
   it('nothing is marked seen before the project loads (the tab default is only a guess until then)', async () => {
     ;(globalThis as unknown as { __bakinTestSdkHooks: Record<string, unknown> }).__bakinTestSdkHooks.useCollapsedAside = () => React.useState(true)
-    mockFetch('p-early', { status: 'active', brainstormUnread: true })
-    render(<ProjectDetail projectId="p-early" onBack={() => {}} />)
+    mockFetch('proj-early', { status: 'active', brainstormUnread: true })
+    render(<ProjectDetail projectId="proj-early" onBack={() => {}} />)
     await screen.findByTestId('project-checklist')
     const calls = (globalThis.fetch as unknown as { mock: { calls: [string][] } }).mock.calls.map(([url]) => String(url))
     expect(calls.filter(url => url.endsWith('/brainstorm/seen'))).toEqual([])
@@ -142,8 +142,8 @@ describe('ProjectDetail shell', () => {
 
   it('mobile: no dock; an Ask button switches to the conversation', async () => {
     desktop = false
-    mockFetch('p-mobile', { status: 'active' })
-    render(<ProjectDetail projectId="p-mobile" onBack={() => {}} />)
+    mockFetch('proj-mobile', { status: 'active' })
+    render(<ProjectDetail projectId="proj-mobile" onBack={() => {}} />)
     await screen.findByTestId('project-checklist')
     expect(screen.queryByRole('complementary', { name: 'Project conversation' })).toBeNull()
     expect(composers()).toHaveLength(0)
@@ -153,8 +153,8 @@ describe('ProjectDetail shell', () => {
   })
 
   it('has no right rail, no resize divider and no status picker', async () => {
-    mockFetch('p-plain', { status: 'active' })
-    render(<ProjectDetail projectId="p-plain" onBack={() => {}} />)
+    mockFetch('proj-plain', { status: 'active' })
+    render(<ProjectDetail projectId="proj-plain" onBack={() => {}} />)
     await screen.findByTestId('project-checklist')
     expect(screen.queryByText('Project information')).toBeNull()
     expect(screen.queryByRole('separator')).toBeNull()
@@ -162,8 +162,8 @@ describe('ProjectDetail shell', () => {
   })
 
   it('Plan tab: Edit plan swaps in the editor with the plan body', async () => {
-    mockFetch('p-plan', { status: 'archived', body: '# Plan body' })
-    render(<ProjectDetail projectId="p-plan" onBack={() => {}} />)
+    mockFetch('proj-plan', { status: 'archived', body: '# Plan body' })
+    render(<ProjectDetail projectId="proj-plan" onBack={() => {}} />)
     const edit = await screen.findByRole('button', { name: 'Edit plan' })
     await act(async () => { fireEvent.click(edit) })
     expect(screen.getByTestId('project-editor').textContent).toBe('# Plan body')
@@ -187,19 +187,19 @@ describe('Plan updated (D15)', () => {
   }
 
   it('an unseen agent revision dots the Plan tab and shows the notice with the conversation', async () => {
-    mockFetch('p-rev', agentRevision, { '/api/plugins/projects/p-rev/history': () => history })
-    render(<ProjectDetail projectId="p-rev" onBack={() => {}} />)
+    mockFetch('proj-rev', agentRevision, { '/api/plugins/projects/proj-rev/history': () => history })
+    render(<ProjectDetail projectId="proj-rev" onBack={() => {}} />)
     expect(await screen.findByText(/^Plan updated/)).toBeDefined()
     expect(screen.getByRole('tab', { name: 'Plan updated' })).toBeDefined()
   })
 
   it('Review changes opens the Plan history against the last-seen revision and marks the new one seen', async () => {
     const seen: unknown[] = []
-    mockFetch('p-review', agentRevision, {
-      '/api/plugins/projects/p-review/history': () => history,
-      '/api/plugins/projects/p-review/plan/seen': (init) => { seen.push(JSON.parse(String(init?.body))); return { ok: true, planSeenRevision: 3 } },
+    mockFetch('proj-review', agentRevision, {
+      '/api/plugins/projects/proj-review/history': () => history,
+      '/api/plugins/projects/proj-review/plan/seen': (init) => { seen.push(JSON.parse(String(init?.body))); return { ok: true, planSeenRevision: 3 } },
     })
-    render(<ProjectDetail projectId="p-review" onBack={() => {}} />)
+    render(<ProjectDetail projectId="proj-review" onBack={() => {}} />)
     const review = await screen.findByRole('button', { name: 'Review changes' })
     await act(async () => { fireEvent.click(review) })
     expect(selectedTab()).toMatch(/^Plan/)
@@ -217,28 +217,28 @@ describe('Plan updated (D15)', () => {
     const snapshots = [...history.history]
     globalThis.fetch = mock(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : String(input)
-      if (url === '/api/plugins/projects/p-hold') return Response.json(projectPayload('p-hold', live))
-      if (url === '/api/plugins/projects/p-hold/history') return Response.json({ history: snapshots })
+      if (url === '/api/plugins/projects/proj-hold') return Response.json(projectPayload('proj-hold', live))
+      if (url === '/api/plugins/projects/proj-hold/history') return Response.json({ history: snapshots })
       if (url.endsWith('/plan/seen')) { live.planSeenRevision = live.planRevision; return Response.json({ ok: true }) }
       if (url.endsWith('/brainstorm/seen')) return Response.json({ ok: true })
       if (url.endsWith('/files')) return Response.json({ produced: [] })
       throw new Error(`Unexpected fetch: ${url}`)
     }) as unknown as typeof fetch
-    render(<ProjectDetail projectId="p-hold" onBack={() => {}} />)
+    render(<ProjectDetail projectId="proj-hold" onBack={() => {}} />)
     const review = await screen.findByRole('button', { name: 'Review changes' })
     await act(async () => { fireEvent.click(review) })
     await within(await screen.findByTestId('plan-history-diff')).findByText('seen version')
     // Another agent revision lands while the user is still reviewing.
     snapshots.push({ ts: '2026-10-25T09:45:00.000Z', author: 'agent', body: 'latest plan', revision: 3 })
     Object.assign(live, { body: 'newest plan', planRevision: 4 })
-    await act(async () => { emitPluginEvent({ event: 'projects.changed', projectId: 'p-hold' }) })
+    await act(async () => { emitPluginEvent({ event: 'projects.changed', projectId: 'proj-hold' }) })
     await within(screen.getByTestId('plan-history-diff')).findByText('newest plan')
     expect(within(screen.getByTestId('plan-history-diff')).getByText('seen version')).toBeDefined()
   })
 
   it('a user\'s own revision raises nothing', async () => {
-    mockFetch('p-own', { ...agentRevision, planUpdatedBy: 'user' })
-    render(<ProjectDetail projectId="p-own" onBack={() => {}} />)
+    mockFetch('proj-own', { ...agentRevision, planUpdatedBy: 'user' })
+    render(<ProjectDetail projectId="proj-own" onBack={() => {}} />)
     await screen.findByRole('tablist', { name: 'Project sections' })
     expect(screen.queryByText(/^Plan updated/)).toBeNull()
     expect(screen.getByRole('tab', { name: 'Plan' })).toBeDefined()
@@ -249,50 +249,50 @@ describe('ProjectDetail brainstorm durability (bakin#703)', () => {
   it('echoes the user message immediately on send — before the 202 lands', async () => {
     let resolvePost: () => void = () => {}
     const askBodies: unknown[] = []
-    mockFetch('p-703', {}, {
-      '/api/plugins/projects/p-703/ask': async (init) => {
+    mockFetch('proj-703', {}, {
+      '/api/plugins/projects/proj-703/ask': async (init) => {
         askBodies.push(JSON.parse(String(init?.body)))
         await new Promise<void>((resolve) => { resolvePost = resolve })
         return { ok: true, streaming: true }
       },
     })
-    render(<ProjectDetail projectId="p-703" onBack={() => {}} />)
+    render(<ProjectDetail projectId="proj-703" onBack={() => {}} />)
     const input = await screen.findByTestId('chat-input')
     fireEvent.change(input, { target: { value: 'What next?' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() => expect(screen.getByText('What next?')).toBeDefined())
     // The lead answers unless the user picked a one-off consult.
-    expect(askBodies).toEqual([{ projectId: 'p-703', prompt: 'What next?', agent: 'main' }])
+    expect(askBodies).toEqual([{ projectId: 'proj-703', prompt: 'What next?', agent: 'main' }])
     await act(async () => { resolvePost() })
   })
 
   it('answering the lead\'s question card sends the formatted answer to the lead', async () => {
     const asks: unknown[] = []
     const question = { v: 1, id: 'q_0123456789abcdef', question: 'Which inbox?', options: [{ label: 'Personal' }, { label: 'Work' }], recommended: 0, allowOther: true }
-    mockFetch('p-ask', {
+    mockFetch('proj-ask', {
       brainstormMessages: [
         { kind: 'user', ts: '2026-10-25T10:00:00.000Z', content: 'help me clean my inbox' },
         { kind: 'tool', ts: '2026-10-25T10:00:01.000Z', toolName: 'bakin_exec_ask_user', status: 'completed', metadata: { bakinQuestion: question } },
       ],
-    }, { '/api/plugins/projects/p-ask/ask': (init) => { asks.push(JSON.parse(String(init?.body))); return { ok: true } } })
-    render(<ProjectDetail projectId="p-ask" onBack={() => {}} />)
+    }, { '/api/plugins/projects/proj-ask/ask': (init) => { asks.push(JSON.parse(String(init?.body))); return { ok: true } } })
+    render(<ProjectDetail projectId="proj-ask" onBack={() => {}} />)
     const work = await screen.findByRole('button', { name: 'Work' })
     await act(async () => { fireEvent.click(work) })
-    expect(asks).toEqual([{ projectId: 'p-ask', prompt: '**Which inbox?** → Work', agent: 'main' }])
+    expect(asks).toEqual([{ projectId: 'proj-ask', prompt: '**Which inbox?** → Work', agent: 'main' }])
   })
 
   it('rehydrates a mid-flight turn on mount and keeps streaming over the bus', async () => {
-    mockFetch('p-live', {
+    mockFetch('proj-live', {
       brainstormMessages: [
         { kind: 'user', ts: '2026-07-20T10:00:01.000Z', content: 'Long question' },
         { kind: 'assistant', ts: '2026-07-20T10:00:02.000Z', agentId: 'main', content: 'Partial reply so far' },
       ],
       brainstormStreaming: true,
     })
-    render(<ProjectDetail projectId="p-live" onBack={() => {}} />)
+    render(<ProjectDetail projectId="proj-live" onBack={() => {}} />)
     await waitFor(() => expect(screen.getByText('Partial reply so far')).toBeDefined())
     act(() => {
-      emitPluginEvent({ event: 'projects.brainstorm.chunk', projectId: 'p-live', chunk: { type: 'text', content: 'live continuation' } })
+      emitPluginEvent({ event: 'projects.brainstorm.chunk', projectId: 'proj-live', chunk: { type: 'text', content: 'live continuation' } })
     })
     await waitFor(() => expect(screen.getByText(/live continuation/)).toBeDefined())
   })
@@ -300,19 +300,19 @@ describe('ProjectDetail brainstorm durability (bakin#703)', () => {
 
 describe('Files tab', () => {
   it('lists what the project\'s tasks produced apart from what is attached', async () => {
-    mockFetch('p-produced', {
+    mockFetch('proj-produced', {
       status: 'completed',
       assets: [{ assetId: 'brief', label: 'Brief' }],
       resolvedAssets: [{ assetId: 'brief', label: 'Brief', type: 'text' }],
     }, {
-      '/api/plugins/projects/p-produced/files': () => ({
+      '/api/plugins/projects/proj-produced/files': () => ({
         produced: [
           { assetId: 'hero', type: 'images', description: 'Hero image', taskId: 'board-a' },
           { assetId: 'brief', type: 'text', description: 'Brief', taskId: 'board-a' },
         ],
       }),
     })
-    render(<ProjectDetail projectId="p-produced" onBack={() => {}} />)
+    render(<ProjectDetail projectId="proj-produced" onBack={() => {}} />)
     const produced = await screen.findByRole('list', { name: 'Produced files' })
     expect(within(produced).getByText('Hero image')).toBeDefined()
     // Already attached ⇒ listed once, under Attached.
@@ -322,12 +322,12 @@ describe('Files tab', () => {
 
 
   it('previews a non-image file without an image and links to the asset', async () => {
-    mockFetch('p-files', {
+    mockFetch('proj-files', {
       status: 'completed',
       assets: [{ assetId: '20260531-brief-abc12345', label: 'Launch brief' }],
       resolvedAssets: [{ assetId: '20260531-brief-abc12345', label: 'Launch brief', type: 'pdf', description: 'Campaign planning PDF' }],
     })
-    render(<ProjectDetail projectId="p-files" onBack={() => {}} />)
+    render(<ProjectDetail projectId="proj-files" onBack={() => {}} />)
     fireEvent.click(await screen.findByRole('button', { name: 'Open Launch brief' }))
     const dialog = await screen.findByRole('dialog', { name: /Launch brief/ })
     expect(within(dialog).queryByRole('img')).toBeNull()
@@ -336,23 +336,23 @@ describe('Files tab', () => {
 
   it('produced files reload when the project signals a board change', async () => {
     let filesCalls = 0
-    mockFetch('p-reload', { status: 'completed' }, { '/api/plugins/projects/p-reload/files': () => { filesCalls++; return { produced: [] } } })
-    render(<ProjectDetail projectId="p-reload" onBack={() => {}} />)
+    mockFetch('proj-reload', { status: 'completed' }, { '/api/plugins/projects/proj-reload/files': () => { filesCalls++; return { produced: [] } } })
+    render(<ProjectDetail projectId="proj-reload" onBack={() => {}} />)
     await screen.findByText('Nothing produced yet')
     const before = filesCalls
-    await act(async () => { emitPluginEvent({ event: 'projects.changed', projectId: 'p-reload', action: 'task.statusChanged' }) })
+    await act(async () => { emitPluginEvent({ event: 'projects.changed', projectId: 'proj-reload', action: 'task.statusChanged' }) })
     await waitFor(() => expect(filesCalls).toBeGreaterThan(before))
   })
 
   it('offers relink and detach for a missing file', async () => {
-    mockFetch('p-missing', {
+    mockFetch('proj-missing', {
       status: 'completed',
       assets: [{ assetId: 'deleted-image.png', label: 'Deleted image' }],
       resolvedAssets: [{ assetId: 'deleted-image.png', label: 'Deleted image', type: 'unknown', missing: true }],
     }, {
       '/api/plugins/assets/versioned': () => ({ assets: [{ assetId: '20260531-replacement-abc12345', type: 'images', description: 'Replacement image' }] }),
     })
-    render(<ProjectDetail projectId="p-missing" onBack={() => {}} />)
+    render(<ProjectDetail projectId="proj-missing" onBack={() => {}} />)
     expect(await screen.findByText("can't find asset")).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: 'Relink Deleted image' }))
     expect(await screen.findByText('20260531-replacement-abc12345')).toBeDefined()
