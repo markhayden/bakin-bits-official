@@ -9,6 +9,14 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- `messaging` (0.12.3), `projects` (0.11.5): every dispatched `bakin`
+  CLI command declares its complete `args` (positionals plus every flag,
+  generated from the exec tool's own schema). Bakin's next release parses
+  plugin CLI arguments strictly from these declarations: strings stay literal
+  (no comma-splitting or JSON coercion), and unknown flags and extra arguments
+  are refused (markhayden/bakin#1028). Current Bakin ignores the field, so
+  install these before upgrading Bakin. A drift test pins each declaration to
+  its exec tool's zod parameters.
 - `messaging` (0.12.2), `terminal` (0.3.4): require Bakin `>=0.0.1-rc.42`.
   Both client bundles are built for the `react19-sdk-focused-v2` contract
   (zod host-provided, markhayden/bakin#948), which rc.41 does not serve;

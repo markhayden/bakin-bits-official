@@ -1,7 +1,7 @@
 {
   "id": "projects",
   "name": "Projects",
-  "version": "0.11.4",
+  "version": "0.11.5",
   "bakin": ">=0.0.1-rc.41",
   "description": "Project management with specs, checklists, task linking, and agent access via MCP tools",
   "contentFiles": [],
@@ -392,7 +392,19 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_list"
-        }
+        },
+        "args": [
+          {
+            "name": "status",
+            "type": "string",
+            "values": [
+              "draft",
+              "active",
+              "completed",
+              "archived"
+            ]
+          }
+        ]
       },
       {
         "name": "projects:get",
@@ -401,7 +413,15 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_get"
-        }
+        },
+        "args": [
+          {
+            "name": "projectId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          }
+        ]
       },
       {
         "name": "projects:create",
@@ -410,7 +430,27 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_create"
-        }
+        },
+        "args": [
+          {
+            "name": "title",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "body",
+            "type": "string"
+          },
+          {
+            "name": "owner",
+            "type": "string"
+          },
+          {
+            "name": "tasks",
+            "type": "string[]"
+          }
+        ]
       },
       {
         "name": "projects:update",
@@ -419,7 +459,37 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_update"
-        }
+        },
+        "args": [
+          {
+            "name": "projectId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "title",
+            "type": "string"
+          },
+          {
+            "name": "status",
+            "type": "string",
+            "values": [
+              "draft",
+              "active",
+              "completed",
+              "archived"
+            ]
+          },
+          {
+            "name": "body",
+            "type": "string"
+          },
+          {
+            "name": "owner",
+            "type": "string"
+          }
+        ]
       },
       {
         "name": "projects:apply-plan",
@@ -428,7 +498,45 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_apply_plan"
-        }
+        },
+        "args": [
+          {
+            "name": "projectId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "title",
+            "type": "string"
+          },
+          {
+            "name": "status",
+            "type": "string",
+            "values": [
+              "draft",
+              "active",
+              "completed",
+              "archived"
+            ]
+          },
+          {
+            "name": "body",
+            "type": "string"
+          },
+          {
+            "name": "appendBody",
+            "type": "string"
+          },
+          {
+            "name": "owner",
+            "type": "string"
+          },
+          {
+            "name": "checklistItems",
+            "type": "string[]"
+          }
+        ]
       },
       {
         "name": "projects:delete",
@@ -437,7 +545,15 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_delete"
-        }
+        },
+        "args": [
+          {
+            "name": "projectId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          }
+        ]
       },
       {
         "name": "projects:add-item",
@@ -446,7 +562,21 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_add_item"
-        }
+        },
+        "args": [
+          {
+            "name": "projectId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "title",
+            "type": "string",
+            "positional": true,
+            "required": true
+          }
+        ]
       },
       {
         "name": "projects:toggle-item",
@@ -455,7 +585,27 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_toggle_item"
-        }
+        },
+        "args": [
+          {
+            "name": "projectId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "itemId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "checked",
+            "type": "boolean",
+            "positional": true,
+            "required": true
+          }
+        ]
       },
       {
         "name": "projects:update-item",
@@ -464,7 +614,29 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_update_item"
-        }
+        },
+        "args": [
+          {
+            "name": "projectId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "itemId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "title",
+            "type": "string"
+          },
+          {
+            "name": "description",
+            "type": "string"
+          }
+        ]
       },
       {
         "name": "projects:remove-item",
@@ -473,7 +645,21 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_remove_item"
-        }
+        },
+        "args": [
+          {
+            "name": "projectId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "taskItemId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          }
+        ]
       },
       {
         "name": "projects:link-item",
@@ -482,7 +668,27 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_link_item"
-        }
+        },
+        "args": [
+          {
+            "name": "projectId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "taskItemId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "taskId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          }
+        ]
       },
       {
         "name": "projects:promote-item",
@@ -491,7 +697,25 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_promote_item"
-        }
+        },
+        "args": [
+          {
+            "name": "projectId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "taskItemId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "assignee",
+            "type": "string"
+          }
+        ]
       },
       {
         "name": "projects:attach-asset",
@@ -500,7 +724,25 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_attach_asset"
-        }
+        },
+        "args": [
+          {
+            "name": "projectId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "assetId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "label",
+            "type": "string"
+          }
+        ]
       },
       {
         "name": "projects:relink-asset",
@@ -509,7 +751,31 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_relink_asset"
-        }
+        },
+        "args": [
+          {
+            "name": "projectId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "assetId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "newAssetId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "label",
+            "type": "string"
+          }
+        ]
       },
       {
         "name": "projects:detach-asset",
@@ -518,7 +784,21 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_detach_asset"
-        }
+        },
+        "args": [
+          {
+            "name": "projectId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "assetId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          }
+        ]
       },
       {
         "name": "projects:ask",
@@ -527,7 +807,25 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_ask"
-        }
+        },
+        "args": [
+          {
+            "name": "projectId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "message",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "agent",
+            "type": "string"
+          }
+        ]
       }
     ],
     "settings": [

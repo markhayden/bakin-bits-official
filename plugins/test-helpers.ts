@@ -563,3 +563,33 @@ export async function callTool(
 ): Promise<Record<string, unknown>> {
   return tool.handler(params, agent)
 }
+
+type ZodLike = { _zod: { def: { type: string; innerType?: ZodLike; element?: ZodLike; entries?: Record<string, string> } } }
+
+/**
+ * The CLI argument surface an exec tool's zod parameters imply: name → type,
+ * required, and enum values. `cliCommands[].args` must equal it (drift guard
+ * for Bakin's strict declared-args CLI).
+ */
+export function execToolArgShape(tool: ExecToolDefinition): Record<string, { type: string; required: boolean; values?: string[] }> {
+  const shape: Record<string, { type: string; required: boolean; values?: string[] }> = {}
+  for (const [name, schema] of Object.entries((tool as { parameters?: Record<string, ZodLike> }).parameters ?? {})) {
+    let current = schema
+    let required = true
+    while (['optional', 'default', 'nullable'].includes(current._zod.def.type)) { required = false; current = current._zod.def.innerType! }
+    const def = current._zod.def
+    if (def.type === 'enum') shape[name] = { type: 'string', required, values: Object.values(def.entries!) }
+    else shape[name] = { type: def.type === 'array' ? `${def.element!._zod.def.type}[]` : def.type, required }
+  }
+  return shape
+}
+
+/** Every dispatched cliCommand's declared args, keyed like `execToolArgShape`. */
+export function declaredCliArgShapes(manifest: { contributes?: { cliCommands?: Array<{ name: string; dispatch?: { type: string; name?: string }; args?: Array<{ name: string; type: string; required?: boolean; values?: string[] }> }> } }) {
+  return (manifest.contributes?.cliCommands ?? []).filter((command) => command.dispatch?.type === 'execTool').map((command) => ({
+    command: command.name,
+    tool: command.dispatch!.name!,
+    args: Object.fromEntries((command.args ?? []).map((arg) => [arg.name, { type: arg.type, required: arg.required === true, ...(arg.values ? { values: arg.values } : {}) }])),
+  }))
+}
+
