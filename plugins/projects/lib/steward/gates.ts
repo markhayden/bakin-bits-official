@@ -38,7 +38,7 @@ function gateQueues(): Map<string, Promise<unknown>> {
 }
 
 const log = {
-  warn: (...args: unknown[]) => console.warn('[projects:steward]', ...args),
+  warn: (...args: unknown[]) => console.warn('[projects steward]', ...args),
 }
 
 export const GATE_KINDS = ['complete', 'signoff'] as const

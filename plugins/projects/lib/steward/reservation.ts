@@ -20,9 +20,9 @@ import { buildStewardDescription } from './prompt'
 import { decideStewardRun, stewardEligibility, type StewardSkipReason } from './scan'
 
 const log = {
-  info: (...args: unknown[]) => console.info('[projects:steward]', ...args),
-  warn: (...args: unknown[]) => console.warn('[projects:steward]', ...args),
-  error: (...args: unknown[]) => console.error('[projects:steward]', ...args),
+  info: (...args: unknown[]) => console.info('[projects steward]', ...args),
+  warn: (...args: unknown[]) => console.warn('[projects steward]', ...args),
+  error: (...args: unknown[]) => console.error('[projects steward]', ...args),
 }
 
 export const STEWARD_TAG = 'project-steward'

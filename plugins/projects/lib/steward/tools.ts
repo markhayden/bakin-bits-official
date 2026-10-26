@@ -22,7 +22,7 @@ import { withAdmissionFence } from './admission'
 import { capBytes } from './prompt'
 
 const log = {
-  warn: (...args: unknown[]) => console.warn('[projects:steward]', ...args),
+  warn: (...args: unknown[]) => console.warn('[projects steward]', ...args),
 }
 
 export const STEWARD_CONTEXT_MAX_BYTES = 1_024
