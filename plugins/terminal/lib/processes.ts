@@ -64,10 +64,12 @@ export class TmuxProcesses implements ProcessDriver {
     const control = this.control(id)
     await control.ready
     // Browser and agent input always reaches the program: a native client's
-    // scrollback (copy mode) is cancelled first, in the same ordered queue.
-    const cancel = control.command(['if-shell', '-F', '-t', id, '#{pane_in_mode}', `send-keys -X -t ${id} cancel`])
-    const keys = control.sendKeys(id, new TextEncoder().encode(data))
-    await Promise.all([cancel, keys])
+    // scrollback (copy mode) is cancelled first. Each step is its own awaited
+    // command — a command that runs another (if-shell) emits extra reply
+    // blocks and would break the control client's FIFO correlation.
+    const [mode] = await control.command(['display-message', '-p', '-t', id, '#{pane_in_mode}'])
+    if (mode?.trim() === '1') await control.command(['send-keys', '-X', '-t', id, 'cancel'])
+    await control.sendKeys(id, new TextEncoder().encode(data))
   }
   connected(id: string): boolean { return this.clients.has(id) && !this.controls.get(id)?.isClosed }
   async resize(id: string, cols: number, rows: number): Promise<void> {

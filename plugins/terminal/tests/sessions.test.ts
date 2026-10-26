@@ -193,3 +193,12 @@ test('nextOutput resolves on new output, on output that landed before it subscri
   await aborted
 })
 
+test('service setup runs in the same queue as creation, never in the middle of one', async () => {
+  const { manager } = fixture()
+  const order: string[] = []
+  const creating = manager.create({ title: 'Racing', cwd: '/tmp', program: 'shell' }, human).then(() => order.push('created'))
+  const setup = manager.setupService(async () => { order.push('setup') })
+  await Promise.all([creating, setup])
+  expect(order).toEqual(['created', 'setup'])
+})
+

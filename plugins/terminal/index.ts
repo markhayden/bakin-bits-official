@@ -52,7 +52,7 @@ export default definePlugin({
       const cursor = z.coerce.number().int().nonnegative().parse(url.searchParams.get('cursor') ?? 0)
       return Response.json(sessions().output(url.searchParams.get('id') ?? '', principal, cursor))
     }),
-    route('/service', 'POST', 'Set up the persistent terminal service', async (request) => { human(request); await service?.install(); await sessions().start(); return Response.json({ ready: true }) }),
+    route('/service', 'POST', 'Set up the persistent terminal service', async (request) => { human(request); await sessions().setupService(() => service!.install()); return Response.json({ ready: true }) }),
   ],
   settingsSchema: { fields: [
     { key: 'enabledAgents', label: 'Enable terminal access', description: 'Enabled agents can open and operate terminal sessions. A session is a real shell running as your user, so an enabled agent can read any file you can — including stored API keys and credentials. Enable only agents you trust with full access to this machine.', type: 'agent-toggles', default: ['main'] },
@@ -110,8 +110,7 @@ export default definePlugin({
         if (!item) return []
         op.stage('setup')
         try {
-          await service!.install()
-          await sessions().start()
+          await sessions().setupService(() => service!.install())
           return [{ itemId: item.id, actionId: item.actionId, status: 'applied', message: 'The Terminal service runs the current configuration.', affectedCheckIds: ['terminal.service'], changes: item.changes }]
         } catch (error) {
           return [{ itemId: item.id, actionId: item.actionId, status: 'failed', message: error instanceof Error ? error.message : String(error), affectedCheckIds: ['terminal.service'], changes: [] }]
@@ -138,19 +137,19 @@ export default definePlugin({
           ['maintenance', 'Terminal maintenance failed', maintenanceFailed],
           ['retention', `${retained.length} terminal worktrees need review`, retained.length > 0],
         ] as const) {
-          if (updateRequired) observations.push({ key: 'service-update', status: 'warning', summary: 'Terminal service update available', incident: {
-          key: 'service-update', declarationId: 'service-update', subject: TERMINAL_SUBJECT, title: 'Terminal service update available',
-          impact: 'Terminal runs an older service setup; native attach and the current terminal configuration need the update. It applies once no session is live.',
-          class: 'service_failure', disposition: 'watch',
-          resolution: { key: 'apply', type: 'repair', actionId: 'setup-service', label: 'Apply update' },
-        } })
-        if (problem) observations.push({ key, status: 'warning', summary, incident: {
+          if (problem) observations.push({ key, status: 'warning', summary, incident: {
             key, declarationId: key, subject: TERMINAL_SUBJECT, title: summary,
             impact: key === 'retention' ? 'Unfinished work is retained and may block new worktrees.' : 'Terminal operations or cleanup may be unavailable.',
             class: key === 'retention' ? 'cleanup_backlog' : 'service_failure', disposition: 'watch',
             resolution: { key: 'review', type: 'human', needs: 'decision', label: 'Open Terminal', href: '/terminal' },
           } })
         }
+        if (updateRequired) observations.push({ key: 'service-update', status: 'warning', summary: 'Terminal service update available', incident: {
+          key: 'service-update', declarationId: 'service-update', subject: TERMINAL_SUBJECT, title: 'Terminal service update available',
+          impact: 'Terminal runs an older service setup; native attach and the current terminal configuration need the update. It applies once no session is live.',
+          class: 'service_failure', disposition: 'watch',
+          resolution: { key: 'apply', type: 'repair', actionId: 'setup-service', label: 'Apply update' },
+        } })
         return { outcome: 'observed', observations: observations.length ? [observations[0]!, ...observations.slice(1)] : [{ key: 'service', status: 'healthy', summary: 'Terminal service and retention are healthy.' }] }
       },
     })

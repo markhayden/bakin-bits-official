@@ -38,16 +38,8 @@ export class Sessions {
     authorize(session, principal, this.enabled())
     return session
   }
-  async start(): Promise<void> {
-    for (const session of this.store.sessions()) {
-      if (session.state !== 'running') continue
-      if (await this.driver.alive(session.id)) {
-        // A restarted service may have lost pane options; titles are Bakin's.
-        await this.driver.title(session)
-        this.attach(session)
-      } else { session.state = 'exited'; this.store.save(session) }
-    }
-  }
+  /** Boot: reattach live sessions (a restarted service may have lost titles). */
+  start(): Promise<void> { return this.setupService(async () => {}) }
   /** The newest stored output cursor for a session (0 when none). */
   latestCursor(id: string): number {
     return this.store.output(id, Number.MAX_SAFE_INTEGER).cursor
@@ -302,6 +294,22 @@ export class Sessions {
     }
   }
   sweep(): Promise<void> { return this.run(() => this.sweepUnlocked()) }
+  /**
+   * Set up (or update) the tmux service in the manager's queue, so it can
+   * never land in the middle of a session's creation, then reattach.
+   */
+  setupService(install: () => Promise<void>): Promise<void> {
+    return this.run(async () => {
+      await install()
+      for (const session of this.store.sessions()) {
+        if (session.state !== 'running') continue
+        if (await this.driver.alive(session.id)) {
+          await this.driver.title(session)
+          this.attach(session)
+        } else { session.state = 'exited'; this.store.save(session) }
+      }
+    })
+  }
   async beforeUninstall(stop: () => Promise<void>): Promise<void> {
     await this.run(async () => {
       if (this.store.sessions().some((s) => s.state !== 'completed' || s.worktreePath)) throw new TerminalError('Complete sessions and review retained worktrees before removing Terminal')

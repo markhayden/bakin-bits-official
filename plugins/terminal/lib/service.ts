@@ -54,7 +54,17 @@ export class TerminalService {
    */
   private fingerprint(tmux: string): string {
     const pin = tmuxPin()
-    return createHash('sha256').update(JSON.stringify({ tmux, version: pin.version, sha256: pin.sha256, config: tmuxConfig(), args: this.programArguments(tmux) })).digest('hex')
+    // The canonical plist without its environment dictionary covers program
+    // arguments, KeepAlive and RunAtLoad.
+    return createHash('sha256').update(JSON.stringify({ version: pin.version, sha256: pin.sha256, config: tmuxConfig(), plist: this.plistXml(tmux, {}) })).digest('hex')
+  }
+  private plistXml(tmux: string, env: Record<string, string>): string {
+    const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
+    return `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>
+      <key>Label</key><string>${this.label}</string><key>ProgramArguments</key><array>${this.programArguments(tmux).map((part) => `<string>${escape(part)}</string>`).join('')}</array>
+      <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+      <key>EnvironmentVariables</key><dict>${Object.entries(env).map(([key, value]) => `<key>${key}</key><string>${escape(value)}</string>`).join('')}</dict>
+      </dict></plist>`
   }
   private programArguments(tmux: string): string[] {
     return [tmux, '-D', '-S', this.socket, '-f', join(this.root, 'tmux.conf')]
@@ -101,8 +111,9 @@ export class TerminalService {
    */
   async updateRequired(): Promise<boolean> {
     const tmux = this.tmux
-    if (!tmux || !await this.installedProgram()) return false
-    return this.recordedFingerprint() !== this.fingerprint(tmux)
+    const program = tmux ? await this.installedProgram() : undefined
+    if (!tmux || !program) return false
+    return program !== tmux || this.recordedFingerprint() !== this.fingerprint(tmux)
   }
   install(): Promise<void> {
     if (!this.setup) {
@@ -119,7 +130,7 @@ export class TerminalService {
     const program = await this.installedProgram()
     const ready = await this.ready()
     const desired = this.fingerprint(tmux)
-    if (ready && program && this.recordedFingerprint() === desired) return
+    if (ready && program === tmux && this.recordedFingerprint() === desired) return
     if (ready) {
       // An empty persistent server reports "no current target" from list-panes.
       // Count all live panes, including sessions not recorded by the plugin.
@@ -135,17 +146,11 @@ export class TerminalService {
       const job = Bun.spawn(['launchctl', 'print', `gui/${process.getuid!()}/${this.label}`], { stdout: 'ignore', stderr: 'ignore' })
       if (await job.exited !== 113) throw new TerminalError('Terminal process state is unknown. Its service is still registered; no changes were made.', 503)
     }
-    const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
     mkdirSync(join(homedir(), 'Library/LaunchAgents'), { recursive: true })
-    const env = terminalEnvironment()
     // Any previous record is void the moment the service is replaced.
     if (existsSync(this.record)) unlinkSync(this.record)
     writeFileSync(join(this.root, 'tmux.conf'), tmuxConfig(), { mode: 0o600 })
-    writeFileSync(this.plist, `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>
-      <key>Label</key><string>${this.label}</string><key>ProgramArguments</key><array>${this.programArguments(tmux).map((part) => `<string>${escape(part)}</string>`).join('')}</array>
-      <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
-      <key>EnvironmentVariables</key><dict>${Object.entries(env).map(([key, value]) => `<key>${key}</key><string>${escape(value)}</string>`).join('')}</dict>
-      </dict></plist>`, { mode: 0o600 })
+    writeFileSync(this.plist, this.plistXml(tmux, terminalEnvironment()), { mode: 0o600 })
     const result = Bun.spawn(['launchctl', 'bootstrap', `gui/${process.getuid!()}`, this.plist], { stdout: 'ignore', stderr: 'pipe' })
     if (await result.exited) throw new TerminalError('Could not bootstrap the Terminal LaunchAgent', 503)
     for (let i = 0; i < 40; i++) {

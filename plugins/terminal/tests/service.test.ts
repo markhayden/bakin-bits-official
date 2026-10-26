@@ -103,6 +103,15 @@ describe('terminal service managed binary', () => {
     expect(commands.filter(args => args[0] === 'launchctl').map(args => args[1])).toEqual(['bootout', 'bootstrap'])
     expect(await service.updateRequired()).toBe(false)
   })
+  it('requires an update when the LaunchAgent runs another executable despite a matching record', async () => {
+    await service.install()
+    const plist = readFileSync(plistPath(), 'utf8')
+    writeFileSync(plistPath(), plist.replace(`<string>${managedTmux}</string>`, '<string>/opt/homebrew/bin/tmux</string>'))
+    expect(await service.updateRequired()).toBe(true)
+    commands = []
+    await service.install()
+    expect(commands.filter(args => args[0] === 'launchctl').map(args => args[1])).toEqual(['bootout', 'bootstrap'])
+  })
   it('requires an update when the recorded fingerprint differs from the desired one', async () => {
     await service.install()
     writeFileSync(join(root, 'service.json'), JSON.stringify({ fingerprint: 'stale' }))

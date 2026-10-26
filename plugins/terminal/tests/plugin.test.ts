@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -44,3 +44,31 @@ test('plugin activation registers protected tools and honest health without star
     await plugin.beforeUninstall?.()
   } finally { await plugin.onShutdown?.(); rmSync(root, { recursive: true, force: true }) }
 })
+
+test('an available service update is ONE observation with the Apply update repair', async () => {
+  const { TerminalService } = await import('../lib/service')
+  const ready = spyOn(TerminalService.prototype, 'ready').mockResolvedValue(true)
+  const update = spyOn(TerminalService.prototype, 'updateRequired').mockResolvedValue(true)
+  const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-update-'))
+  const checks: HealthCheckRegistrationInput[] = []
+  const context = {
+    storage: { localRoot: root }, getSettings: () => ({ enabledAgents: [] }),
+    hooks: { register: () => () => {}, invoke: async () => undefined },
+    tasks: { get: async () => undefined }, log: { error: () => {} },
+    registerExecTool: () => {}, registerHealthRepairAction: () => 'setup-service',
+    registerHealthCheck: (check: HealthCheckRegistrationInput) => { checks.push(check); return check.id },
+  } as unknown as PluginContext
+  try {
+    await plugin.activate(context)
+    const health = await checks[0]!.run()
+    if (health.outcome !== 'observed') throw new Error('expected observations')
+    const keys = health.observations.map((observation) => observation.key)
+    expect(new Set(keys).size).toBe(keys.length)
+    const updates = health.observations.filter((observation) => observation.key === 'service-update')
+    expect(updates).toHaveLength(1)
+    expect(updates[0]!.incident?.resolution).toEqual({ key: 'apply', type: 'repair', actionId: 'setup-service', label: 'Apply update' })
+  } finally {
+    await plugin.onShutdown?.(); ready.mockRestore(); update.mockRestore(); rmSync(root, { recursive: true, force: true })
+  }
+})
+
