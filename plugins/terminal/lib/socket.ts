@@ -2,8 +2,9 @@
  * One WebSocket per viewer (spec D8). Text frames are JSON control messages;
  * binary frames are terminal output.
  *
- * client → server: hello { clientId } (first, binds identity) · ack { bytes }
- *   (cumulative bytes written to xterm) · input { generation, viewerSeq, data }
+ * client → server: hello { clientId } (first, binds identity) · ack { epoch,
+ *   bytes } (cumulative bytes written to xterm since that sync; acks for an
+ *   older epoch are ignored) · input { generation, viewerSeq, data }
  *   · resize { generation, cols, rows } · pong
  * server → client: sync { epoch, session, snapshot, cursor } (atomic: the
  *   snapshot and the cursor it was taken at, plus generation, consumed input
@@ -50,7 +51,7 @@ export interface ViewerManager {
 
 const message = z.discriminatedUnion('type', [
   z.object({ type: z.literal('hello'), clientId: z.string().regex(CLIENT_ID) }),
-  z.object({ type: z.literal('ack'), bytes: z.number().int().nonnegative() }),
+  z.object({ type: z.literal('ack'), epoch: z.number().int().nonnegative(), bytes: z.number().int().nonnegative() }),
   z.object({ type: z.literal('input'), generation: z.number().int().nonnegative(), viewerSeq: z.number().int().positive(), data: z.string().max(65536) }),
   z.object({ type: z.literal('resize'), generation: z.number().int().nonnegative(), cols: z.number().int().min(20).max(400), rows: z.number().int().min(1).max(150) }),
   z.object({ type: z.literal('pong') }),
@@ -126,6 +127,8 @@ export class TerminalViewer {
     switch (parsed.type) {
       case 'hello': return this.hello(parsed.clientId)
       case 'ack':
+        // Bytes written before a resync belong to a picture the client has discarded.
+        if (parsed.epoch !== this.epoch) return
         this.acked = Math.min(this.sent, Math.max(this.acked, parsed.bytes))
         if (this.sent - this.acked < this.window()) { clearTimeout(this.evict); this.evict = undefined; this.wake?.() }
         return
@@ -150,24 +153,35 @@ export class TerminalViewer {
     viewers.get(key)?.close(SOCKET_CLOSE.superseded, 'Reconnected elsewhere')
     viewers.set(key, this)
     this.unsubscribe = this.manager.onSessionChange(this.sessionId, (session) => this.send({ type: 'session', session }))
-    await this.sync()
-    void this.pump()
+    if (await this.sync()) void this.pump()
   }
 
-  /** The atomic resync: snapshot + the cursor it reflects, then output after it. */
-  private async sync(): Promise<void> {
+  /** A failure the client recovers from by reconnecting (404 only when the session is gone). */
+  private failed(error: unknown): void {
+    if (error instanceof TerminalError && error.status === 404) this.close(SOCKET_CLOSE.notFound, 'Session not found')
+    else this.close(SOCKET_CLOSE.resync, 'Terminal attachment unavailable; reconnect')
+  }
+
+  /** The atomic resync: snapshot + the cursor it reflects, then output after it. False when it failed (socket closed). */
+  private async sync(): Promise<boolean> {
     this.epoch = ++TerminalViewer.epochs
     this.sent = 0
     this.acked = 0
-    const session = this.manager.get(this.sessionId, this.principal!)
-    if (session.state === 'running') {
-      const snapshot = await this.manager.screen(this.sessionId, this.principal!)
-      this.cursor = snapshot.cursor
-      this.send({ type: 'sync', epoch: this.epoch, session: snapshot.session, snapshot: Buffer.from(snapshot.data).toString('base64'), cursor: snapshot.cursor })
-    } else {
-      // Ended sessions replay their retained output from the start.
-      this.cursor = 0
-      this.send({ type: 'sync', epoch: this.epoch, session, snapshot: '', cursor: 0 })
+    try {
+      const session = this.manager.get(this.sessionId, this.principal!)
+      if (session.state === 'running') {
+        const snapshot = await this.manager.screen(this.sessionId, this.principal!)
+        this.cursor = snapshot.cursor
+        this.send({ type: 'sync', epoch: this.epoch, session: snapshot.session, snapshot: Buffer.from(snapshot.data).toString('base64'), cursor: snapshot.cursor })
+      } else {
+        // Ended sessions replay their retained output from the start.
+        this.cursor = 0
+        this.send({ type: 'sync', epoch: this.epoch, session, snapshot: '', cursor: 0 })
+      }
+      return true
+    } catch (error) {
+      this.failed(error)
+      return false
     }
   }
 
@@ -181,10 +195,10 @@ export class TerminalViewer {
       let page: ReturnType<ViewerManager['outputPage']>
       // Never more than the window allows (beyond one stored chunk).
       try { page = this.manager.outputPage(this.sessionId, this.principal!, this.cursor, this.window() - (this.sent - this.acked)) }
-      catch { this.close(SOCKET_CLOSE.notFound, 'Session unavailable'); return }
+      catch (error) { this.failed(error); return }
       if (page.truncated && page.session.state === 'running') {
         // Output rolled past this viewer: rebuild it from a fresh snapshot.
-        await this.sync()
+        if (!await this.sync()) return
         continue
       }
       if (!page.data.length) {

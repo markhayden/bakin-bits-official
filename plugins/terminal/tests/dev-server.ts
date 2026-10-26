@@ -63,6 +63,9 @@ const server = Bun.serve<ViewerData>({
   async fetch(request, preview) {
     const url = new URL(request.url)
     if (url.pathname === '/api/plugins/terminal/socket') {
+      // The same cross-site guard the host applies before any plugin socket.
+      const origin = request.headers.get('origin')
+      if (!origin || new URL(origin).host !== url.host) return new Response('Cross-origin socket refused', { status: 403 })
       const id = url.searchParams.get('id') ?? ''
       if (preview.upgrade(request, { data: { id, message: [], close: [] } })) return undefined
       return new Response('Upgrade required', { status: 426 })

@@ -64,7 +64,7 @@ describe('TerminalSocketClient', () => {
     socket().server(new Uint8Array(12))
     expect(socket().of('ack')).toEqual([])
     finish!()
-    expect(socket().of('ack')).toEqual([{ type: 'ack', bytes: 12 }])
+    expect(socket().of('ack')).toEqual([{ type: 'ack', epoch: 1, bytes: 12 }])
   })
 
   it('coalesces keystrokes while an envelope is in flight, never across a generation change', async () => {
@@ -136,4 +136,63 @@ describe('TerminalSocketClient', () => {
     socket().server({ type: 'session', session: { ...session, generation: 2 } })
     expect(events.sessions.at(-1)?.generation).toBe(2)
   })
+
+  it('tags acknowledgements with the sync epoch and ignores writes finished for an older one', () => {
+    const finishes: Array<() => void> = []
+    const { client, socket } = setup({ onOutput: (_bytes, done) => { finishes.push(done) } })
+    client.connect(); socket().open()
+    socket().server({ type: 'sync', epoch: 1, session, snapshot: '', cursor: 0 })
+    socket().server(new Uint8Array(12))
+    socket().server({ type: 'sync', epoch: 2, session, snapshot: '', cursor: 0 })
+    finishes[0]!()
+    expect(socket().of('ack')).toEqual([])
+    socket().server(new Uint8Array(12))
+    finishes[1]!()
+    expect(socket().of('ack')).toEqual([{ type: 'ack', epoch: 2, bytes: 12 }])
+  })
+
+  it('reports in-flight input as uncertain and unsent input as not sent when the connection drops', () => {
+    const { client, socket, events } = setup()
+    client.connect(); socket().open()
+    socket().server({ type: 'sync', epoch: 1, session, snapshot: '', cursor: 0 })
+    client.input(1, 'sent')
+    client.input(1, 'queued')
+    socket().close(1006)
+    expect(events.results).toEqual([
+      { viewerSeq: 1, status: 'uncertain', error: 'The connection dropped before this input was confirmed' },
+      { viewerSeq: 0, status: 'rejected', error: 'The connection dropped before this input was sent' },
+    ])
+  })
+
+  it('a rejection drops queued input of the same generation only', async () => {
+    const { client, socket } = setup()
+    client.connect(); socket().open()
+    socket().server({ type: 'sync', epoch: 1, session, snapshot: '', cursor: 0 })
+    client.input(1, 'a')
+    client.input(2, 'next generation')
+    socket().server({ type: 'result', viewerSeq: 1, status: 'rejected', error: 'Input ownership changed' })
+    await until(() => socket().of('input').length === 2, 'generation 2 still sent')
+    expect(socket().of('input').map((frame) => frame.data)).toEqual(['a', 'next generation'])
+  })
+
+  it('reconnect() replaces an open socket with a fresh one and a new sync', () => {
+    const { client, socket } = setup()
+    client.connect(); socket().open()
+    socket().server({ type: 'sync', epoch: 1, session, snapshot: '', cursor: 0 })
+    const first = socket()
+    client.reconnect()
+    expect(first.readyState).toBe(3)
+    expect(FakeSocket.all).toHaveLength(2)
+    socket().open()
+    expect(socket().sent[0]).toEqual({ type: 'hello', clientId: 'tab-0123456789abcdef' })
+  })
+
+  it('resize reports whether it was sent', () => {
+    const { client, socket } = setup()
+    client.connect(); socket().open()
+    expect(client.resize(1, 80, 24)).toBe(false)
+    socket().server({ type: 'sync', epoch: 1, session, snapshot: '', cursor: 0 })
+    expect(client.resize(1, 80, 24)).toBe(true)
+  })
 })
+

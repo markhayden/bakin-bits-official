@@ -45,8 +45,10 @@ export class TerminalSocketClient {
   private synced = false
   private stopped = false
   private viewerSeq = 0
-  private inFlight = 0
+  /** Sent envelopes awaiting their result: viewerSeq → generation. */
+  private inFlight = new Map<number, number>()
   private pending: { generation: number; data: string } | undefined
+  private epoch = -1
   private flushTimer: ReturnType<typeof setTimeout> | undefined
   private written = 0
   private ackedSent = 0
@@ -70,9 +72,22 @@ export class TerminalSocketClient {
     socket.onclose = (event) => { if (this.socket === socket) this.dropped(event.code) }
   }
 
-  /** The page is visible/online/focused again: reconnect now instead of waiting. */
+  /** A reconnect is already scheduled: run it now instead of waiting. */
   resume(): void {
     if (this.stopped || this.retryTimer === undefined) return
+    this.connect()
+  }
+
+  /**
+   * Replace the connection now, even one that looks open (a phone back from
+   * the background may hold a dead socket): fresh hello, fresh sync.
+   */
+  reconnect(): void {
+    if (this.stopped) return
+    const old = this.socket
+    this.socket = undefined
+    this.lost()
+    old?.close(4000)
     this.connect()
   }
 
@@ -88,7 +103,7 @@ export class TerminalSocketClient {
   input(generation: number, data: string): boolean {
     if (!this.synced || !data) return false
     if (this.pending && this.pending.generation !== generation) this.flush()
-    if (this.inFlight === 0 && !this.pending) {
+    if (this.inFlight.size === 0 && !this.pending) {
       this.envelope(generation, data)
       return true
     }
@@ -98,13 +113,17 @@ export class TerminalSocketClient {
     return true
   }
 
-  resize(generation: number, cols: number, rows: number): void {
-    if (this.synced) this.socket?.send(JSON.stringify({ type: 'resize', generation, cols, rows }))
+  /** True when the resize was sent (a disconnected client sends nothing). */
+  resize(generation: number, cols: number, rows: number): boolean {
+    if (!this.synced || !this.socket) return false
+    this.socket.send(JSON.stringify({ type: 'resize', generation, cols, rows }))
+    return true
   }
 
   private envelope(generation: number, data: string): void {
-    this.inFlight++
-    this.socket?.send(JSON.stringify({ type: 'input', generation, viewerSeq: ++this.viewerSeq, data }))
+    const viewerSeq = ++this.viewerSeq
+    this.inFlight.set(viewerSeq, generation)
+    this.socket?.send(JSON.stringify({ type: 'input', generation, viewerSeq, data }))
   }
 
   private flush(): void {
@@ -118,7 +137,9 @@ export class TerminalSocketClient {
   private receive(raw: unknown): void {
     if (raw instanceof ArrayBuffer) {
       const bytes = new Uint8Array(raw)
-      this.options.onOutput(bytes, () => this.written_(bytes.byteLength))
+      const epoch = this.epoch
+      // A write finishing after a resync belongs to a discarded picture.
+      this.options.onOutput(bytes, () => { if (epoch === this.epoch) this.written_(bytes.byteLength) })
       return
     }
     const message = JSON.parse(String(raw)) as { type: string } & Record<string, unknown>
@@ -126,23 +147,28 @@ export class TerminalSocketClient {
       case 'sync':
         this.synced = true
         this.retry = 0
+        this.epoch = Number(message.epoch)
         this.written = 0
         this.ackedSent = 0
+        clearTimeout(this.ackTimer)
+        this.ackTimer = undefined
         this.options.onSync(message as unknown as SyncMessage)
         this.options.onStatus((message.session as Session).state === 'completed' ? 'Completed' : 'Connected')
         return
       case 'session': this.options.onSession(message.session as Session); return
       case 'result': {
-        this.inFlight = Math.max(0, this.inFlight - 1)
         const result = message as unknown as InputResult
-        if (result.status === 'rejected') {
-          // A refused envelope means the state it was typed against is gone.
+        const generation = this.inFlight.get(result.viewerSeq)
+        this.inFlight.delete(result.viewerSeq)
+        if (result.status === 'rejected' && this.pending && this.pending.generation === generation) {
+          // A refused envelope means the state it was typed against is gone;
+          // input queued for that same state goes with it.
           clearTimeout(this.flushTimer)
           this.flushTimer = undefined
           this.pending = undefined
         }
         this.options.onResult({ viewerSeq: result.viewerSeq, status: result.status, ...(result.error ? { error: result.error } : {}) })
-        if (this.inFlight === 0 && this.pending) this.flush()
+        if (this.inFlight.size === 0 && this.pending) this.flush()
         return
       }
       case 'ping': this.socket?.send(JSON.stringify({ type: 'pong' })); return
@@ -161,22 +187,32 @@ export class TerminalSocketClient {
     this.ackTimer = undefined
     if (this.written === this.ackedSent) return
     this.ackedSent = this.written
-    this.socket?.send(JSON.stringify({ type: 'ack', bytes: this.written }))
+    this.socket?.send(JSON.stringify({ type: 'ack', epoch: this.epoch, bytes: this.written }))
   }
 
   private reset(): void {
     this.synced = false
     this.viewerSeq = 0
-    this.inFlight = 0
+    this.inFlight.clear()
     this.pending = undefined
+    this.epoch = -1
     clearTimeout(this.flushTimer)
     clearTimeout(this.ackTimer)
     this.flushTimer = undefined
     this.ackTimer = undefined
   }
 
-  private dropped(code: number): void {
+  /** Tell the caller about input a lost connection leaves unresolved — never resend it. */
+  private lost(): void {
+    for (const viewerSeq of this.inFlight.keys()) {
+      this.options.onResult({ viewerSeq, status: 'uncertain', error: 'The connection dropped before this input was confirmed' })
+    }
+    if (this.pending) this.options.onResult({ viewerSeq: 0, status: 'rejected', error: 'The connection dropped before this input was sent' })
     this.reset()
+  }
+
+  private dropped(code: number): void {
+    this.lost()
     this.socket = undefined
     if (this.stopped) return
     const terminal = TERMINAL_CLOSES[code]

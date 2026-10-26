@@ -115,10 +115,13 @@ cursor, and an explicit truncation flag.
     answer: an error reads **Input not sent** when it was refused, or **May
     have been delivered** when the connection dropped mid-delivery. Input is
     never replayed.
-  - The browser reconnects by itself, at once when the page becomes visible,
-    focused or online again, so a phone returning from the background picks up
-    where it left off. Opening the same session in another tab is fine; each
-    tab has its own connection.
+  - The browser reconnects by itself with backoff. After the page has been in
+    the background for more than a few seconds, or when the network comes back,
+    it takes a fresh connection and sync, so a phone returning from the
+    background picks up where it left off, even if its old socket only looked
+    open. Input that was mid-flight when a connection dropped reads **May have
+    been delivered**; input still queued reads **Input not sent**. Opening the
+    same session in another tab is fine; each tab has its own connection.
 - Ten live sessions and ten retained managed worktrees are separate defaults.
   At the worktree cap, safely eligible work is reclaimed or creation is blocked.
 - Cleanup requires completion, no process using the path, no tracked/untracked/

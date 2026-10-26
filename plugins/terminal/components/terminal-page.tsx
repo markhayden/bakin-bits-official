@@ -118,6 +118,8 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     return sortDir === 'asc' ? compared : -compared
   })
   const session = all.find((item) => item.id === sessionId)
+  const openSession = useRef(sessionId)
+  openSession.current = sessionId
   const ended = session?.state === 'exited' || session?.state === 'completed'
   const ownerAgentName = session?.owner.kind === 'agent' ? agents.find((agent) => agent.id === session.owner.id)?.name ?? session.owner.id : undefined
   // The operator is not the tab: any human client drives a human-owned live session.
@@ -173,7 +175,9 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     markActivity()
     if (!await operate('take', {}, targetId)) return
     const latest = current.current.find((item) => item.id === targetId)
-    if (!data || !latest || latest.owner.kind !== 'human' || latest.state !== 'running') return
+    // The input handle belongs to whatever session is open now: never type
+    // into it if the operator navigated away while the takeover ran.
+    if (!data || !latest || openSession.current !== targetId || latest.owner.kind !== 'human' || latest.state !== 'running') return
     if (!inputHandle.current?.send(latest.generation, data)) setError('Input not sent: the terminal is reconnecting.')
   }
   function handleClaim(data: string) {

@@ -109,7 +109,7 @@ describe('TerminalViewer', () => {
     const { manager } = fakeManager()
     const peer = fakeSocket()
     new TerminalViewer(manager, peer.socket, 's1', options)
-    peer.client({ type: 'ack', bytes: 0 })
+    peer.client({ type: 'ack', epoch: 1, bytes: 0 })
     expect(peer.state.closed?.code).toBe(SOCKET_CLOSE.protocol)
   })
 
@@ -124,11 +124,11 @@ describe('TerminalViewer', () => {
     await Bun.sleep(30)
     expect(peer.bytes()).toBe(1200)
     // Each acknowledgement opens one more window; acking as it renders drains the rest.
-    peer.client({ type: 'ack', bytes: 1200 })
+    peer.client({ type: 'ack', epoch: peer.of('sync')[0]!.epoch, bytes: 1200 })
     await until(() => peer.bytes() === 2400, 'second window after the ack')
     await Bun.sleep(30)
     expect(peer.bytes()).toBe(2400)
-    peer.client({ type: 'ack', bytes: 2400 })
+    peer.client({ type: 'ack', epoch: peer.of('sync')[0]!.epoch, bytes: 2400 })
     await until(() => peer.bytes() === 3000, 'rest after the next ack')
   })
 
@@ -155,10 +155,10 @@ describe('TerminalViewer', () => {
     const total = 8 * 1024 * 1024
     for (let sent = 0; sent < total; sent += 64 * 1024) {
       push(Buffer.alloc(64 * 1024))
-      healthy.client({ type: 'ack', bytes: healthy.bytes() })
+      healthy.client({ type: 'ack', epoch: healthy.of('sync')[0]!.epoch, bytes: healthy.bytes() })
       await Bun.sleep(0)
     }
-    await until(() => { healthy.client({ type: 'ack', bytes: healthy.bytes() }); return healthy.bytes() === total }, 'healthy viewer receives everything')
+    await until(() => { healthy.client({ type: 'ack', epoch: healthy.of('sync')[0]!.epoch, bytes: healthy.bytes() }); return healthy.bytes() === total }, 'healthy viewer receives everything')
     expect(stalled.bytes()).toBeLessThanOrEqual(256 * 1024 + 64 * 1024)
   })
 
@@ -217,7 +217,7 @@ describe('TerminalViewer', () => {
     push(Buffer.alloc(20)); push('lost'); push('kept')
     await until(() => peer.bytes() === 20, 'paused after the first chunk')
     roll(3)
-    peer.client({ type: 'ack', bytes: 20 })
+    peer.client({ type: 'ack', epoch: peer.of('sync')[0]!.epoch, bytes: 20 })
     await until(() => peer.of('sync').length === 2, 'resync')
     expect(peer.of('sync')[1]!.cursor).toBe(3)
   })
@@ -240,4 +240,44 @@ describe('TerminalViewer', () => {
     await until(() => peer.state.closed !== null, 'not found')
     expect(peer.state.closed?.code).toBe(SOCKET_CLOSE.notFound)
   })
+
+  it('ignores acknowledgements for an older epoch', async () => {
+    const { manager, push, roll } = fakeManager()
+    const peer = fakeSocket()
+    new TerminalViewer(manager, peer.socket, 's1', { ...options, ackWindow: 10, pauseEvictMs: 60_000 })
+    peer.client({ type: 'hello', clientId: CLIENT })
+    await until(() => peer.of('sync').length === 1, 'sync')
+    const firstEpoch = peer.of('sync')[0]!.epoch
+    push(Buffer.alloc(20)); push('x'); push('y')
+    await until(() => peer.bytes() === 20, 'paused')
+    roll(3)
+    peer.client({ type: 'ack', epoch: firstEpoch, bytes: 20 })
+    await until(() => peer.of('sync').length === 2, 'resync after the gap')
+    push(Buffer.alloc(20)); push('after')
+    await until(() => peer.bytes() === 40, 'first window of the new epoch')
+    // A late ack from the old epoch must not open the new window.
+    peer.client({ type: 'ack', epoch: firstEpoch, bytes: 40 })
+    await Bun.sleep(30)
+    expect(peer.bytes()).toBe(40)
+    peer.client({ type: 'ack', epoch: peer.of('sync')[1]!.epoch, bytes: 20 })
+    await until(() => peer.bytes() === 45, 'new-epoch ack opens it')
+  })
+
+  it('closes for a resync (not not-found) when the snapshot or attachment fails', async () => {
+    const broken = fakeManager()
+    broken.manager.screen = async () => { throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503) }
+    const peer = fakeSocket()
+    new TerminalViewer(broken.manager, peer.socket, 's1', options)
+    peer.client({ type: 'hello', clientId: CLIENT })
+    await until(() => peer.state.closed !== null, 'closed')
+    expect(peer.state.closed?.code).toBe(SOCKET_CLOSE.resync)
+    const flaky = fakeManager()
+    flaky.manager.outputPage = () => { throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503) }
+    const other = fakeSocket()
+    new TerminalViewer(flaky.manager, other.socket, 's1', options)
+    other.client({ type: 'hello', clientId: 'other-0123456789abcdef' })
+    await until(() => other.state.closed !== null, 'closed on output failure')
+    expect(other.state.closed?.code).toBe(SOCKET_CLOSE.resync)
+  })
 })
+

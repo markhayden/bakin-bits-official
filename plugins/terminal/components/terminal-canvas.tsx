@@ -50,8 +50,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     // Never resend a size; the session update the server pushes resizes xterm.
     const key = `${cols}x${rows}`
     if ((term.cols === cols && term.rows === rows) || sentSize.current === key) return
-    sentSize.current = key
-    socket.current?.resize(callbacks.current.generation, cols, rows)
+    // Only a size that actually left counts; a disconnected one is retried after the next sync.
+    if (socket.current?.resize(callbacks.current.generation, cols, rows)) sentSize.current = key
   }
   useEffect(() => {
     ready.current = false
@@ -110,6 +110,9 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
         if (sync.snapshot) term.write(Uint8Array.from(atob(sync.snapshot), (value) => value.charCodeAt(0)))
         callbacks.current.onSession(sync.session)
         ready.current = sync.session.state !== 'completed'
+        // Every sync re-fits: the server may hold any size by now.
+        sentSize.current = ''
+        requestAnimationFrame(() => { if (callbacks.current.writable) resizeToViewport() })
       },
       onOutput: (bytes, done) => term.write(bytes, done),
       onSession: (next) => callbacks.current.onSession(next),
@@ -121,16 +124,26 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     })
     socket.current = client
     client.connect()
-    // Phones suspend backgrounded pages: come back to a fresh sync at once.
-    const resume = () => { if (!document.hidden) client.resume() }
-    document.addEventListener('visibilitychange', resume)
-    window.addEventListener('online', resume)
+    // Phones suspend backgrounded pages and may leave a socket that looks open
+    // but is dead: after a real absence (or a network change) take a fresh
+    // connection and sync; otherwise just run any pending reconnect now.
+    let hiddenAt = 0
+    const visibility = () => {
+      if (document.hidden) { hiddenAt = Date.now(); return }
+      if (hiddenAt && Date.now() - hiddenAt > 5000) client.reconnect()
+      else client.resume()
+      hiddenAt = 0
+    }
+    const online = () => client.reconnect()
+    const resume = () => client.resume()
+    document.addEventListener('visibilitychange', visibility)
+    window.addEventListener('online', online)
     window.addEventListener('focus', resume)
     return () => {
       ready.current = false
       inputHandle.current = null
-      document.removeEventListener('visibilitychange', resume)
-      window.removeEventListener('online', resume)
+      document.removeEventListener('visibilitychange', visibility)
+      window.removeEventListener('online', online)
       window.removeEventListener('focus', resume)
       client.close(); socket.current = null; sentSize.current = ''
       textarea.removeEventListener('paste', reset, true)
