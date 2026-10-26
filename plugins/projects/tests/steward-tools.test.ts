@@ -371,3 +371,17 @@ describe('review round 4 regressions', () => {
     expect(rows()).toEqual([])
   })
 })
+
+describe('review round 5 regressions', () => {
+  it('shutdown ends live brainstorm turns, so the next activation never overlaps one', async () => {
+    await setup()
+    holdTurns()
+    expect((await ask('hello')).status).toBe(202)
+    await projectsPlugin.onShutdown?.()
+    expect(rows().some(row => row.kind === 'aborted')).toBe(true)
+    // The next activation's engine is idle and admits normally.
+    plugin = await activatePlugin(projectsPlugin, dir)
+    holdTurns()
+    expect((await ask('again')).status).toBe(202)
+  })
+})

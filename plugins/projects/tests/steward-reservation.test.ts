@@ -124,6 +124,8 @@ describe('steward reservation', () => {
   })
 
   it('steward completion never re-triggers: the finished run records what it handled', async () => {
+    // The brief is frozen after the board's real timestamps (as in production).
+    clock = new Date(Date.now() + HOUR)
     writeProject()
     await addWork('blocked')
     const { created } = await loop.scan('p1') as { created: string }
@@ -366,5 +368,22 @@ describe('review round 3 regressions', () => {
     await loop.reconcile('p1')
     expect(await ctx.tasks.get('task-reserved')).toBeNull()
     expect(stewardState()?.openTaskId).toBeUndefined()
+  })
+})
+
+describe('review round 5 regressions', () => {
+  it('work that finished while a check-in ran earns a follow-up instead of being swallowed', async () => {
+    // The brief is frozen BEFORE the board moves (real timestamps are later).
+    clock = new Date(Date.now() - HOUR)
+    writeProject({ tasks: [{ id: 't001', title: 'Copy', instanceId: 'i-1', checked: false, taskId: 'work-1' }, { id: 't002', title: 'Photos', instanceId: 'i-2', checked: false, taskId: 'work-2' }] })
+    await addWork('inProgress')
+    await ctx.tasks.create({ id: 'work-2', title: 'Photos', projectId: 'p1', column: 'inProgress' })
+    const { created } = await loop.scan('p1', { force: true }) as { created: string }
+    await ctx.tasks.move('work-1', 'done')
+    const done = await ctx.tasks.move(created, 'done')
+    loop.onTaskStatusChanged({ taskId: created, from: 'todo', to: 'done', task: done })
+    await flushTimers()
+    expect(stewardState()?.runNext).toBe('decision')
+    expect(await loop.scan('p1')).toEqual({ created: expect.any(String) })
   })
 })

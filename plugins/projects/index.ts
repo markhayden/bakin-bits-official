@@ -4,7 +4,7 @@
  */
 import { z } from 'zod'
 import { defineRoute } from '@makinbakin/sdk'
-import type { BakinPlugin, PluginContext, RuntimeAgent } from '@makinbakin/sdk/types'
+import type { BakinPlugin, ConversationTurnService, PluginContext, RuntimeAgent } from '@makinbakin/sdk/types'
 import { conversationThreadId } from '@makinbakin/sdk/utils'
 import { createProjectRepository, PlanHistoryUnavailableError, projectToSummary } from './lib/parser'
 import { createProjectService, deriveChecklist } from './lib/project-service'
@@ -29,6 +29,8 @@ let activeProjectRepository: ReturnType<typeof createProjectRepository> | null =
 let resumePendingKickoffs: (() => Promise<void>) | null = null
 /** The steward loop's timer starts in activate() and stops in onShutdown (D20). */
 let stewardLoop: StewardLoop | null = null
+/** This activation's brainstorm turns — ended in onShutdown. */
+let activeBrainstormTurns: ConversationTurnService | null = null
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -254,6 +256,8 @@ const projectsPlugin: BakinPlugin = {
     // hot reload re-binds them (D26).
     const stewardGates = createStewardGates({ ctx, repo, turns: brainstormTurns, projectService })
     stewardGates.registerGates()
+
+    activeBrainstormTurns = brainstormTurns
 
     /**
      * Start a pending kickoff's first brainstorm turn — the SAME path as
@@ -1372,9 +1376,21 @@ const projectsPlugin: BakinPlugin = {
     stewardLoop?.start()
   },
 
-  onShutdown() {
+  async onShutdown() {
     stewardLoop?.stop()
     stewardLoop = null
+    // Each activation builds its own turn service, and the next one cannot
+    // see this one's live turns: end them here (abort, then wait for each
+    // to settle — its queued out-of-turn rows flush on the way), so a hot
+    // reload never admits a turn or a steward row over a live one.
+    const turns = activeBrainstormTurns
+    activeBrainstormTurns = null
+    if (turns) {
+      await Promise.all(turns.listInFlight().map(async ({ key }) => {
+        turns.abort(key)
+        await turns.waitFor(key).catch(err => log.warn('brainstorm turn did not settle at shutdown', { projectId: key, err }))
+      }))
+    }
     activeProjectRepository = null
     resumePendingKickoffs = null
     log.info('Projects plugin shutting down')
