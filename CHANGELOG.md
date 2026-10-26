@@ -9,7 +9,8 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
-- `projects`: the projects revamp (Bakin `.claude/specs/projects-revamp.md`).
+- `projects` (0.12.0, requires Bakin `>=0.0.1-rc.45`): the projects revamp
+  (Bakin `.claude/specs/projects-revamp.md`).
   New projects start from a conversation, not a form: `/projects/new` asks
   what is on your mind, and the first send creates the project idempotently
   and starts the lead's first turn. The detail page is Conversation · Plan ·
