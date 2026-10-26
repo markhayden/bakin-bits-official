@@ -9,6 +9,21 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- `projects`: the projects revamp (Bakin `.claude/specs/projects-revamp.md`).
+  New projects start from a conversation, not a form: `/projects/new` asks
+  what is on your mind, and the first send creates the project idempotently
+  and starts the lead's first turn. The detail page is Conversation · Plan ·
+  Steps · Files tabs with the conversation docked beside the others; the
+  right rail, status picker, `/projects/:id/edit` route and 4-field draft
+  are gone. The lead shapes the project one question card at a time,
+  names it, and drafts the plan once it is clear. Agents can no longer
+  change status, overwrite a title you typed, or delete steps
+  (`bakin_exec_projects_remove_item` is removed; `status` is gone from
+  `_update`/`_apply_plan`). Linked steps complete from their board task.
+  Plan revisions drive a "Plan updated" notice; Files lists what the
+  project's tasks produced. The dead `defaultStatus` and
+  `autoPromoteThreshold` settings are removed. Requires an SDK with
+  structured questions and the conversation-width `PageAside` rail.
 - `messaging` (0.12.2), `terminal` (0.3.4): require Bakin `>=0.0.1-rc.42`.
   Both client bundles are built for the `react19-sdk-focused-v2` contract
   (zod host-provided, markhayden/bakin#948), which rc.41 does not serve;

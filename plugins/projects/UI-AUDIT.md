@@ -1,67 +1,42 @@
-# Projects UI audit remediation — 2026-09-23
+# Projects UI — pattern map (projects revamp, 2026-10-25)
 
-The original audit found oversized Markdown blocks, unsafe writes and draft exits,
-missing detail accessibility coverage, narrow-layout problems and ambiguous states.
-The approved implementation closes those findings through canonical SDK patterns.
-No live project data or agent activity was used in verification.
+The revamp (spec: Bakin `.claude/specs/projects-revamp.md` D7–D18) rebuilt
+Projects around one idea: the project conversation is the primary surface,
+and everything else is a tab beside it. This file maps every surface to the
+public Storybook contract it composes. Earlier audit findings (2026-09-23 —
+plan rendering, staged saves, retry receipts, unsaved-change exits, history
+states) still hold where noted.
 
-| Finding | Implementation | Regression evidence |
+| Surface | Public pattern (Bakin `storybook/public/…`) | Notes |
 | --- | --- | --- |
-| Large Markdown gaps and lost cross-block context | One complete-document MarkdownContent with compareTo; delete the blank-line splitter | Real SDK plan geometry fixture, desktop/mobile; shared Markdown unit/story/browser tests |
-| Failed saves overwrite drafts | One staged title/owner/status/body model, expected-field writes, retained failures | project-draft, project-draft-hook and project-draft-form tests |
-| Concurrent human/agent edits | Untouched fields merge; overlapping fields require a choice; retries compare reviewed values | project-conflicts tests and detail browser agent-update scenario |
-| Checklist failures and duplicate retries | Independent row/add state; durable receipts and stable task identities; promotion recovery | checklist-drafts and checklist-operations tests, lost-response browser scenario |
-| Lost drafts on navigation | Shared keyed read/edit route component and canonical unsaved guard; partial Save All | Browser mounted-node proof, partial-success/retry and no-composer-send checks |
-| Heading order, focus and keyboard traversal | Semantic h2 sections, named keyboard scroll regions, visible row actions; shared composer focus fix | Required real-SDK read/edit conformance, desktop/mobile, no suppressions |
-| Crowded mobile plan toolbar | Wrapping controls and intrinsic reading height | Read/edit fixture screenshots, overflow checks and 200% text scenario |
-| Empty mobile brainstorm dominates page | Canonical Collapsible with mounted content; public composer handle checks hydration | Mobile empty, disclosure, restored draft and mounted-node browser checks |
-| Failed loads look missing/empty | Typed generation-checked project/history requests with explicit retry states | project-loading and history-loading tests, history error browser scenario |
-| Misleading progress/lifecycle | Explicit lifecycle independent of checked count; named Checklist progress | Service/route/sync tests and displayed completed count |
-| Unclear task/asset actions | Task-specific accessible names, labeled auto-growing descriptions, truthful attachment guidance and failed confirmations | Checklist form/unit coverage and real detail conformance |
+| Start screen | `conversation/timeline` — `ContainedAndEmptyStates` (empty state with suggestions); `conversation/composer` — `CanonicalUsage`; `agents/agent-select` — `SizesAndVariants` | No modal: chips pre-fill the composer, nothing is created until send; the lead picker is the composer's leading slot. |
+| Page frame | `recipes/list-detail-pages` — `ContainedDetailWorkspace` | `Page scroll="contained"` owns the gutters; the tab panel or the conversation owns the one scroller. |
+| Header | `pages/page` + `PageHeader`; `feedback/confirm-dialog` — `CanonicalUsage`, `FailedConfirmation` | One next-step button; Start/Mark complete confirm; ⋯ overflow for Archive/Details/Delete. |
+| Rename / Details | Chat's rename-dialog recipe (`Dialog` + `DialogFooter` Cancel/Save); `layout/key-value` | No inline title pattern exists, so rename uses the dialog the chat plugin uses; the footer is the standard Cancel/Save pair. |
+| Tabs | `navigation/tabs` — `UnderlineNavigation` | Controlled, URL state (`?tab`), consumer-owned `project-panel-*` panels; the Plan tab carries a `StatusMarker` when an agent revision is unseen. |
+| Conversation | `conversation/panel-and-drawer` — `DocumentDividerPanel`; `conversation/turns` — `QuestionCards` | `ConversationPanel fitParent chrome="top-divider"`; question cards answer through the panel's send. |
+| Docked conversation | `pages/collapsible-aside` — `ConversationDock` | Public `PageAside width="conversation" side="end"` rail (approved extension); collapsed strip shows the lead's avatar + working/unread marker; exactly one mounted composer. |
+| Plan | `content/markdown-content` — `WholeDocumentComparison`, `ManagedDocumentContext`; `forms/save-bar` — `CanonicalUsage`, `SaveFailureAndRetry`; `forms/unsaved-changes-dialog` | Edit in place on the tab (`?edit=1`), body-only draft with Use latest / Keep mine; History view (`?view=changes`) with restore. |
+| Steps | `lists/list-rows` — `CanonicalUsage`; `primitives/input-group`, `primitives/textarea`, `primitives/progress` | Board state in words; Send to board / Open task actions whose names start with their visible text; linked checkboxes read-only. |
+| Files | `lists/list-rows`; `patterns/asset-picker`; `feedback/system-state` — `ScopeAndRecovery` | Produced (derived) and Attached groups; composer paperclip uploads and attaches. |
+| List | `lists/list-rows` — `CanonicalUsage`, `InteractiveRows`; `recipes/collection-patterns` — `RowBehaviors` | One resume signal per row; archived out of "All". |
 
-## Public patterns and control choices
+Focused entrypoints only: `/ui`, `/layout`, `/patterns`, `/conversation`,
+`/content`, `/navigation`, `/hooks`, `/utils`. No legacy barrel, local
+router, new token, accessibility suppression or design-system exception.
 
-- `storybook/public/agents/agent-select.stories.tsx` — `SizesAndVariants`:
-  owner md/outlined; brainstorm sm/filled. The approved SDK extension forwards the
-  shared controls' sizes and appearance rather than overriding height/borders.
-- `storybook/public/forms/form-composition.stories.tsx` — `CanonicalUsage`;
-  `forms/save-bar.stories.tsx` — `CanonicalUsage`, `SaveFailureAndRetry`:
-  lg/outlined title, staged owner/status/plan, one Save/Discard boundary.
-- `storybook/public/primitives/input-group.stories.tsx` and
-  `primitives/textarea.stories.tsx` — `CanonicalUsage`: md/outlined task entry,
-  labeled sm/outlined description with bounded auto-grow (2–6 rows).
-- `storybook/public/feedback/system-state.stories.tsx` — `ScopeAndRecovery`;
-  `feedback/confirm-dialog.stories.tsx` — `FailedConfirmation`: durable local errors.
-- `storybook/public/forms/unsaved-changes-dialog.stories.tsx` — `CanonicalUsage`:
-  the SDK navigation guard owns route interception and native unload protection.
-- `storybook/public/primitives/collapsible.stories.tsx` — `CanonicalUsage`;
-  `conversation/panel-and-drawer.stories.tsx` — `DraftHandle`: optional mobile
-  brainstorm retains its mounted content and uses the public composer handle.
-- `storybook/public/conversation/panel-and-drawer.stories.tsx` — `DocumentDividerPanel`;
-  `overlays/drawer.stories.tsx` — `CanonicalUsage`: desktop brainstorm omits its
-  redundant heading; both detail dividers have faint centered grips and full-length
-  pink hover/focus/drag feedback. Real-SDK browser coverage checks both controls
-  and preserves the mobile brainstorm disclosure.
-- `storybook/public/content/markdown-content.stories.tsx` — `WholeDocumentComparison`,
-  `ManagedDocumentContext`: full-document rendering and bounded semantic hints.
-- `storybook/public/lists/list-rows.stories.tsx` — `CanonicalUsage`: separated
-  task/asset rows with always-visible named actions.
+## Kit fixes the real-SDK run surfaced (Bakin)
 
-Focused entrypoints: `/ui`, `/layout`, `/patterns`, `/conversation`, `/content`,
-`/navigation`. No legacy barrel, local renderer/router, new token, accessibility
-suppression, or design-system exception was introduced.
+- `ConversationEmptyState` takes `headingLevel` (an `h3` directly under a
+  page `h1` broke heading order).
+- The composer's native file input is `aria-hidden` (enabling attachments
+  otherwise failed the keyboard-order check).
 
-## Verification and coordinated rollout
+## Verification
 
-The plugin's required `test:ui:collections` command now includes the plan fixture,
-read and edit detail fixtures, and the real-router interaction suite. Unit tests
-use stubs only for fast state checks; browser evidence uses an assembled SDK tarball
-and the byte-identical canonical stylesheet. Full final counts and linked PRs are
-recorded in the companion Core task evidence before handoff.
-
-Merge the Core host/SDK prerequisite before Projects 0.11.0. CI pins the exact Core
-commit used to assemble the SDK, not a moving branch. Local operation receipts need
-the host's atomic single-file replacement. Roll back Projects before host/SDK and
-preserve receipt metadata; see README for the older-writer limitation.
-
-No production release, migration or installation is included.
+Real SDK (`BAKIN_SDK_PACKAGE_DIR=… bun run ui:conformance` at the repo root):
+the list fixture, the plan-spacing fixture, every detail surface
+(conversation, plan, steps, files) and the start screen at desktop and
+mobile, plus `tests/detail.browser-test.ts` — 6 interaction scenarios. Unit
+tests (`bun run test`) cover the server, the lead posture and every
+component against the `test-sdk` stubs.

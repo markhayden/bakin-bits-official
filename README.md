@@ -60,7 +60,7 @@ bakin plugins install github:markhayden/bakin-bits-official#plugins/messaging@me
 | Plugin       | Status   | Description                                                        |
 | ------------ | -------- | ------------------------------------------------------------------ |
 | `messaging`  | active   | Content Plans, Deliverables, brainstorm sessions, task-backed prep, and publishing. |
-| `projects`   | active   | Project specs, checklists, task links, and project MCP tools.      |
+| `projects`   | active   | Shape a project in conversation with a lead agent, then track its plan, steps and files. |
 | `_template`  | scaffold | Starter plugin layout for new contributors.                        |
 
 ### Agents

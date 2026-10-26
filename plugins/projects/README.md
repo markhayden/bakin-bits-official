@@ -1,84 +1,132 @@
 # Projects Plugin
 
-Markdown project specs, checklists, task links, assets, and project-scoped
-brainstorming for Bakin.
+Shape a project in conversation with an agent, then track it to done: a
+markdown plan, steps that link to board tasks, the files the work produced,
+and one project conversation that stays with it the whole way.
 
-## Projects collection
+## Starting a project
 
-The index uses the kit's `ListRows variant="separated"` and interactive
-`ListRow` pattern, not preview cards. Projects are text-first records; status,
-item count, completion progress, and update time remain visible without opening
-a project. A row opens the existing detail route. A visible three-dot menu offers
-Delete project without opening the row. Confirmation names the project; deletion
-removes it and its checklist items, retaining linked board tasks and asset files.
-Any running project brainstorm is stopped by the existing delete endpoint.
-The detail page still offers the separate opt-in to delete linked board tasks.
-While deleting, confirmation and dismissal are disabled; failures stay in the
-dialog for retry. Cancel returns focus to the row menu; success returns focus to
-New Project after removing the row. There are no new pin or inline expansion actions.
+"New project" opens the start screen at `/projects/new` — there is no form or
+modal. It asks "What kind of project is on your mind?" with six starter chips.
+A chip only pre-fills the composer with an editable sentence; nothing is
+created until you send. The lead-agent picker sits beside the composer
+(default: the main agent). A list with no projects at all shows the start
+screen directly.
 
-Status chips are solid; the header's shown count is soft. Long titles and metadata
-wrap on narrow screens. The shared status filter remains horizontally scrollable
-on mobile; the full-screen mobile filter redesign is a separate follow-up (#759).
-Search relevance ordering, URL-backed filters, creation, and live unread/working
-brainstorm indicators retain their existing behavior.
+The first send creates the project and starts its first conversation turn.
+The client mints a `requestId` when you press send; `POST /` with `requestId`
++ `firstMessage` writes a draft project (title = the first message trimmed to
+60 characters, `titleSource: 'fallback'`) with a kickoff receipt, then starts
+the first brainstorm turn on the same path as `/ask`. A retried create —
+lost response, double click — returns the same project and never a second
+turn. If the server dies before the turn starts, the boot resume starts it
+once. A failed create keeps your text in the composer; the retry reuses the
+same `requestId`.
 
-Public reference: Bakin `storybook/public/lists/list-rows.stories.tsx` —
-`CanonicalUsage` (separated) and `InteractiveRows`; collection composition in
-`storybook/public/recipes/collection-patterns.stories.tsx` (`RowBehaviors`), and
-`storybook/public/feedback/confirm-dialog.stories.tsx` (`FocusReturn`, `Busy`,
-`FailedConfirmation`).
+## The project page
 
-## Editing a project
+The header holds the title, the status badge and ONE next-step button:
+**Start project** (draft, confirmed), **Mark complete** (active; confirmed
+when steps are unfinished), **Reopen** (completed), **Unarchive** (back to
+the status it was archived from). There is no status picker. The ⋯ menu has
+Archive, Details (lead agent, created/updated, ID) and Delete. The pencil
+beside the title renames the project in a dialog.
 
-Title, owner, lifecycle status and plan form one staged draft. Save changes writes
-only edited fields with their expected server values; Discard returns all four
-fields to the latest server version. Agent updates merge into untouched fields.
-Overlapping edits stay visible until you choose Use latest or Keep mine. Keep mine
-is conditional on the value you reviewed, so another update can conflict again.
+Below it, four tabs — **Conversation · Plan · Steps · Files** (`?tab=`). A
+project opens on what matters at its stage: draft → Conversation, active →
+Steps, completed → Files, archived → Plan.
 
-Checklist descriptions and new tasks are independent drafts. Failed actions keep
-the text and show local errors; other rows stay usable. Add and promotion retries
-use durable operation identities to avoid duplicates after a lost response.
-Deleting an item never lets an old retry recreate it or modify a reused display ID.
-Completed tasks are visible by default; Hide completed is saved per project.
-Checklist progress and project lifecycle are independent, including Completed
-projects with unchecked tasks.
+The conversation is the main surface. On its tab it takes the full width;
+beside Plan, Steps and Files it is docked on the right on desktop (the
+public `PageAside` conversation-width rail), collapsible to a slim strip with
+the lead's avatar and a working/unread marker. Exactly one composer is ever
+mounted, so the draft follows you between tabs. On mobile there is no dock —
+an "Ask {lead}" button opens the Conversation tab.
 
-Leaving offers Save all and leave, Discard, or Stay. Save All validates every draft,
-saves project fields, descriptions in item order, then the new task. Partial
-successes remain saved; retry only submits unfinished work. It never sends the
-brainstorm composer. Read and edit routes keep the same project component mounted.
-On mobile an empty brainstorm starts collapsed; existing conversation, active work
-or a restored composer draft keeps it open. Explicit disclosure changes retain the
-mounted conversation and draft. Desktop keeps the brainstorm expanded.
+## Working with the lead
 
-## Read-only plans and history
+The lead's posture follows the project's stage, from one shared builder
+(`lib/brainstorm-prompt.ts`) used by `/ask`, the kickoff turn and
+`bakin_exec_projects_ask`:
 
-`MarkdownContent` receives the complete current plan and optional complete
-`compareTo` source. Managed sections, reference links, lists, tables and code retain
-full-document context. Changed blocks and deletion markers are accessible; precise
-line review remains in Diff. An exceeded comparison budget says unavailable rather
-than claiming no changes. History loading, missing history and failed/corrupt history
-are distinct. Restore confirms the exact snapshot reviewed and retains errors for retry.
+- **Draft — shaping.** A brainstorm buddy: a brief reflection, at most one
+  challenge, and ONE question card per turn (`bakin_exec_ask_user`, with a
+  recommendation that is never preselected). Once the goal, scope and
+  definition of done are answered it drafts the plan and steps and says
+  "Draft plan is ready in the Plan tab". "Just write it" skips ahead.
+- **Active — progress.** What is blocked, what is next, whether scope holds;
+  no interviewing.
+- **Completed / archived — retrospective.** Answers only.
 
-Public references: Bakin `content/markdown-content` — `Comparison` and
-`ManagedDocumentContext`; `forms/form-composition`, `forms/save-bar`,
-`forms/unsaved-changes-dialog`; `feedback/system-state`, `feedback/confirm-dialog`;
-`agents/agent-select`, `primitives/collapsible` and `conversation/panel-and-drawer`.
-The exact exports and evidence are listed in [UI-AUDIT.md](UI-AUDIT.md).
+The lead names the project once it understands it, unless you already did.
 
-With the installed real SDK, `bun run test:ui` checks the index and
-`bun run test:ui:collections` checks plan spacing, read/edit detail accessibility,
-route-state retention, overlaps, retry receipts, partial saves and mobile composer
-restoration. These are required in official-plugin CI; unit stubs alone do not
-certify layout or routing. Reports live under `test-results/bakin-ui-*`.
+Agent writes pass ONE authority check: agents never change lifecycle status
+(the `status` parameter is gone from `bakin_exec_projects_update` and
+`_apply_plan`), never overwrite a title you typed (`titleSource: 'user'` —
+refused with `title_locked`), and never delete steps (there is no agent
+remove tool). The composer's agent picker is for one-off consults; the lead
+answers by default. The composer's paperclip uploads a file to the asset
+library and attaches it to the project's Files.
+
+## Plan
+
+The Plan tab renders the plan with change hints against the previous
+version, a History view (line diff + restore), and **Edit plan**
+(`?edit=1`) — the editor and one SaveBar in place. The plan draft lives at
+page level, so switching tabs keeps it. An agent edit that overlaps your
+draft asks you to choose: Use latest plan or Keep my plan.
+
+Every committed body change bumps `planRevision` (no-op writes don't;
+restores do) and records `planUpdatedBy`/`planUpdatedAt`. When an agent
+revision is past the one you last saw, the Plan tab shows a dot and the
+conversation shows "Plan updated {age} · Review changes", which opens the
+history compared against the version you last saw. Opening the Plan tab marks
+the current revision seen (`POST /:projectId/plan/seen`); your own edits are
+seen by definition. Nothing is injected into the transcript.
+
+## Steps
+
+Steps are the plan's checklist: progress as "n of m steps done", independent
+row drafts, durable add/promotion receipts, and Hide done. **Send to board**
+promotes a step to a board task; a linked step then shows its board state in
+words ("In progress · Roscoe", "Done · board") and an **Open task** link.
+
+A linked step's completion is derived, never synced: it is checked exactly
+while its board task is done or archived, so reopening the task unchecks it.
+`deriveChecklist(project, board)` is the one source of `checked`/`progress`
+for the detail, list, brainstorm context, task enrichment, search and tool
+returns. Toggling a linked step — UI, REST or tools — is refused with
+`linked_step`. A board column change only tells open pages to refresh.
+
+## Files
+
+Two groups: **From this project's work** — what the project's board tasks
+produced (linked steps plus tasks carrying the `projectId`), derived live
+through the assets plugin's `assets.listByTask` hook by
+`GET /:projectId/files`, never stored — and **Attached**, with attach,
+relink, detach and preview. A file in both shows once, under Attached.
+
+## Projects list
+
+Separated `ListRows`: each row shows the title, status and ONE resume signal
+by priority — Waiting for you (an unanswered question card) › {Lead} is
+working › New reply from {Lead} › Plan updated › "n of m steps done". "All"
+leaves archived projects out; they keep their own filter. A row's ⋯ menu
+deletes the project (linked board tasks and asset files are kept; a running
+conversation is stopped).
+
+Public references and evidence: [UI-AUDIT.md](UI-AUDIT.md).
 
 ## Host prerequisite and mutation storage
 
-Projects 0.11.0 requires the companion Bakin host's atomic scoped-storage replacement
-and matching SDK/CSS build. Install the host prerequisite before upgrading Projects.
-An SDK-only upgrade does not provide storage atomicity.
+Projects requires the companion Bakin host's atomic scoped-storage replacement
+and an SDK with structured questions (`bakin_exec_ask_user`) and the
+conversation-width `PageAside` rail.
+
+Frontmatter additions are all optional with defaults — no migration:
+`titleSource` (absent ⇒ `user`), `kickoff`, `planRevision` (absent ⇒ 0),
+`planUpdatedBy`, `planUpdatedAt`, `archivedFrom`. Stored `checked` on a linked
+step is ignored.
 
 Optional private `operations` frontmatter records durable add results and promotion
 reservations for the project's lifetime. Checklist `instanceId` separates stable
@@ -98,7 +146,7 @@ Project brainstorm talks to agents only through `ctx.runtime.messaging`. The
 project detail UI uses a stable SDK-built thread ID:
 
 ```ts
-brainstormThreadId('projects', projectId, agentId)
+conversationThreadId('projects', projectId, agentId)
 ```
 
 The same `projectId + agentId` pair reuses the same runtime conversation
@@ -109,9 +157,13 @@ traceability, not prompt-history replay.
 
 Brainstorm messages use the project's `.brainstorm.json` sidecar in the same
 plugin-scoped directory as the Markdown project. It stores the conversation kit's
-user, assistant, tool, error and aborted rows, bounded to 300 rows. A separate
-`.brainstorm-seen.json` records attention state; `.history.json` holds up to 20 prior
-plan bodies. These files do not replace the composer's existing draft persistence.
+user, assistant, tool, error and aborted rows, bounded to 300 rows; a question
+card's tool row keeps its `metadata.bakinQuestion`. A separate
+`.brainstorm-seen.json` records what the user has seen — `lastSeenAt` for replies
+and `planSeenRevision` for the plan — and its fields merge on write.
+`.history.json` holds the newest 20 prior plan bodies, each with the revision it
+was, plus the snapshot at the seen revision while it is the comparison baseline.
+These files do not replace the composer's existing draft persistence.
 
 ## Project Storage
 
@@ -168,20 +220,24 @@ omitted, the existing project label is preserved.
 
 ## Tests
 
-Relevant coverage:
+Unit tests run against the `test-sdk` stubs (`bun run test` at the repo root):
 
-- `tests/project-list.test.tsx` — separated row semantics, search/relevance,
-  navigation/creation, loading, and progress/brainstorm indicators
-- `tests/ui.fixture.tsx` / `bakin.ui-test.ts` — real index page at desktop and
-  mobile widths, with long titles and all four project states. Run `bun run
-  test:ui` from a standalone copy of this package with the assembled/released
-  real `@makinbakin/sdk` installed, plus React/React DOM and the declared browser
-  test devDependencies. The monorepo's `test-sdk` is only a unit-test double and
-  cannot run this browser fixture. Inspect `test-results/bakin-ui/index.html`.
-  This fixture covers the index only; detail/editor and nav-slot conformance
-  enrollment remain tracked separately under T69–T70.
-- `tests/routes.test.ts` — stable thread IDs, no prompt-history replay,
-  activity streaming and persistence
-- `tests/project-detail.test.tsx` — brainstorm hydration after reopening
-- `tests/service.test.ts` — project service operations, including asset
-  attach/detach/relink and missing asset resolution
+- `tests/routes.test.ts` — routes and exec tools: kickoff idempotency and boot
+  resume, the authority rules, derived steps, plan revisions/seen, produced
+  files, list resume signals, thread IDs and streaming
+- `tests/service.test.ts`, `tests/project-conflicts.test.ts` — the service:
+  derived completion, revisions and the pinned baseline, expected-value writes
+- `tests/brainstorm-prompt.test.ts` — the staged posture
+- `tests/start-screen.test.tsx`, `tests/project-header.test.tsx`,
+  `tests/project-detail.test.tsx`, `tests/steps-tab.test.tsx`,
+  `tests/project-list.test.tsx`, `tests/project-row.test.ts`,
+  `tests/plan-draft*.test.ts*`, `tests/project-uploads.test.tsx` — the UI
+
+Browser fixtures need the real SDK. Root `BAKIN_SDK_PACKAGE_DIR=<assembled
+sdk> bun run ui:conformance` copies this package, installs that SDK and runs
+`test:ui` (the list) and `test:ui:collections` — plan spacing, every detail
+surface (`PROJECTS_UI_SURFACE=conversation|plan|steps|files|start`) at desktop
+and mobile, and `tests/detail.browser-test.ts` (one composer across tabs and
+dock states, draft retention, lost-add retries, partial Save all, "Plan
+updated" review, the mobile Ask button, 200% text, history retry). Reports
+land under `test-results/bakin-ui-*`.
