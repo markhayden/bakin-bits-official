@@ -1,13 +1,27 @@
-import { expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { afterAll, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { ControlClient } from '../lib/control'
 import { Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
 import { TerminalService, terminalEnvironment } from '../lib/service'
 import { TmuxProcesses } from '../lib/processes'
 
 const processTest = process.env.TERMINAL_PROCESS_TEST === '1' ? test : test.skip
+
+// Terminal runs only the managed tmux (`$BAKIN_HOME/bin/tmux`). These tests
+// give a throwaway home that binary: TERMINAL_TMUX, else the pinned version
+// found on PATH. Run with the managed pin before merging (plan D12).
+const bakinHome = mkdtempSync(join(tmpdir(), 'bakin-terminal-home-'))
+if (process.env.TERMINAL_PROCESS_TEST === '1') {
+  const tmux = process.env.TERMINAL_TMUX ?? Bun.which('tmux')
+  if (!tmux) throw new Error('TERMINAL_PROCESS_TEST needs tmux: set TERMINAL_TMUX to the managed binary')
+  mkdirSync(join(bakinHome, 'bin'), { recursive: true })
+  symlinkSync(tmux, join(bakinHome, 'bin', 'tmux'))
+  process.env.BAKIN_HOME = bakinHome
+}
+afterAll(() => rmSync(bakinHome, { recursive: true, force: true }))
 
 processTest('boot marks stored running sessions exited when the tmux server is empty', async () => {
   const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-empty-'))
@@ -83,3 +97,45 @@ processTest('real shell survives manager restart, accepts input, resizes and ter
     rmSync(root, { recursive: true, force: true })
   }
 }, 20000)
+
+processTest('control client: command round trip, quoting, subscriptions and exit', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-control-'))
+  const service = new TerminalService(root)
+  const server = Bun.spawn([service.tmux!, '-D', '-S', service.socket, '-f', '/dev/null'], { env: terminalEnvironment(), stdout: 'ignore', stderr: 'ignore' })
+  let client: ControlClient | undefined
+  try {
+    for (let attempt = 0; attempt < 100 && !await service.ready(); attempt++) await Bun.sleep(50)
+    await service.command(['new-session', '-d', '-s', 'control-probe', '-x', '80', '-y', '24', 'cat'])
+    const notifications: string[] = []
+    client = ControlClient.attach(service.tmux!, service.socket, 'control-probe', terminalEnvironment(), (line) => notifications.push(line))
+    await client.ready
+    // Quoting survives tmux's parser: quotes, $ and backslashes stay literal.
+    await client.command(['set-option', '-p', '-t', 'control-probe', '@bakin_title', 'Say "hi" $HOME \\ ok'])
+    expect(await client.command(['display-message', '-p', '-t', 'control-probe', '#{@bakin_title}'])).toEqual(['Say "hi" $HOME \\ ok'])
+    // Input bypasses key tables and arrives byte-exact.
+    await client.sendKeys('control-probe', new TextEncoder().encode('hello control\r'))
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if ((await service.command(['capture-pane', '-p', '-t', 'control-probe'])).includes('hello control')) break
+      await Bun.sleep(50)
+    }
+    expect(await service.command(['capture-pane', '-p', '-t', 'control-probe'])).toContain('hello control')
+    // A failed command reports tmux's own message.
+    await expect(client.command(['kill-session', '-t', 'no-such-session'])).rejects.toThrow("can't find session")
+    // Format subscriptions notify on change.
+    await client.command(['refresh-client', '-B', 'title:%*:#{@bakin_title}'])
+    await client.command(['set-option', '-p', '-t', 'control-probe', '@bakin_title', 'changed'])
+    for (let attempt = 0; attempt < 60 && !notifications.some((line) => line.startsWith('%subscription-changed title') && line.endsWith(': changed')); attempt++) await Bun.sleep(50)
+    expect(notifications.some((line) => line.startsWith('%subscription-changed title') && line.endsWith(': changed'))).toBe(true)
+    // The control client does not count toward the window size (ignore-size).
+    await service.command(['resize-window', '-t', 'control-probe', '-x', '120', '-y', '40'])
+    expect((await service.command(['display-message', '-p', '-t', 'control-probe', '#{window_width}x#{window_height}'])).trim()).toBe('120x40')
+    // Killing the server ends the control connection and rejects new work.
+    await service.command(['kill-server'], true)
+    await expect(client.command(['list-clients'])).rejects.toThrow()
+  } finally {
+    client?.close()
+    server.kill(); await server.exited
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 20000)
+
