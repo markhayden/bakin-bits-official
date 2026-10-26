@@ -136,7 +136,7 @@ export function Conversation({ turns = [] }) {
     React.createElement('div', { key: i }, turn.kind === 'user' ? turn.content : null)))
 }
 
-export function Composer({ onSend, placeholder, inputLabel, busy, handleRef, leadingSlot }) {
+export function Composer({ onSend, placeholder, inputLabel, busy, disabled, handleRef, leadingSlot }) {
   const [draft, setDraft] = useState('')
   const inputRef = useRef(null)
   useImperativeHandle(handleRef, () => ({
@@ -154,13 +154,14 @@ export function Composer({ onSend, placeholder, inputLabel, busy, handleRef, lea
       placeholder,
       'data-testid': 'chat-input',
       value: draft,
+      disabled,
       onChange: event => setDraft(event.target.value),
       onKeyDown: event => {
         if (event.key === 'Enter' && !event.shiftKey) {
           event.preventDefault()
           const value = event.currentTarget.value.trim()
           // The real composer clears its draft before handing the text off.
-          if (value && !busy) {
+          if (value && !busy && !disabled) {
             setDraft('')
             void onSend?.(value)
           }

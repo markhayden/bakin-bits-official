@@ -16,6 +16,27 @@ import { useRouter } from '@makinbakin/sdk/navigation'
 import { projectRequest } from '../lib/project-api'
 import { STARTER_PROMPTS, fallbackTitle } from '../lib/start'
 
+type PendingCreate = { requestId: string; message: string }
+const PENDING_KEY = 'projects:new:pending'
+
+/** The unconfirmed first send survives a reload, so its retry still dedupes. */
+function readPending(): PendingCreate | null {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(PENDING_KEY) ?? 'null') as Partial<PendingCreate> | null
+    return parsed && typeof parsed.requestId === 'string' && typeof parsed.message === 'string' ? { requestId: parsed.requestId, message: parsed.message } : null
+  } catch {
+    return null
+  }
+}
+function writePending(value: PendingCreate | null): void {
+  try {
+    if (value) sessionStorage.setItem(PENDING_KEY, JSON.stringify(value))
+    else sessionStorage.removeItem(PENDING_KEY)
+  } catch {
+    // Private mode: the in-memory copy still dedupes retries in this visit.
+  }
+}
+
 export function StartScreen({ onBack }: { onBack?: () => void }) {
   const router = useRouter()
   const mainAgentId = useMainAgentId() ?? 'main'
@@ -30,15 +51,19 @@ export function StartScreen({ onBack }: { onBack?: () => void }) {
   const [error, setError] = useState<string | null>(null)
   const composer = useRef<ComposerHandle | null>(null)
   // The first send's payload, minted when the user presses send. Every retry
-  // re-sends it UNCHANGED (same requestId, same message), so a lost response
-  // can never create a second project or silently drop an edit (D8).
-  const pending = useRef<{ requestId: string; message: string } | null>(null)
+  // — including after a reload — re-sends it UNCHANGED (same requestId, same
+  // message), so a lost response can never create a second project or
+  // silently drop an edit (D8).
+  const pending = useRef<PendingCreate | null>(readPending())
   const leadId = lead ?? mainAgentId
 
   const create = async (content: string) => {
     setCreating(true)
     setError(null)
-    pending.current ??= { requestId: crypto.randomUUID(), message: content }
+    if (!pending.current) {
+      pending.current = { requestId: crypto.randomUUID(), message: content }
+      writePending(pending.current)
+    }
     const { requestId, message } = pending.current
     try {
       const result = await projectRequest('', {
@@ -48,6 +73,7 @@ export function StartScreen({ onBack }: { onBack?: () => void }) {
       }) as { id?: unknown }
       if (typeof result.id !== 'string' || !result.id) throw new Error('Projects did not return the new project.')
       pending.current = null
+      writePending(null)
       // Text edited after the first attempt is not lost: it waits in the
       // project's composer as a draft.
       if (content !== message) writeComposerDraft(`project:${result.id}`, content)
@@ -80,7 +106,8 @@ export function StartScreen({ onBack }: { onBack?: () => void }) {
               title="What kind of project is on your mind?"
               description="A rough idea is enough — we'll shape it together."
               suggestions={STARTER_PROMPTS.map(starter => starter.label)}
-              onSuggestion={(label: string) => {
+              // Nothing edits the message while it is being created.
+              onSuggestion={creating ? undefined : (label: string) => {
                 const starter = STARTER_PROMPTS.find(entry => entry.label === label)
                 if (!starter) return
                 composer.current?.setText(starter.prompt)
@@ -102,6 +129,7 @@ export function StartScreen({ onBack }: { onBack?: () => void }) {
               placeholder="Describe your project…"
               inputLabel="Describe your project"
               busy={creating}
+              disabled={creating}
               onSend={(content: string) => { void create(content) }}
               handleRef={composer}
               leadingSlot={(

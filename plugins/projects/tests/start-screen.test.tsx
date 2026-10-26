@@ -16,6 +16,7 @@ let responses: Array<() => Response> = []
 const fetchMock = mock(async (_url: string, _init?: RequestInit) => (responses.shift() ?? (() => Response.json({ ok: true, id: 'p1', created: true })))())
 
 beforeEach(() => {
+  sessionStorage.clear()
   push.mockClear()
   fetchMock.mockClear()
   responses = []
@@ -75,18 +76,30 @@ describe('StartScreen', () => {
   })
 })
 
-describe('StartScreen failure with newer text', () => {
-  it('a failed create keeps text typed while the request was out', async () => {
-    let fail!: () => void
+describe('StartScreen while creating', () => {
+  it('locks the composer and the chips until the create settles', async () => {
+    let finish!: () => void
     ;(globalThis as unknown as { fetch: typeof fetch }).fetch = (() => new Promise<Response>(resolve => {
-      fail = () => resolve(Response.json({ error: 'Projects is restarting.' }, { status: 503 }))
+      finish = () => resolve(Response.json({ ok: true, id: 'p1', created: true }))
     })) as unknown as typeof fetch
     render(<StartScreen />)
     await send('First idea')
-    await act(async () => { fireEvent.change(input(), { target: { value: 'More detail typed meanwhile' } }) })
-    await act(async () => { fail() })
-    expect(input().value).toBe('More detail typed meanwhile')
-    expect(screen.getByText('Projects is restarting.')).toBeDefined()
+    expect(input().disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Clean up my email' })).toBeNull()
+    await act(async () => { finish() })
+    expect(push).toHaveBeenCalledWith('/projects/p1')
+  })
+
+  it('an unconfirmed create survives a reload and its retry reuses the identity', async () => {
+    responses = [() => Response.json({ error: 'Lost response' }, { status: 503 })]
+    const first = render(<StartScreen />)
+    await send('Reload me')
+    first.unmount()
+    render(<StartScreen />)
+    await send('Reload me')
+    const [original, retry] = bodies()
+    expect(retry.requestId).toBe(original.requestId)
+    expect(sessionStorage.getItem('projects:new:pending')).toBeNull()
   })
 })
 
