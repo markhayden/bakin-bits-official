@@ -10,6 +10,7 @@ import { createProjectRepository, PlanHistoryUnavailableError, projectToSummary 
 import { createProjectService, deriveChecklist } from './lib/project-service'
 import { ProjectMutationError } from './lib/project-mutations'
 import { buildProjectBrainstormContext } from './lib/brainstorm-prompt'
+import { createStewardGates } from './lib/steward/gates'
 import { createInputGate } from './lib/steward/input-gate'
 import { createStewardLoop, type StewardLoop } from './lib/steward/reservation'
 import { registerStewardTools } from './lib/steward/tools'
@@ -234,6 +235,11 @@ const projectsPlugin: BakinPlugin = {
         },
       },
     })
+
+    // Sign-off gates ride Bakin's approvals; registered in activate() so a
+    // hot reload re-binds them (D26).
+    const stewardGates = createStewardGates({ ctx, repo, turns: brainstormTurns, projectService })
+    stewardGates.registerGates()
 
     /**
      * Start a pending kickoff's first brainstorm turn — the SAME path as
@@ -529,6 +535,11 @@ const projectsPlugin: BakinPlugin = {
       if (!id) return json({ error: 'Missing id' }, 400)
       try {
         await updateProject(id, patch, callerFromRequest(req), expected)
+        // Completing or archiving ends the steward loop: open check-ins and
+        // pending sign-offs go with it (D28).
+        if (patch.status === 'completed' || patch.status === 'archived') {
+          await stewardGates.cleanup(id, { reason: `Project ${patch.status}` })
+        }
         ctx.activity.audit('updated', 'system', { projectId: id })
         ctx.activity.log('system', `Updated project ${id}`)
         indexProject(id).catch(() => {})
@@ -1260,6 +1271,7 @@ const projectsPlugin: BakinPlugin = {
     })
 
     registerStewardTools({ ctx, repo, turns: brainstormTurns, gate: inputGate })
+    stewardGates.registerTool()
 
     steward.start()
     log.info('Projects plugin activated')

@@ -394,6 +394,14 @@
           "storage.write",
           "tasks.read"
         ]
+      },
+      {
+        "name": "bakin_exec_projects_request_signoff",
+        "summary": "Ask the user to sign off a deliverable or the project's completion",
+        "permissions": [
+          "storage.write",
+          "tasks.write"
+        ]
       }
     ],
     "cliCommands": [

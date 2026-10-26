@@ -117,6 +117,7 @@ const gatesSchema = z.record(z.string(), z.object({
   approvalId: z.string().min(1),
   generation: z.number().int().min(1),
   state: z.enum(['pending', 'approved', 'rejected', 'cancelled']),
+  stewardTaskId: z.string().min(1).optional(),
 }).strict())
 
 export function parseProject(content: string): Project {

@@ -82,6 +82,8 @@ export interface ProjectGateState {
   approvalId: string
   generation: number
   state: 'pending' | 'approved' | 'rejected' | 'cancelled'
+  /** The check-in task that asked — closed once the decision lands. */
+  stewardTaskId?: string
 }
 
 export interface ProjectFrontmatter {
