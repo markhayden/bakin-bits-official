@@ -1,12 +1,16 @@
 import { randomUUID } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
 import { relative, isAbsolute } from 'node:path'
-import { authorize, createSchema, DAY, DeliveryUncertainError, TerminalError, type CreateInput, type Principal, type Session, type TerminalSettings } from './contracts'
+import { authorize, createSchema, DAY, DeliveryUncertainError, TerminalError, type CreateInput, type Principal, type Session, type SizeClaimant, type TerminalSettings } from './contracts'
 import type { ProcessDriver } from './processes'
+import { claimSize, clampSize, nextSize } from './sizing'
 import { Screen } from './screen'
 import { Store } from './store'
 
 interface WorktreeResult { ok: boolean; error?: string; worktreePath?: string }
+/** The creating screen's grid and what kind of screen it is (it holds the size claim). */
+export type StartSize = { cols: number; rows: number } & SizeClaimant
+
 export interface SessionOptions {
   settings(): TerminalSettings
   prepare(input: { repoPath: string; sessionId: string; agent: string }): Promise<WorktreeResult | undefined>
@@ -98,7 +102,23 @@ export class Sessions {
       }
     })
   }
-  private attach(session: Session): void {
+  /**
+   * Attach and adopt tmux's actual window before anything reads or writes
+   * through the attachment (the record may be stale: a resize whose save
+   * failed, a crash). False when tmux cannot say: the attachment is dropped
+   * again, and the next viewer sync retries.
+   */
+  private async attach(session: Session): Promise<boolean> {
+    this.attachUnreconciled(session)
+    try {
+      this.adoptSize(session, await this.driver.windowSize(session.id))
+      return true
+    } catch {
+      await this.stopScreen(session.id)
+      return false
+    }
+  }
+  private attachUnreconciled(session: Session): void {
     if (this.screens.has(session.id)) return
     const screen = new Screen(session.cols, session.rows)
     this.screens.set(session.id, screen)
@@ -127,12 +147,17 @@ export class Sessions {
       if (!this.driver.connected(id) || this.screens.get(id)?.failed || !this.screens.has(id)) {
         await this.stopScreen(id)
         if (!await this.driver.alive(id)) throw new TerminalError('Terminal process has exited', 409)
-        this.attach(session)
+        if (!await this.attach(session)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
       }
       return this.screens.get(id)!
     })
   }
-  create(raw: unknown, principal: Principal): Promise<Session> {
+  /**
+   * `size` is the creating screen's grid (a human's pane or terminal); it
+   * makes that viewer the size authority. Without one — agents — the session
+   * starts at the configured default with nobody sizing it yet.
+   */
+  create(raw: unknown, principal: Principal, size?: StartSize): Promise<Session> {
     return this.run(async () => {
       const input = createSchema.parse(raw)
       this.list(principal)
@@ -145,7 +170,8 @@ export class Sessions {
       if (!statSync(cwd).isDirectory()) throw new TerminalError('Working directory must be a directory', 400)
       const session: Session = {
         ...input, cwd, agentId, id: `terminal-${randomUUID()}`, owner: principal,
-        generation: 1, inputSequence: 0, cols: 100, rows: 30, state: 'running',
+        generation: 1, inputSequence: 0, state: 'running',
+        ...this.startSize(principal, size),
         createdAt: this.now(), lastActivityAt: this.now(),
       }
       if (input.program !== 'shell' && input.checkout === 'isolated') {
@@ -162,7 +188,8 @@ export class Sessions {
       await this.driver.create(session)
       session.state = 'running'
       this.save(session)
-      this.attach(session)
+      // Unreconciled, the session stays detached; the first viewer sync retries.
+      await this.attach(session)
       return session
     })
   }
@@ -203,6 +230,8 @@ export class Sessions {
     if (session.state !== 'running') throw new TerminalError('Session has exited')
     if (sequence !== session.inputSequence + 1) throw new TerminalError('Input sequence is stale or out of order; do not retry ambiguous input')
     if (Buffer.byteLength(data) > 65536) throw new TerminalError('Input exceeds 64 KiB', 413)
+    // No attachment (a resize could not be reconciled): refuse before consuming, so nothing is uncertain.
+    if (!this.driver.connected(id)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
     // Consume the sequence before delivery. A transport failure is never auto-retried.
     session.inputSequence = sequence
     session.lastActivityAt = this.now()
@@ -214,18 +243,67 @@ export class Sessions {
     }
     return session
   }
-  resize(id: string, principal: Principal, generation: number, cols: number, rows: number): Promise<Session> {
+  /** Make `principal`'s screen the size authority and fit the grid to it (any human; spec D2). */
+  claim(id: string, principal: Principal, cols: number, rows: number, claimant: SizeClaimant): Promise<Session> {
+    return this.run(async () => {
+      if (principal.kind !== 'human') throw new TerminalError('Only the human sizes terminal sessions', 403)
+      const session = this.get(id, principal)
+      if (session.state !== 'running') throw new TerminalError('Session has exited')
+      Object.assign(session, claimSize(session, principal.id, claimant))
+      const size = clampSize(cols, rows)
+      return this.applySize(session, size.cols, size.rows)
+    })
+  }
+  /** The authority's screen changed size: follow it. Anyone else, or an older epoch, is stale. */
+  resizeAs(id: string, principal: Principal, epoch: number, cols: number, rows: number): Promise<Session> {
     return this.run(async () => {
       const session = this.get(id, principal)
-      authorize(session, principal, this.enabled(), true, generation)
       if (session.state !== 'running') throw new TerminalError('Session has exited')
-      if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 20 || cols > 400 || rows < 1 || rows > 150) throw new TerminalError('Invalid terminal dimensions', 400)
-      await this.driver.resize(id, cols, rows)
-      this.screens.get(id)?.resize(cols, rows)
-      session.cols = cols; session.rows = rows
-      this.save(session)
-      return session
+      const next = nextSize(session, { viewer: principal.id, epoch, cols, rows })
+      return this.applySize(session, next.cols, next.rows)
     })
+  }
+  /**
+   * tmux first (the source of truth), then the bridge PTY, the headless
+   * screen and the record. If tmux refuses, read back the window it actually
+   * has and make everything else match. Runs inside the queue, so input
+   * waits until the representations agree. When they cannot be made to
+   * agree (tmux unreachable, the record unwritable), the attachment is
+   * dropped: input is refused and viewers resync, and the next attachment
+   * adopts tmux's actual window.
+   */
+  private async applySize(session: Session, cols: number, rows: number): Promise<Session> {
+    try {
+      let size = { cols, rows }
+      if (cols !== session.cols || rows !== session.rows) {
+        // A failed resize-window may still have moved the window; trust tmux.
+        try { await this.driver.resize(session.id, cols, rows) }
+        catch { size = await this.driver.windowSize(session.id) }
+      }
+      this.adoptSize(session, size)
+      return session
+    } catch {
+      await this.stopScreen(session.id)
+      throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
+    }
+  }
+  /** Make the headless screen and the record match `size` (tmux's window). */
+  private adoptSize(session: Session, size: { cols: number; rows: number }): void {
+    if (size.cols !== session.cols || size.rows !== session.rows) {
+      this.screens.get(session.id)?.resize(size.cols, size.rows)
+      session.cols = size.cols
+      session.rows = size.rows
+      session.sizeRevision++
+    }
+    this.save(session)
+  }
+  private startSize(principal: Principal, size?: StartSize): Pick<Session, 'cols' | 'rows' | 'sizeEpoch' | 'sizeRevision' | 'sizeAuthority'> {
+    if (principal.kind === 'human' && size) {
+      const { cols, rows, ...claimant } = size
+      return { ...clampSize(cols, rows), sizeEpoch: 1, sizeRevision: 0, sizeAuthority: { viewer: principal.id, ...claimant } }
+    }
+    const fallback = this.options.settings().defaultSize ?? { cols: 200, rows: 60 }
+    return { ...clampSize(fallback.cols, fallback.rows), sizeEpoch: 0, sizeRevision: 0 }
   }
   finish(id: string, principal: Principal, _generation: number, terminate: boolean): Promise<Session> {
     return this.run(async () => {
@@ -252,11 +330,13 @@ export class Sessions {
     const current = this.get(id, principal)
     return { session: current, ...snapshot }
   }
-  async readScreen(id: string, principal: Principal): Promise<string> {
+  /** The visible pane as text, with the grid it was read at (captured together). */
+  async readScreen(id: string, principal: Principal): Promise<{ screen: string; cols: number; rows: number; sizeRevision: number }> {
     const screen = await this.ensureScreen(id, principal)
-    const text = await screen.capture(() => screen.text())
-    this.get(id, principal)
-    return text
+    return screen.capture(() => {
+      const session = this.get(id, principal)
+      return { screen: screen.text(), cols: session.cols, rows: session.rows, sizeRevision: session.sizeRevision }
+    })
   }
   /** One bounded page of stored output after `cursor`, as bytes (at least one stored chunk, else at most `limit` bytes). */
   outputPage(id: string, principal: Principal, cursor: number, limit?: number): { session: Session; cursor: number; data: Buffer; truncated: boolean } {
@@ -337,7 +417,8 @@ export class Sessions {
         if (session.state !== 'running') continue
         if (await this.driver.alive(session.id)) {
           await this.driver.title(session)
-          this.attach(session)
+          // Unreconciled, the session stays detached; the first viewer sync retries.
+          await this.attach(session)
         } else { session.state = 'exited'; this.save(session) }
       }
     })

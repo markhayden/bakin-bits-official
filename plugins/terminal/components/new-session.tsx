@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Fo
 import type { Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
 import { api } from './api'
+import { estimateTerminalSize } from './terminal-size'
 import { useTerminalAgents } from './use-terminal-agents'
 
 const programs: Record<string, string> = { shell: 'Shell', claude: 'Claude Code', codex: 'Codex' }
@@ -65,7 +66,7 @@ export function NewSession({ open, onOpenChange, onCreated }: { open: boolean; o
   async function submit(event: FormEvent) {
     event.preventDefault(); setBusy(true); setError('')
     try {
-      const session = await api<Session>('/sessions', { title: (title ?? suggestedTitle).slice(0, 100), cwd, program, checkout, agentId: agentId || undefined, taskId: taskId || undefined, projectId: projectId || undefined })
+      const session = await api<Session>('/sessions', { title: (title ?? suggestedTitle).slice(0, 100), cwd, program, checkout, agentId: agentId || undefined, taskId: taskId || undefined, projectId: projectId || undefined, size: estimateTerminalSize() })
       onCreated(session); onOpenChange(false)
     } catch (error) { setError(error instanceof Error ? error.message : 'Could not create session') }
     finally { setBusy(false) }

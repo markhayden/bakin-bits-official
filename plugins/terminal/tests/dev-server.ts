@@ -8,7 +8,7 @@ import { TmuxProcesses } from '../lib/processes'
 import { Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
 import type { PluginSocket } from '@makinbakin/sdk/types'
-import { command, failure, human } from '../lib/http'
+import { command, creatingScreen, failure, human } from '../lib/http'
 import { TerminalViewer } from '../lib/socket'
 
 const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-preview-'))
@@ -80,8 +80,16 @@ const server = Bun.serve<ViewerData>({
           await manager.refreshStates()
           return Response.json({ sessions: manager.list(principal), serviceReady: true })
         }
-        if (path === '/sessions' && request.method === 'POST') return Response.json(await manager.create(await request.json(), principal))
-        if (path === '/session' && request.method === 'POST') return Response.json(await command(manager, await request.json(), principal))
+        if (path === '/sessions' && request.method === 'POST') {
+          const body = await request.json() as Record<string, unknown>
+          return Response.json(await manager.create(body, principal, creatingScreen(body.size)))
+        }
+        if (path === '/session' && request.method === 'POST') {
+          const body = await request.json() as { id?: string; operation?: string }
+          // The plugin saves this into settings; the preview just answers.
+          if (body.operation === 'default-size') { const session = manager.get(body.id ?? '', principal); return Response.json({ defaultSize: { cols: session.cols, rows: session.rows } }) }
+          return Response.json(await command(manager, body, principal))
+        }
         return new Response('Not found', { status: 404 })
       }
       if (url.pathname === '/preview.js' || url.pathname === '/preview.css') return new Response(Bun.file(join(root, url.pathname.slice(1))))

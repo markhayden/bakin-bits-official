@@ -12,7 +12,8 @@ export class Store {
       CREATE INDEX IF NOT EXISTS output_session ON output(session, cursor);`)
   }
   sessions(): Session[] {
-    return (this.db.query('SELECT value FROM sessions').all() as { value: string }[]).map((row) => JSON.parse(row.value))
+    // Rows written before explicit sizing carry no epoch or revision yet.
+    return (this.db.query('SELECT value FROM sessions').all() as { value: string }[]).map((row) => ({ sizeEpoch: 0, sizeRevision: 0, ...JSON.parse(row.value) }))
   }
   save(session: Session): void {
     const previous = this.db.query('SELECT value FROM sessions WHERE id=?').get(session.id) as { value: string } | null

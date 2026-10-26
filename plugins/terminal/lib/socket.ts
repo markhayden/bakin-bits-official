@@ -5,10 +5,14 @@
  * client → server: hello { clientId } (first, binds identity) · ack { epoch,
  *   bytes } (cumulative bytes written to xterm since that sync; acks for an
  *   older epoch are ignored) · input { generation, viewerSeq, data }
- *   · resize { generation, cols, rows } · pong
+ *   · claim { cols, rows, device } (this screen sizes the session from now on) ·
+ *   resize { epoch, cols, rows } (the claiming screen changed size; stale for
+ *   anyone else or an older epoch) · pong
  * server → client: sync { epoch, session, snapshot, cursor } (atomic: the
  *   snapshot and the cursor it was taken at, plus generation, consumed input
- *   sequence and size on `session`) · binary output · session { session } ·
+ *   sequence and size on `session`, and `sizeFrozen`) · binary output ·
+ *   session { session } · presence { sizeFrozen } (the sizing screen
+ *   disconnected or came back: the size holds while it is away) ·
  *   result { viewerSeq, status: accepted | rejected | uncertain, error? } ·
  *   ping · error { error }
  *
@@ -21,7 +25,7 @@
  */
 import { z } from 'zod'
 import type { PluginSocket } from '@makinbakin/sdk/types'
-import { DeliveryUncertainError, TerminalError, type Principal, type Session } from './contracts'
+import { DeliveryUncertainError, screenDevice, TerminalError, type Principal, type Session, type SizeClaimant } from './contracts'
 
 export const ACK_WINDOW = 256 * 1024
 export const PAUSE_EVICT_MS = 10_000
@@ -46,19 +50,26 @@ export interface ViewerManager {
   nextOutput(id: string, cursor: number, signal: AbortSignal): Promise<void>
   onSessionChange(id: string, listener: (session: Session) => void): () => void
   writeNext(id: string, principal: Principal, generation: number, data: string): Promise<Session>
-  resize(id: string, principal: Principal, generation: number, cols: number, rows: number): Promise<Session>
+  claim(id: string, principal: Principal, cols: number, rows: number, claimant: SizeClaimant): Promise<Session>
+  resizeAs(id: string, principal: Principal, epoch: number, cols: number, rows: number): Promise<Session>
 }
 
 const message = z.discriminatedUnion('type', [
   z.object({ type: z.literal('hello'), clientId: z.string().regex(CLIENT_ID) }),
   z.object({ type: z.literal('ack'), epoch: z.number().int().nonnegative(), bytes: z.number().int().nonnegative() }),
   z.object({ type: z.literal('input'), generation: z.number().int().nonnegative(), viewerSeq: z.number().int().positive(), data: z.string().max(65536) }),
-  z.object({ type: z.literal('resize'), generation: z.number().int().nonnegative(), cols: z.number().int().min(20).max(400), rows: z.number().int().min(1).max(150) }),
+  z.object({ type: z.literal('claim'), cols: z.number().int().min(1).max(400), rows: z.number().int().min(1).max(150), device: screenDevice }),
+  z.object({ type: z.literal('resize'), epoch: z.number().int().nonnegative(), cols: z.number().int().min(1).max(400), rows: z.number().int().min(1).max(150) }),
   z.object({ type: z.literal('pong') }),
 ])
 
 /** Live viewers by `${sessionId} ${clientId}`: a reconnect supersedes the old socket. */
 const viewers = new Map<string, TerminalViewer>()
+
+/** The sizing screen joined or left: every other viewer's header changes (frozen or live). */
+function presenceChanged(sessionId: string, clientId: string): void {
+  for (const [key, viewer] of viewers) if (key.startsWith(`${sessionId} `)) viewer.authorityMoved(clientId)
+}
 
 export class TerminalViewer {
   private principal: Principal | undefined
@@ -67,6 +78,7 @@ export class TerminalViewer {
   private sent = 0
   private acked = 0
   private lastViewerSeq = 0
+  private sentFrozen: boolean | undefined
   private closed = false
   private wake: (() => void) | undefined
   private evict: ReturnType<typeof setTimeout> | undefined
@@ -108,7 +120,10 @@ export class TerminalViewer {
     this.wake?.()
     if (this.principal) {
       const key = `${this.sessionId} ${this.principal.id}`
-      if (viewers.get(key) === this) viewers.delete(key)
+      if (viewers.get(key) === this) {
+        viewers.delete(key)
+        presenceChanged(this.sessionId, this.principal.id)
+      }
     }
   }
 
@@ -133,15 +148,42 @@ export class TerminalViewer {
         if (this.sent - this.acked < this.window()) { clearTimeout(this.evict); this.evict = undefined; this.wake?.() }
         return
       case 'input': return this.input(parsed.generation, parsed.viewerSeq, parsed.data)
+      case 'claim':
       case 'resize':
-        try { await this.manager.resize(this.sessionId, this.principal!, parsed.generation, parsed.cols, parsed.rows) }
-        catch (error) { this.send({ type: 'error', error: error instanceof Error ? error.message : 'Resize failed' }) }
+        try {
+          if (parsed.type === 'claim') await this.manager.claim(this.sessionId, this.principal!, parsed.cols, parsed.rows, { kind: 'browser', device: parsed.device })
+          else await this.manager.resizeAs(this.sessionId, this.principal!, parsed.epoch, parsed.cols, parsed.rows)
+        } catch (error) {
+          // A stale resize (someone else claimed) is normal: the pushed session says who sizes now.
+          this.send({ type: 'size-refused', error: error instanceof Error ? error.message : 'Resize failed' })
+        }
         return
       case 'pong': return
     }
   }
 
   private window(): number { return this.options.ackWindow ?? ACK_WINDOW }
+
+  /** The size holds while the browser that sizes it is not connected. */
+  private frozen(session: Session): boolean {
+    const authority = session.sizeAuthority
+    return authority?.kind === 'browser' && !viewers.has(`${session.id} ${authority.viewer}`)
+  }
+
+  /** Tell this viewer when the size freezes or thaws (only on change; sync carries the first value). */
+  private presence(session: Session): void {
+    const sizeFrozen = this.frozen(session)
+    if (sizeFrozen === this.sentFrozen) return
+    this.sentFrozen = sizeFrozen
+    this.send({ type: 'presence', sizeFrozen })
+  }
+
+  /** A screen of this session connected or left: it may be the one that sizes it. */
+  authorityMoved(clientId: string): void {
+    if (!this.principal || this.principal.id === clientId) return
+    try { this.presence(this.manager.get(this.sessionId, this.principal)) }
+    catch (error) { this.failed(error) }
+  }
 
   private async hello(clientId: string): Promise<void> {
     if (this.principal) { this.close(SOCKET_CLOSE.protocol, 'hello was already sent'); return }
@@ -152,7 +194,11 @@ export class TerminalViewer {
     const key = `${this.sessionId} ${clientId}`
     viewers.get(key)?.close(SOCKET_CLOSE.superseded, 'Reconnected elsewhere')
     viewers.set(key, this)
-    this.unsubscribe = this.manager.onSessionChange(this.sessionId, (session) => this.send({ type: 'session', session }))
+    presenceChanged(this.sessionId, clientId)
+    this.unsubscribe = this.manager.onSessionChange(this.sessionId, (session) => {
+      this.send({ type: 'session', session })
+      this.presence(session)
+    })
     if (await this.sync()) void this.pump()
   }
 
@@ -172,11 +218,13 @@ export class TerminalViewer {
       if (session.state === 'running') {
         const snapshot = await this.manager.screen(this.sessionId, this.principal!)
         this.cursor = snapshot.cursor
-        this.send({ type: 'sync', epoch: this.epoch, session: snapshot.session, snapshot: Buffer.from(snapshot.data).toString('base64'), cursor: snapshot.cursor })
+        this.sentFrozen = this.frozen(snapshot.session)
+        this.send({ type: 'sync', epoch: this.epoch, session: snapshot.session, snapshot: Buffer.from(snapshot.data).toString('base64'), cursor: snapshot.cursor, sizeFrozen: this.sentFrozen })
       } else {
         // Ended sessions replay their retained output from the start.
         this.cursor = 0
-        this.send({ type: 'sync', epoch: this.epoch, session, snapshot: '', cursor: 0 })
+        this.sentFrozen = this.frozen(session)
+        this.send({ type: 'sync', epoch: this.epoch, session, snapshot: '', cursor: 0, sizeFrozen: this.sentFrozen })
       }
       return true
     } catch (error) {

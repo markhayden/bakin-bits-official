@@ -1,5 +1,38 @@
-[data-bakin-plugin="terminal"] .terminal-xterm .xterm {
+/*
+ * The pane pans natively on both axes (spec D10; never CSS transforms, xterm
+ * #6023). touch-action leaves one-finger panning to the browser and hands
+ * two-finger pinches to the canvas, which turns them into a font size.
+ */
+[data-bakin-plugin="terminal"] .terminal-pane {
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
+  /* xterm's layers carry z-indexes; keep them below the view actions. */
+  isolation: isolate;
+}
+[data-bakin-plugin="terminal"] .terminal-pane:focus-visible {
+  outline: 2px solid var(--bakin-color-focus-ring);
+  outline-offset: -2px;
+}
+
+/* The sizing screen: the grid is fitted to the pane. */
+[data-bakin-plugin="terminal"] .terminal-pane[data-fit="pane"] .terminal-xterm,
+[data-bakin-plugin="terminal"] .terminal-pane[data-fit="pane"] .terminal-xterm .xterm {
   height: 100%;
+}
+
+/* Every other screen: the real grid at its own size; the pane pans over it. */
+[data-bakin-plugin="terminal"] .terminal-pane[data-fit="width"] .terminal-xterm {
+  width: max-content;
+  height: max-content;
+}
+
+[data-bakin-plugin="terminal"] .terminal-view-actions {
+  position: absolute;
+  right: var(--bakin-layout-space-4);
+  bottom: var(--bakin-layout-space-4);
+  display: flex;
+  gap: var(--bakin-layout-gap-dense);
 }
 
 [data-bakin-plugin="terminal"] .terminal-xterm .xterm-viewport {
@@ -9,6 +42,11 @@
 [data-bakin-plugin="terminal"] .terminal-xterm .xterm:focus-within {
   outline: 2px solid var(--bakin-color-focus-ring);
   outline-offset: -2px;
+}
+
+/* Compact headers show the grid alone; the popover names who sizes it. */
+@media (max-width: 48rem) {
+  [data-bakin-plugin="terminal"] .terminal-size-detail { display: none; }
 }
 
 /* Compact input follows the public TerminalInput recipe on phones and tablets. */

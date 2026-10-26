@@ -4,7 +4,7 @@ import { authorize, type Session } from '../lib/contracts'
 const session: Session = {
   id: 'one', title: 'Shell', cwd: '/tmp', program: 'shell', agentId: 'patch',
   owner: { kind: 'agent', id: 'patch' }, generation: 1, inputSequence: 0,
-  cols: 80, rows: 24, state: 'running', createdAt: 0, lastActivityAt: 0,
+  cols: 80, rows: 24, sizeEpoch: 0, sizeRevision: 0, state: 'running', createdAt: 0, lastActivityAt: 0,
 }
 test('assignment, enablement and input generation are independent gates', () => {
   expect(() => authorize(session, { kind: 'agent', id: 'patch' }, ['patch'], true, 1)).not.toThrow()

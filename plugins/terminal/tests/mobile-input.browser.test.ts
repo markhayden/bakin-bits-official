@@ -30,6 +30,11 @@ browserTest('phone keys drive completion, history and interrupt while preserving
     const tab = keys.getByRole('button', { name: 'Tab', exact: true })
     await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.terminal-input-controls button')?.disabled === false)
     await tab.waitFor()
+    // A session made over the API is nobody's size yet: this phone takes it, so the grid fits above the keys.
+    await page.locator('[data-slot="workspace-page-compact-header"]').getByRole('button', { name: /^Terminal size / }).tap()
+    await page.getByRole('button', { name: 'Fit to this device', exact: true }).tap()
+    await page.waitForFunction(() => document.querySelector('.terminal-pane')?.getAttribute('data-fit') === 'pane')
+    await page.keyboard.press('Escape')
     const input = page.locator('.xterm-helper-textarea')
     await input.focus()
     await page.keyboard.type('cat completion-pr')
@@ -71,11 +76,13 @@ browserTest('phone keys drive completion, history and interrupt while preserving
     await keys.getByRole('button', { name: 'Shift+Tab', exact: true }).tap()
     await socket.waitForTyped('\x1b[Z')
     expect(await input.evaluate(el => el === document.activeElement)).toBe(true)
+    // The pane sits above the keys inside the short viewport. Smaller than the
+    // 40×10 floor, it keeps the floored grid and pans over it (spec D2).
     await page.waitForFunction(() => {
-      const screen = document.querySelector('.xterm-screen')!.getBoundingClientRect()
-      const output = document.querySelector('.terminal-xterm')!.getBoundingClientRect()
+      const pane = document.querySelector<HTMLElement>('.terminal-pane')!
+      const output = pane.getBoundingClientRect()
       const keys = document.querySelector('.terminal-input-controls')!.getBoundingClientRect()
-      return screen.height <= output.height + 1 && output.bottom <= keys.top + 1 && keys.bottom <= 351.5
+      return output.bottom <= keys.top + 1 && keys.bottom <= 351.5 && pane.scrollHeight > pane.clientHeight
     })
     const images = join(import.meta.dir, '../test-results/mobile-input')
     mkdirSync(images, { recursive: true })

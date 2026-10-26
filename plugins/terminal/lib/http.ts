@@ -1,6 +1,6 @@
 import { z } from 'zod'
-import { TerminalError, type Principal } from './contracts'
-import type { Sessions } from './sessions'
+import { screenDevice, TerminalError, type Principal } from './contracts'
+import type { Sessions, StartSize } from './sessions'
 
 export function human(request: Request): Principal {
   const origin = request.headers.get('origin')
@@ -10,6 +10,12 @@ export function human(request: Request): Principal {
     throw new TerminalError('Same-origin Terminal client required', 403)
   }
   return { kind: 'human', id }
+}
+
+/** POST /sessions `size`: the creating screen's grid, so the program starts at the size it is seen at. */
+export function creatingScreen(raw: unknown): StartSize | undefined {
+  const size = z.object({ cols: z.number().int(), rows: z.number().int(), device: screenDevice }).safeParse(raw)
+  return size.success ? { ...size.data, kind: 'browser' } : undefined
 }
 
 /**
@@ -23,8 +29,6 @@ export const commandSchema = z.object({
   sequence: z.number().int().positive().optional(),
   data: z.string().max(65536).optional(),
   agentId: z.string().min(1).max(100).optional(),
-  cols: z.number().int().min(20).max(400).optional(),
-  rows: z.number().int().min(1).max(150).optional(),
 })
 
 export async function command(manager: Sessions, raw: unknown, principal: Principal): Promise<unknown> {
@@ -38,17 +42,16 @@ export async function command(manager: Sessions, raw: unknown, principal: Princi
 }
 
 const agentCommandSchema = commandSchema.extend({
-  operation: z.enum(['write', 'resize', 'interrupt', 'complete', 'terminate']),
+  operation: z.enum(['write', 'interrupt', 'complete', 'terminate']),
 })
 
-/** The agent tool's session operations: explicit-sequence input plus lifecycle. */
+/** The agent tool's session operations: explicit-sequence input plus lifecycle. Agents never size a session (spec D3). */
 export async function agentCommand(manager: Sessions, raw: unknown, principal: Principal): Promise<unknown> {
   const input = agentCommandSchema.parse(raw)
   switch (input.operation) {
     case 'write': case 'interrupt':
       if (input.generation === undefined || input.sequence === undefined) throw new TerminalError('Generation and input sequence required', 400)
       return manager.write(input.id, principal, input.generation, input.sequence, input.operation === 'interrupt' ? '\x03' : input.data ?? '')
-    case 'resize': return manager.resize(input.id, principal, input.generation ?? -1, input.cols ?? 100, input.rows ?? 30)
     case 'complete': case 'terminate': return manager.finish(input.id, principal, input.generation ?? -1, input.operation === 'terminate')
   }
 }

@@ -18,7 +18,7 @@ test('output rolls at session and global byte limits and reports gaps', () => {
 test('deleteSession removes the row, its output, and its cursor', () => {
   const store = new Store(':memory:')
   stores.push(store)
-  store.save({ id: 'gone', title: 'Gone', cwd: '/tmp', program: 'shell', owner: { kind: 'human', id: 'h' }, generation: 1, inputSequence: 0, cols: 80, rows: 24, state: 'completed', createdAt: 1, lastActivityAt: 1 })
+  store.save({ id: 'gone', title: 'Gone', cwd: '/tmp', program: 'shell', owner: { kind: 'human', id: 'h' }, generation: 1, inputSequence: 0, cols: 80, rows: 24, sizeEpoch: 0, sizeRevision: 0, state: 'completed', createdAt: 1, lastActivityAt: 1 })
   store.append('gone', Buffer.from('output'))
   store.deleteSession('gone')
   expect(store.sessions()).toHaveLength(0)

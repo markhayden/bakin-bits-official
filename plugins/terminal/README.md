@@ -72,11 +72,37 @@ enabled. Take Control revokes agent input until Return Control; simply viewing
 or disconnecting does not change ownership. Another browser tab must explicitly
 take control. Reassignment revokes the previous agent's reads and writes.
 
+## Sizing across devices
+
+A session has one real grid. Exactly one screen sizes it, by an explicit
+claim: the browser (or terminal app) that created it, or the last one where
+someone chose **Fit to this device** in the header's size control
+(`200×60 · Sized by this device | desktop | phone | terminal app`). That
+screen keeps the grid fitted to its pane: height changes apply at once,
+width changes after 100 ms. Viewing, typing, rotating, opening a keyboard, or
+Take/Return control on any other screen never resizes anything. When the
+sizing screen disconnects the header says **Size frozen** and the grid holds
+until someone fits it again.
+
+Every other screen renders the real grid locally. Its font is fitted to the
+pane's width (never below 10px on touch screens, 8px elsewhere) and the pane
+pans natively in both directions. Pinch (or Ctrl+scroll on a trackpad) sets a
+font for this device, remembered in this browser; **Reset view** returns to
+the fitted font. The view follows the cursor after each update; panning or
+selecting text pauses that until **Follow cursor**. Panning never opens the
+keyboard or sends input.
+
+Session actions › **Use this size as the default** saves the current grid as
+the Default columns/rows for new sessions nobody's screen sized yet (agent
+sessions).
+
 ## Agent Tool
 
 `bakin_exec_terminal_session` accepts `operation` and an `input` object. Operations
-are `list`, `create`, `screen`, `output`, `write`, `resize`, `interrupt`, `complete`,
-and `terminate`. The host supplies verified agent identity; a body/query agent ID
+are `list`, `create`, `screen`, `output`, `write`, `interrupt`, `complete`,
+and `terminate`. Agents never size a session: agent-created sessions start at
+the Default columns/rows settings (200×60), and every `screen` reports `cols`,
+`rows` and `sizeRevision` so an agent re-reads after a human resizes. The host supplies verified agent identity; a body/query agent ID
 does not grant access. OpenClaw MCP provisioning installs per-agent bearer
 credentials; Pi uses its in-process invocation identity. Generic HTTP exec
 cannot invoke this protected tool. Existing runtime tool allowlists still apply.
@@ -203,10 +229,9 @@ headers. New terminal is available on the index, not inside a session.
 All icon tools use `overlays/tooltip.stories.tsx` / `CanonicalUsage`, with
 explanations on hover and keyboard focus, including disabled controls.
 SDK `/patterns`, `/layout`, `/ui`, and `/navigation` own the page composition,
-spacing, typography, tool controls, and empty/error states. The xterm surface
-always fills the available pane. Its cell grid automatically resizes when this
-browser owns input; there is no manual Fit control, and viewing does not resize
-another owner's session. Back navigation never terminates the process.
+spacing, typography, tool controls, and empty/error states. Sizing is
+described below; driving input never resizes anything. Back navigation never
+terminates the process.
 Agent assignment uses the same full-width kit field and registered display
 name, portrait, and accent color as Tasks; terminal enablement remains a
 separate permission gate.
@@ -214,7 +239,8 @@ separate permission gate.
 Manual shell smoke test:Title `Manual shell test`, Program `Shell`, Working
 directory `/tmp`, Assigned agent `Unassigned`, Task `No task`, Project
 `No project`. Start the terminal and run `pwd` and `printf 'terminal test OK\n'`.
-The prompt should resize automatically as the pane changes. Use Session
+The prompt should follow the pane as it changes (this screen created the
+session, so it sizes it). Use Session
 actions / Terminate and complete to finish the test.
 xterm content/styles remain scoped to the plugin. The output has a kit `p-bakin-4`
 inset; xterm's theme and unused viewport use the same canvas background as that
@@ -238,7 +264,7 @@ Terminal automatically uses xterm's WebGL renderer when available. GPU startup f
 
 Phones and touch-capable tablets keep a centered strip of Esc, Tab, one-shot Ctrl, and arrow keys below the output, above the software keyboard. Wrapped rows and expanded keys stay centered. More reveals Enter, Backspace, Delete, Shift+Tab, Home/End, Page Up/Down, and Ctrl+C/D/Z/R/L/A/E/U/K/W. Tap Ctrl again to cancel it. The next key consumes it; paste, composition, disconnection, ownership changes, and leaving the interaction cancel it. Ordinary terminal resizing preserves an armed Ctrl. Explicit combinations always send their named keys. Pointer taps preserve existing editor focus and do not open the keyboard when it is closed.
 
-Keys are disabled while watching, disconnected, or changing ownership; use Take over to drive. Ended sessions and deleted output have no key strip. Normal/application cursor modes use the current xterm mode. All keys pass through the viewer connection's ordered input. Automatic resize may shrink a live, human-owned grid to one row on short viewports; watchers never resize its PTY. Physical Tab follows Capture Tab while input is available.
+Keys are disabled while watching, disconnected, or changing ownership; use Take over to drive. Ended sessions and deleted output have no key strip. Normal/application cursor modes use the current xterm mode. All keys pass through the viewer connection's ordered input. A screen that sizes the session never shrinks it below 40×10; a shorter pane (a phone keyboard) pans over the floored grid. Physical Tab follows Capture Tab while input is available.
 
 The shared references are `pages/workspace-page.stories.tsx — KeyboardAwareInput` and `recipes/terminal-input.stories.tsx — CompactAndExpanded`. The kit owns viewport measurement and the reserved accessory slot; the plugin owns key encoding, Ctrl state, and ownership.
 

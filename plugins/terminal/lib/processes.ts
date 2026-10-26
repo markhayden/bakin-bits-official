@@ -11,7 +11,10 @@ export interface ProcessDriver {
   write(id: string, data: string): Promise<void>
   /** Set the pane title native clients show (`@bakin_title`). */
   title(session: Session): Promise<void>
+  /** tmux first (resize-window), then the bridge PTY. */
   resize(id: string, cols: number, rows: number): Promise<void>
+  /** The window size tmux actually has. */
+  windowSize(id: string): Promise<{ cols: number; rows: number }>
   alive(id: string): Promise<boolean>
   screen(id: string): Promise<string>
   terminate(id: string): Promise<void>
@@ -73,10 +76,20 @@ export class TmuxProcesses implements ProcessDriver {
   }
   connected(id: string): boolean { return this.clients.has(id) && !this.controls.get(id)?.isClosed }
   async resize(id: string, cols: number, rows: number): Promise<void> {
-    this.clients.get(id)?.terminal?.resize(cols, rows)
     const control = this.control(id)
     await control.ready
     await control.command(['resize-window', '-t', id, '-x', String(cols), '-y', String(rows)])
+    this.clients.get(id)?.terminal?.resize(cols, rows)
+  }
+  async windowSize(id: string): Promise<{ cols: number; rows: number }> {
+    const control = this.control(id)
+    await control.ready
+    const [line] = await control.command(['display-message', '-p', '-t', id, '#{window_width} #{window_height}'])
+    const [cols, rows] = (line ?? '').trim().split(' ').map(Number)
+    if (!Number.isInteger(cols) || !Number.isInteger(rows)) throw new TerminalError('Terminal window size is unknown', 503)
+    // Keep the bridge PTY on the real window so its redraw stays whole.
+    this.clients.get(id)?.terminal?.resize(cols!, rows!)
+    return { cols: cols!, rows: rows! }
   }
   async alive(id: string): Promise<boolean> {
     if (!await this.service.ready()) throw new TerminalError('Terminal service unavailable; process state is unknown', 503)

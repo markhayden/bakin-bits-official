@@ -50,7 +50,7 @@ browserTest('HTTP browsers load terminals and empty and error states own the ful
   } finally { await browser.close() }
 }, 30000)
 
-browserTest('an agent-controlled terminal fills the pane without resizing the shared session', async () => {
+browserTest('a screen that does not size the session fits the font to its width without resizing it', async () => {
   const browser = await launchChromium()
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
   let resizes = 0
@@ -66,8 +66,12 @@ browserTest('an agent-controlled terminal fills the pane without resizing the sh
     await page.locator('.terminal-xterm .xterm').waitFor()
     await page.setViewportSize({ width: 1000, height: 740 })
     await page.waitForTimeout(250)
+    // The real 80×24 grid, its font fitted to the pane's width; height pans.
+    // Cells snap to whole pixels, so the fill is within a pixel per column.
     const pane = await page.getByRole('region', { name: 'Terminal output', exact: true }).boundingBox()
-    expect((await page.locator('.terminal-xterm .xterm').boundingBox())!.height).toBeGreaterThan(pane!.height - 40)
+    await page.waitForFunction(() => document.querySelector('.xterm-screen')!.clientWidth > document.querySelector<HTMLElement>('.terminal-pane')!.clientWidth - 32 - 80)
+    const grid = (await page.locator('.terminal-xterm .xterm-screen').boundingBox())!
+    expect(grid.width).toBeLessThanOrEqual(pane!.width - 32)
     expect(resizes).toBe(0)
   } finally { await browser.close() }
 }, 15000)
@@ -99,8 +103,9 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     const width = await workspace.evaluate((element) => element.clientWidth)
     const output = await page.getByRole('region', { name: 'Terminal output', exact: true }).boundingBox()
     expect(output!.width).toBeGreaterThan(width * 0.95)
+    // Nobody sized this fixture session: the grid's font fills the width, inside the inset.
     const surface = await page.locator('.terminal-xterm .xterm').boundingBox()
-    expect(surface!.height).toBeGreaterThan(output!.height - 40)
+    expect(surface!.width).toBeGreaterThan(output!.width - 32 - 80)
     expect(surface!.x - output!.x).toBeGreaterThanOrEqual(16)
     expect(surface!.y - output!.y).toBeGreaterThanOrEqual(16)
     expect(await page.getByRole('region', { name: 'Terminal output', exact: true }).evaluate((region) => getComputedStyle(region).backgroundColor === getComputedStyle(region.querySelector('.xterm-scrollable-element')!).backgroundColor)).toBe(true)

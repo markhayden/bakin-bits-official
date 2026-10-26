@@ -1,14 +1,15 @@
 import { expect } from 'bun:test'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { browserTest, launchChromium } from './browser'
+import { browserTest, launchChromium, viewerSocket } from './browser'
 
-browserTest('managed tmux serves a real shell across reconnect and mobile resizing', async () => {
+browserTest('managed tmux serves a real shell across reconnect, and the creating screen keeps sizing it', async () => {
   const browser = await launchChromium()
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
   page.setDefaultTimeout(5000)
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
+  const socket = await viewerSocket(page)
   let id: string | undefined
   try {
     await page.goto(process.env.TERMINAL_PREVIEW_URL!)
@@ -18,6 +19,8 @@ browserTest('managed tmux serves a real shell across reconnect and mobile resizi
     const creation = page.waitForResponse(response => response.url().endsWith('/terminal/sessions') && response.request().method() === 'POST')
     await page.getByRole('button', { name: 'Start terminal', exact: true }).click()
     id = (await (await creation).json()).id
+    // Typing before the viewer socket syncs is refused, never queued.
+    await page.getByRole('status').filter({ hasText: "You're driving", visible: true }).first().waitFor()
     await page.locator('.xterm-helper-textarea').focus()
     await page.keyboard.type('printf "MANAGED_%s_OK\\n" TMUX')
     await page.keyboard.press('Enter')
@@ -26,9 +29,10 @@ browserTest('managed tmux serves a real shell across reconnect and mobile resizi
     await controls.getByRole('button', { name: 'Session actions', exact: true }).click()
     await page.getByRole('menuitem', { name: 'Reconnect terminal', exact: true }).click()
     await page.waitForFunction(() => document.querySelector('.xterm-accessibility-tree')?.textContent?.includes('MANAGED_TMUX_OK'))
-    const resized = page.waitForResponse(response => response.url().endsWith('/terminal/session') && response.request().postDataJSON()?.operation === 'resize' && response.request().postDataJSON()?.cols < 50)
+    // The creator holds the size claim, so narrowing its window narrows the session (to the 40-column floor at most).
     await page.setViewportSize({ width: 390, height: 844 })
-    expect((await (await resized).json()).cols).toBeLessThan(50)
+    const resized = await socket.waitFor(frame => frame.type === 'resize' && (frame.cols as number) < 50)
+    expect(resized.cols).toBeGreaterThanOrEqual(40)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     const screenshots = join(import.meta.dir, '../test-results/release')
     mkdirSync(screenshots, { recursive: true })

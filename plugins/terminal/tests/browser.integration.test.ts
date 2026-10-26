@@ -67,7 +67,8 @@ browserTest('browser creates a real shell, sends input and reconnects without lo
       await page.waitForFunction(() => (document.querySelector('[data-slot="activity-panel"]')?.getBoundingClientRect().width ?? 0) <= 1)
     }
     await workspace.evaluate((element) => { element.scrollTop = element.scrollHeight })
-    await socket.waitFor((frame) => frame.type === 'resize' && (frame.cols as number) < 40)
+    // Narrower than the 40-column floor: the grid stops at the floor and the pane pans (spec D2).
+    await socket.waitFor((frame) => frame.type === 'resize' && frame.cols === 40)
     await page.screenshot({ path: join(screenshots, 'mobile.png'), fullPage: true })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
     await page.getByRole('button', { name: 'Session actions', exact: true }).click()

@@ -35,7 +35,7 @@ processTest('boot marks stored running sessions exited when the tmux server is e
     const store = new Store(join(root, 'terminal.db'))
     store.save({
       id: 'terminal-ghost', title: 'Ghost', cwd: root, program: 'shell', owner: human,
-      generation: 1, inputSequence: 0, cols: 100, rows: 30, state: 'running',
+      generation: 1, inputSequence: 0, cols: 100, rows: 30, sizeEpoch: 0, sizeRevision: 0, state: 'running',
       createdAt: Date.now(), lastActivityAt: Date.now(),
     })
     manager = new Sessions(store, new TmuxProcesses(service), { settings: () => ({}), prepare: async () => undefined, release: async () => undefined })
@@ -71,21 +71,21 @@ processTest('real shell survives manager restart, accepts input, resizes and ter
     const pid = await service.command(['display-message', '-p', '-t', session.id, '#{pane_pid}'])
     await Bun.sleep(250)
     await manager.write(session.id, human, 1, 1, 'printf "BAKIN_TERMINAL_READY\\n"\r')
-    await wait(async () => (await manager!.readScreen(session.id, human)).includes('BAKIN_TERMINAL_READY'))
-    await manager.resize(session.id, human, 1, 80, 24)
+    await wait(async () => (await manager!.readScreen(session.id, human)).screen.includes('BAKIN_TERMINAL_READY'))
+    await manager.claim(session.id, human, 80, 24, { kind: 'browser', device: 'desktop' })
     expect((await service.command(['display-message', '-p', '-t', session.id, '#{pane_width} #{pane_height}'])).trim()).toBe('80 24')
     await manager.shutdown()
     manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProcesses(service), options)
     await manager.start()
     expect(await service.command(['display-message', '-p', '-t', session.id, '#{pane_pid}'])).toBe(pid)
-    await wait(async () => (await manager!.readScreen(session.id, human)).includes('BAKIN_TERMINAL_READY'))
+    await wait(async () => (await manager!.readScreen(session.id, human)).screen.includes('BAKIN_TERMINAL_READY'))
     expect(manager.get(session.id, human).owner).toEqual(human)
     await manager.finish(session.id, human, 1, true)
     expect(manager.get(session.id, human).state).toBe('completed')
     if (process.env.TERMINAL_CLI_TEST === '1') {
       for (const program of ['claude', 'codex'] as const) {
         const cli = await manager.create({ title: program, program, checkout: 'existing', cwd: root }, human)
-        await wait(async () => (await manager!.readScreen(cli.id, human)).trim().length > 0)
+        await wait(async () => (await manager!.readScreen(cli.id, human)).screen.trim().length > 0)
         expect(await new TmuxProcesses(service).alive(cli.id)).toBe(true)
         await manager.finish(cli.id, human, 1, true)
       }
@@ -166,10 +166,11 @@ processTest('bridge: titles the session, cancels copy-mode before input, and onl
     await service.command(['copy-mode', '-t', session.id])
     expect((await service.command(['display-message', '-p', '-t', session.id, '#{pane_in_mode}'])).trim()).toBe('1')
     await manager.write(session.id, human, session.generation, 1, 'printf "AFTER_COPY_MODE\\n"\r')
-    await wait(async () => (await manager!.readScreen(session.id, human)).includes('AFTER_COPY_MODE'))
+    await wait(async () => (await manager!.readScreen(session.id, human)).screen.includes('AFTER_COPY_MODE'))
     expect((await service.command(['display-message', '-p', '-t', session.id, '#{pane_in_mode}'])).trim()).toBe('0')
     // An explicit resize goes through the control client.
-    await manager.resize(session.id, human, session.generation, 90, 20)
+    const claimed = await manager.claim(session.id, human, 90, 20, { kind: 'browser', device: 'desktop' })
+    expect(claimed.sizeRevision).toBeGreaterThan(0)
     expect((await service.command(['display-message', '-p', '-t', session.id, '#{window_width}x#{window_height}'])).trim()).toBe('90x20')
     await manager.finish(session.id, human, session.generation, true)
   } finally {

@@ -6,6 +6,7 @@
  * dropped is the caller's "may have been delivered".
  */
 import type { Session } from '../lib/contracts'
+import type { ScreenDevice } from './terminal-view'
 
 export interface SocketLike {
   binaryType: string
@@ -17,7 +18,7 @@ export interface SocketLike {
   close(code?: number): void
 }
 
-export interface SyncMessage { epoch: number; session: Session; snapshot: string; cursor: number }
+export interface SyncMessage { epoch: number; session: Session; snapshot: string; cursor: number; sizeFrozen: boolean }
 export interface InputResult { viewerSeq: number; status: 'accepted' | 'rejected' | 'uncertain'; error?: string }
 
 /** Server close codes (lib/socket.ts SOCKET_CLOSE) that must not auto-reconnect. */
@@ -30,6 +31,8 @@ export interface TerminalSocketOptions {
   /** Write the bytes to xterm and call `done` from its write callback. */
   onOutput(bytes: Uint8Array, done: () => void): void
   onSession(session: Session): void
+  /** The screen that sizes the session disconnected (true) or is back (false); every sync says it too. */
+  onPresence(sizeFrozen: boolean): void
   onResult(result: InputResult): void
   onStatus(status: string): void
   createSocket?: (url: string) => SocketLike
@@ -113,10 +116,17 @@ export class TerminalSocketClient {
     return true
   }
 
-  /** True when the resize was sent (a disconnected client sends nothing). */
-  resize(generation: number, cols: number, rows: number): boolean {
+  /** Make this screen the session's size authority at `cols`×`rows`. */
+  claim(cols: number, rows: number, device: ScreenDevice): boolean {
     if (!this.synced || !this.socket) return false
-    this.socket.send(JSON.stringify({ type: 'resize', generation, cols, rows }))
+    this.socket.send(JSON.stringify({ type: 'claim', cols, rows, device }))
+    return true
+  }
+
+  /** The authority's pane changed: follow it at the current size `epoch`. True when sent. */
+  resize(epoch: number, cols: number, rows: number): boolean {
+    if (!this.synced || !this.socket) return false
+    this.socket.send(JSON.stringify({ type: 'resize', epoch, cols, rows }))
     return true
   }
 
@@ -153,9 +163,11 @@ export class TerminalSocketClient {
         clearTimeout(this.ackTimer)
         this.ackTimer = undefined
         this.options.onSync(message as unknown as SyncMessage)
+        this.options.onPresence(Boolean(message.sizeFrozen))
         this.options.onStatus((message.session as Session).state === 'completed' ? 'Completed' : 'Connected')
         return
       case 'session': this.options.onSession(message.session as Session); return
+      case 'presence': this.options.onPresence(Boolean(message.sizeFrozen)); return
       case 'result': {
         const result = message as unknown as InputResult
         const generation = this.inFlight.get(result.viewerSeq)
@@ -173,6 +185,8 @@ export class TerminalSocketClient {
       }
       case 'ping': this.socket?.send(JSON.stringify({ type: 'pong' })); return
       case 'error': this.options.onStatus(String(message.error)); return
+      // Someone else claimed in between; the pushed session already says who sizes.
+      case 'size-refused': return
     }
   }
 

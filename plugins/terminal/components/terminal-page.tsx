@@ -4,13 +4,16 @@ import { Inline, Stack } from '@makinbakin/sdk/layout'
 import { Alert, AlertDescription, Badge, Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SystemState, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, Text, Separator, Popover, PopoverTrigger, PopoverContent, PopoverTitle, DropdownMenuItem, DropdownMenuSwitchItem, DropdownMenuSeparator } from '@makinbakin/sdk/ui'
 import { PluginLink, useQueryState, useRouter } from '@makinbakin/sdk/navigation'
 import { formatAge } from '@makinbakin/sdk/utils'
-import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Terminal, RotateCw, Keyboard } from 'lucide-react'
+import { toast } from '@makinbakin/sdk/hooks'
+import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Terminal, RotateCw, Keyboard, Ruler } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
 import { api } from './api'
 import { TerminalControls } from './terminal-controls'
 import type { TerminalInputHandle } from './terminal-input'
-import { TerminalCanvas } from './terminal-canvas'
+import { TerminalCanvas, type TerminalViewHandle } from './terminal-canvas'
+import { SizeControl } from './size-control'
+import { estimateTerminalSize } from './terminal-size'
 import type { InputResult } from './terminal-socket'
 import { NewSession } from './new-session'
 import { TerminalTool as Tool } from './terminal-tool'
@@ -40,6 +43,9 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const [assignment, setAssignment] = useState('')
   const [captureTab, setCaptureTab] = useState(true)
   const inputHandle = useRef<TerminalInputHandle | null>(null)
+  const viewHandle = useRef<TerminalViewHandle | null>(null)
+  // Viewer-socket presence, not session state: the screen that sizes the open session is away.
+  const [sizeFrozen, setSizeFrozen] = useState(false)
   const [ctrl, setCtrl] = useState(false)
   const [attempt, setAttempt] = useState(0)
   const [streamStatus, setStreamStatus] = useState('Connecting')
@@ -137,6 +143,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const chipLabel = session?.historyDeleted ? 'Output deleted' : ended ? 'Ended' : !connected ? streamStatus.split(' / ')[0] : writable ? "You're driving" : ownerAgentName ? `You're watching ${ownerAgentName}` : "You're watching"
   const statusChip = session && <Badge size="xs" variant="solid" tone={chipTone} role="status" title={status}>{chipLabel}</Badge>
   useEffect(() => { setAssignment(session?.agentId ?? '') }, [session?.id, session?.agentId])
+  useEffect(() => { setSizeFrozen(false) }, [sessionId])
   async function operate(operation: string, extra: Record<string, unknown> = {}, targetId = sessionId) {
     const target = current.current.find((item) => item.id === targetId)
     if (!target) return
@@ -149,6 +156,13 @@ function Workspace({ sessionId }: { sessionId?: string }) {
       return true
     } catch (error) { setError(error instanceof Error ? error.message : 'Terminal operation failed'); return false }
     finally { setBusy(false) }
+  }
+  async function saveDefaultSize(target: Session) {
+    setError('')
+    try {
+      await api('/session', { id: target.id, operation: 'default-size' })
+      toast(`New sessions start at ${target.cols}×${target.rows}`, 'success')
+    } catch (error) { setError(error instanceof Error ? error.message : 'Default size not saved') }
   }
   function input(data: string) {
     if (!session || !inputEnabled) return
@@ -223,7 +237,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     // checkout, never minting a second worktree) with the same assignment.
     setBusy(true); setError('')
     try {
-      const created = await api<Session>('/sessions', { title: target.title, cwd: target.cwd, program: target.program, checkout: 'existing', agentId: target.agentId || undefined, taskId: target.taskId || undefined, projectId: target.projectId || undefined })
+      const created = await api<Session>('/sessions', { title: target.title, cwd: target.cwd, program: target.program, checkout: 'existing', agentId: target.agentId || undefined, taskId: target.taskId || undefined, projectId: target.projectId || undefined, size: estimateTerminalSize() })
       update(created); router.push(`/terminal/${encodeURIComponent(created.id)}`)
     } catch (error) { setError(error instanceof Error ? error.message : 'Could not reopen session') }
     finally { setBusy(false) }
@@ -241,6 +255,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     {error && <Alert tone="danger"><AlertDescription>{error}</AlertDescription></Alert>}
   </>
   const controls = session && <Inline gap="dense" wrap={false} aria-label="Terminal controls">
+            {!ended && !session.historyDeleted && <SizeControl session={session} frozen={sizeFrozen} busy={busy} onMinFont={() => viewHandle.current?.refit()} onFit={() => { if (!viewHandle.current?.fitToDevice()) setError('Size not changed: the terminal is reconnecting.') }} />}
             <Popover>
               <Tool label="Session details" description="View the working directory, agent assignment, and linked work." render={<PopoverTrigger render={<Button size="icon-sm" variant="ghost" aria-label="Session details" />} />}><Info size={16} /></Tool>
               <PopoverContent align="end">
@@ -279,6 +294,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
             <SessionActions session={session} busy={busy} onOperate={(operation, id) => void operate(operation, {}, id)} onConfirm={setConfirm}>
                 <DropdownMenuSwitchItem checked={captureTab} onCheckedChange={setCaptureTab} disabled={session.historyDeleted}><Keyboard size={16} />Capture Tab</DropdownMenuSwitchItem>
                 <DropdownMenuItem disabled={session.historyDeleted} onClick={() => setAttempt((value) => value + 1)}><RotateCw size={16} />Reconnect terminal</DropdownMenuItem>
+                <DropdownMenuItem disabled={busy} onClick={() => void saveDefaultSize(session)}><Ruler size={16} />Use this size as the default</DropdownMenuItem>
                 <DropdownMenuSeparator />
             </SessionActions>
         </Inline>
@@ -349,7 +365,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
           {session.cleanupReason && <Alert tone="attention"><AlertDescription>{session.cleanupReason}</AlertDescription></Alert>}
           </Stack>}
           <Separator />
-          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} inputEnabled={Boolean(inputEnabled)} inputHandle={inputHandle} onCtrlChange={setCtrl} captureTab={captureTab} attempt={attempt} onStatus={setStreamStatus} onInput={input} onClaim={handleClaim} onSession={update} onResult={handleResult} />}
+          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} inputEnabled={Boolean(inputEnabled)} inputHandle={inputHandle} viewHandle={viewHandle} onCtrlChange={setCtrl} captureTab={captureTab} attempt={attempt} onStatus={setStreamStatus} onInput={input} onClaim={handleClaim} onSession={update} onSizeFrozen={setSizeFrozen} onResult={handleResult} />}
         </>)}
       </Stack>
     </WorkspacePageBody>
