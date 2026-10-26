@@ -74,6 +74,21 @@ describe('StartScreen', () => {
   })
 })
 
+describe('StartScreen failure with newer text', () => {
+  it('a failed create keeps text typed while the request was out', async () => {
+    let fail!: () => void
+    ;(globalThis as unknown as { fetch: typeof fetch }).fetch = (() => new Promise<Response>(resolve => {
+      fail = () => resolve(Response.json({ error: 'Projects is restarting.' }, { status: 503 }))
+    })) as unknown as typeof fetch
+    render(<StartScreen />)
+    await send('First idea')
+    await act(async () => { fireEvent.change(input(), { target: { value: 'More detail typed meanwhile' } }) })
+    await act(async () => { fail() })
+    expect(input().value).toBe('More detail typed meanwhile')
+    expect(screen.getByText('Projects is restarting.')).toBeDefined()
+  })
+})
+
 describe('fallbackTitle', () => {
   it('keeps short messages and trims long ones on a word boundary', () => {
     expect(fallbackTitle('  Plan   a trip  ')).toBe('Plan a trip')

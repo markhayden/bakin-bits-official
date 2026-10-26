@@ -514,6 +514,10 @@ const projectsPlugin: BakinPlugin = {
       const body = await readBody<{ id?: string; deleteLinkedTasks?: boolean }>(req).catch(() => ({} as { id?: string; deleteLinkedTasks?: boolean }))
       const id = url.searchParams.get('projectId') || body.id
       if (!id) return json({ error: 'Missing id' }, 400)
+      // Deleting a project deletes its plan and steps: a human decision (D9a).
+      if (callerFromRequest(req).kind === 'agent') {
+        return json({ error: 'Agents cannot delete projects — that is the user\'s decision.', code: 'agent_project_delete' }, 403)
+      }
       // A live brainstorm must die with its project — otherwise it keeps
       // billing and resurrects the transcript sidecar (review I2).
       brainstormTurns.abort(id)
@@ -970,24 +974,6 @@ const projectsPlugin: BakinPlugin = {
           }, { kind: 'agent', agentId: agent })
           indexProject(params.projectId as string).catch(() => {})
           return { ok: true, ...result }
-        } catch (err: unknown) {
-          return { ok: false, error: (err as Error).message }
-        }
-      },
-    })
-
-    ctx.registerExecTool({
-      name: 'bakin_exec_projects_delete',
-      label: 'Deleted a project',
-      description: 'Delete a project by ID.',
-      parameters: {
-        projectId: z.string().describe('Project ID'),
-      },
-      handler: async (params: Record<string, unknown>, agent: string) => {
-        try {
-          await deleteProject(params.projectId as string, agent)
-          ctx.search.remove(params.projectId as string).catch(() => {})
-          return { ok: true }
         } catch (err: unknown) {
           return { ok: false, error: (err as Error).message }
         }

@@ -63,8 +63,8 @@ The lead names the project once it understands it, unless you already did.
 Agent writes pass ONE authority check: agents never change lifecycle status
 (the `status` parameter is gone from `bakin_exec_projects_update` and
 `_apply_plan`), never overwrite a title you typed (`titleSource: 'user'` —
-refused with `title_locked`), and never delete steps (there is no agent
-remove tool). REST follows the same rule: the Projects UI declares the
+refused with `title_locked`), and never delete steps or projects (there
+are no agent remove/delete tools; deleting is a UI action). REST follows the same rule: the Projects UI declares the
 operator (`X-Bakin-Operator: declared`, the SDK's
 `OPERATOR_DECLARATION_HEADERS`) on every mutation, and a caller from an agent
 context (`X-Bakin-Agent-Context`) or without the declaration is held to the

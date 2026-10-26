@@ -53,8 +53,9 @@ export function StartScreen({ onBack }: { onBack?: () => void }) {
       requestId.current = null
       router.push(`/projects/${encodeURIComponent(result.id)}`)
     } catch (err) {
-      // The composer cleared its draft on send — put the text back.
-      composer.current?.setText(content)
+      // The composer cleared its draft on send — put the text back, unless
+      // newer text was typed while the request was out.
+      if (composer.current?.isEmpty() ?? true) composer.current?.setText(content)
       setError(err instanceof Error ? err.message : 'The project could not be created. Try again.')
     } finally {
       setCreating(false)

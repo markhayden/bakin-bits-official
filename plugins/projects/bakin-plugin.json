@@ -309,13 +309,6 @@
         ]
       },
       {
-        "name": "bakin_exec_projects_delete",
-        "summary": "Delete a project",
-        "permissions": [
-          "storage.write"
-        ]
-      },
-      {
         "name": "bakin_exec_projects_add_item",
         "summary": "Add a checklist item",
         "permissions": [
@@ -435,15 +428,6 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_projects_apply_plan"
-        }
-      },
-      {
-        "name": "projects:delete",
-        "usage": "bakin projects delete <projectId>",
-        "summary": "Delete a project",
-        "dispatch": {
-          "type": "execTool",
-          "name": "bakin_exec_projects_delete"
         }
       },
       {

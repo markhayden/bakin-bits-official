@@ -19,6 +19,7 @@ import {
 import { useQueryState, useRouter } from "@makinbakin/sdk/navigation"
 import { useSearch } from "@makinbakin/sdk/hooks"
 import { useAgentList, useDebug, usePluginEvent } from "@makinbakin/sdk/hooks"
+import { OPERATOR_DECLARATION_HEADERS } from '@makinbakin/sdk/utils'
 import { ProjectRow } from './project-row'
 import { StartScreen } from './start-screen'
 import type { ProjectSummary, ProjectStatus } from '../types'
@@ -139,7 +140,7 @@ export function ProjectList() {
     try {
       const res = await fetch(`/api/plugins/projects/${encodeURIComponent(deleteTarget.id)}`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...OPERATOR_DECLARATION_HEADERS },
         body: JSON.stringify({ deleteLinkedTasks: false }),
       })
       if (!res.ok) throw new Error(`Could not delete project (${res.status}). Please try again.`)

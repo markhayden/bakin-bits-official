@@ -400,8 +400,13 @@ describe('Routes', () => {
 
       const route = findRoute(plugin.routes, 'DELETE', '/:projectId')!
       expect(route).toBeDefined()
+      // Agents (or undeclared callers) never delete a project.
+      const fromAgent = await callRoute(route, plugin.ctx, { searchParams: { projectId: 'proj-del' }, headers: { 'X-Bakin-Agent-Context': 'scout' } })
+      expect(fromAgent).toMatchObject({ status: 403, body: { code: 'agent_project_delete' } })
+      expect(existsSync(join(projectsDir, 'proj-del.md'))).toBe(true)
       const { status, body } = await callRoute(route, plugin.ctx, {
         searchParams: { projectId: 'proj-del' },
+        headers: OPERATOR,
       })
       expect(status).toBe(200)
       expect(body.ok).toBe(true)
@@ -418,6 +423,7 @@ describe('Routes', () => {
       const route = findRoute(plugin.routes, 'DELETE', '/:projectId')!
       const { status, body } = await callRoute(route, plugin.ctx, {
         searchParams: { projectId: 'nope' },
+        headers: OPERATOR,
       })
       expect(status).toBe(400)
       expect(body.error).toMatch(/not found/i)
@@ -435,6 +441,7 @@ describe('Routes', () => {
       await callRoute(route, plugin.ctx, {
         searchParams: { projectId: 'proj-linked' },
         body: { deleteLinkedTasks: true },
+        headers: OPERATOR,
       })
       expect(removeTask).toHaveBeenCalledWith('board01')
       expect(existsSync(join(projectsDir, 'proj-linked.md'))).toBe(false)
@@ -1301,7 +1308,7 @@ describe('Routes', () => {
       await callRoute(askRoute, plugin.ctx, { body: { projectId: 'proj-del', prompt: 'go' } })
 
       const deleteRoute = findRoute(plugin.routes, 'DELETE', '/:projectId')!
-      const res = await callRoute(deleteRoute, plugin.ctx, { searchParams: { projectId: 'proj-del' } })
+      const res = await callRoute(deleteRoute, plugin.ctx, { searchParams: { projectId: 'proj-del' }, headers: OPERATOR })
       expect(res.status).toBe(200)
       await settled
       expect(sawAbort).toBe(true)
@@ -1759,28 +1766,6 @@ describe('Exec Tools', () => {
   })
 
   // -------------------------------------------------------------------------
-  // bakin_exec_projects_delete
-  // -------------------------------------------------------------------------
-  describe('bakin_exec_projects_delete', () => {
-    it('deletes a project', async () => {
-      writeProjectFixture('proj-tool-del', { title: 'Delete Me' })
-
-      const tool = findTool(plugin.execTools, 'bakin_exec_projects_delete')!
-      expect(tool).toBeDefined()
-      const result = await callTool(tool, { projectId: 'proj-tool-del' })
-      expect(result.ok).toBe(true)
-      expect(existsSync(join(projectsDir, 'proj-tool-del.md'))).toBe(false)
-    })
-
-    it('returns error for non-existent project', async () => {
-      const tool = findTool(plugin.execTools, 'bakin_exec_projects_delete')!
-      const result = await callTool(tool, { projectId: 'nope' })
-      expect(result.ok).toBe(false)
-      expect(result.error).toMatch(/not found/i)
-    })
-  })
-
-  // -------------------------------------------------------------------------
   // bakin_exec_projects_add_item
   // -------------------------------------------------------------------------
   describe('bakin_exec_projects_add_item', () => {
@@ -2077,7 +2062,6 @@ describe('Registration', () => {
       'bakin_exec_projects_create',
       'bakin_exec_projects_update',
       'bakin_exec_projects_apply_plan',
-      'bakin_exec_projects_delete',
       'bakin_exec_projects_add_item',
       'bakin_exec_projects_mark_item',
       'bakin_exec_projects_link_item',
@@ -2091,8 +2075,9 @@ describe('Registration', () => {
       const tool = findTool(plugin.execTools, name)
       expect(tool, `Missing exec tool: ${name}`).toBeDefined()
     }
-    // Agents never delete steps (D9a) — removal is a user action only.
+    // Agents never delete steps or projects (D9a) — removal is a user action only.
     expect(findTool(plugin.execTools, 'bakin_exec_projects_remove_item')).toBeUndefined()
+    expect(findTool(plugin.execTools, 'bakin_exec_projects_delete')).toBeUndefined()
   })
 
   it('registers hooks', () => {
