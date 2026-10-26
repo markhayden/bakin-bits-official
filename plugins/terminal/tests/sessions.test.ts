@@ -540,3 +540,30 @@ test('a client that leaves mid-reconcile does not undo another client\'s admissi
   await nativeAttach(session.id, ghostty(737, 100, 30, false))
   expect(manager.nativeClients(session.id).map((client) => client.pid)).toEqual([737])
 })
+
+test('an admission survives a later client failing in the same pass, and the confirm resolves', async () => {
+  const { manager, natives, nativeAttach } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  const confirmed = manager.confirmAttach(reserved.token, 941)
+  await manager.idle()
+  // 941 is admitted first; then a stuck client's detach fails for real (it is still listed).
+  const driver = (manager as unknown as { driver: { detachClient(name: string): Promise<void> } }).driver
+  const detach = driver.detachClient
+  driver.detachClient = async (name) => { if (name === 'stuck') throw new Error('server busy'); return detach(name) }
+  natives.set(session.id, [ghostty(941)])
+  await nativeAttach(session.id, { ...ghostty(942, 80, 24, false), control: true, name: 'stuck' })
+  await confirmed
+  expect(manager.nativeClients(session.id).map((client) => client.pid)).toEqual([941])
+  expect(manager.get(session.id, human).sizeAuthority).toEqual({ viewer: 'native:941', kind: 'native' })
+})
+
+test('a confirm whose admission pass fails is refused, not left waiting', async () => {
+  const { manager, natives } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  natives.set(session.id, [ghostty(951)])
+  const driver = (manager as unknown as { driver: { setReadonly(): Promise<void> } }).driver
+  driver.setReadonly = async () => { throw new Error('server busy') }
+  await expect(manager.confirmAttach(reserved.token, 951)).rejects.toThrow('Could not admit this terminal: server busy')
+})

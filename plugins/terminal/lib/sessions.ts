@@ -351,8 +351,14 @@ export class Sessions {
       await this.ensureAttached(session)
       const token = randomUUID()
       this.reservations.set(token, { sessionId: id, generation: session.generation, expires: this.now() + RESERVATION_MS })
-      // Unconfirmed or unattached by then, it lapses and its waiting client (if any) is detached.
-      const timer = setTimeout(() => { this.timers.delete(timer); this.clientsChanged(id) }, RESERVATION_MS + 50)
+      // Unspent by then it lapses (whatever the clock says), and its waiting client (if any) is detached.
+      const timer = setTimeout(() => {
+        this.timers.delete(timer)
+        void this.run(async () => {
+          this.dropReservation(token, 'This attach expired; run the command again')
+          await this.reconcileClients(id)
+        }).catch(() => undefined)
+      }, RESERVATION_MS)
       this.timers.add(timer)
       return { session, token, args: this.driver.attachArgs(id) }
     })
@@ -379,7 +385,11 @@ export class Sessions {
       // Wrapped, not returned: the queue must not wait on admission (admission runs in the queue).
       const admitted = new Promise<void>((resolve, reject) => { reservation.settle = { resolve, reject } })
       admitted.catch(() => undefined)
-      await this.reconcileClients(session.id)
+      try { await this.reconcileClients(session.id) }
+      catch (error) {
+        // Not admitted by the failed pass: say so instead of waiting out the expiry.
+        this.dropReservation(token, `Could not admit this terminal: ${error instanceof Error ? error.message : String(error)}`)
+      }
       return { admitted }
     })
     await admitted
@@ -419,39 +429,51 @@ export class Sessions {
       if (reservation.expires < this.now()) this.dropReservation(token, 'This attach expired; run the command again')
     }
     const admitted = this.natives.get(id) ?? new Map<number, NativeClient>()
-    const next = new Map<number, NativeClient>()
-    let newest: NativeClient | undefined
     const present = await this.driver.clients(id)
-    for (const client of present) {
-      if (admitted.has(client.pid)) { next.set(client.pid, client); continue }
-      const match = client.control ? undefined : [...this.reservations].find(([, reservation]) => reservation.sessionId === id && reservation.pid === client.pid && reservation.generation === session.generation)
-      if (match && session.owner.kind === 'human') {
-        // Launched read-only; admitted, it types.
-        if (!await this.onClient(id, client, () => this.driver.setReadonly(id, client, false))) continue
-        next.set(client.pid, { ...client, readonly: false })
-        newest = client
-        this.dropReservation(match[0])
-        continue
+    // Admitted clients still attached stay admitted whatever happens below.
+    const next = new Map(present.filter((client) => admitted.has(client.pid)).map((client) => [client.pid, client]))
+    const spent: string[] = []
+    let newest: NativeClient | undefined
+    try {
+      for (const client of present) {
+        if (admitted.has(client.pid)) continue
+        const match = client.control ? undefined : [...this.reservations].find(([, reservation]) => reservation.sessionId === id && reservation.pid === client.pid && reservation.generation === session.generation)
+        if (match && session.owner.kind === 'human') {
+          // Launched read-only; admitted, it types.
+          if (!await this.onClient(id, client, () => this.driver.setReadonly(id, client, false))) continue
+          next.set(client.pid, { ...client, readonly: false })
+          newest = client
+          spent.push(match[0])
+          continue
+        }
+        const pending = [...this.reservations.values()].some((reservation) => reservation.sessionId === id && reservation.pid === undefined)
+        // A confirm is on its way: hold the terminal client, unable to type, until then.
+        if (pending && !client.control) await this.onClient(id, client, () => this.driver.setReadonly(id, client, true))
+        else await this.onClient(id, client, () => this.driver.detachClient(client.name))
       }
-      const pending = [...this.reservations.values()].some((reservation) => reservation.sessionId === id && reservation.pid === undefined)
-      // A confirm is on its way: hold the terminal client, unable to type, until then.
-      if (pending && !client.control) await this.onClient(id, client, () => this.driver.setReadonly(id, client, true))
-      else await this.onClient(id, client, () => this.driver.detachClient(client.name))
+    } finally {
+      // Commit whatever was admitted (even if a later client failed), with
+      // its size claim, before telling the confirms and the viewers.
+      this.natives.set(id, next)
+      // The newest admitted app claims the size.
+      if (newest) {
+        Object.assign(session, claimSize(session, nativeViewer(newest.pid), { kind: 'native' }))
+        this.save(session)
+      }
+      for (const token of spent) this.dropReservation(token)
+      const changed = next.size !== admitted.size || [...next].some(([pid, client]) => {
+        const before = admitted.get(pid)
+        return !before || before.cols !== client.cols || before.rows !== client.rows
+      })
+      if (changed) for (const listener of this.nativeListeners.get(id) ?? []) listener()
     }
-    const changed = next.size !== admitted.size || [...next].some(([pid, client]) => {
-      const before = admitted.get(pid)
-      return !before || before.cols !== client.cols || before.rows !== client.rows
-    })
-    this.natives.set(id, next)
-    // The newest admitted app claims the size; the app holding the claim is followed.
-    if (newest) Object.assign(session, claimSize(session, nativeViewer(newest.pid), { kind: 'native' }))
+    // The app holding the claim is followed.
     const authority = session.sizeAuthority
     const sizer = authority?.kind === 'native' ? [...next.values()].find((client) => nativeViewer(client.pid) === authority.viewer) : undefined
     if (sizer) {
       const size = clampSize(sizer.cols, sizer.rows)
       await this.applySize(session, size.cols, size.rows)
-    } else if (newest) this.save(session)
-    if (changed) for (const listener of this.nativeListeners.get(id) ?? []) listener()
+    }
   }
   /** Act on one client; false when it left meanwhile (tmux no longer lists it). Anything else is a real failure. */
   private async onClient(id: string, client: NativeClient, action: () => Promise<void>): Promise<boolean> {

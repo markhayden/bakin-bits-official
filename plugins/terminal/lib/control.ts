@@ -16,6 +16,12 @@ export class ControlError extends TerminalError {
 /** Largest send-keys chunk; chunks are queued in order, so input never reorders. */
 const SEND_KEYS_CHUNK = 4096
 const MAX_PENDING = 256
+/**
+ * A reply that never comes means a wedged connection. Replies correlate by
+ * order, so one cannot be skipped: the connection is closed (every waiter
+ * fails, the attachment drops) and the next viewer sync reattaches.
+ */
+export const COMMAND_TIMEOUT_MS = 5000
 
 export class ControlParser {
   private buffer = ''
@@ -66,7 +72,7 @@ export class ControlClient {
   readonly ready: Promise<void>
   /** The `tmux -C` process, so its tmux client is known as Bakin's own. */
   pid?: number
-  constructor(private transport: ControlTransport, onNotification: (line: string) => void) {
+  constructor(private transport: ControlTransport, onNotification: (line: string) => void, private timeoutMs = COMMAND_TIMEOUT_MS) {
     this.parser = new ControlParser((ok, lines) => {
       const next = this.pending.shift()
       if (!next) return
@@ -102,7 +108,10 @@ export class ControlClient {
     if (this.closed) return Promise.reject(new ControlError('Terminal control connection closed'))
     if (this.pending.length >= MAX_PENDING) return Promise.reject(new ControlError('Terminal control queue is full'))
     const line = controlCommandLine(args)
-    const reply = new Promise<string[]>((resolve, reject) => { this.pending.push({ resolve, reject }) })
+    const reply = new Promise<string[]>((resolve, reject) => {
+      const timer = setTimeout(() => this.close(), this.timeoutMs)
+      this.pending.push({ resolve: (lines) => { clearTimeout(timer); resolve(lines) }, reject: (error) => { clearTimeout(timer); reject(error) } })
+    })
     this.transport.write(`${line}\n`)
     return reply
   }
