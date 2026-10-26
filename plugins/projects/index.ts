@@ -232,26 +232,29 @@ const projectsPlugin: BakinPlugin = {
     // receipt is re-read after the awaits, so a retry that lost the race to
     // a completed start never starts the turn again.
     const startingKickoffs = new Set<string>()
-    async function startKickoff(projectId: string): Promise<void> {
-      if (startingKickoffs.has(projectId)) return
+    /** `pending` = the engine did not admit the turn; the receipt stays for a retry. */
+    async function startKickoff(projectId: string): Promise<'started' | 'in-flight' | 'pending'> {
+      if (startingKickoffs.has(projectId)) return 'in-flight'
       startingKickoffs.add(projectId)
       try {
         const project = readProject(projectId)
         const kickoff = project?.kickoff
-        if (!project || kickoff?.state !== 'pending' || !kickoff.message) return
+        if (!project || kickoff?.state !== 'pending' || !kickoff.message) return 'started'
         // The engine persists the user row BEFORE accepting: a transcript is
         // proof the turn was already accepted (e.g. the `started` write failed).
         if (readBrainstormMessages(projectId).length > 0) {
           await projectService.advanceKickoff(projectId, kickoff.requestId, 'pending', 'started')
-          return
+          return 'started'
         }
         const runtimeContent = buildProjectBrainstormContext(await derive(project), kickoff.message, { live: true })
-        if (readProject(projectId)?.kickoff?.state !== 'pending') return
+        if (readProject(projectId)?.kickoff?.state !== 'pending') return 'started'
         const result = await brainstormTurns.start(ctx, projectId, kickoff.message, {
           agentId: kickoff.agentId ?? project.owner,
           runtimeContent,
         })
-        if (result === 'accepted') await projectService.advanceKickoff(projectId, kickoff.requestId, 'pending', 'started')
+        if (result !== 'accepted') return 'pending'
+        await projectService.advanceKickoff(projectId, kickoff.requestId, 'pending', 'started')
+        return 'started'
       } finally {
         startingKickoffs.delete(projectId)
       }
@@ -478,8 +481,13 @@ const projectsPlugin: BakinPlugin = {
           const result = await projectService.kickoffProject({
             requestId: body.requestId ?? '', title: body.title, owner, message: body.firstMessage ?? '',
           })
-          if (result.kickoff.state === 'pending') await startKickoff(result.id)
+          const started = result.kickoff.state === 'pending' ? await startKickoff(result.id) : 'started'
           if (result.created) indexProject(result.id).catch(() => {})
+          // The project exists but its first turn did not start: a retryable
+          // failure — the client's retry (same requestId) resumes this project.
+          if (started === 'pending') {
+            return json({ error: 'The project was created but the conversation could not start. Try again.', code: 'kickoff_pending', id: result.id }, 503)
+          }
           return json({ ok: true, id: result.id, created: result.created })
         } catch (error) {
           return mutationFailure(error)

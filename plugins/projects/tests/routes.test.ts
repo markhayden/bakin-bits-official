@@ -1037,6 +1037,25 @@ describe('Routes', () => {
         expect((await readViaTool('proj-accepted-retry')).kickoff).toMatchObject({ state: 'started' })
       })
 
+      it('a kickoff the engine did not admit is a retryable failure that the retry resumes', async () => {
+        const streamMock = mockRuntimeStream(['On it.'])
+        // The engine's first user-row append fails once (it answers not_found).
+        const storage = plugin.ctx.storage
+        const realWrite = storage.write.bind(storage)
+        let failOnce = true
+        storage.write = (path: string, content: string) => {
+          if (failOnce && path.endsWith('.brainstorm.json')) { failOnce = false; throw new Error('disk full') }
+          return realWrite(path, content)
+        }
+        const first = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        expect(first).toMatchObject({ status: 503, body: { code: 'kickoff_pending' } })
+        const settled = nextSettle()
+        const retry = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        expect(retry).toMatchObject({ status: 200, body: { id: first.body.id, created: false } })
+        await settled
+        expect(streamMock).toHaveBeenCalledTimes(1)
+      })
+
       it('rejects a malformed request identity', async () => {
         const { status, body } = await callRoute(createRoute(), plugin.ctx, { body: { ...kickoffBody, requestId: 'x' } })
         expect(status).toBe(400)
