@@ -61,7 +61,7 @@ export function localDay(now: Date): string {
 
 export type StewardScanOutcome =
   | { created: string }
-  | { skipped: StewardSkipReason | 'disabled' | 'not_found' | 'daily_cap' | 'create_failed' }
+  | { skipped: StewardSkipReason | 'disabled' | 'stopped' | 'not_found' | 'daily_cap' | 'create_failed' }
 
 export interface StewardLoop {
   /** One scan; joins a scan already running for the project (single-flight). */
@@ -89,6 +89,10 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
   const followUps = new Map<string, { force: boolean; promise: Promise<StewardScanOutcome> }>()
   const debounces = new Map<string, ReturnType<typeof setTimeout>>()
   let timer: ReturnType<typeof setInterval> | null = null
+  // stop() bumps the generation: a scan that started before shutdown never
+  // reserves after it, and nothing new starts until start().
+  let generation = 0
+  let stopped = false
 
   const changed = (projectId: string) => ctx.events.emit('projects.changed', { projectId, action: 'steward' })
   const stuckAfterMs = () => settings().stuckAfterHours * 3_600_000
@@ -132,16 +136,32 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
       project.steward.phase = 'created'
       return true
     })
+    // The reservation was cancelled (completed/archived project) or
+    // finalized while this create was in flight: nothing tracks the task
+    // any more, so it must not linger on the board.
+    if (repo.readProject(projectId)?.steward?.openTaskId !== reservation.openTaskId) {
+      const task = await ctx.tasks.get(reservation.openTaskId)
+      if (task && !OPEN_EXCLUDED.has(task.column)) await ctx.tasks.move(reservation.openTaskId, 'archived')
+      ctx.activity.audit('steward.orphan_archived', 'system', { projectId, taskId: reservation.openTaskId })
+      return false
+    }
     return true
   }
 
-  /** Close the open run: what the board looks like NOW is what this run handled (D20a). */
+  /**
+   * Close the open run: the board as the run left it is what it handled
+   * (D20a). Runs as soon as the check-in's own transition arrives (the
+   * reconcile at every scan is the backstop), and the fingerprint is taken
+   * against the NEW watermark — `work-done`/`stalled` measured from the
+   * finalized `lastStewardAt`, exactly as the next scan will measure them —
+   * so finalizing never changes the fingerprint by itself.
+   */
   async function finalize(projectId: string, taskId: string, how: 'done' | 'abandoned' | 'foreign'): Promise<void> {
     const project = repo.readProject(projectId)
     if (!project) return
     const tasks = await ctx.tasks.list({ projectId })
     const at = now()
-    const digest = buildStewardDigest(project, tasks, { now: at, stuckAfterMs: stuckAfterMs(), steward: project.steward })
+    const digest = buildStewardDigest(project, tasks, { now: at, stuckAfterMs: stuckAfterMs(), steward: { ...project.steward, lastStewardAt: at.toISOString() } })
     const closed = await writeSteward(projectId, current => {
       const steward = current.steward
       if (steward?.openTaskId !== taskId) return false
@@ -188,6 +208,7 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
   }
 
   async function runScan(projectId: string, force: boolean): Promise<StewardScanOutcome> {
+    const started = generation
     const config = settings()
     if (!config.enabled) return { skipped: 'disabled' }
     await reconcile(projectId)
@@ -203,6 +224,7 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
     if (!decision.run) return { skipped: decision.reason }
 
     const reserved = await withProjectLock((): Reservation | StewardScanOutcome => {
+      if (generation !== started || stopped) return { skipped: 'stopped' }
       const current = repo.readProject(projectId)
       if (!current) return { skipped: 'not_found' }
       const again = stewardEligibility(current)
@@ -249,6 +271,7 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
   }
 
   function scan(projectId: string, opts: { force?: boolean } = {}): Promise<StewardScanOutcome> {
+    if (stopped) return Promise.resolve({ skipped: 'stopped' })
     const force = Boolean(opts.force)
     const running = flights.get(projectId)
     if (running) {
@@ -287,8 +310,14 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
     const data = payload as { to?: unknown; task?: Task } | null
     const task = data?.task
     const projectId = task?.projectId
-    // Steward transitions never trigger a scan — that is how a run can't feed itself.
-    if (!projectId || !task || isStewardTask(task) || typeof data.to !== 'string' || !TRIGGER_COLUMNS.has(data.to)) return
+    if (!projectId || !task || typeof data.to !== 'string') return
+    // A finished check-in is finalized at once (what it handled is the board
+    // NOW), but never triggers a scan — that is how a run can't feed itself.
+    if (isStewardTask(task)) {
+      if (OPEN_EXCLUDED.has(data.to)) reconcile(projectId).catch(err => log.error('steward finalize failed', err, { projectId }))
+      return
+    }
+    if (!TRIGGER_COLUMNS.has(data.to)) return
     if (debounces.has(projectId)) return
     const pending = setTimeout(() => {
       debounces.delete(projectId)
@@ -304,12 +333,16 @@ export function createStewardLoop({ ctx, repo, now = () => new Date(), settings 
     reconcile,
     onTaskStatusChanged,
     start() {
+      stopped = false
       if (timer) clearInterval(timer)
       timer = setInterval(() => { void scanAll() }, settings().scanMinutes * 60_000)
       // A backstop, not a reason to keep the process alive.
       timer.unref?.()
     },
     stop() {
+      stopped = true
+      generation += 1
+      followUps.clear()
       if (timer) clearInterval(timer)
       timer = null
       for (const pending of debounces.values()) clearTimeout(pending)

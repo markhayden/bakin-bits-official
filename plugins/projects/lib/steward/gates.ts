@@ -76,24 +76,24 @@ export function createStewardGates({ ctx, repo, turns, projectService }: Steward
     })
   }
 
-  /** Move a task, tolerating one that is already there or gone. */
+  /**
+   * Move a task. A task that is gone, or already there, is fine; any other
+   * failure THROWS — the caller's approval stays pending and a retry
+   * converges (every effect here is idempotent).
+   */
   async function moveTask(taskId: string | undefined, column: Task['column']): Promise<void> {
     if (!taskId) return
-    try {
-      const task = await ctx.tasks.get(taskId)
-      if (task && task.column !== column) await ctx.tasks.move(taskId, column)
-    } catch (err) {
-      log.warn('could not move task', { taskId, column, err })
-    }
+    const task = await ctx.tasks.get(taskId)
+    if (task && task.column !== column) await ctx.tasks.move(taskId, column)
   }
 
-  /** A note in the project conversation, on the steward's own turn. */
-  async function note(project: Project, stewardTaskId: string | undefined, content: string): Promise<void> {
-    const agentId = project.steward?.frozen?.assignee ?? project.owner
+  /** A note in the project conversation, on the asking check-in's turn and in its voice. */
+  async function note(project: Project, gate: ProjectGateState | undefined, content: string): Promise<void> {
+    const agentId = gate?.stewardAgentId ?? project.owner
     const result = await turns.appendExternal(turnCtx, project.id, [{
       kind: 'assistant',
       ts: new Date().toISOString(),
-      ...(stewardTaskId ? { turnId: `steward:${stewardTaskId}` } : {}),
+      ...(gate?.stewardTaskId ? { turnId: `steward:${gate.stewardTaskId}` } : {}),
       agentId,
       content,
     }], { agentId, preview: content })
@@ -101,21 +101,20 @@ export function createStewardGates({ ctx, repo, turns, projectService }: Steward
   }
 
   /**
-   * End the loop for a project that completed or was archived: open steward
-   * task → done (when it anchors the resolving completion) or archived;
-   * every other pending sign-off → cancelled; input gate cleared.
-   * Idempotent — a retry after a partial failure converges.
+   * End the loop for a project that completed or was archived: every other
+   * pending sign-off → cancelled; open steward task → done (when it anchors
+   * the resolving completion) or archived; input gate cleared. Failures
+   * throw BEFORE the bookkeeping is cleared, so a retry converges.
    */
   async function cleanup(projectId: string, opts: { resolvingApprovalId?: string; reason: string }): Promise<void> {
     for (const approval of ctx.approvals.listPending({ entityId: projectId })) {
       if (approval.approvalId === opts.resolvingApprovalId) continue
       await ctx.approvals.cancel(approval.approvalId, opts.reason)
     }
-    const before = repo.readProject(projectId)
-    const openTaskId = before?.steward?.openTaskId
+    const openTaskId = repo.readProject(projectId)?.steward?.openTaskId
     const resolvingAnchor = opts.resolvingApprovalId ? ctx.approvals.get(opts.resolvingApprovalId)?.taskId : undefined
     if (openTaskId) {
-      const task = await ctx.tasks.get(openTaskId).catch(() => null)
+      const task = await ctx.tasks.get(openTaskId)
       if (task && isStewardTask(task, projectId)) await moveTask(openTaskId, openTaskId === resolvingAnchor ? 'done' : 'archived')
     }
     await withProjectLock(() => {
@@ -150,49 +149,68 @@ export function createStewardGates({ ctx, repo, turns, projectService }: Steward
     return project.gates?.[gateKey(parsed.gateKind, parsed.subject)]?.approvalId === approval.approvalId ? 'live' : 'orphaned'
   }
 
+  /**
+   * The decision applies only to the CURRENT, still-pending generation —
+   * the host does not ask ownerState at resolve time, so the gate fences it.
+   */
+  function currentGate(approval: PluginApproval): { project: Project; key: string; gate: ProjectGateState } {
+    const parsed = parseGateApprovalId(approval.approvalId)
+    const project = parsed ? repo.readProject(parsed.projectId) : null
+    if (!parsed || !project) throw ctx.approvals.refusal('This project no longer exists.', 409)
+    const key = gateKey(parsed.gateKind, parsed.subject)
+    const gate = project.gates?.[key]
+    if (gate?.approvalId !== approval.approvalId || gate.state !== 'pending') {
+      throw ctx.approvals.refusal('This sign-off was replaced by a newer request.', 409)
+    }
+    return { project, key, gate }
+  }
+
   async function resolveComplete(approval: PluginApproval, decision: PluginApprovalDecision): Promise<void> {
-    const parsed = parseGateApprovalId(approval.approvalId)!
-    const project = repo.readProject(parsed.projectId)
-    if (!project || project.status !== 'active') throw ctx.approvals.refusal('This project is no longer active.', 409)
-    const key = gateKey('complete', parsed.subject)
+    const { project, key, gate } = currentGate(approval)
     if (decision.option === 'approve') {
-      await projectService.updateProject(project.id, { status: 'completed' }, { kind: 'user' })
+      // A retry after a partial failure finds the project already completed
+      // by THIS approval (its gate is still pending): resume, don't refuse.
+      if (project.status === 'active') await projectService.updateProject(project.id, { status: 'completed' }, { kind: 'user' })
+      else if (project.status !== 'completed') throw ctx.approvals.refusal('This project is no longer active.', 409)
       await moveTask(approval.taskId, 'done')
-      await writeGate(project.id, key, approval.approvalId, 'approved')
       await cleanup(project.id, { resolvingApprovalId: approval.approvalId, reason: 'Project completed' })
+      await writeGate(project.id, key, approval.approvalId, 'approved')
       ctx.activity.audit('steward.completed', 'system', { projectId: project.id, approvalId: approval.approvalId, decidedBy: decision.decidedBy })
       return
     }
-    await writeGate(project.id, key, approval.approvalId, 'rejected')
+    if (project.status !== 'active') throw ctx.approvals.refusal('This project is no longer active.', 409)
     await moveTask(approval.taskId, 'done')
-    await note(project, approval.taskId, `You held off on completing the project${decision.comment ? `: “${decision.comment}”` : '.'} I'll pick it back up at the next check-in.`)
+    await note(project, gate, `You held off on completing the project${decision.comment ? `: “${decision.comment}”` : '.'} I'll pick it back up at the next check-in.`)
+    // Last: until every effect landed, the gate (and the approval) stay pending.
+    await writeGate(project.id, key, approval.approvalId, 'rejected')
     changed(project.id)
   }
 
   async function resolveSignoff(approval: PluginApproval, decision: PluginApprovalDecision): Promise<void> {
-    const parsed = parseGateApprovalId(approval.approvalId)!
-    const project = repo.readProject(parsed.projectId)
-    if (!project || project.status !== 'active') throw ctx.approvals.refusal('This project is no longer active.', 409)
-    const key = gateKey('signoff', parsed.subject)
-    const deliverable = await ctx.tasks.get(parsed.subject)
-    // The check-in that ASKED — a later check-in may be open by now.
-    const stewardTaskId = project.gates?.[key]?.stewardTaskId
+    const { project, key, gate } = currentGate(approval)
+    if (project.status !== 'active') throw ctx.approvals.refusal('This project is no longer active.', 409)
+    const subject = parseGateApprovalId(approval.approvalId)!.subject
+    const deliverable = await ctx.tasks.get(subject)
     if (decision.option === 'approve') {
-      await moveTask(parsed.subject, 'done')
+      await moveTask(subject, 'done')
     } else {
       const reason = decision.comment?.trim() || 'No reason given.'
-      if (deliverable) {
-        await ctx.tasks.appendLog(parsed.subject, { timestamp: new Date().toISOString(), author: 'operator', message: `Sign-off declined: ${reason}` })
-        await ctx.tasks.update(parsed.subject, {
+      const declined = `Sign-off declined: ${reason}`
+      // Idempotent on retry: the reason lands once.
+      if (deliverable && !deliverable.description?.includes(declined)) {
+        await ctx.tasks.appendLog(subject, { timestamp: new Date().toISOString(), author: 'operator', message: declined })
+        await ctx.tasks.update(subject, {
           column: 'todo',
-          description: [deliverable.description?.trim(), `Sign-off declined: ${reason}`].filter(Boolean).join('\n\n'),
+          description: [deliverable.description?.trim(), declined].filter(Boolean).join('\n\n'),
         })
+      } else if (deliverable) {
+        await moveTask(subject, 'todo')
       }
-      await note(project, stewardTaskId, `You sent “${deliverable?.title ?? parsed.subject}” back: “${reason}”`)
+      await note(project, gate, `You sent “${deliverable?.title ?? subject}” back: “${reason}”`)
     }
-    await writeGate(project.id, key, approval.approvalId, decision.option === 'approve' ? 'approved' : 'rejected')
     // The check-in that asked is over once the decision is made.
-    if (stewardTaskId) await moveTask(stewardTaskId, 'done')
+    await moveTask(gate.stewardTaskId, 'done')
+    await writeGate(project.id, key, approval.approvalId, decision.option === 'approve' ? 'approved' : 'rejected')
     changed(project.id)
   }
 
@@ -214,8 +232,8 @@ export function createStewardGates({ ctx, repo, turns, projectService }: Steward
         subjectTaskId: z.string().optional().describe('The deliverable\'s board task id (required for "signoff")'),
         summary: z.string().describe('What the user is approving, and why it is ready'),
       },
-      handler: async (params: Record<string, unknown>) => {
-        const steward = await resolveSteward(params.projectId, params.taskId)
+      handler: async (params: Record<string, unknown>, agent?: string) => {
+        const steward = await resolveSteward(params.projectId, params.taskId, agent)
         if (!steward.ok) return { ok: false, error: steward.error, code: steward.code }
         const { project, taskId } = steward.identity
         const gateKind = params.gateKind
@@ -234,12 +252,29 @@ export function createStewardGates({ ctx, repo, turns, projectService }: Steward
         }
         const anchor = gateKind === 'complete' ? taskId : subject
         const key = gateKey(gateKind, subject)
+        /** A request that would return an existing record: pending, or a deliverable already signed off and done. */
+        const reuse = (prior: ProjectGateState | undefined) => prior?.state === 'pending'
+          || (prior?.state === 'approved' && gateKind === 'signoff' && deliverable?.column === 'done')
+
+        const known = repo.readProject(project.id)?.gates?.[key]
+        if (reuse(known)) return { ok: true, approvalId: known!.approvalId, state: known!.state, message: 'Already asked. Finish this check-in now.' }
+        // The board's Review column carries the "Needs approval" signal —
+        // moved BEFORE the approval exists, so a fast decision can never be
+        // undone by a late move back to review.
+        try {
+          await moveTask(taskId, 'review')
+          if (gateKind === 'signoff') await moveTask(subject, 'review')
+        } catch (err) {
+          return { ok: false, error: `Could not move the task to review: ${err instanceof Error ? err.message : String(err)}`, code: 'board_unavailable' }
+        }
 
         const outcome = await withProjectLock(() => {
           const current = repo.readProject(project.id)
           if (!current) return { error: 'not_found' as const }
           const prior = current.gates?.[key]
-          if (prior?.state === 'pending' || prior?.state === 'approved') return { approvalId: prior.approvalId, state: prior.state, created: false }
+          if (reuse(prior)) return { approvalId: prior!.approvalId, state: prior!.state, created: false }
+          // Rejected, cancelled, or approved in an earlier lifecycle (a
+          // reopened project, a reworked deliverable): a new generation.
           const generation = (prior?.generation ?? 0) + 1
           const approvalId = gateApprovalId(project.id, gateKind, subject, generation)
           ctx.approvals.request({
@@ -250,15 +285,12 @@ export function createStewardGates({ ctx, repo, turns, projectService }: Steward
             title: gateKind === 'complete' ? `Complete “${current.title}”?` : `Sign off “${deliverable!.title}”?`,
             summary,
           })
-          current.gates = { ...current.gates, [key]: { approvalId, generation, state: 'pending', stewardTaskId: taskId } }
+          current.gates = { ...current.gates, [key]: { approvalId, generation, state: 'pending', stewardTaskId: taskId, stewardAgentId: steward.identity.agentId } }
           repo.writeProject(current)
           return { approvalId, state: 'pending' as const, created: true }
         })
         if ('error' in outcome) return { ok: false, error: `Project not found: ${project.id}`, code: 'not_found' }
         if (outcome.created) {
-          // The board's Review column carries the "Needs approval" signal.
-          await moveTask(taskId, 'review')
-          if (gateKind === 'signoff') await moveTask(subject, 'review')
           ctx.activity.audit('steward.request_signoff', steward.identity.agentId, { projectId: project.id, taskId, gateKind, approvalId: outcome.approvalId })
           changed(project.id)
         }

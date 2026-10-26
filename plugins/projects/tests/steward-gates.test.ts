@@ -22,6 +22,14 @@ const OPERATOR = { 'X-Bakin-Operator': 'declared' }
 const STEWARD_TASK = 'task-steward-1'
 const COMPLETE_ID = 'projects:p1:complete:project:1'
 
+async function waitUntil(cond: () => boolean | Promise<boolean>, label: string): Promise<void> {
+  const deadline = Date.now() + 2000
+  while (!(await cond())) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`)
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+}
+
 let plugin: ActivatedPlugin
 let repo: ProjectRepository
 let n = 0
@@ -48,7 +56,7 @@ const read = () => repo.readProject('p1')!
 const column = async (id: string) => (await plugin.ctx.tasks.get(id))?.column
 const signoff = (extra: Record<string, unknown> = {}) => callTool(findTool(plugin.execTools, 'bakin_exec_projects_request_signoff')!, {
   projectId: 'p1', taskId: STEWARD_TASK, gateKind: 'complete', summary: 'All three steps are done and reviewed.', ...extra,
-})
+}, 'pixel')
 const notes = () => repo.readBrainstormMessages('p1').filter(r => r.kind === 'assistant').map(r => r.kind === 'assistant' ? r.content : '')
 
 describe('complete gate', () => {
@@ -61,7 +69,7 @@ describe('complete gate', () => {
       gateKind: 'complete', entityId: 'p1', taskId: STEWARD_TASK, status: 'pending', title: 'Complete “Launch”?', summary: 'All three steps are done and reviewed.',
     }))
     expect(await column(STEWARD_TASK)).toBe('review')
-    expect(read().gates).toEqual({ 'complete:project': { approvalId: COMPLETE_ID, generation: 1, state: 'pending', stewardTaskId: STEWARD_TASK } })
+    expect(read().gates).toEqual({ 'complete:project': { approvalId: COMPLETE_ID, generation: 1, state: 'pending', stewardTaskId: STEWARD_TASK, stewardAgentId: 'pixel' } })
     expect(stewardEligibility(read())).toBe('completion_pending')
     // Re-requesting while pending is a no-op returning the same id.
     expect(await signoff({ summary: 'Again' })).toEqual(expect.objectContaining({ approvalId: COMPLETE_ID }))
@@ -90,9 +98,15 @@ describe('complete gate', () => {
     expect(read().gates?.['complete:project']).toEqual(expect.objectContaining({ state: 'rejected', generation: 1 }))
     expect(await column(STEWARD_TASK)).toBe('done')
     expect(notes()).toEqual([expect.stringContaining('“The FAQ still needs a pass”')])
-    expect(stewardEligibility(read())).toBe('run_open')
+    // The check-in finished, so it is finalized at once and the loop is free again.
+    await waitUntil(() => read().steward?.openTaskId === undefined, 'check-in finalized')
+    expect(stewardEligibility(read())).toBeNull()
 
-    const again = await signoff()
+    // The finished check-in can no longer ask; the NEXT check-in re-requests.
+    expect(await signoff()).toEqual(expect.objectContaining({ ok: false, code: 'not_steward' }))
+    await plugin.ctx.tasks.create({ id: 'task-steward-2', title: 'Check in: Launch', agent: 'pixel', projectId: 'p1', source: { pluginId: 'projects', entityType: 'steward', entityId: 'p1' } })
+    repo.writeProject({ ...read(), steward: { ...read().steward, openTaskId: 'task-steward-2', phase: 'created', frozen: { title: 'Check in: Launch', assignee: 'pixel', description: 'brief' } } })
+    const again = await signoff({ taskId: 'task-steward-2' })
     expect(again.approvalId).toBe('projects:p1:complete:project:2')
     expect(read().gates?.['complete:project']?.generation).toBe(2)
   })
@@ -166,5 +180,79 @@ describe('gate owner state', () => {
     await plugin.ctx.tasks.move(STEWARD_TASK, 'done')
     await plugin.approvals.resolve(COMPLETE_ID, 'approve')
     expect(read().status).toBe('completed')
+  })
+})
+
+describe('review round 1 regressions', () => {
+  beforeEach(setup)
+
+  const openNextCheckin = async (id: string) => {
+    await plugin.ctx.tasks.create({ id, title: 'Check in: Launch', agent: 'pixel', projectId: 'p1', source: { pluginId: 'projects', entityType: 'steward', entityId: 'p1' } })
+    repo.writeProject({ ...read(), steward: { ...read().steward, openTaskId: id, phase: 'created', frozen: { title: 'Check in: Launch', assignee: 'pixel', description: 'brief' } } })
+  }
+
+  it('a superseded generation cannot change the project', async () => {
+    await signoff()
+    // Generation 2 is current (e.g. after a rejection whose record lagged).
+    repo.writeProject({ ...read(), gates: { 'complete:project': { approvalId: 'projects:p1:complete:project:2', generation: 2, state: 'pending' } } })
+    await expect(plugin.approvals.resolve(COMPLETE_ID, 'approve')).rejects.toThrow('replaced by a newer request')
+    expect(read().status).toBe('active')
+    expect(plugin.ctx.approvals.get(COMPLETE_ID)?.status).toBe('pending')
+  })
+
+  it('tasks move to review BEFORE the approval exists, so a fast decision is never undone', async () => {
+    const pendingAtMove: number[] = []
+    const realMove = plugin.ctx.tasks.move
+    plugin.ctx.tasks.move = async (id, column) => {
+      if (column === 'review') pendingAtMove.push(plugin.ctx.approvals.listPending().length)
+      return realMove(id, column)
+    }
+    const { approvalId } = await signoff({ gateKind: 'signoff', subjectTaskId: 'work-1', summary: 'Copy is ready' })
+    expect(pendingAtMove).toEqual([0, 0])
+    await plugin.approvals.resolve(approvalId as string, 'approve')
+    expect(await column('work-1')).toBe('done')
+  })
+
+  it('a failed task write keeps the approval and the gate pending; a retry converges', async () => {
+    const { approvalId } = await signoff({ gateKind: 'signoff', subjectTaskId: 'work-1', summary: 'Copy is ready' })
+    const realMove = plugin.ctx.tasks.move
+    plugin.ctx.tasks.move = async () => { throw new Error('board offline') }
+    await expect(plugin.approvals.resolve(approvalId as string, 'approve')).rejects.toThrow('board offline')
+    expect(plugin.ctx.approvals.get(approvalId as string)?.status).toBe('pending')
+    expect(read().gates?.['signoff:work-1']?.state).toBe('pending')
+    plugin.ctx.tasks.move = realMove
+    await plugin.approvals.resolve(approvalId as string, 'approve')
+    expect(await column('work-1')).toBe('done')
+    expect(read().gates?.['signoff:work-1']?.state).toBe('approved')
+  })
+
+  it('a completion that failed half-way resumes through its own approval', async () => {
+    await signoff()
+    await signoff({ gateKind: 'signoff', subjectTaskId: 'work-1', summary: 'Copy is ready' })
+    const realCancel = plugin.ctx.approvals.cancel
+    plugin.ctx.approvals.cancel = async () => { throw new Error('approvals store busy') }
+    await expect(plugin.approvals.resolve(COMPLETE_ID, 'approve')).rejects.toThrow('approvals store busy')
+    expect(read().status).toBe('completed')
+    plugin.ctx.approvals.cancel = realCancel
+    await plugin.approvals.resolve(COMPLETE_ID, 'approve')
+    expect(read().gates?.['complete:project']?.state).toBe('approved')
+    expect(plugin.ctx.approvals.get('projects:p1:signoff:work-1:1')?.status).toBe('cancelled')
+  })
+
+  it('a reopened project asks for completion with a new generation', async () => {
+    await signoff()
+    await plugin.approvals.resolve(COMPLETE_ID, 'approve')
+    repo.writeProject({ ...read(), status: 'active' })
+    await openNextCheckin('task-steward-2')
+    const again = await signoff({ taskId: 'task-steward-2' })
+    expect(again).toEqual(expect.objectContaining({ approvalId: 'projects:p1:complete:project:2', state: 'pending' }))
+  })
+
+  it('a late decision speaks as the check-in that asked, not today\'s lead', async () => {
+    const { approvalId } = await signoff({ gateKind: 'signoff', subjectTaskId: 'work-1', summary: 'Copy is ready' })
+    repo.writeProject({ ...read(), owner: 'scribe', steward: {} })
+    await plugin.approvals.resolve(approvalId as string, 'reject', 'Too long')
+    const row = repo.readBrainstormMessages('p1').find(r => r.kind === 'assistant')
+    expect(row).toEqual(expect.objectContaining({ agentId: 'pixel', turnId: `steward:${STEWARD_TASK}` }))
   })
 })

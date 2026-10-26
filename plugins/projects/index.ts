@@ -842,8 +842,12 @@ const projectsPlugin: BakinPlugin = {
       const agentId = body.agent || await getRuntimeMainAgentId(ctx)
       // The next user message ends an open check-in question (D25): it rides
       // this turn's context, and the gate flips only once the turn is admitted.
-      const pendingQuestion = project.waitingOn
-      const context = buildProjectBrainstormContext(await derive(project), body.prompt, { live: true, ...(pendingQuestion ? { pendingQuestion } : {}) })
+      // Sampled AFTER the board read, right before admission, so a question
+      // posted while this request was reading the board is still the one
+      // this message answers.
+      const derived = await derive(project)
+      const pendingQuestion = readProject(projectId)?.waitingOn
+      const context = buildProjectBrainstormContext(derived, body.prompt, { live: true, ...(pendingQuestion ? { pendingQuestion } : {}) })
 
       const result = await brainstormTurns.start(ctx, projectId, body.prompt, {
         agentId,

@@ -62,6 +62,8 @@ async function setup(extra: Partial<Project> = {}): Promise<void> {
 }
 
 const tool = (name: string) => findTool(plugin.execTools, name)!
+/** Tool calls come from the check-in's assignee unless a test says otherwise. */
+const asSteward = (t: Parameters<typeof callTool>[0], params: Record<string, unknown>, agent = 'pixel') => callTool(t, params, agent)
 const rows = () => repo.readBrainstormMessages('p1')
 const read = () => repo.readProject('p1')!
 
@@ -99,22 +101,30 @@ describe('steward identity', () => {
   beforeEach(() => setup())
 
   it('refuses any taskId but the open check-in', async () => {
-    const result = await callTool(tool('bakin_exec_projects_checkin'), { projectId: 'p1', taskId: 'task-other', summary: 'hi' })
+    const result = await asSteward(tool('bakin_exec_projects_checkin'), { projectId: 'p1', taskId: 'task-other', summary: 'hi' })
     expect(result).toEqual(expect.objectContaining({ ok: false, code: 'not_steward' }))
     expect(rows()).toEqual([])
   })
 
-  it('points a call from inside the project conversation at ask_user', async () => {
+  it('points a call from inside the project conversation at ask_user — even with the open check-in\'s task id', async () => {
     const turn = holdTurns()
     expect((await ask('hello')).status).toBe(202)
-    const result = await callTool(tool('bakin_exec_projects_request_input'), { ...question, taskId: undefined })
+    // The brainstorm turn runs as `main`; it learned the check-in's id somehow.
+    const result = await asSteward(tool('bakin_exec_projects_request_input'), question, 'main')
     expect(result).toEqual(expect.objectContaining({ ok: false, code: 'use_ask_user' }))
+    expect(read().waitingOn).toBeUndefined()
     turn.release()
+  })
+
+  it('refuses another agent holding the open check-in\'s task id', async () => {
+    const result = await asSteward(tool('bakin_exec_projects_checkin'), { projectId: 'p1', taskId: STEWARD_TASK, summary: 'hi' }, 'scribe')
+    expect(result).toEqual(expect.objectContaining({ ok: false, code: 'not_steward' }))
+    expect(rows()).toEqual([])
   })
 
   it('refuses a check-in task that is not this project\'s steward', async () => {
     await plugin.ctx.tasks.update(STEWARD_TASK, { source: { pluginId: 'projects', entityType: 'checklist', entityId: 'p1:x' } })
-    const result = await callTool(tool('bakin_exec_projects_checkin'), { projectId: 'p1', taskId: STEWARD_TASK, summary: 'hi' })
+    const result = await asSteward(tool('bakin_exec_projects_checkin'), { projectId: 'p1', taskId: STEWARD_TASK, summary: 'hi' })
     expect(result).toEqual(expect.objectContaining({ ok: false, code: 'not_steward' }))
   })
 })
@@ -124,7 +134,7 @@ describe('checkin', () => {
 
   it('appends an attributed row on its own steward turn — the frozen assignee, not the current lead', async () => {
     repo.writeProject({ ...read(), owner: 'scribe' })
-    const result = await callTool(tool('bakin_exec_projects_checkin'), {
+    const result = await asSteward(tool('bakin_exec_projects_checkin'), {
       projectId: 'p1', taskId: STEWARD_TASK, summary: 'Sent 2 steps to the board', actions: ['Promoted t001', 'Assigned t002 to scribe'],
     })
     expect(result).toEqual({ ok: true, status: 'appended' })
@@ -140,7 +150,7 @@ describe('checkin', () => {
   it('queues behind a running brainstorm turn and lands after it', async () => {
     const turn = holdTurns()
     await ask('hello')
-    const result = await callTool(tool('bakin_exec_projects_checkin'), { projectId: 'p1', taskId: STEWARD_TASK, summary: 'Checked' })
+    const result = await asSteward(tool('bakin_exec_projects_checkin'), { projectId: 'p1', taskId: STEWARD_TASK, summary: 'Checked' })
     expect(result).toEqual({ ok: true, status: 'queued' })
     expect(rows().some(r => r.kind === 'assistant' && r.content.startsWith('Checked in'))).toBe(false)
     turn.release()
@@ -154,7 +164,7 @@ describe('request_input', () => {
   beforeEach(() => setup())
 
   it('posts an answerable card, opens the gate, announces it and pauses scans', async () => {
-    const result = await callTool(tool('bakin_exec_projects_request_input'), question)
+    const result = await asSteward(tool('bakin_exec_projects_request_input'), question)
     expect(result).toEqual(expect.objectContaining({ ok: true, status: 'appended', questionId: expect.stringMatching(/^q_[a-z0-9]{16}$/) }))
     const row = rows()[0]!
     expect(row).toEqual(expect.objectContaining({ kind: 'tool', turnId: `steward:${STEWARD_TASK}`, agentId: 'pixel', status: 'completed' }))
@@ -168,15 +178,15 @@ describe('request_input', () => {
   })
 
   it('rejects an invalid question without touching the gate', async () => {
-    const result = await callTool(tool('bakin_exec_projects_request_input'), { ...question, options: [{ label: 'Only one' }] })
+    const result = await asSteward(tool('bakin_exec_projects_request_input'), { ...question, options: [{ label: 'Only one' }] })
     expect(result).toEqual(expect.objectContaining({ ok: false, code: 'invalid_question' }))
     expect(read().waitingOn).toBeUndefined()
     expect(rows()).toEqual([])
   })
 
   it('a newer question supersedes the open one', async () => {
-    const first = await callTool(tool('bakin_exec_projects_request_input'), question)
-    const second = await callTool(tool('bakin_exec_projects_request_input'), { ...question, question: 'Push the launch a week?' })
+    const first = await asSteward(tool('bakin_exec_projects_request_input'), question)
+    const second = await asSteward(tool('bakin_exec_projects_request_input'), { ...question, question: 'Push the launch a week?' })
     expect(second.questionId).not.toBe(first.questionId)
     expect(read().waitingOn?.questionId).toBe(second.questionId)
   })
@@ -186,7 +196,7 @@ describe('the reply turn', () => {
   beforeEach(() => setup())
 
   it('carries the pending question, flips to replyPending once admitted, and clears at settle', async () => {
-    const { questionId } = await callTool(tool('bakin_exec_projects_request_input'), question)
+    const { questionId } = await asSteward(tool('bakin_exec_projects_request_input'), question)
     const turn = holdTurns()
     expect((await ask('**Drop the blog post from scope?** → Drop it')).status).toBe(202)
     expect(turn.contents[0]).toContain('Pending question from your last check-in: Drop the blog post from scope?')
@@ -202,7 +212,7 @@ describe('the reply turn', () => {
   it('a busy engine leaves the gate untouched', async () => {
     const first = holdTurns()
     await ask('something first')
-    await callTool(tool('bakin_exec_projects_request_input'), question)
+    await asSteward(tool('bakin_exec_projects_request_input'), question)
     expect((await ask('my reply')).status).toBe(409)
     expect(read().waitingOn).toBeDefined()
     expect(read().replyPending).toBeUndefined()
@@ -210,7 +220,7 @@ describe('the reply turn', () => {
   })
 
   it('an aborted reply turn ends the gate too', async () => {
-    await callTool(tool('bakin_exec_projects_request_input'), question)
+    await asSteward(tool('bakin_exec_projects_request_input'), question)
     holdTurns()
     await ask('my reply')
     expect(read().replyPending).toBeDefined()
@@ -225,5 +235,53 @@ describe('boot sweep', () => {
   it('clears a reply gate no turn is alive to finish', async () => {
     await setup({ replyPending: { questionId: 'q_0000000000000000' } })
     await waitUntil(() => read().replyPending === undefined, 'boot sweep')
+  })
+})
+
+describe('review round 1 regressions', () => {
+  beforeEach(() => setup())
+
+  it('a question posted while /ask reads the board still rides that reply', async () => {
+    const realList = plugin.ctx.tasks.list
+    let posted = false
+    plugin.ctx.tasks.list = async (filter) => {
+      if (!posted) {
+        posted = true
+        await asSteward(tool('bakin_exec_projects_request_input'), question)
+      }
+      return realList(filter)
+    }
+    const turn = holdTurns()
+    expect((await ask('Drop it')).status).toBe(202)
+    expect(turn.contents[0]).toContain('Pending question from your last check-in')
+    expect(read().waitingOn).toBeUndefined()
+    expect(read().replyPending).toBeDefined()
+    turn.release()
+  })
+
+  it('a card that fails to land withdraws its gate — immediately', async () => {
+    const realWrite = plugin.ctx.storage.write.bind(plugin.ctx.storage)
+    plugin.ctx.storage.write = (path: string, content: string) => {
+      if (path.endsWith('.brainstorm.json')) throw new Error('disk full')
+      return realWrite(path, content)
+    }
+    const result = await asSteward(tool('bakin_exec_projects_request_input'), question)
+    expect(result).toEqual(expect.objectContaining({ ok: false, code: 'append_failed' }))
+    expect(read().waitingOn).toBeUndefined()
+  })
+
+  it('a card that fails to land withdraws its gate — after a queued flush', async () => {
+    const turn = holdTurns()
+    await ask('hello')
+    const result = await asSteward(tool('bakin_exec_projects_request_input'), question)
+    expect(result.status).toBe('queued')
+    expect(read().waitingOn).toBeDefined()
+    const realWrite = plugin.ctx.storage.write.bind(plugin.ctx.storage)
+    plugin.ctx.storage.write = (path: string, content: string) => {
+      if (path.endsWith('.brainstorm.json')) throw new Error('disk full')
+      return realWrite(path, content)
+    }
+    turn.release()
+    await waitUntil(() => read().waitingOn === undefined, 'gate withdrawn')
   })
 })

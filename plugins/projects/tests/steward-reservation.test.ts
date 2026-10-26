@@ -230,3 +230,67 @@ describe('steward settings (D29)', () => {
     expect(readStewardSettings(ctx)).toEqual({ ...STEWARD_DEFAULTS, enabled: false })
   })
 })
+
+describe('review round 1 regressions', () => {
+  it('finalizing never changes the fingerprint by itself: an all-done project gets ONE check-in', async () => {
+    // The clock runs ahead of the board's real timestamps, so the finished
+    // work predates the finalize watermark.
+    clock = new Date(Date.now() + HOUR)
+    writeProject()
+    await addWork('done')
+    const { created } = await loop.scan('p1', { force: true }) as { created: string }
+    const done = await ctx.tasks.move(created, 'done')
+    loop.onTaskStatusChanged({ taskId: created, from: 'todo', to: 'done', task: done })
+    await flushTimers()
+    expect(stewardState()?.openTaskId).toBeUndefined()
+    expect(await loop.scan('p1')).toEqual({ skipped: 'unchanged' })
+    expect(await stewardTasks()).toHaveLength(1)
+  })
+
+  it('a finished check-in is finalized at once, so later work changes are new', async () => {
+    writeProject()
+    await addWork('inProgress')
+    const { created } = await loop.scan('p1', { force: true }) as { created: string }
+    const done = await ctx.tasks.move(created, 'done')
+    loop.onTaskStatusChanged({ taskId: created, from: 'todo', to: 'done', task: done })
+    await flushTimers()
+    expect(stewardState()?.lastFingerprint).toBeDefined()
+    // Work gets blocked AFTER the check-in finished: that is a change.
+    await ctx.tasks.move('work-1', 'blocked')
+    expect(await loop.scan('p1')).toEqual({ created: expect.any(String) })
+  })
+
+  it('a create that lands after its reservation was cancelled is archived, not orphaned', async () => {
+    writeProject()
+    await addWork('blocked')
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const realCreate = ctx.tasks.create
+    ctx.tasks.create = async (input) => { await held; return realCreate(input) }
+    const scanning = loop.scan('p1')
+    await flushTimers()
+    const reservedId = stewardState()!.openTaskId!
+    // Completion cleanup clears the reservation meanwhile.
+    repo.writeProject({ ...repo.readProject('p1')!, status: 'completed', steward: {} })
+    release()
+    expect(await scanning).toEqual({ skipped: 'create_failed' })
+    expect((await ctx.tasks.get(reservedId))?.column).toBe('archived')
+  })
+
+  it('a scan in flight at shutdown never reserves afterwards', async () => {
+    writeProject()
+    await addWork('blocked')
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const realList = ctx.tasks.list
+    ctx.tasks.list = async (filter) => { await held; return realList(filter) }
+    const scanning = loop.scan('p1')
+    const followUp = loop.scan('p1', { force: true })
+    loop.stop()
+    release()
+    expect(await scanning).toEqual({ skipped: 'stopped' })
+    expect(await followUp).toEqual({ skipped: 'stopped' })
+    expect(stewardState()?.openTaskId).toBeUndefined()
+    expect(await loop.scan('p1')).toEqual({ skipped: 'stopped' })
+  })
+})

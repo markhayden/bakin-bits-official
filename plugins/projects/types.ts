@@ -84,6 +84,8 @@ export interface ProjectGateState {
   state: 'pending' | 'approved' | 'rejected' | 'cancelled'
   /** The check-in task that asked — closed once the decision lands. */
   stewardTaskId?: string
+  /** That check-in's frozen assignee: later notes speak as it (D24). */
+  stewardAgentId?: string
 }
 
 export interface ProjectFrontmatter {

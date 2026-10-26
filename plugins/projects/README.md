@@ -119,9 +119,14 @@ signing off a deliverable, completing the project. Enforced by the server:
 no status changes, no step deletion, no overwriting your title. Advisory (in
 the check-in's instructions, not enforced): scope and spend.
 
-**Check-in tools** (each takes the `taskId` from its check-in task; anything
-but the project's open check-in is refused with `not_steward`, or
-`use_ask_user` from inside the project conversation):
+**Check-in tools** (each takes the `taskId` from its check-in task, and the
+calling agent must be that check-in's assignee — anything else is refused with
+`not_steward`; while that agent has a turn running in the project
+conversation, `use_ask_user`). Tool calls carry no session identity, so the
+same agent calling from another session with the open task id cannot be told
+apart — declared, not verified, the same limit approvals document; at worst a
+check-in that overlaps the lead's live conversation turn is refused and its
+situation re-raises at the next window:
 
 - `bakin_exec_projects_checkin` — "Checked in: …" plus the actions taken,
   posted to the project conversation as the lead (the check-in's own turn).

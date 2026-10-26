@@ -22,11 +22,12 @@ import {
   Field,
   FieldLabel,
   Input,
+  Text,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@makinbakin/sdk/ui'
-import { Inline, Stack } from '@makinbakin/sdk/layout'
+import { Inline } from '@makinbakin/sdk/layout'
 import { AgentSelect, ConfirmDialog, KeyValue, PageHeader, StatusBadge } from '@makinbakin/sdk/patterns'
 import { toast } from '@makinbakin/sdk/hooks'
 import { formatAge, formatDateTime } from '@makinbakin/sdk/utils'
@@ -45,8 +46,12 @@ interface NextStep {
   /** The status this step was offered from — the write's expected value. */
   from: ProjectStatus
   to: ProjectStatus
-  /** A confirmation to show first, or none for a direct step. */
-  confirm?: { title: string; description: ReactNode; confirmLabel: string }
+  /**
+   * A confirmation to show first, or none for a direct step. `description`
+   * is phrasing content (the dialog renders it in a paragraph); structured
+   * content — lists, links — goes in `body`.
+   */
+  confirm?: { title: string; description: ReactNode; body?: ReactNode; confirmLabel: string }
 }
 
 const UNFINISHED_LISTED = 5
@@ -67,18 +72,14 @@ export function nextStepFor(
         to: 'active',
         confirm: {
           title: 'Start project?',
-          description: (
-            <Stack gap="dense">
-              <span>
-                {leadName} takes it from here — sends steps to the board, assigns each to the right agent or keeps it, and checks in as work moves. You&apos;ll be asked when a decision or sign-off is needed.
-              </span>
-              <Inline gap="dense">
-                <span>{steps === 0 ? `No steps yet — ${leadName} breaks the plan down first.` : `${steps} ${steps === 1 ? 'step' : 'steps'} in the plan.`}</span>
-                {steps > 0 && opts.onReviewSteps ? (
-                  <Button type="button" variant="link" size="sm" className="h-auto p-0" onClick={opts.onReviewSteps}>Review steps first</Button>
-                ) : null}
-              </Inline>
-            </Stack>
+          description: `${leadName} takes it from here — sends steps to the board, assigns each to the right agent or keeps it, and checks in as work moves. You'll be asked when a decision or sign-off is needed.`,
+          body: (
+            <Inline gap="dense">
+              <Text size="meta" tone="muted">{steps === 0 ? `No steps yet — ${leadName} breaks the plan down first.` : `${steps} ${steps === 1 ? 'step' : 'steps'} in the plan.`}</Text>
+              {steps > 0 && opts.onReviewSteps ? (
+                <Button type="button" variant="link" size="sm" className="h-auto p-0" onClick={opts.onReviewSteps}>Review steps first</Button>
+              ) : null}
+            </Inline>
           ),
           confirmLabel: 'Start project',
         },
@@ -96,14 +97,12 @@ export function nextStepFor(
         ...(unfinished.length > 0 ? {
           confirm: {
             title: 'Mark complete?',
-            description: (
-              <Stack gap="dense">
-                <span>{unfinished.length} {unfinished.length === 1 ? 'step isn\'t' : 'steps aren\'t'} done — complete anyway? You can reopen the project later.</span>
-                <ul className="list-disc ps-bakin-4">
-                  {listed.map(task => <li key={task.id} className="[overflow-wrap:anywhere]">{task.title}</li>)}
-                  {more > 0 ? <li>and {more} more</li> : null}
-                </ul>
-              </Stack>
+            description: `${unfinished.length} ${unfinished.length === 1 ? 'step isn\'t' : 'steps aren\'t'} done — complete anyway? You can reopen the project later.`,
+            body: (
+              <ul className="list-disc ps-bakin-4">
+                {listed.map(task => <li key={task.id} className="[overflow-wrap:anywhere]">{task.title}</li>)}
+                {more > 0 ? <li>and {more} more</li> : null}
+              </ul>
             ),
             confirmLabel: 'Complete anyway',
           },
@@ -269,7 +268,9 @@ export function ProjectHeader({
         error={confirmError}
         onConfirm={() => { if (confirming) void transition(confirming.from, confirming.to, true) }}
         onCancel={() => { if (!busy) setConfirming(null) }}
-      />
+      >
+        {confirming?.confirm?.body}
+      </ConfirmDialog>
 
       {renaming ? (
         <RenameDialog

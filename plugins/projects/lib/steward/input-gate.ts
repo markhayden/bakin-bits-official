@@ -29,6 +29,14 @@ export function createInputGate(repo: ProjectRepository) {
         return true
       })
     },
+    /** The question's card never landed: drop the gate it opened (compare-and-set). */
+    withdraw(projectId: string, questionId: string): Promise<boolean> {
+      return write(projectId, project => {
+        if (project.waitingOn?.questionId !== questionId) return false
+        delete project.waitingOn
+        return true
+      })
+    },
     /** After the reply turn was accepted: compare-and-set on the question id. */
     admitReply(projectId: string, questionId: string): Promise<boolean> {
       return write(projectId, project => {

@@ -42,6 +42,7 @@ describe('steward controls (D27, D28, D29)', () => {
     const dialog = screen.getByRole('dialog', { name: 'Start project?' })
     expect(dialog.textContent).toContain('Roscoe takes it from here — sends steps to the board, assigns each to the right agent or keeps it, and checks in as work moves.')
     expect(dialog.textContent).toContain('2 steps in the plan.')
+    expect(dialog.querySelector('p div, p button')).toBeNull()
     await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Review steps first' })) })
     expect(onReviewSteps).toHaveBeenCalled()
     expect(screen.queryByRole('dialog', { name: 'Start project?' })).toBeNull()
@@ -62,6 +63,8 @@ describe('steward controls (D27, D28, D29)', () => {
     const dialog = screen.getByRole('dialog', { name: 'Mark complete?' })
     expect(dialog.textContent).toContain('2 steps aren\'t done — complete anyway?')
     expect(within(dialog).getAllByRole('listitem').map(item => item.textContent)).toEqual(['Draft copy', 'Ship'])
+    // The description is phrasing content (a paragraph in the real dialog); the list rides the body.
+    expect(dialog.querySelector('p ul, p div')).toBeNull()
     await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Complete anyway' })) })
     expect(bodies()).toEqual([{ status: 'completed', expected: { status: 'active' } }])
   })
