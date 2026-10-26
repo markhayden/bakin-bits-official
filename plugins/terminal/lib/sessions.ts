@@ -446,10 +446,9 @@ export class Sessions {
       try {
         const match = client.control ? undefined : [...this.reservations].find(([, reservation]) => reservation.sessionId === id && reservation.pid === client.pid && reservation.generation === session.generation)
         if (match && session.owner.kind === 'human') {
-          // Launched read-only; admitted, it types.
-          if (!await this.onClient(id, client, () => this.driver.setReadonly(id, client, false))) continue
-          next.set(client.pid, { ...client, readonly: false })
-          fresh.push({ client, token: match[0] })
+          // Admitted below, once its claim and size are in place; it stays read-only (as launched) until then.
+          if (!client.readonly && !await this.onClient(id, client, () => this.driver.setReadonly(id, client, true))) continue
+          fresh.push({ client: { ...client, readonly: true }, token: match[0] })
           continue
         }
         const pending = [...this.reservations.values()].some((reservation) => reservation.sessionId === id && reservation.pid === undefined)
@@ -466,6 +465,11 @@ export class Sessions {
         Object.assign(session, claimSize(session, nativeViewer(newest.pid), { kind: 'native' }))
         const size = clampSize(newest.cols, newest.rows)
         await this.applySize(session, size.cols, size.rows)
+        // Only now can it type.
+        for (const { client } of fresh) {
+          await this.driver.setReadonly(id, client, false)
+          next.set(client.pid, { ...client, readonly: false })
+        }
       } catch (error) {
         failure ??= error
         for (const { client, token } of fresh.splice(0)) {

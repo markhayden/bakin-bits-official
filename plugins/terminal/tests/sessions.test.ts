@@ -620,3 +620,34 @@ test('an admission whose resize cannot be reconciled is revoked too', async () =
   expect(manager.nativeClients(session.id)).toEqual([])
   expect(detachedClients).toEqual(['/dev/ttys001'])
 })
+
+test('a fresh client stays read-only until its claim and resize are in place, and if they fail', async () => {
+  const { manager, natives, failResizes, failReadBack } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  natives.set(session.id, [ghostty(995, 120, 40)])
+  const driver = (manager as unknown as { driver: { resize(id: string, cols: number, rows: number): Promise<void> } }).driver
+  const resize = driver.resize
+  let release!: () => void
+  let entered!: () => void
+  const resizing = new Promise<void>((resolve) => { entered = resolve })
+  driver.resize = async (...args) => { entered(); await new Promise<void>((resolve) => { release = resolve }); return resize(...args) }
+  const confirmed = manager.confirmAttach(reserved.token, 995)
+  await resizing
+  expect(natives.get(session.id)?.[0]?.readonly).toBe(true)
+  release()
+  await confirmed
+  expect(natives.get(session.id)?.[0]?.readonly).toBe(false)
+  // And when sizing fails, it never became writable before being detached.
+  driver.resize = resize
+  const second = await manager.reserveAttach(session.id, operator)
+  const seen: boolean[] = []
+  const setReadonly = (manager as unknown as { driver: { setReadonly(id: string, client: unknown, readonly: boolean): Promise<void> } }).driver
+  const original = setReadonly.setReadonly
+  setReadonly.setReadonly = async (id, client, readonly) => { seen.push(readonly); return original(id, client, readonly) }
+  natives.set(session.id, [...natives.get(session.id)!, ghostty(996, 90, 30)])
+  failResizes(new Error('tmux refused'))
+  failReadBack(new Error('tmux gone'))
+  await expect(manager.confirmAttach(second.token, 996)).rejects.toThrow('Could not admit this terminal')
+  expect(seen).not.toContain(false)
+})
