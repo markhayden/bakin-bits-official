@@ -10,7 +10,9 @@ import { createProjectRepository, PlanHistoryUnavailableError, projectToSummary 
 import { createProjectService, deriveChecklist } from './lib/project-service'
 import { ProjectMutationError } from './lib/project-mutations'
 import { buildProjectBrainstormContext } from './lib/brainstorm-prompt'
+import { createInputGate } from './lib/steward/input-gate'
 import { createStewardLoop, type StewardLoop } from './lib/steward/reservation'
+import { registerStewardTools } from './lib/steward/tools'
 import type { MutationCaller, Project, ProjectBrainstormMessage, ProjectStatus, ProjectPatch, ChecklistPatch, ProducedFile } from './types'
 
 const log = {
@@ -162,6 +164,7 @@ const projectsPlugin: BakinPlugin = {
     stewardLoop?.stop()
     const steward = createStewardLoop({ ctx, repo })
     stewardLoop = steward
+    const inputGate = createInputGate(repo)
     const {
       createProject,
       updateProject,
@@ -200,6 +203,8 @@ const projectsPlugin: BakinPlugin = {
         // Fires at 202-accept — the nav working dot must not wait out model
         // latency for the first chunk (bakin#707).
         started: 'projects.brainstorm.started',
+        // Steward check-ins and questions written outside a turn (D24a).
+        appended: 'projects.brainstorm.appended',
       },
       payload: (key) => ({ projectId: key }),
       resolveThread: async (key) =>
@@ -220,10 +225,12 @@ const projectsPlugin: BakinPlugin = {
         runId: (key, turnId) => `brainstorm:projects:${key}:turn:${turnId}`,
       },
       hooks: {
-        // The kickoff receipt rides until its first turn settles (D8).
+        // The kickoff receipt rides until its first turn settles (D8); a
+        // reply to a check-in question ends its gate the same way (D25).
         onSettled: async ({ key }) => {
           const kickoff = readProject(key)?.kickoff
           if (kickoff?.state === 'started') await projectService.advanceKickoff(key, kickoff.requestId, 'started', 'settled')
+          await inputGate.settleReply(key)
         },
       },
     })
@@ -410,8 +417,10 @@ const projectsPlugin: BakinPlugin = {
 
     // Boot sweep (bakin#706): brainstorms whose transcript ends on a user
     // row lost their turn to a process death — stamp an honest error row.
+    // No turn is alive at boot, so a reply gate left open ends too (D25).
     try {
       for (const project of readAllProjects()) {
+        if (project.replyPending) void inputGate.settleReply(project.id)
         const rows = readBrainstormMessages(project.id)
         const last = rows[rows.length - 1]
         if (last?.kind !== 'user') continue
@@ -788,7 +797,10 @@ const projectsPlugin: BakinPlugin = {
       const project = readProject(projectId)
       if (!project) return json({ error: 'Project not found' }, 404)
       const agentId = body.agent || await getRuntimeMainAgentId(ctx)
-      const context = buildProjectBrainstormContext(await derive(project), body.prompt, { live: true })
+      // The next user message ends an open check-in question (D25): it rides
+      // this turn's context, and the gate flips only once the turn is admitted.
+      const pendingQuestion = project.waitingOn
+      const context = buildProjectBrainstormContext(await derive(project), body.prompt, { live: true, ...(pendingQuestion ? { pendingQuestion } : {}) })
 
       const result = await brainstormTurns.start(ctx, projectId, body.prompt, {
         agentId,
@@ -796,6 +808,11 @@ const projectsPlugin: BakinPlugin = {
       })
       if (result === 'not_found') return json({ error: 'Project not found' }, 404)
       if (result === 'busy') return json({ error: 'A brainstorm turn is already running for this project' }, 409)
+      if (pendingQuestion) {
+        await inputGate.admitReply(projectId, pendingQuestion.questionId)
+        // The turn may have settled before the flip landed: nothing would clear it.
+        if (!brainstormTurns.isInFlight(projectId)) await inputGate.settleReply(projectId)
+      }
       return json({ ok: true, streaming: true }, 202)
     })
 
@@ -1241,6 +1258,8 @@ const projectsPlugin: BakinPlugin = {
         }
       },
     })
+
+    registerStewardTools({ ctx, repo, turns: brainstormTurns, gate: inputGate })
 
     steward.start()
     log.info('Projects plugin activated')

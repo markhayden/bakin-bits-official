@@ -2002,6 +2002,10 @@ declare module '@makinbakin/sdk/utils' {
     readonly serializedBytes: 2048
   }
   export function parseBakinQuestion(value: unknown): import('@makinbakin/sdk/conversation').BakinQuestion | null
+  /** Validate what an agent passes for a question (before minting an id); `allowOther` defaults to true. */
+  export function validateBakinQuestionInput(value: unknown):
+    | { ok: true; value: { question: string; options: { label: string; description?: string }[]; recommended?: number; allowOther: boolean } }
+    | { ok: false; error: string }
   export function validateBakinQuestionInput(value: unknown):
     | { ok: true; value: Omit<import('@makinbakin/sdk/conversation').BakinQuestion, 'v' | 'id'> }
     | { ok: false; error: string }

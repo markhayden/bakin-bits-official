@@ -161,6 +161,8 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
       chunk: 'projects.brainstorm.chunk',
       done: 'projects.brainstorm.done',
       error: 'projects.brainstorm.error',
+      // Steward check-ins and questions land outside a turn (D24a).
+      appended: 'projects.brainstorm.appended',
     },
     keyOf: useCallback((payload: Record<string, unknown>) => payload.projectId, []),
     load: useCallback(async (key: string) => {

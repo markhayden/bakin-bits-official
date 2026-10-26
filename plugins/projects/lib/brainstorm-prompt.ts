@@ -5,11 +5,23 @@
  * shape, a progress buddy once it is active, and a retrospective partner
  * after it closes.
  */
-import type { Project, ProjectStatus } from '../types'
+import type { Project, ProjectStatus, ProjectWaitingOn } from '../types'
 
 /** `live`: the reply renders in the project chat, where question cards work. */
 export interface BrainstormPromptOptions {
   live: boolean
+  /** A check-in question this message answers (D25): the lead sees what it asked, and why. */
+  pendingQuestion?: ProjectWaitingOn
+}
+
+function pendingQuestionLines(waiting: ProjectWaitingOn): string[] {
+  return [
+    '',
+    `Pending question from your last check-in: ${waiting.question}`,
+    ...(waiting.options?.length ? [`Options: ${waiting.options.join(' · ')}`] : []),
+    ...(waiting.context ? [`Why you asked: ${waiting.context}`] : []),
+    'The user\'s message below is their reply to it — act on it.',
+  ]
 }
 
 const SHARED = [
@@ -79,6 +91,7 @@ export function buildProjectBrainstormContext(project: Project, request: string,
     ...assetLines,
     '',
     projectBrainstormInstructions(project.status, opts),
+    ...(opts.pendingQuestion ? pendingQuestionLines(opts.pendingQuestion) : []),
     '',
     'User request:',
     request,

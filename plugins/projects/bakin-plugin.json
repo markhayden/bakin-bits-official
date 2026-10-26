@@ -378,6 +378,22 @@
           "runtime.messaging",
           "storage.read"
         ]
+      },
+      {
+        "name": "bakin_exec_projects_checkin",
+        "summary": "Report a project check-in in the project conversation",
+        "permissions": [
+          "storage.write",
+          "tasks.read"
+        ]
+      },
+      {
+        "name": "bakin_exec_projects_request_input",
+        "summary": "Ask the user a decision during a project check-in",
+        "permissions": [
+          "storage.write",
+          "tasks.read"
+        ]
       }
     ],
     "cliCommands": [
