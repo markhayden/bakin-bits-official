@@ -1,7 +1,7 @@
 {
   "id": "messaging",
   "name": "Messaging",
-  "version": "0.12.2",
+  "version": "0.12.3",
   "bakin": ">=0.0.1-rc.42",
   "description": "Content messaging with scheduling, brainstorming, and multi-agent content pipeline",
   "contentFiles": [],
@@ -536,7 +536,17 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_messaging_session_list"
-        }
+        },
+        "args": [
+          {
+            "name": "status",
+            "type": "string"
+          },
+          {
+            "name": "agentId",
+            "type": "string"
+          }
+        ]
       },
       {
         "name": "messaging:session",
@@ -545,7 +555,15 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_messaging_session_get"
-        }
+        },
+        "args": [
+          {
+            "name": "sessionId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          }
+        ]
       },
       {
         "name": "messaging:session-create",
@@ -554,7 +572,23 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_messaging_session_create"
-        }
+        },
+        "args": [
+          {
+            "name": "agentId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "title",
+            "type": "string"
+          },
+          {
+            "name": "scope",
+            "type": "string"
+          }
+        ]
       },
       {
         "name": "messaging:session-update",
@@ -563,7 +597,23 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_messaging_session_update"
-        }
+        },
+        "args": [
+          {
+            "name": "sessionId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "title",
+            "type": "string"
+          },
+          {
+            "name": "status",
+            "type": "string"
+          }
+        ]
       },
       {
         "name": "messaging:session-delete",
@@ -572,7 +622,15 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_messaging_session_delete"
-        }
+        },
+        "args": [
+          {
+            "name": "sessionId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          }
+        ]
       },
       {
         "name": "messaging:message",
@@ -581,7 +639,21 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_messaging_session_message"
-        }
+        },
+        "args": [
+          {
+            "name": "sessionId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "message",
+            "type": "string",
+            "positional": true,
+            "required": true
+          }
+        ]
       },
       {
         "name": "messaging:materialize",
@@ -590,7 +662,15 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_messaging_session_materialize"
-        }
+        },
+        "args": [
+          {
+            "name": "sessionId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          }
+        ]
       },
       {
         "name": "messaging:proposal",
@@ -599,7 +679,45 @@
         "dispatch": {
           "type": "execTool",
           "name": "bakin_exec_messaging_proposal_update"
-        }
+        },
+        "args": [
+          {
+            "name": "sessionId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "proposalId",
+            "type": "string",
+            "positional": true,
+            "required": true
+          },
+          {
+            "name": "status",
+            "type": "string"
+          },
+          {
+            "name": "title",
+            "type": "string"
+          },
+          {
+            "name": "brief",
+            "type": "string"
+          },
+          {
+            "name": "targetDate",
+            "type": "string"
+          },
+          {
+            "name": "suggestedChannels",
+            "type": "string[]"
+          },
+          {
+            "name": "rejectionNote",
+            "type": "string"
+          }
+        ]
       }
     ],
     "settings": [

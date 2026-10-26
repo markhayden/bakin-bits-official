@@ -563,3 +563,50 @@ export async function callTool(
 ): Promise<Record<string, unknown>> {
   return tool.handler(params, agent)
 }
+
+type ZodLike = {
+  _zod: { def: { type: string; innerType?: ZodLike; element?: ZodLike; entries?: Record<string, string> } }
+  safeParse(value: unknown): { success: boolean }
+}
+
+/** Argument types Bakin's declared-args CLI can parse. */
+export const CLI_ARG_TYPES = ['string', 'number', 'boolean', 'string[]']
+
+/**
+ * The CLI argument surface an exec tool's zod parameters imply: name → type,
+ * required, and enum values. `cliCommands[].args` must equal it (drift guard
+ * for Bakin's strict declared-args CLI). Requiredness is whether the schema
+ * rejects `undefined` (so `.nullable()` stays required and `z.coerce.*` is
+ * optional); an unwrapped type Bakin cannot parse comes back as-is so the
+ * test fails on it.
+ */
+export function execToolArgShape(tool: ExecToolDefinition): Record<string, { type: string; required: boolean; values?: string[] }> {
+  const shape: Record<string, { type: string; required: boolean; values?: string[] }> = {}
+  for (const [name, schema] of Object.entries((tool as unknown as { parameters?: Record<string, ZodLike> }).parameters ?? {})) {
+    const required = !schema.safeParse(undefined).success
+    let current = schema
+    while (['optional', 'default', 'nullable', 'nonoptional'].includes(current._zod.def.type)) current = current._zod.def.innerType!
+    const def = current._zod.def
+    if (def.type === 'enum') shape[name] = { type: 'string', required, values: Object.values(def.entries!) }
+    else shape[name] = { type: def.type === 'array' ? `${def.element!._zod.def.type}[]` : def.type, required }
+  }
+  return shape
+}
+
+type ManifestCliCommand = {
+  name: string
+  usage: string
+  dispatch?: { type: string; name?: string }
+  args?: Array<{ name: string; type: string; positional?: boolean; required?: boolean; values?: string[] }>
+}
+
+/** Every dispatched cliCommand's declared args, keyed like `execToolArgShape`, plus its positional order. */
+export function declaredCliArgShapes(manifest: { contributes?: { cliCommands?: ManifestCliCommand[] } }) {
+  return (manifest.contributes?.cliCommands ?? []).filter((command) => command.dispatch?.type === 'execTool').map((command) => ({
+    command: command.name,
+    tool: command.dispatch!.name!,
+    args: Object.fromEntries((command.args ?? []).map((arg) => [arg.name, { type: arg.type, required: arg.required === true, ...(arg.values ? { values: arg.values } : {}) }])),
+    positionals: (command.args ?? []).filter((arg) => arg.positional).map((arg) => arg.name),
+    placeholders: command.usage.split(/\s+/).filter((word) => /^<[^>]+>$/.test(word)).map((word) => word.slice(1, -1).replace(/\?$/, '')),
+  }))
+}

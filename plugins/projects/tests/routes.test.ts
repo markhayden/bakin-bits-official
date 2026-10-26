@@ -4,7 +4,7 @@
  * registered HTTP route and MCP exec tool.
  */
 import { describe, it, expect, beforeEach, afterAll, mock } from 'bun:test'
-import { mkdirSync, rmSync, writeFileSync, existsSync } from 'fs'
+import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { dump } from 'js-yaml'
@@ -15,6 +15,9 @@ import {
   callRoute,
   callTool,
   callSearchRoute,
+  CLI_ARG_TYPES,
+  declaredCliArgShapes,
+  execToolArgShape,
 } from '../test-helpers'
 import type { ActivatedPlugin } from '../test-helpers'
 import type {
@@ -1849,3 +1852,18 @@ describe('Registration', () => {
     expect(plugin.ctx.watchFiles).toHaveBeenCalledWith(['projects/*.md'])
   })
 })
+
+describe('projects cliCommands args', () => {
+  it('match the exec tools they dispatch (Bakin parses CLI args strictly from them)', async () => {
+    const manifest = JSON.parse(readFileSync(join(import.meta.dir, '..', 'bakin-plugin.json'), 'utf-8'))
+    for (const declared of declaredCliArgShapes(manifest)) {
+      const tool = findTool(plugin.execTools, declared.tool)
+      expect(tool, `${declared.command} dispatches missing tool ${declared.tool}`).toBeDefined()
+      const implied = execToolArgShape(tool!)
+      expect(declared.args, declared.command).toEqual(implied)
+      expect(declared.positionals, `${declared.command} positionals follow the usage placeholders`).toEqual(declared.placeholders)
+      for (const [name, arg] of Object.entries(implied)) expect(CLI_ARG_TYPES, `${declared.command} --${name} has an unsupported type`).toContain(arg.type)
+    }
+  })
+})
+

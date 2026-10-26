@@ -59,6 +59,9 @@ import {
   findTool,
   callRoute,
   makeRequest,
+  CLI_ARG_TYPES,
+  declaredCliArgShapes,
+  execToolArgShape,
 } from '../test-helpers'
 import type { ActivatedPlugin } from '../test-helpers'
 
@@ -713,3 +716,18 @@ describe('Session message exec tool (non-streaming)', () => {
     expect(result.error).toContain('Runtime down')
   })
 })
+
+describe('messaging cliCommands args', () => {
+  it('match the exec tools they dispatch (Bakin parses CLI args strictly from them)', async () => {
+    const manifest = JSON.parse(readFileSync(join(import.meta.dir, '..', 'bakin-plugin.json'), 'utf-8'))
+    for (const declared of declaredCliArgShapes(manifest)) {
+      const tool = findTool(plugin.execTools, declared.tool)
+      expect(tool, `${declared.command} dispatches missing tool ${declared.tool}`).toBeDefined()
+      const implied = execToolArgShape(tool!)
+      expect(declared.args, declared.command).toEqual(implied)
+      expect(declared.positionals, `${declared.command} positionals follow the usage placeholders`).toEqual(declared.placeholders)
+      for (const [name, arg] of Object.entries(implied)) expect(CLI_ARG_TYPES, `${declared.command} --${name} has an unsupported type`).toContain(arg.type)
+    }
+  })
+})
+
