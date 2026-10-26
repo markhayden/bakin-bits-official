@@ -42,7 +42,7 @@ export function failure(error: unknown): Response {
   return Response.json({ error: error instanceof TerminalError ? error.message : status === 400 ? 'Invalid terminal request' : 'Terminal operation failed' }, { status })
 }
 
-/** Pull-based streaming bounds a slow client's queue to one output page. */
+/** Pull-based streaming bounds a slow client's queue to one output page; output is pushed, not polled. */
 export async function stream(manager: Sessions, request: Request): Promise<Response> {
   const principal = human(request)
   const id = new URL(request.url).searchParams.get('id') ?? ''
@@ -64,7 +64,7 @@ export async function stream(manager: Sessions, request: Request): Promise<Respo
           if (output.truncated && output.session.state === 'running') throw new TerminalError('Output gap; reconnect required')
           cursor = output.cursor
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ ...output, type: 'output' })}\n\n`))
-          await Bun.sleep(100)
+          await manager.nextOutput(id, cursor, request.signal)
         }
         initial = false
       } catch {

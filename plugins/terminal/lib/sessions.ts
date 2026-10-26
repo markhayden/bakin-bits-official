@@ -18,6 +18,7 @@ export interface SessionOptions {
 export class Sessions {
   private pending: Promise<unknown> = Promise.resolve()
   private screens = new Map<string, Screen>()
+  private outputListeners = new Map<string, Set<() => void>>()
   private closed = false
   constructor(readonly store: Store, private driver: ProcessDriver, private options: SessionOptions) {}
   private now(): number { return this.options.now?.() ?? Date.now() }
@@ -40,8 +41,44 @@ export class Sessions {
   async start(): Promise<void> {
     for (const session of this.store.sessions()) {
       if (session.state !== 'running') continue
-      if (await this.driver.alive(session.id)) this.attach(session)
-      else { session.state = 'exited'; this.store.save(session) }
+      if (await this.driver.alive(session.id)) {
+        // A restarted service may have lost pane options; titles are Bakin's.
+        await this.driver.title(session)
+        this.attach(session)
+      } else { session.state = 'exited'; this.store.save(session) }
+    }
+  }
+  /** The newest stored output cursor for a session (0 when none). */
+  latestCursor(id: string): number {
+    return this.store.output(id, Number.MAX_SAFE_INTEGER).cursor
+  }
+  /**
+   * Resolve once output past `cursor` is stored, the signal aborts, or
+   * `idleMs` passes (a keepalive for long-quiet sessions). Subscribes before
+   * re-checking the store, so output landing in between is never missed.
+   */
+  nextOutput(id: string, cursor: number, signal: AbortSignal, idleMs = 15_000): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer)
+        unsubscribe()
+        signal.removeEventListener('abort', done)
+        resolve()
+      }
+      const unsubscribe = this.onOutput(id, done)
+      const timer = setTimeout(done, idleMs)
+      signal.addEventListener('abort', done, { once: true })
+      if (signal.aborted || this.latestCursor(id) > cursor) done()
+    })
+  }
+  /** Hear about newly stored output for a session (push instead of polling). */
+  onOutput(id: string, listener: () => void): () => void {
+    let listeners = this.outputListeners.get(id)
+    if (!listeners) this.outputListeners.set(id, listeners = new Set())
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+      if (!listeners.size) this.outputListeners.delete(id)
     }
   }
   refreshStates(): Promise<void> {
@@ -63,7 +100,10 @@ export class Sessions {
       for (let offset = 0; offset < data.length; offset += 65536) {
         const chunk = data.slice(offset, offset + 65536)
         // Screen.failed exposes bounded-parser overflow to readers; a fresh attachment recovers it.
-        void screen.write(chunk, () => this.store.append(session.id, chunk)).catch(() => undefined)
+        void screen.write(chunk, () => {
+          this.store.append(session.id, chunk)
+          for (const listener of this.outputListeners.get(session.id) ?? []) listener()
+        }).catch(() => undefined)
       }
     })
   }
@@ -150,7 +190,7 @@ export class Sessions {
       session.inputSequence = sequence
       session.lastActivityAt = this.now()
       this.store.save(session)
-      this.driver.write(id, data)
+      await this.driver.write(id, data)
       return session
     })
   }

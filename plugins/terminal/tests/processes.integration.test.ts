@@ -139,3 +139,45 @@ processTest('control client: command round trip, quoting, subscriptions and exit
   }
 }, 20000)
 
+processTest('bridge: titles the session, cancels copy-mode before input, and only resize-window sizes the window', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-bridge-'))
+  const service = new TerminalService(root)
+  const config = join(root, 'tmux.conf')
+  await Bun.write(config, (await import('../lib/tmux-config')).tmuxConfig())
+  const server = Bun.spawn([service.tmux!, '-D', '-S', service.socket, '-f', config], { env: terminalEnvironment(), stdout: 'ignore', stderr: 'ignore' })
+  const human = { kind: 'human', id: 'integration-browser' } as const
+  const options = { settings: () => ({}), prepare: async () => undefined, release: async () => undefined }
+  let manager: Sessions | undefined
+  let other: ReturnType<typeof Bun.spawn> | undefined
+  const wait = async (predicate: () => Promise<boolean>) => {
+    for (let attempt = 0; attempt < 100; attempt++) { if (await predicate()) return; await Bun.sleep(50) }
+    throw new Error('Bridge probe timed out')
+  }
+  try {
+    await wait(() => service.ready())
+    manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProcesses(service), options)
+    const session = await manager.create({ title: 'Bridge "probe"', cwd: root }, human)
+    expect((await service.command(['display-message', '-p', '-t', session.id, '#{@bakin_title}'])).trim()).toBe('Bridge "probe"')
+    // Another client of a different size (as a native terminal would be) does not resize the window.
+    other = Bun.spawn([service.tmux!, '-S', service.socket, 'attach-session', '-t', session.id], { env: terminalEnvironment(), terminal: { cols: 60, rows: 15, data: () => {} } })
+    await wait(async () => (await service.command(['list-clients', '-t', session.id, '-F', '#{client_width}'])).includes('60'))
+    expect((await service.command(['display-message', '-p', '-t', session.id, '#{window_width}x#{window_height}'])).trim()).toBe(`${session.cols}x${session.rows}`)
+    // Input cancels a pane left in copy mode, then reaches the shell.
+    await service.command(['copy-mode', '-t', session.id])
+    expect((await service.command(['display-message', '-p', '-t', session.id, '#{pane_in_mode}'])).trim()).toBe('1')
+    await manager.write(session.id, human, session.generation, 1, 'printf "AFTER_COPY_MODE\\n"\r')
+    await wait(async () => (await manager!.readScreen(session.id, human)).includes('AFTER_COPY_MODE'))
+    expect((await service.command(['display-message', '-p', '-t', session.id, '#{pane_in_mode}'])).trim()).toBe('0')
+    // An explicit resize goes through the control client.
+    await manager.resize(session.id, human, session.generation, 90, 20)
+    expect((await service.command(['display-message', '-p', '-t', session.id, '#{window_width}x#{window_height}'])).trim()).toBe('90x20')
+    await manager.finish(session.id, human, session.generation, true)
+  } finally {
+    other?.kill()
+    await manager?.shutdown()
+    await service.command(['kill-server'], true)
+    server.kill(); await server.exited
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 30000)
+

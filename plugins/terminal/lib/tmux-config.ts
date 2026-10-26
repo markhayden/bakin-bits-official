@@ -10,6 +10,9 @@ export function tmuxConfig(): string {
     'set -g exit-empty off',
     'set -g remain-on-exit on',
     'set -g history-limit 50000',
+    // Only Bakin's explicit resize-window sizes a window; attaching clients
+    // (bridge, control, native) never do.
+    'set -g window-size manual',
     'set -g status off',
     'set -g mouse off',
     'set -g default-terminal xterm-256color',

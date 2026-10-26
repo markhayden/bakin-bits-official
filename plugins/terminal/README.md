@@ -95,6 +95,16 @@ cursor, and an explicit truncation flag.
   never treated as permission to delete work.
 - Complete refuses a live process. Terminate explicitly stops it. Dead tmux
   sessions are removed on completion. Bakin shutdown detaches only its clients.
+- Bakin holds two tmux clients per live session:
+  - an attached client whose redraw stream is the output, and from which a reconnect recovers;
+  - a control-mode client (`tmux -C`) that carries input, resizes and queries.
+
+  Neither one sizes the window (`window-size manual`): only Bakin's explicit
+  resize does, so an extra client, such as a terminal app, never reshapes a
+  session. Input is delivered byte-exact with `send-keys -H` and never passes
+  through tmux key bindings. A pane left in copy mode is returned to its
+  program first. New output reaches viewers as soon as it is stored, with no
+  polling interval.
 - Ten live sessions and ten retained managed worktrees are separate defaults.
   At the worktree cap, safely eligible work is reclaimed or creation is blocked.
 - Cleanup requires completion, no process using the path, no tracked/untracked/
