@@ -204,10 +204,16 @@ export class TerminalSocketClient {
 
   /** Tell the caller about input a lost connection leaves unresolved — never resend it. */
   private lost(): void {
-    for (const viewerSeq of this.inFlight.keys()) {
-      this.options.onResult({ viewerSeq, status: 'uncertain', error: 'The connection dropped before this input was confirmed' })
+    // ONE outcome per drop, and uncertainty wins: a later "not sent" must
+    // never hide input that may already have run.
+    const lastSent = [...this.inFlight.keys()].at(-1)
+    if (lastSent !== undefined) {
+      this.options.onResult({ viewerSeq: lastSent, status: 'uncertain', error: this.pending
+        ? 'The connection dropped before your input was confirmed; anything typed after it was not sent'
+        : 'The connection dropped before this input was confirmed' })
+    } else if (this.pending) {
+      this.options.onResult({ viewerSeq: 0, status: 'rejected', error: 'The connection dropped before this input was sent' })
     }
-    if (this.pending) this.options.onResult({ viewerSeq: 0, status: 'rejected', error: 'The connection dropped before this input was sent' })
     this.reset()
   }
 

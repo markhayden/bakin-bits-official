@@ -158,10 +158,22 @@ describe('TerminalSocketClient', () => {
     client.input(1, 'sent')
     client.input(1, 'queued')
     socket().close(1006)
+    // One outcome, and it keeps the uncertainty visible.
     expect(events.results).toEqual([
-      { viewerSeq: 1, status: 'uncertain', error: 'The connection dropped before this input was confirmed' },
-      { viewerSeq: 0, status: 'rejected', error: 'The connection dropped before this input was sent' },
+      { viewerSeq: 1, status: 'uncertain', error: 'The connection dropped before your input was confirmed; anything typed after it was not sent' },
     ])
+  })
+
+  it('after a confirmed input, a drop with new input in flight and queued still reports uncertainty', () => {
+    const { client, socket, events } = setup({ coalesceMs: 60_000 })
+    client.connect(); socket().open()
+    socket().server({ type: 'sync', epoch: 1, session, snapshot: '', cursor: 0 })
+    client.input(1, 'a')
+    socket().server({ type: 'result', viewerSeq: 1, status: 'accepted' })
+    client.input(1, 'b')
+    client.input(1, 'c')
+    socket().close(1006)
+    expect(events.results.at(-1)).toEqual({ viewerSeq: 2, status: 'uncertain', error: 'The connection dropped before your input was confirmed; anything typed after it was not sent' })
   })
 
   it('a rejection drops queued input of the same generation only', async () => {
