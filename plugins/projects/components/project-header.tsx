@@ -1,13 +1,14 @@
 'use client'
 
 /**
- * Project header (D11–D13): the title (renamed through the kit's rename
- * dialog), the status badge, ONE next-step button for the lifecycle, and a
- * ⋯ menu for Archive, Details and Delete. No status picker anywhere — every
+ * Project header (D11–D13, D27, D29): the title (renamed through the kit's
+ * rename dialog), the status badge (+ "Paused" while check-ins are paused),
+ * ONE next-step button for the lifecycle, and a ⋯ menu for Pause/Resume
+ * check-ins, Archive, Details and Delete. No status picker anywhere — every
  * transition carries the status it expects, so a stale page never clobbers.
  */
 import { useState, type ReactNode } from 'react'
-import { Archive, ArrowLeft, Info, Pencil, Trash } from 'lucide-react'
+import { Archive, ArrowLeft, Info, Pause, Pencil, Play, Trash } from 'lucide-react'
 import {
   Alert,
   AlertDescription,
@@ -25,7 +26,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@makinbakin/sdk/ui'
-import { AgentSelect, ConfirmDialog, KeyValue, PageHeader } from '@makinbakin/sdk/patterns'
+import { Inline, Stack } from '@makinbakin/sdk/layout'
+import { AgentSelect, ConfirmDialog, KeyValue, PageHeader, StatusBadge } from '@makinbakin/sdk/patterns'
 import { toast } from '@makinbakin/sdk/hooks'
 import { formatAge, formatDateTime } from '@makinbakin/sdk/utils'
 import { ProjectStatusBadge } from './project-status-badge'
@@ -47,31 +49,63 @@ interface NextStep {
   confirm?: { title: string; description: ReactNode; confirmLabel: string }
 }
 
+const UNFINISHED_LISTED = 5
+
 /** The one primary lifecycle action for a status (D11). */
-export function nextStepFor(project: Pick<ProjectDetailData, 'status' | 'tasks' | 'archivedFrom'>, leadName: string): NextStep {
+export function nextStepFor(
+  project: Pick<ProjectDetailData, 'status' | 'tasks' | 'archivedFrom'>,
+  leadName: string,
+  opts: { onReviewSteps?: () => void } = {},
+): NextStep {
   switch (project.status) {
-    case 'draft':
+    case 'draft': {
+      const steps = project.tasks.length
+      // The hand-off (D27): Start gives the lead the wheel.
       return {
         label: 'Start project',
         from: 'draft',
         to: 'active',
         confirm: {
           title: 'Start project?',
-          description: `The project becomes active work. ${leadName} switches from shaping the plan to tracking its progress with you.`,
+          description: (
+            <Stack gap="dense">
+              <span>
+                {leadName} takes it from here — sends steps to the board, assigns each to the right agent or keeps it, and checks in as work moves. You&apos;ll be asked when a decision or sign-off is needed.
+              </span>
+              <Inline gap="dense">
+                <span>{steps === 0 ? `No steps yet — ${leadName} breaks the plan down first.` : `${steps} ${steps === 1 ? 'step' : 'steps'} in the plan.`}</span>
+                {steps > 0 && opts.onReviewSteps ? (
+                  <Button type="button" variant="link" size="sm" className="h-auto p-0" onClick={opts.onReviewSteps}>Review steps first</Button>
+                ) : null}
+              </Inline>
+            </Stack>
+          ),
           confirmLabel: 'Start project',
         },
       }
+    }
     case 'active': {
-      const open = project.tasks.filter(task => !task.checked).length
+      const unfinished = project.tasks.filter(task => !task.checked)
+      const listed = unfinished.slice(0, UNFINISHED_LISTED)
+      const more = unfinished.length - listed.length
       return {
         label: 'Mark complete',
         from: 'active',
         to: 'completed',
-        ...(open > 0 ? {
+        // D28: name what is not done before completing anyway.
+        ...(unfinished.length > 0 ? {
           confirm: {
             title: 'Mark complete?',
-            description: `${open} of ${project.tasks.length} steps ${open === 1 ? 'isn\'t' : 'aren\'t'} done yet. You can reopen the project later.`,
-            confirmLabel: 'Mark complete',
+            description: (
+              <Stack gap="dense">
+                <span>{unfinished.length} {unfinished.length === 1 ? 'step isn\'t' : 'steps aren\'t'} done — complete anyway? You can reopen the project later.</span>
+                <ul className="list-disc ps-bakin-4">
+                  {listed.map(task => <li key={task.id} className="[overflow-wrap:anywhere]">{task.title}</li>)}
+                  {more > 0 ? <li>and {more} more</li> : null}
+                </ul>
+              </Stack>
+            ),
+            confirmLabel: 'Complete anyway',
           },
         } : {}),
       }
@@ -89,15 +123,23 @@ export function ProjectHeader({
   onBack,
   onChanged,
   onDelete,
+  onReviewSteps,
 }: {
   project: ProjectDetailData
   agents: readonly HeaderAgent[]
   onBack: () => void
   onChanged: () => Promise<unknown>
   onDelete: () => void
+  /** Leave the Start dialog for the Steps tab. */
+  onReviewSteps?: () => void
 }) {
   const leadName = agents.find(agent => agent.id === project.owner)?.name ?? (project.owner || 'The lead agent')
-  const step = nextStepFor(project, leadName)
+  const step = nextStepFor(project, leadName, onReviewSteps ? {
+    onReviewSteps: () => {
+      setConfirming(null)
+      onReviewSteps()
+    },
+  } : {})
   const [confirming, setConfirming] = useState<NextStep | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmError, setConfirmError] = useState<string | null>(null)
@@ -126,6 +168,19 @@ export function ProjectHeader({
       else toast(message, 'error')
     } finally {
       setBusy(false)
+    }
+  }
+
+  const setPaused = async (paused: boolean) => {
+    try {
+      await projectRequest(`${encodeURIComponent(project.id)}/steward/pause`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paused }),
+      })
+      await onChanged()
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Check-ins could not be updated. Try again.', 'error')
     }
   }
 
@@ -162,7 +217,14 @@ export function ProjectHeader({
             </Tooltip>
           </span>
         )}
-        meta={<ProjectStatusBadge status={project.status} />}
+        meta={(
+          <Inline gap="dense" wrap={false}>
+            <ProjectStatusBadge status={project.status} />
+            {project.status === 'active' && project.stewardPaused ? (
+              <StatusBadge tone="neutral" variant="outline" size="xs">Paused</StatusBadge>
+            ) : null}
+          </Inline>
+        )}
         actionsLabel="Project actions"
         actions={(
           <Button type="button" size="sm" disabled={busy} onClick={() => runStep(step)}>
@@ -172,6 +234,12 @@ export function ProjectHeader({
         overflowActionsLabel="More project actions"
         overflowActions={(
           <>
+            {project.status === 'active' ? (
+              <DropdownMenuItem onClick={() => { void setPaused(!project.stewardPaused) }}>
+                {project.stewardPaused ? <Play aria-hidden="true" /> : <Pause aria-hidden="true" />}
+                {project.stewardPaused ? 'Resume check-ins' : 'Pause check-ins'}
+              </DropdownMenuItem>
+            ) : null}
             {project.status !== 'archived' ? (
               <DropdownMenuItem onClick={() => { void transition(project.status, 'archived', false) }}>
                 <Archive aria-hidden="true" />

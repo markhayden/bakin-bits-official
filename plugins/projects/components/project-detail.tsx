@@ -399,6 +399,7 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
         onBack={exitGuard.requestExit}
         onChanged={refresh}
         onDelete={() => { setDeleteError(null); setDeleteOpen(true) }}
+        onReviewSteps={() => selectTab('steps')}
       />
       <PageBody gap="content">
         <div className="flex min-h-0 min-w-0 flex-1">

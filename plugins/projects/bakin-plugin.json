@@ -226,6 +226,14 @@
         ]
       },
       {
+        "method": "POST",
+        "path": "/:projectId/steward/pause",
+        "summary": "Pause or resume the lead's check-ins (operator only)",
+        "permissions": [
+          "storage.write"
+        ]
+      },
+      {
         "method": "GET",
         "path": "/brainstorm/attention",
         "summary": "Brainstorm attention totals (unread + in-flight)",

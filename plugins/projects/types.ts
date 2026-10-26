@@ -166,6 +166,11 @@ export interface ProjectSummary {
   waitingForYou?: boolean
   /** An agent revised the plan since the user last looked. */
   planUpdated?: boolean
+  /** Steward signals (D29): a sign-off is pending, work is stuck, the daily cap was hit, the user paused check-ins. */
+  needsApproval?: boolean
+  stuck?: boolean
+  checkinsPausedToday?: boolean
+  stewardPaused?: boolean
 }
 
 

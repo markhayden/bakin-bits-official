@@ -12,7 +12,8 @@ import { ProjectMutationError } from './lib/project-mutations'
 import { buildProjectBrainstormContext } from './lib/brainstorm-prompt'
 import { createStewardGates } from './lib/steward/gates'
 import { createInputGate } from './lib/steward/input-gate'
-import { createStewardLoop, type StewardLoop } from './lib/steward/reservation'
+import { buildStewardDigest } from './lib/steward/digest'
+import { createStewardLoop, localDay, readStewardSettings, type StewardLoop } from './lib/steward/reservation'
 import { registerStewardTools } from './lib/steward/tools'
 import type { MutationCaller, Project, ProjectBrainstormMessage, ProjectStatus, ProjectPatch, ChecklistPatch, ProducedFile } from './types'
 
@@ -150,6 +151,7 @@ const projectsPlugin: BakinPlugin = {
     legacyRoute('DELETE', '/:projectId/assets/:assetId', 'Detach asset'),
     legacyRoute('POST', '/:projectId/ask', 'Ask agent about project (202; streams over the plugin-event bus)'),
     legacyRoute('POST', '/:projectId/ask/abort', 'Abort the in-flight brainstorm turn'),
+    legacyRoute('POST', '/:projectId/steward/pause', 'Pause or resume the lead\'s check-ins (operator only)'),
     legacyRoute('GET', '/brainstorm/attention', 'Brainstorm attention totals (unread + in-flight)'),
     legacyRoute('POST', '/:projectId/brainstorm/seen', 'Mark a project brainstorm as seen'),
     legacyRoute('POST', '/:projectId/plan/seen', 'Mark a plan revision as seen (the "Plan updated" baseline)'),
@@ -446,8 +448,16 @@ const projectsPlugin: BakinPlugin = {
       const statusFilter = url.searchParams.get('status') as ProjectStatus | null
       let projects = readAllProjects()
       if (statusFilter) projects = projects.filter(p => p.status === statusFilter)
-      const board = await boardIndex()
+      const tasks = await ctx.tasks.list()
+      const board = new Map(tasks.map(task => [task.id, { column: task.column, title: task.title, ...(task.agent ? { agent: task.agent } : {}) }]))
       projects = projects.map(p => deriveChecklist(p, board))
+      const stewardSettings = readStewardSettings(ctx)
+      const now = new Date()
+      const today = localDay(now)
+      /** The steward's read of an Active project: is work stuck? (D29 list signal) */
+      const stuck = (p: Project) => p.status === 'active' && buildStewardDigest(p, tasks, {
+        now, stuckAfterMs: stewardSettings.stuckAfterHours * 3_600_000, steward: p.steward,
+      }).signals.some(signal => signal.kind === 'blocked' || signal.kind === 'idle-review' || signal.kind === 'stalled')
       // Per-project attention flags so list rows can show WHICH project has
       // an unseen reply / running turn (the nav badge names only the count).
       const inflight = new Set(brainstormTurns.listInFlight().map(t => t.key))
@@ -459,6 +469,11 @@ const projectsPlugin: BakinPlugin = {
           doneCount: p.tasks.filter(task => task.checked).length,
           waitingForYou: repo.readWaitingForUser(p.id),
           planUpdated: p.planUpdatedBy === 'agent' && p.planRevision > repo.readSeen(p.id).planSeenRevision,
+          needsApproval: Object.values(p.gates ?? {}).some(gate => gate.state === 'pending'),
+          stuck: stuck(p),
+          checkinsPausedToday: p.status === 'active' && stewardSettings.enabled
+            && p.steward?.runs?.date === today && p.steward.runs.count >= stewardSettings.maxRunsPerDay,
+          ...(p.stewardPaused ? { stewardPaused: true } : {}),
         })),
       })
     }
@@ -534,7 +549,13 @@ const projectsPlugin: BakinPlugin = {
       const id = url.searchParams.get('projectId') || bodyId
       if (!id) return json({ error: 'Missing id' }, 400)
       try {
+        const before = readProject(id)?.status
         await updateProject(id, patch, callerFromRequest(req), expected)
+        // Start is the hand-off (D27): the lead's first check-in is reserved
+        // now, past the fingerprint gate — with no steps it breaks the plan down.
+        if (before === 'draft' && patch.status === 'active') {
+          steward.scan(id, { force: true }).catch(err => log.error('steward hand-off failed', err, { projectId: id }))
+        }
         // Completing or archiving ends the steward loop: open check-ins and
         // pending sign-offs go with it (D28).
         if (patch.status === 'completed' || patch.status === 'archived') {
@@ -834,6 +855,24 @@ const projectsPlugin: BakinPlugin = {
       if (!id) return json({ error: 'Missing projectId' }, 400)
       if (!brainstormTurns.abort(id)) return json({ error: 'No brainstorm turn in flight' }, 409)
       return json({ ok: true })
+    })
+
+    // POST /:projectId/steward/pause — the user's check-in control (D29).
+    routeHandlers.set('POST /:projectId/steward/pause', async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const id = url.searchParams.get('projectId')
+      if (!id) return json({ error: 'Missing projectId' }, 400)
+      if (callerFromRequest(req).kind === 'agent') {
+        return json({ error: 'Pausing check-ins is the user\'s decision.', code: 'agent_steward_pause' }, 403)
+      }
+      const body = await readBody<{ paused?: unknown }>(req).catch(() => ({} as { paused?: unknown }))
+      if (typeof body.paused !== 'boolean') return json({ error: 'Missing paused', code: 'invalid_request' }, 400)
+      try {
+        await projectService.setStewardPaused(id, body.paused)
+        return json({ ok: true, paused: body.paused })
+      } catch (error) {
+        return mutationFailure(error)
+      }
     })
 
     /** A project counts as unread when agent activity landed after the last view. */

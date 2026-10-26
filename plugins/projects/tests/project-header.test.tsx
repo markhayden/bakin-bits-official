@@ -28,9 +28,66 @@ beforeEach(() => {
 })
 afterEach(() => cleanup())
 
-function renderHeader(overrides: Partial<ProjectDetailData> = {}) {
-  return render(<ProjectHeader project={project(overrides)} agents={agents} onBack={() => {}} onChanged={onChanged} onDelete={() => {}} />)
+function renderHeader(overrides: Partial<ProjectDetailData> = {}, onReviewSteps?: () => void) {
+  return render(<ProjectHeader project={project(overrides)} agents={agents} onBack={() => {}} onChanged={onChanged} onDelete={() => {}} onReviewSteps={onReviewSteps} />)
 }
+
+const steps = (titles: string[], checked: boolean[] = []) => titles.map((title, i) => ({ id: `t00${i + 1}`, title, checked: checked[i] ?? false }))
+
+describe('steward controls (D27, D28, D29)', () => {
+  it('Start is the hand-off: the lead takes it from here, with the step count and a way back to the steps', async () => {
+    const onReviewSteps = mock(() => {})
+    renderHeader({ tasks: steps(['Draft copy', 'Pick photos']) }, onReviewSteps)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start project' })) })
+    const dialog = screen.getByRole('dialog', { name: 'Start project?' })
+    expect(dialog.textContent).toContain('Roscoe takes it from here — sends steps to the board, assigns each to the right agent or keeps it, and checks in as work moves.')
+    expect(dialog.textContent).toContain('2 steps in the plan.')
+    await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Review steps first' })) })
+    expect(onReviewSteps).toHaveBeenCalled()
+    expect(screen.queryByRole('dialog', { name: 'Start project?' })).toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('Start with no steps says the lead breaks the plan down first', async () => {
+    renderHeader({}, () => {})
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start project' })) })
+    const dialog = screen.getByRole('dialog', { name: 'Start project?' })
+    expect(dialog.textContent).toContain('No steps yet — Roscoe breaks the plan down first.')
+    expect(within(dialog).queryByRole('button', { name: 'Review steps first' })).toBeNull()
+  })
+
+  it('Mark complete names the unfinished steps before completing anyway', async () => {
+    renderHeader({ status: 'active', tasks: steps(['Draft copy', 'Pick photos', 'Ship'], [false, true, false]) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Mark complete' })) })
+    const dialog = screen.getByRole('dialog', { name: 'Mark complete?' })
+    expect(dialog.textContent).toContain('2 steps aren\'t done — complete anyway?')
+    expect(within(dialog).getAllByRole('listitem').map(item => item.textContent)).toEqual(['Draft copy', 'Ship'])
+    await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Complete anyway' })) })
+    expect(bodies()).toEqual([{ status: 'completed', expected: { status: 'active' } }])
+  })
+
+  it('pauses and resumes check-ins from the ⋯ menu (menu items render as buttons in the stub); paused shows a badge', async () => {
+    const { unmount } = renderHeader({ status: 'active' })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Pause check-ins' })) })
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/plugins/projects/p1/steward/pause')
+    expect(bodies()).toEqual([{ paused: true }])
+    expect(onChanged).toHaveBeenCalled()
+    expect(screen.queryByText('Paused')).toBeNull()
+    unmount()
+
+    fetchMock.mockClear()
+    renderHeader({ status: 'active', stewardPaused: true })
+    expect(screen.getByText('Paused')).toBeDefined()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Resume check-ins' })) })
+    expect(bodies()).toEqual([{ paused: false }])
+  })
+
+  it('offers no check-in controls outside an active project', async () => {
+    renderHeader({ status: 'draft', stewardPaused: true })
+    expect(screen.queryByText('Paused')).toBeNull()
+    expect(screen.queryByRole('button', { name: /check-ins/ })).toBeNull()
+  })
+})
 
 describe('nextStepFor', () => {
   it('maps every status to one primary action', () => {
@@ -43,7 +100,7 @@ describe('nextStepFor', () => {
 
   it('completing with unfinished steps asks first', () => {
     const step = nextStepFor(project({ status: 'active', tasks: [{ id: 't001', title: 'a', checked: false }, { id: 't002', title: 'b', checked: true }] }), 'Roscoe')
-    expect(step.confirm?.description).toBe('1 of 2 steps isn\'t done yet. You can reopen the project later.')
+    expect(step.confirm).toMatchObject({ title: 'Mark complete?', confirmLabel: 'Complete anyway' })
   })
 })
 
