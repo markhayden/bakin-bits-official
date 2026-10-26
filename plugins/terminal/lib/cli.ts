@@ -21,7 +21,11 @@ export function operator(request: Request): Principal {
 }
 
 /** What the core CLI posts to a launch route. */
-const launchBody = <T extends z.ZodTypeAny>(params: T) => z.object({ params, caller: z.object({ cwd: z.string().min(1).max(4096) }) })
+const launchBody = <T extends z.ZodTypeAny>(params: T) => z.object({ params, caller: z.object({
+  cwd: z.string().min(1).max(4096),
+  cols: z.number().int().min(1).max(10_000),
+  rows: z.number().int().min(1).max(10_000),
+}) })
 export const newBody = launchBody(z.object({
   title: z.string().optional(),
   program: z.enum(['shell', 'claude', 'codex']).optional(),
@@ -43,7 +47,7 @@ export function resolveRef(sessions: Session[], ref: string): Session {
     || (ref.length >= 8 && (session.id.startsWith(ref) || session.id.replace(/^terminal-/, '').startsWith(ref))))
   if (matches.length === 1) return matches[0]!
   if (!matches.length) throw new TerminalError(`No running session matches "${ref}". bakin terminal ls lists them`, 404)
-  throw new TerminalError(`Several sessions match "${ref}"; use an id:\n${matches.map((session) => `  ${shortId(session)}  ${session.title}`).join('\n')}`, 409)
+  throw new TerminalError(`Several sessions match "${ref}"; use an id:\n${matches.map((session) => `  ${session.id}  ${session.title}`).join('\n')}`, 409)
 }
 
 /** `bakin terminal new` defaults: here, a shell, the existing checkout unless --worktree, titled after the directory. */
@@ -59,19 +63,25 @@ export function newSessionInput(body: z.infer<typeof newBody>): Record<string, u
 }
 
 /** The launch answer: tmux's arguments and where to confirm the pid. */
-export async function launch(manager: Sessions, id: string, principal: Principal): Promise<{ args: string[]; confirm: { path: string; token: string } }> {
+export async function launch(manager: Sessions, id: string, principal: Principal): Promise<{ args: string[]; confirm: { path: string; token: string }; recovery?: string }> {
   const { args, token } = await manager.reserveAttach(id, principal)
   return { args, confirm: { path: '/cli/confirm', token } }
 }
 
-/** `new` keeps a session it created even when attaching fails, and says how to attach (never retried). */
+/**
+ * `new` starts the program at this terminal's size (the app claims it on
+ * attach) and keeps a session it created even when attaching fails, saying
+ * how to attach — before the launch (here) or after it (the CLI prints
+ * `recovery`). Never retried.
+ */
 export async function createAndLaunch(manager: Sessions, body: z.infer<typeof newBody>, principal: Principal): Promise<Awaited<ReturnType<typeof launch>>> {
-  const session = await manager.create(newSessionInput(body), principal)
+  const session = await manager.create(newSessionInput(body), principal, { cols: body.caller.cols, rows: body.caller.rows, kind: 'native' })
+  const recovery = `Session ${shortId(session)} is running in Bakin. Attach with: ${attachCommand(session)}`
   try {
-    return await launch(manager, session.id, principal)
+    return { ...await launch(manager, session.id, principal), recovery }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
-    throw new TerminalError(`Created session ${shortId(session)} (${session.id}) but could not attach: ${reason}. Attach with: ${attachCommand(session)}`, error instanceof TerminalError ? error.status : 503)
+    throw new TerminalError(`Created the session but could not attach: ${reason}. ${recovery}`, error instanceof TerminalError ? error.status : 503)
   }
 }
 

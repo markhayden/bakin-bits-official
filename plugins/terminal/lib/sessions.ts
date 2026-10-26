@@ -110,6 +110,7 @@ export class Sessions {
       for (const session of this.store.sessions()) {
         if (session.state === 'running' && !await this.driver.alive(session.id)) {
           session.state = 'exited'
+          this.forgetNatives(session.id)
           this.save(session)
         }
       }
@@ -394,7 +395,7 @@ export class Sessions {
    */
   private async reconcileClients(id: string): Promise<void> {
     const session = this.store.sessions().find((entry) => entry.id === id)
-    if (!session || session.state !== 'running') return
+    if (!session || session.state !== 'running') { this.forgetNatives(id); return }
     for (const [token, reservation] of this.reservations) if (reservation.expires < this.now()) this.reservations.delete(token)
     const admitted = this.natives.get(id) ?? new Map<number, NativeClient>()
     const next = new Map<number, NativeClient>()
@@ -404,11 +405,17 @@ export class Sessions {
       const match = [...this.reservations].find(([, reservation]) => reservation.sessionId === id && reservation.pid === client.pid && reservation.generation === session.generation)
       if (match && session.owner.kind === 'human') {
         this.reservations.delete(match[0])
-        next.set(client.pid, client)
+        // Launched read-only; admitted, it types.
+        if (client.readonly) await this.driver.setReadonly(client.name, false)
+        next.set(client.pid, { ...client, readonly: false })
         newest = client
         continue
       }
-      if ([...this.reservations.values()].some((reservation) => reservation.sessionId === id && reservation.pid === undefined)) continue
+      // A confirm is on its way: hold the client, unable to type, until then.
+      if ([...this.reservations.values()].some((reservation) => reservation.sessionId === id && reservation.pid === undefined)) {
+        if (!client.readonly) await this.driver.setReadonly(client.name, true)
+        continue
+      }
       await this.driver.detachClient(client.name)
     }
     const changed = next.size !== admitted.size || [...next].some(([pid, client]) => {
@@ -429,19 +436,23 @@ export class Sessions {
   private dropReservations(id: string): void {
     for (const [token, reservation] of this.reservations) if (reservation.sessionId === id) this.reservations.delete(token)
   }
-  /** Detach every admitted terminal app and wait until tmux reports them gone. */
+  /** Detach every client that is not Bakin's own (admitted or held) and wait until tmux reports them gone. */
   private async detachNatives(id: string): Promise<void> {
-    const admitted = this.natives.get(id)
-    if (!admitted?.size) return
-    for (const client of admitted.values()) await this.driver.detachClient(client.name)
     for (let attempt = 0; ; attempt++) {
-      const remaining = (await this.driver.clients(id)).filter((client) => admitted.has(client.pid))
+      const remaining = await this.driver.clients(id)
       if (!remaining.length) break
       if (attempt >= 40) throw new TerminalError('A terminal app is still attached; close it and try again', 503)
+      if (attempt % 10 === 0) for (const client of remaining) await this.driver.detachClient(client.name)
       await Bun.sleep(50)
     }
-    this.natives.set(id, new Map())
-    for (const listener of this.nativeListeners.get(id) ?? []) listener()
+    this.forgetNatives(id)
+  }
+  /** The session no longer has terminal apps (detached, ended or deleted): drop its admission state. */
+  private forgetNatives(id: string): void {
+    this.dropReservations(id)
+    const had = this.natives.get(id)?.size
+    this.natives.delete(id)
+    if (had) for (const listener of this.nativeListeners.get(id) ?? []) listener()
   }
   finish(id: string, principal: Principal, _generation: number, terminate: boolean): Promise<Session> {
     return this.run(async () => {
@@ -455,6 +466,7 @@ export class Sessions {
       if (alive && !terminate) throw new TerminalError('The process is still running; exit it or explicitly terminate it first')
       await this.driver.terminate(id)
       await this.stopScreen(id)
+      this.forgetNatives(id)
       session.state = 'completed'
       session.completedAt = this.now()
       this.save(session)
@@ -511,6 +523,7 @@ export class Sessions {
         await this.options.release({ sessionId: session.id, worktreePath: session.worktreePath, teardown: true }).catch(() => undefined)
       }
       await this.stopScreen(id)
+      this.forgetNatives(id)
       this.store.deleteSession(id)
     })
   }

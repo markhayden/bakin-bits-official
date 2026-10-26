@@ -64,6 +64,8 @@ export class ControlClient {
   private parser: ControlParser
   /** Settles when tmux has answered the attach. */
   readonly ready: Promise<void>
+  /** The `tmux -C` process, so its tmux client is known as Bakin's own. */
+  pid?: number
   constructor(private transport: ControlTransport, onNotification: (line: string) => void) {
     this.parser = new ControlParser((ok, lines) => {
       const next = this.pending.shift()
@@ -88,6 +90,7 @@ export class ControlClient {
       close: () => { child.kill() },
       exited: child.exited,
     }, onNotification)
+    client.pid = child.pid
     void (async () => {
       const decoder = new TextDecoder()
       for await (const chunk of child.stdout) client.feed(decoder.decode(chunk, { stream: true }))

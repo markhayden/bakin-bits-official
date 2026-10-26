@@ -23,13 +23,13 @@ describe('resolveRef', () => {
   })
 
   it('lists the candidates when a prefix or title is ambiguous, and refuses short prefixes', () => {
-    expect(() => resolveRef([a, b], '1a2b3c4d')).toThrow('Several sessions match "1a2b3c4d"; use an id:\n  1a2b3c4d  bakin\n  1a2b3c4d  tests')
+    expect(() => resolveRef([a, b], '1a2b3c4d')).toThrow(`Several sessions match "1a2b3c4d"; use an id:\n  ${a.id}  bakin\n  ${b.id}  tests`)
     expect(() => resolveRef([a, b], '1a2b')).toThrow('No running session matches "1a2b"')
   })
 })
 
 describe('bakin terminal new', () => {
-  const body = (params: Record<string, unknown>) => newBody.parse({ params, caller: { cwd: '/Users/me/code/bakin' } })
+  const body = (params: Record<string, unknown>) => newBody.parse({ params, caller: { cwd: '/Users/me/code/bakin', cols: 120, rows: 40 } })
 
   it('defaults to a shell in the caller\'s directory on the existing checkout, titled after it', () => {
     expect(newSessionInput(body({}))).toEqual({ title: 'bakin', cwd: '/Users/me/code/bakin', program: 'shell', checkout: 'existing' })
@@ -56,7 +56,7 @@ describe('operator', () => {
 
 describe('sessionTable', () => {
   it('prints one aligned row per session with its terminal app count', () => {
-    const table = sessionTable([a, { ...c, owner: { kind: 'agent', id: 'patch' }, worktreePath: '/w', cwd: '/w' }], (id) => id === a.id ? [{ pid: 1, name: 't', cols: 1, rows: 1 }] : [], '/Users/me')
+    const table = sessionTable([a, { ...c, owner: { kind: 'agent', id: 'patch' }, worktreePath: '/w', cwd: '/w' }], (id) => id === a.id ? [{ pid: 1, name: 't', cols: 1, rows: 1, readonly: false }] : [], '/Users/me')
     expect(table.split('\n')).toEqual([
       'ID        TITLE  PROGRAM  OWNER  STATE      SIZE    DIRECTORY      APPS',
       '1a2b3c4d  bakin  shell    you    running    200×60  ~/code/bakin   1',

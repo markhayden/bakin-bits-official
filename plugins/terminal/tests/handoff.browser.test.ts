@@ -5,7 +5,11 @@ import { browserTest, launchChromium } from './browser'
 const header = (page: Awaited<ReturnType<Awaited<ReturnType<typeof launchChromium>>['newPage']>>) => page.locator('[data-slot="workspace-page-compact-header"], [data-slot="workspace-page-header"]').filter({ visible: true })
 
 /** The preview's managed tmux (dev-server prints it); a terminal app is a tmux client on its own PTY. */
-const tmux = () => process.env.TERMINAL_PREVIEW_TMUX ?? Bun.which('tmux')!
+function tmux(): string {
+  const path = process.env.TERMINAL_PREVIEW_TMUX
+  if (!path) throw new Error('Set TERMINAL_PREVIEW_TMUX to the tmux the preview printed')
+  return path
+}
 
 browserTest('the session shows its attach command, and a terminal app attaching or leaving shows in the header and list', async () => {
   const browser = await launchChromium()
@@ -41,7 +45,7 @@ browserTest('the session shows its attach command, and a terminal app attaching 
     expect(await page.getByText('Open in a terminal app').count()).toBe(0)
 
     // The CLI's side of `bakin terminal attach`: reserve, launch tmux, confirm the pid.
-    const prepared = await (await Bun.fetch(new URL('/api/plugins/terminal/cli/attach', base), { method: 'POST', headers: operator, body: JSON.stringify({ params: { ref: id }, caller: { cwd: '/tmp' } }) })).json() as { args: string[]; confirm: { path: string; token: string } }
+    const prepared = await (await Bun.fetch(new URL('/api/plugins/terminal/cli/attach', base), { method: 'POST', headers: operator, body: JSON.stringify({ params: { ref: id }, caller: { cwd: '/tmp', cols: 120, rows: 36 } }) })).json() as { args: string[]; confirm: { path: string; token: string } }
     app = Bun.spawn([tmux(), ...prepared.args], { terminal: { cols: 120, rows: 36, data: () => {} } })
     const confirmed = await Bun.fetch(new URL(`/api/plugins/terminal${prepared.confirm.path}`, base), { method: 'POST', headers: operator, body: JSON.stringify({ token: prepared.confirm.token, pid: app.pid }) })
     expect(confirmed.status).toBe(200)

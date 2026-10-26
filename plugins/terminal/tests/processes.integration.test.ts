@@ -211,6 +211,10 @@ processTest('terminal apps: an unreserved attach is detached; an admitted one si
     await raw.exited
     expect(await attachedPids()).not.toContain(raw.pid)
     expect(manager.get(session.id, human).cols).toBe(200)
+    // So is a foreign control-mode client: only Bakin's own bridge and control clients are exempt.
+    const foreign = Bun.spawn([service.tmux!, '-S', service.socket, '-C', 'attach-session', '-t', session.id], { env: terminalEnvironment(), stdin: 'pipe', stdout: 'ignore', stderr: 'ignore' })
+    apps.push(foreign)
+    await wait(async () => !(await attachedPids()).includes(foreign.pid), 'foreign control client detached')
 
     // A reserved, confirmed attach is admitted and sizes the session; its resizes are followed.
     const reserved = await manager.reserveAttach(session.id, operator)
@@ -218,6 +222,8 @@ processTest('terminal apps: an unreserved attach is detached; an admitted one si
     await manager.confirmAttach(reserved.token, ghostty.pid)
     await wait(() => manager!.nativeClients(session.id).length === 1, 'admitted')
     await wait(() => manager!.get(session.id, human).cols === 132, 'sized by the app')
+    // Launched read-only, admitted it can type.
+    expect((await service.command(['list-clients', '-t', session.id, '-F', '#{client_pid} #{client_readonly}'])).split('\n')).toContain(`${ghostty.pid} 0`)
     expect(manager.get(session.id, human).sizeAuthority).toEqual({ viewer: `native:${ghostty.pid}`, kind: 'native' })
     expect((await service.command(['display-message', '-p', '-t', session.id, '#{window_width}x#{window_height}'])).trim()).toBe('132x41')
     ghostty.terminal!.resize(100, 33)

@@ -3,8 +3,8 @@ import { TerminalError } from './contracts'
 import { ControlClient } from './control'
 import { TerminalService, terminalEnvironment } from './service'
 
-/** A terminal app's tmux client on a session (Ghostty and friends); never Bakin's own bridge or control client. */
-export interface NativeClient { pid: number; name: string; cols: number; rows: number }
+/** A tmux client on a session that is not Bakin's own bridge or control client: a terminal app (Ghostty and friends) or anything else that attached. */
+export interface NativeClient { pid: number; name: string; cols: number; rows: number; readonly: boolean }
 
 export interface ProcessDriver {
   create(session: Session): Promise<void>
@@ -27,7 +27,9 @@ export interface ProcessDriver {
   /** The terminal apps attached to a session. */
   clients(id: string): Promise<NativeClient[]>
   detachClient(name: string): Promise<void>
-  /** tmux arguments (after the binary) that attach a terminal app to the session. */
+  /** Let a client type (admitted) or stop it typing (held until its reservation is confirmed). */
+  setReadonly(name: string, readonly: boolean): Promise<void>
+  /** tmux arguments (after the binary) that attach a terminal app to the session, read-only until admitted. */
   attachArgs(id: string): string[]
 }
 
@@ -134,18 +136,24 @@ export class TmuxProcesses implements ProcessDriver {
     return Boolean(output.trim() || error.trim()) || (exit !== 0 && exit !== 1)
   }
   async clients(id: string): Promise<NativeClient[]> {
-    const bridge = this.bridges.get(id)?.pid
-    const output = await this.service.command(['list-clients', '-t', id, '-F', '#{client_pid} #{client_control_mode} #{client_width} #{client_height} #{client_name}'])
+    // Bakin's own clients by process, never by kind: a foreign control-mode client is just another client.
+    const own = new Set([this.bridges.get(id)?.pid, this.controls.get(id)?.pid])
+    const output = await this.service.command(['list-clients', '-t', id, '-F', '#{client_pid} #{client_readonly} #{client_width} #{client_height} #{client_name}'])
     return output.split('\n').flatMap((line) => {
-      const [pid, control, cols, rows, ...name] = line.split(' ')
-      return line && control === '0' && Number(pid) !== bridge ? [{ pid: Number(pid), name: name.join(' '), cols: Number(cols), rows: Number(rows) }] : []
+      const [pid, readonly, cols, rows, ...name] = line.split(' ')
+      return line && !own.has(Number(pid)) ? [{ pid: Number(pid), name: name.join(' '), cols: Number(cols), rows: Number(rows), readonly: readonly === '1' }] : []
     })
   }
   async detachClient(name: string): Promise<void> {
     await this.service.command(['detach-client', '-t', name])
   }
+  async setReadonly(name: string, readonly: boolean): Promise<void> {
+    // switch-client -r toggles; only toggle a client that is the other way.
+    const [line] = (await this.service.command(['display-message', '-p', '-c', name, '#{client_readonly}'])).split('\n')
+    if ((line?.trim() === '1') !== readonly) await this.service.command(['switch-client', '-c', name, '-r'])
+  }
   attachArgs(id: string): string[] {
-    return ['-S', this.service.socket, 'attach-session', '-t', id, ';', 'display-message', '-d', '5000', ATTACH_HINT]
+    return ['-S', this.service.socket, 'attach-session', '-f', 'read-only', '-t', id, ';', 'display-message', '-d', '5000', ATTACH_HINT]
   }
   async detach(id?: string): Promise<void> {
     const controls = id ? [this.controls.get(id)].filter((control) => control !== undefined) : [...this.controls.values()]

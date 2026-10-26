@@ -35,6 +35,9 @@ function fixture() {
       detachedClients.push(name)
       for (const [id, list] of natives) natives.set(id, list.filter((client) => client.name !== name))
     },
+    setReadonly: async (name, readonly) => {
+      for (const [id, list] of natives) natives.set(id, list.map((client) => client.name === name ? { ...client, readonly } : client))
+    },
     attachArgs: (id) => ['-S', '/tmp/t.sock', 'attach-session', '-t', id],
   }
   const releases: Array<{ sessionId: string; worktreePath: string; teardown?: boolean }> = []
@@ -349,10 +352,11 @@ test('reattaching after setup adopts tmux\'s window, even when the stored record
 })
 
 const operator = { kind: 'human', id: 'cli' } as const
-const ghostty = (pid: number, cols = 120, rows = 40): NativeClient => ({ pid, name: `/dev/ttys00${pid % 10}`, cols, rows })
+/** Launched by the CLI, a terminal app attaches read-only until admitted. */
+const ghostty = (pid: number, cols = 120, rows = 40, readonly = true): NativeClient => ({ pid, name: `/dev/ttys00${pid % 10}`, cols, rows, readonly })
 
 test('a terminal app attaches only through a confirmed reservation, then sizes the session', async () => {
-  const { manager, nativeAttach, detachedClients } = fixture()
+  const { manager, nativeAttach, detachedClients, natives } = fixture()
   const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
   const reserved = await manager.reserveAttach(session.id, operator)
   expect(reserved.args).toEqual(['-S', '/tmp/t.sock', 'attach-session', '-t', session.id])
@@ -360,13 +364,16 @@ test('a terminal app attaches only through a confirmed reservation, then sizes t
   await nativeAttach(session.id, ghostty(501))
   expect(detachedClients).toEqual([])
   expect(manager.nativeClients(session.id)).toEqual([])
+  expect(natives.get(session.id)?.[0]?.readonly).toBe(true)
   await manager.confirmAttach(reserved.token, 501)
   expect(manager.nativeClients(session.id).map((client) => client.pid)).toEqual([501])
+  // Admitted, it can type.
+  expect(natives.get(session.id)?.[0]?.readonly).toBe(false)
   const sized = manager.get(session.id, human)
   expect(sized.sizeAuthority).toEqual({ viewer: 'native:501', kind: 'native' })
   expect([sized.cols, sized.rows]).toEqual([120, 40])
   // The app's window resizes: the session follows (clamped to the floor).
-  await nativeAttach(session.id, ghostty(501, 30, 8))
+  await nativeAttach(session.id, ghostty(501, 30, 8, false))
   expect([manager.get(session.id, human).cols, manager.get(session.id, human).rows]).toEqual([40, 10])
   // A reservation is single-use.
   await expect(manager.confirmAttach(reserved.token, 777)).rejects.toThrow('run the command again')
@@ -427,8 +434,62 @@ test('the app leaving is heard, and a browser claim stops following it', async (
   await manager.confirmAttach(reserved.token, 904)
   await nativeAttach(session.id, ghostty(904))
   await manager.claim(session.id, human, 100, 30, { kind: 'browser', device: 'desktop' })
-  await nativeAttach(session.id, ghostty(904, 150, 50))
+  await nativeAttach(session.id, ghostty(904, 150, 50, false))
   expect([manager.get(session.id, human).cols, manager.get(session.id, human).rows]).toEqual([100, 30])
   await nativeLeave(session.id, 904)
   expect(heard).toEqual([1, 1, 0])
+})
+
+test('while a confirm is pending, every unmatched client is held unable to type, and Return detaches held clients too', async () => {
+  const { manager, nativeAttach, natives, detachedClients } = fixture()
+  const session = await manager.create({ title: 'Agent', cwd: '/tmp' }, agent)
+  await manager.control(session.id, human, 'take')
+  await manager.reserveAttach(session.id, operator)
+  // A raw attach that slips into the window (writable) is made read-only while it waits.
+  await nativeAttach(session.id, ghostty(311, 80, 24, false))
+  expect(natives.get(session.id)?.[0]).toMatchObject({ pid: 311, readonly: true })
+  expect(detachedClients).toEqual([])
+  const returned = await manager.control(session.id, human, 'return')
+  expect(detachedClients).toEqual(['/dev/ttys001'])
+  expect(natives.get(session.id)).toEqual([])
+  expect(returned.owner).toEqual(agent)
+})
+
+test('ending or deleting a session forgets its terminal apps', async () => {
+  const { manager, nativeAttach, live } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const heard: number[] = []
+  manager.onNatives(session.id, () => heard.push(manager.nativeClients(session.id).length))
+  const reserved = await manager.reserveAttach(session.id, operator)
+  await manager.confirmAttach(reserved.token, 412)
+  await nativeAttach(session.id, ghostty(412))
+  live.delete(session.id)
+  await manager.refreshStates()
+  expect(manager.nativeClients(session.id)).toEqual([])
+  expect(heard).toEqual([1, 0])
+  await expect(manager.reserveAttach(session.id, operator)).rejects.toThrow('exited')
+})
+
+test('a CLI-created session starts at the caller\'s terminal size, sized by the terminal app', async () => {
+  const { manager, tmuxSizes } = fixture()
+  const session = await manager.create({ title: 'Here', cwd: '/tmp', checkout: 'existing' }, operator, { cols: 90, rows: 28, kind: 'native' })
+  expect([session.cols, session.rows]).toEqual([90, 28])
+  expect(tmuxSizes.get(session.id)).toEqual({ cols: 90, rows: 28 })
+  expect(session.sizeAuthority).toEqual({ viewer: 'cli', kind: 'native' })
+})
+
+test('an isolated checkout is prepared for a shell too; a shell defaults to the existing checkout', async () => {
+  const prepared: string[] = []
+  const driver = { create: async () => {}, attach() {}, connected: () => true, write: async () => {}, resize: async () => {}, windowSize: async () => ({ cols: 200, rows: 60 }), title: async () => {}, alive: async () => true, screen: async () => '', terminate: async () => {}, inUse: async () => false, detach: async () => {}, clients: async () => [], detachClient: async () => {}, setReadonly: async () => {}, attachArgs: () => [] } satisfies ProcessDriver
+  const manager = new Sessions(new Store(':memory:'), driver, {
+    settings: () => ({ enabledAgents: [] }),
+    prepare: async (input) => { prepared.push(input.sessionId); return { ok: true, worktreePath: '/tmp' } },
+    release: async () => ({ ok: true }),
+  })
+  managers.push(manager)
+  const plain = await manager.create({ title: 'Plain', cwd: '/tmp' }, human)
+  expect(plain.worktreePath).toBeUndefined()
+  const isolated = await manager.create({ title: 'Isolated', cwd: '/tmp', checkout: 'isolated' }, human)
+  expect(prepared).toEqual([isolated.id])
+  expect(isolated.worktreePath).toBe('/tmp')
 })
