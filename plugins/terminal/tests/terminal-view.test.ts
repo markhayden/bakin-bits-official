@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { fitWidthFont, MAX_FONT, minFont, pinchFont, reveal, screenDevice, sizedBy, storedFont, storeFont, storeMinFont } from '../components/terminal-view'
+import { fitWidthFont, MAX_FONT, minFont, pinchFont, resizePlan, reveal, screenDevice, sizedBy, storedFont, storeFont, storeMinFont } from '../components/terminal-view'
 
 function media(coarse: boolean, width = 390, height = 844) {
   return { matchMedia: (query: string) => ({ matches: coarse && query === '(pointer: coarse)' }) as MediaQueryList, screen: { width, height } as Screen }
@@ -82,5 +82,18 @@ describe('naming the size authority', () => {
     expect(screenDevice(media(true))).toBe('phone')
     expect(screenDevice(media(true, 1024, 1366))).toBe('desktop')
     expect(screenDevice(media(false))).toBe('desktop')
+  })
+})
+
+describe('resizePlan', () => {
+  it('sends a height change now at the current width and leaves a width change for later', () => {
+    expect(resizePlan({ cols: 100, rows: 20 }, { cols: 100, rows: 30 })).toEqual({ now: { cols: 100, rows: 20 }, later: false })
+    expect(resizePlan({ cols: 80, rows: 20 }, { cols: 100, rows: 30 })).toEqual({ now: { cols: 100, rows: 20 }, later: true })
+    expect(resizePlan({ cols: 100, rows: 30 }, { cols: 100, rows: 30 })).toEqual({ later: false })
+  })
+
+  it('reconciles a pane that moved back before the server acknowledged', () => {
+    // Sent 80×30 for a narrowed pane, which then returned to 100 columns: the acknowledgement asks for 100 again.
+    expect(resizePlan({ cols: 100, rows: 30 }, { cols: 80, rows: 30 })).toEqual({ later: true })
   })
 })

@@ -97,3 +97,14 @@ export function sizedBy(session: Pick<Session, 'sizeAuthority'>, me: string): st
   if (authority.kind === 'native') return 'terminal app'
   return authority.viewer === me ? 'this device' : authority.device
 }
+
+/**
+ * The sizing screen's next step from the grid its pane holds (`proposed`)
+ * and the grid the session has (`current`): a height change goes now, at the
+ * current width; a width change waits out the debounce. Run on every pane
+ * change AND every acknowledged size, so a pane that moved back before the
+ * server answered is reconciled.
+ */
+export function resizePlan(proposed: { cols: number; rows: number }, current: { cols: number; rows: number }): { now?: { cols: number; rows: number }; later: boolean } {
+  return { ...(proposed.rows !== current.rows ? { now: { cols: current.cols, rows: proposed.rows } } : {}), later: proposed.cols !== current.cols }
+}

@@ -9,7 +9,7 @@ import { clientId } from './api'
 import { enableWebgl } from './terminal-renderer'
 import { TerminalSocketClient, type InputResult } from './terminal-socket'
 import { consumeControl, encodeTerminalKey, type TerminalInputHandle } from './terminal-input'
-import { BASE_FONT, clampFont, fitWidthFont, minFont, pinchFont, reveal, screenDevice, storedFont, storeFont } from './terminal-view'
+import { BASE_FONT, clampFont, fitWidthFont, minFont, pinchFont, resizePlan, reveal, screenDevice, storedFont, storeFont } from './terminal-view'
 import '@xterm/xterm/css/xterm.css'
 
 /** What the page asks of the canvas: "Fit to this device" claims the size; refit applies a new smallest-text choice. */
@@ -38,6 +38,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
   const sentSize = useRef('')
   const ctrl = useRef(false)
   const ready = useRef(false)
+  // Re-plan the sizing screen's grid (pane changes and acknowledged sizes both ask).
+  const replan = useRef<() => void>(() => {})
 
   function screen(): HTMLElement | null { return element.current?.querySelector('.xterm-screen') ?? null }
   function paneBox(): { width: number; height: number } | undefined {
@@ -269,11 +271,12 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     }
   }, [session.id, attempt])
   useLayoutEffect(() => { inputHandle.current?.reset() }, [inputEnabled, session.generation, session.id, attempt])
-  // A new grid: other screens refit their font to it. The authority's own
-  // pane did not change (its pending width waits out its debounce).
+  // A new grid: other screens refit their font to it; the authority re-plans
+  // against its pane (which may have moved again before this answer came).
   useEffect(() => {
     terminal.current?.resize(session.cols, session.rows)
-    if (!callbacks.current.authority) requestAnimationFrame(applyView)
+    if (callbacks.current.authority) replan.current()
+    else requestAnimationFrame(applyView)
   }, [session.cols, session.rows])
   useEffect(() => { applyView() }, [authority, zoom])
   // A new claim (by anyone) starts a fresh exchange: what this screen sent before is no longer known to the server.
@@ -371,16 +374,18 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
       const term = terminal.current
       const proposed = callbacks.current.authority ? proposedSize() : undefined
       if (!term || !proposed) { timer = setTimeout(applyView, 100); return }
-      if (proposed.rows !== term.rows) sendSize(term.cols, proposed.rows)
-      if (proposed.cols !== term.cols) timer = setTimeout(applyView, 100)
+      const plan = resizePlan(proposed, term)
+      if (plan.now) sendSize(plan.now.cols, plan.now.rows)
+      if (plan.later) timer = setTimeout(applyView, 100)
     }
+    replan.current = schedule
     // Observe the pane, not the terminal's cell grid: resizing rows must not
     // create a feedback loop, and other viewers must never resize the session.
     const observer = new ResizeObserver(schedule)
     observer.observe(pane.current)
     void document.fonts.ready.then(schedule)
     schedule()
-    return () => { disposed = true; clearTimeout(timer); observer.disconnect() }
+    return () => { disposed = true; clearTimeout(timer); observer.disconnect(); replan.current = () => {} }
   }, [session.id, authority, session.sizeEpoch, attempt])
 
   function resumeFollow() {
