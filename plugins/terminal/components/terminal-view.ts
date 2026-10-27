@@ -90,6 +90,24 @@ export function reveal(view: ScrollView, target: Box, margin = 0): { left: numbe
   return { left: axis(view.scrollLeft, view.clientWidth, target.left, target.width), top: axis(view.scrollTop, view.clientHeight, target.top, target.height) }
 }
 
+/**
+ * Adjust a reveal (`scroll`) so `target` does not sit under `cover`, a box in
+ * window coordinates (the corner view controls): below it if the content can
+ * move that far, else to its left, else unchanged.
+ */
+export function revealClearOf(view: ScrollView & { scrollWidth: number; scrollHeight: number }, target: Box, scroll: { left: number; top: number }, cover: Box | undefined): { left: number; top: number } {
+  if (!cover) return scroll
+  const x = target.left - scroll.left
+  const y = target.top - scroll.top
+  const under = x < cover.left + cover.width && x + target.width > cover.left && y < cover.top + cover.height && y + target.height > cover.top
+  if (!under) return scroll
+  const top = target.top - (cover.top + cover.height)
+  if (top >= 0 && top <= view.scrollHeight - view.clientHeight) return { left: scroll.left, top }
+  const left = target.left + target.width - cover.left
+  if (left >= 0 && left <= view.scrollWidth - view.clientWidth) return { left, top: scroll.top }
+  return scroll
+}
+
 /** Who "Sized by …" names. Agents never size a session, so they never appear here. */
 export function sizedBy(session: Pick<Session, 'sizeAuthority'>, me: string): string | undefined {
   const authority = session.sizeAuthority

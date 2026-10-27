@@ -89,8 +89,10 @@ pane's width (never below 10px on touch screens, 8px elsewhere) and the pane
 pans natively in both directions. Pinch (or Ctrl+scroll on a trackpad) sets a
 font for this device, remembered in this browser; **Reset view** returns to
 the fitted font. The view follows the cursor after each update; panning or
-selecting text pauses that until **Follow cursor**. Panning never opens the
-keyboard or sends input.
+selecting text pauses that until **↓ Live** (Follow cursor). Both controls
+sit small in the pane's top-right corner, never over the bottom rows where
+the program's input line is, and tapping them keeps the keyboard where it
+is. Panning never opens the keyboard or sends input.
 
 Session actions › **Use this size as the default** saves the current grid as
 the Default columns/rows for new sessions nobody's screen sized yet (agent

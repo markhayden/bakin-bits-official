@@ -2,14 +2,14 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 're
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Button } from '@makinbakin/sdk/ui'
-import { LocateFixed, ZoomOut } from 'lucide-react'
+import { ArrowDown, ZoomOut } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import { clampSize } from '../lib/sizing'
 import { clientId } from './api'
 import { enableWebgl } from './terminal-renderer'
 import { TerminalSocketClient, type InputResult } from './terminal-socket'
 import { consumeControl, encodeTerminalKey, type TerminalInputHandle } from './terminal-input'
-import { BASE_FONT, clampFont, fitWidthFont, minFont, pinchFont, resizePlan, reveal, screenDevice, storedFont, storeFont } from './terminal-view'
+import { BASE_FONT, clampFont, fitWidthFont, minFont, pinchFont, resizePlan, reveal, revealClearOf, screenDevice, storedFont, storeFont } from './terminal-view'
 import '@xterm/xterm/css/xterm.css'
 
 /** What the page asks of the canvas: "Fit to this device" claims the size; refit applies a new smallest-text choice. */
@@ -21,6 +21,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
 }) {
   const pane = useRef<HTMLDivElement>(null)
   const element = useRef<HTMLDivElement>(null)
+  const actions = useRef<HTMLDivElement>(null)
   // This screen sizes the grid only while it holds the session's size claim;
   // every other screen renders the real grid at a font fitted to its width.
   const authority = session.state === 'running' && session.sizeAuthority?.viewer === clientId()
@@ -127,7 +128,10 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
       top: origin.top - view.top + el.scrollTop + buffer.cursorY * cell.height,
       width: cell.width, height: cell.height,
     }
-    const next = reveal(el, target, cell.height)
+    // Never leave the cursor under the corner view controls.
+    const controls = actions.current?.getBoundingClientRect()
+    const cover = controls && { left: controls.left - view.left, top: controls.top - view.top, width: controls.width, height: controls.height }
+    const next = revealClearOf(el, target, reveal(el, target, cell.height), cover)
     if (next.left !== el.scrollLeft || next.top !== el.scrollTop) el.scrollTo(next.left, next.top)
   }
   function overflows(): boolean {
@@ -397,9 +401,11 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     <div ref={pane} role="region" aria-label="Terminal output" tabIndex={0} data-fit={authority ? 'pane' : 'width'} className="terminal-pane min-h-0 flex-1 bg-bakin-canvas-default p-bakin-4">
       <div ref={element} className="terminal-xterm" />
     </div>
-    {(paused || zoom !== undefined) && <div className="terminal-view-actions">
-      {paused && <Button size="sm" variant="secondary" onClick={resumeFollow}><LocateFixed size={16} />Follow cursor</Button>}
-      {zoom !== undefined && <Button size="sm" variant="secondary" onClick={() => zoomTo(undefined)}><ZoomOut size={16} />Reset view</Button>}
+    {/* Top-right, outside the scrolling content: the bottom rows hold the program's input line.
+        Pressing a control never takes focus from the terminal (no keyboard flicker). */}
+    {(paused || zoom !== undefined) && <div ref={actions} className="terminal-view-actions" onMouseDown={(event) => event.preventDefault()}>
+      {zoom !== undefined && <Button size="icon-sm" variant="secondary" aria-label="Reset view" title="Reset view" onClick={() => zoomTo(undefined)}><ZoomOut /></Button>}
+      {paused && <Button size="sm" variant="secondary" aria-label="Follow cursor" title="Follow cursor" onClick={resumeFollow}><ArrowDown />Live</Button>}
     </div>}
   </div>
 }
