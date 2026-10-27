@@ -209,22 +209,6 @@ export class MarkdownStorageAdapter implements StorageAdapter {
     return existsSync(this.resolve(path))
   }
 
-  readAll(): Record<string, string> {
-    const out: Record<string, string> = {}
-    const walk = (dir: string, prefix = '') => {
-      if (!existsSync(dir)) return
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        if (entry.name.startsWith('.')) continue
-        const rel = prefix ? `${prefix}/${entry.name}` : entry.name
-        const full = join(dir, entry.name)
-        if (entry.isDirectory()) walk(full, rel)
-        else if (/\.(md|json|jsonl)$/.test(entry.name)) out[rel] = readFileSync(full, 'utf-8')
-      }
-    }
-    walk(this.root)
-    return out
-  }
-
   list(path = ''): string[] {
     const full = this.resolve(path)
     if (!existsSync(full) || !statSync(full).isDirectory()) return []
