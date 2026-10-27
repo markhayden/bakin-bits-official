@@ -19,7 +19,7 @@ env:
   # (so the stylesheet-identity checks match). Includes the zod
   # externalization contract (#948). Pin a reviewed commit, never a moving
   # branch.
-  BAKIN_SDK_REF: d44f3fce88c1b09794c5d967d7cb30abeb790cf3
+  BAKIN_SDK_REF: 7cac03d9e7e2c7df3211d842a432e1b1b3b7d141
 
 jobs:
   check:
