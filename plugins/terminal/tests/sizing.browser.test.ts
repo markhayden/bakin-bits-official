@@ -5,6 +5,15 @@ type Page = Awaited<ReturnType<Awaited<ReturnType<typeof launchChromium>>['newPa
 
 const sizeButton = (page: Page) => page.locator('[data-slot="workspace-page-compact-header"], [data-slot="workspace-page-header"]').filter({ visible: true }).getByRole('button', { name: /^Terminal size / }).first()
 const font = (page: Page) => page.evaluate(() => Number(document.querySelector('.terminal-pane')!.getAttribute('data-font-size')))
+/** The corner view controls sit in the pane's top strip and never over its bottom rows (the program's input line). */
+async function controlsInTopCorner(page: Page) {
+  const box = (await page.locator('.terminal-pane').boundingBox())!
+  const controls = (await page.locator('.terminal-view-actions').boundingBox())!
+  expect(controls.y).toBeGreaterThanOrEqual(box.y)
+  expect(controls.y + controls.height).toBeLessThanOrEqual(box.y + 48)
+  expect(controls.x + controls.width).toBeLessThanOrEqual(box.x + box.width)
+  expect(controls.x).toBeGreaterThan(box.x + box.width / 2)
+}
 const pane = (page: Page) => page.evaluate(() => {
   const el = document.querySelector<HTMLElement>('.terminal-pane')!
   return { fit: el.dataset.fit, scrollLeft: el.scrollLeft, scrollTop: el.scrollTop, maxLeft: el.scrollWidth - el.clientWidth, maxTop: el.scrollHeight - el.clientHeight, overflowX: el.scrollWidth > el.clientWidth, overflowY: el.scrollHeight > el.clientHeight }
@@ -111,6 +120,7 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     await phone.getByRole('button', { name: 'Follow cursor', exact: true }).waitFor()
     expect(await phone.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea'))).toBe(false)
     expect(phoneSocket.inputs().length).toBe(typedBefore)
+    await controlsInTopCorner(phone)
     const panned = await pane(phone)
     expect(panned.scrollLeft).toBeGreaterThan(100)
     expect(panned.scrollTop).toBeLessThan(start.maxTop - 100)
@@ -151,8 +161,11 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     await desk.mouse.move(deskBox.x + deskBox.width / 2, deskBox.y + deskBox.height / 2)
     const beforeWheel = await pane(desk)
     expect(beforeWheel.overflowY).toBe(true)
+    // Typing focus stays on the terminal through the controls (no keyboard flicker on a phone).
+    await desk.locator('.xterm-helper-textarea').focus()
     await desk.mouse.wheel(0, -300)
     await desk.getByRole('button', { name: 'Follow cursor', exact: true }).waitFor()
+    await controlsInTopCorner(desk)
     expect((await pane(desk)).scrollTop).toBeLessThan(beforeWheel.scrollTop)
     const deskFont = await font(desk)
     await desk.keyboard.down('Control')
@@ -164,6 +177,7 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     await desk.getByRole('button', { name: 'Reset view', exact: true }).click()
     await desk.waitForFunction((size) => Number(document.querySelector('.terminal-pane')?.getAttribute('data-font-size')) === size, deskFont)
     expect(await desk.getByRole('button', { name: 'Follow cursor', exact: true }).isVisible()).toBe(true)
+    expect(await desk.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea'))).toBe(true)
     expect(deskSocket.inputs().length).toBe(deskInputs)
     await phone.waitForFunction(() => document.querySelector('.terminal-pane')?.getAttribute('data-fit') === 'pane')
 

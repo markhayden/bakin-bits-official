@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { fitWidthFont, MAX_FONT, minFont, pinchFont, resizePlan, reveal, screenDevice, sizedBy, storedFont, storeFont, storeMinFont } from '../components/terminal-view'
+import { fitWidthFont, MAX_FONT, minFont, pinchFont, resizePlan, reveal, revealClearOf, screenDevice, sizedBy, storedFont, storeFont, storeMinFont } from '../components/terminal-view'
 
 function media(coarse: boolean, width = 390, height = 844) {
   return { matchMedia: (query: string) => ({ matches: coarse && query === '(pointer: coarse)' }) as MediaQueryList, screen: { width, height } as Screen }
@@ -67,6 +67,28 @@ describe('reveal', () => {
   it('scrolls the least distance to a target past either edge', () => {
     expect(reveal(view, { left: 500, top: 400, width: 8, height: 16 }, 4)).toEqual({ left: 212, top: 220 })
     expect(reveal(view, { left: 20, top: 30, width: 8, height: 16 }, 4)).toEqual({ left: 16, top: 26 })
+  })
+})
+
+describe('revealClearOf', () => {
+  // A 300x200 window onto 1000x1000 content; the corner controls cover x 220–300, y 0–40 of the window.
+  const view = { scrollLeft: 0, scrollTop: 0, clientWidth: 300, clientHeight: 200, scrollWidth: 1000, scrollHeight: 1000 }
+  const controls = { left: 220, top: 0, width: 80, height: 40 }
+  it('leaves a cursor clear of the controls alone', () => {
+    expect(revealClearOf(view, { left: 50, top: 100, width: 8, height: 16 }, { left: 0, top: 80 }, controls)).toEqual({ left: 0, top: 80 })
+    expect(revealClearOf(view, { left: 250, top: 100, width: 8, height: 16 }, { left: 0, top: 0 }, undefined)).toEqual({ left: 0, top: 0 })
+  })
+  it('scrolls a cursor under the controls down below them', () => {
+    // On screen at (250, 20): under the controls; scroll up 20 so it sits at y 40.
+    expect(revealClearOf(view, { left: 250, top: 120, width: 8, height: 16 }, { left: 0, top: 100 }, controls)).toEqual({ left: 0, top: 80 })
+  })
+  it('scrolls sideways when the content cannot move down far enough', () => {
+    // Content top: no room above, so move the cursor left of the controls instead.
+    expect(revealClearOf(view, { left: 250, top: 10, width: 8, height: 16 }, { left: 0, top: 0 }, controls)).toEqual({ left: 38, top: 0 })
+  })
+  it('gives up when neither direction has room', () => {
+    const small = { ...view, scrollWidth: 300, scrollHeight: 200 }
+    expect(revealClearOf(small, { left: 250, top: 10, width: 8, height: 16 }, { left: 0, top: 0 }, controls)).toEqual({ left: 0, top: 0 })
   })
 })
 

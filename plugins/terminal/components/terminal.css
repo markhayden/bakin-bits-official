@@ -27,12 +27,24 @@
   height: max-content;
 }
 
+/* The corner view controls sit top-right, over the pane but outside its
+   scrolling content: the bottom rows hold the program's input line. */
 [data-bakin-plugin="terminal"] .terminal-view-actions {
   position: absolute;
-  right: var(--bakin-layout-space-4);
-  bottom: var(--bakin-layout-space-4);
+  top: var(--bakin-layout-space-2);
+  right: var(--bakin-layout-space-2);
   display: flex;
   gap: var(--bakin-layout-gap-dense);
+}
+
+/* 32 px to look at, 44 px to hit on touch. */
+@media (pointer: coarse) {
+  [data-bakin-plugin="terminal"] .terminal-view-actions > button { position: relative; }
+  [data-bakin-plugin="terminal"] .terminal-view-actions > button::after {
+    content: "";
+    position: absolute;
+    inset: -6px;
+  }
 }
 
 [data-bakin-plugin="terminal"] .terminal-xterm .xterm-viewport {
