@@ -27,11 +27,11 @@ function setup() {
 describe('what counts as one key', () => {
   it('single characters, ESC-prefixed characters, and cursor/tilde keys (modified or not)', () => {
     for (const data of ['c', 'é', '你', '\x03', '\x1b', '\x7f', '\x1bc', '\x1b\x7f', '\x1b[A', '\x1bOA', '\x1b[1;5D', '\x1b[3~', '\x1b[5;5~',
-      '\x1b[Z', '\x1bOP', '\x1b[1;5P', '\x1b[2~', '\x1b[15~', '\x1b[24;5~']) expect(isKey(data)).toBe(true)
+      '\x1b[Z', '\x1bOP', '\x1bOR', '\x1b[1;5P', '\x1b[2~', '\x1b[15~', '\x1b[24;5~']) expect(isKey(data)).toBe(true)
   })
   it('not words, and not the replies xterm sends on its own', () => {
     // CSI 1;5 R is both Ctrl+F3 and a cursor-position reply: it stays a reply.
-    for (const data of ['echo', '你好', '\x1b[O', '\x1b[I', '\x1b[12;3R', '\x1b[1;5R', '\x1b[?1;2c', '\x1b[<0;10;5M', '\x1b[200~c\x1b[201~']) expect(isKey(data)).toBe(false)
+    for (const data of ['echo', '你好', '\x1b[O', '\x1b[I', '\x1b[R', '\x1b[12;3R', '\x1b[1;5R', '\x1b[?1;2c', '\x1b[<0;10;5M', '\x1b[200~c\x1b[201~']) expect(isKey(data)).toBe(false)
   })
 })
 
@@ -99,7 +99,7 @@ describe('modifier input', () => {
   })
   it('hardware keys the bar cannot modify still use up a one-shot modifier', () => {
     const { input } = setup()
-    for (const key of ['\x1b[Z', '\x1bOP', '\x1b[2~', '\x1b[15~']) {
+    for (const key of ['\x1b[Z', '\x1bOP', '\x1bOR', '\x1b[2~', '\x1b[15~']) {
       input.toggle('ctrl')
       expect(input.data(key)).toBe(key)
       expect(input.modifiers.ctrl).toBe('off')

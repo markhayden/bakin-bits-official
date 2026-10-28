@@ -14,8 +14,8 @@ export function isKey(data: string): boolean {
   if (!data.startsWith('\x1b')) return false
   const sequence = data.slice(1)
   return [...sequence].length === 1
-    // Cursor keys, Home/End, F1–F4 (SS3 or CSI 1;m), Shift+Tab.
-    || /^(?:O|\[)[ABCDHFPQS]$/.test(sequence) || /^\[1;\d+[ABCDHFPQS]$/.test(sequence) || sequence === '[Z'
+    // Cursor keys, Home/End, F1–F4 (SS3, or CSI 1;m when modified), Shift+Tab.
+    || /^(?:O|\[)[ABCDHF]$/.test(sequence) || /^O[PQRS]$/.test(sequence) || /^\[1;\d+[ABCDHFPQS]$/.test(sequence) || sequence === '[Z'
     // Tilde keys: Insert, Delete, Page Up/Down, F5–F12, modified or not.
     || /^\[\d+(?:;\d+)?~$/.test(sequence)
   // Not CSI 1;m R: a modified F3 and a cursor-position reply are the same
