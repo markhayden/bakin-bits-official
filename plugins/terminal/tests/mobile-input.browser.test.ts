@@ -55,11 +55,15 @@ browserTest('the phone key bar follows the typing session and its keys send exac
     // Not typing: no bar, only the corner keyboard button, which starts typing.
     const keys = page.getByRole('group', { name: 'Terminal keys', exact: true })
     expect(await keys.count()).toBe(0)
+    // With no bar below it, the pane keeps its last line clear of the screen's rounded corner.
+    const bottomPadding = () => page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.terminal-pane')!).paddingBottom))
+    expect(await bottomPadding()).toBe(32)
     const input = page.locator('.xterm-helper-textarea')
     await page.getByRole('button', { name: 'Show keyboard', exact: true }).tap()
     expect(await input.evaluate(el => el === document.activeElement)).toBe(true)
     await keys.waitFor()
     await page.getByRole('button', { name: 'Show keyboard', exact: true }).waitFor({ state: 'detached' })
+    expect(await bottomPadding()).toBe(16)
     await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.terminal-key-bar button')?.disabled === false)
 
     // Tab completes and the keyboard (focus) stays.

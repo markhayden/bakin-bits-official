@@ -11,6 +11,13 @@
   /* xterm's layers carry z-indexes; keep them below the view actions. */
   isolation: isolate;
 }
+/* Phones and tablets without the key bar: a touch more room at the bottom,
+   so the last line clears the screen's rounded corner. */
+@media (pointer: coarse) {
+  [data-bakin-plugin="terminal"] [data-slot="workspace-page-body"]:not(:has(.terminal-key-bar)) .terminal-pane {
+    padding-bottom: var(--bakin-layout-space-8);
+  }
+}
 [data-bakin-plugin="terminal"] .terminal-pane:focus-visible {
   outline: 2px solid var(--bakin-color-focus-ring);
   outline-offset: -2px;
