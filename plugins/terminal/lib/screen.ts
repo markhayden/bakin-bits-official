@@ -5,6 +5,7 @@ import { terminalSteps } from './memory'
 import { runSliced } from './replica'
 import { screenView, type ScreenView } from './shadow'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
+import { visibleText } from './terminal-state'
 import { guardParser } from './xterm-fixes'
 
 interface Pending { data: Uint8Array; parsed?: () => void; resolve(): void; reject(error: unknown): void }
@@ -129,10 +130,7 @@ export class Screen {
     this.pending = run.then(() => {}, () => {})
     return this.pending
   }
-  text(): string {
-    const buffer = this.terminal.buffer.active
-    return Array.from({ length: this.terminal.rows }, (_, index) => buffer.getLine(buffer.baseY + index)?.translateToString(true) ?? '').join('\n')
-  }
+  text(): string { return visibleText(this.terminal) }
   async drain(): Promise<void> {
     // Failed writes remain visible through failed/capture; disposal still must settle.
     await this.pending.catch(() => undefined)

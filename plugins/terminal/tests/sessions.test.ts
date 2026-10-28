@@ -3,6 +3,7 @@ import { Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
 import { DAY, type Session } from '../lib/contracts'
 import type { NativeClient, ProcessDriver } from '../lib/processes'
+import { Replica } from '../lib/replica'
 
 const managers: Sessions[] = []
 afterEach(async () => { for (const manager of managers.splice(0)) await manager.shutdown() })
@@ -27,7 +28,10 @@ function fixture(options: { raw?: boolean } = {}) {
   const clientsChanged = new Map<string, () => void>()
   const vanishing = new Set<number>()
   const detachedClients: string[] = []
+  /** Raw-path replicas, by session (none until a test makes one). */
+  const replicas = new Map<string, Replica>()
   const driver: ProcessDriver = {
+    replica: (id) => replicas.get(id),
     create: async (s) => { live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, output, changed) { attached.add(s.id); outputs.set(s.id, output); clientsChanged.set(s.id, changed) }, connected: (id) => attached.has(id) && !bridgeLost.has(id), controlConnected: (id) => attached.has(id),
     write: async (_id, data) => { if (writeFailure) throw writeFailure; writes.push(data) },
     resize: async (id, cols, rows) => { if (resizeFailure) { tmuxSizes.set(id, { cols: 77, rows: 22 }); throw resizeFailure } tmuxSizes.set(id, { cols, rows }) },
@@ -61,7 +65,7 @@ function fixture(options: { raw?: boolean } = {}) {
   })
   managers.push(manager)
   return {
-    manager, writes, live, attached, terminated, forgotten, bridgeLost, releases, outputs, natives, detachedClients, vanishing,
+    manager, writes, live, attached, terminated, forgotten, bridgeLost, releases, outputs, natives, detachedClients, vanishing, replicas,
     /** A terminal app attaches (or resizes) in tmux; the control client notices. */
     nativeAttach: async (id: string, client: NativeClient) => {
       natives.set(id, [...(natives.get(id) ?? []).filter((entry) => entry.pid !== client.pid), client])
@@ -694,4 +698,30 @@ test('raw-path input needs only the control client; the bridge path needs its br
       expect(writes).toEqual([])
     }
   }
+})
+
+test('raw path: readScreen takes the screen, the grid and the size revision from the replica in one step (adoptSize never moves it)', async () => {
+  const { manager, replicas, tmuxSizes } = fixture({ raw: true })
+  const session = await manager.create({ title: 'Raw', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+  // No replica, or none seeded yet: not ready, never the bridge's screen.
+  await expect(manager.readScreen(session.id, human)).rejects.toThrow('not ready')
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  replicas.set(session.id, replica)
+  let seq = 0
+  await replica.event({ seq: ++seq, kind: 'seed', bytes: new TextEncoder().encode('\x1bcfrom the replica'), cols: 64, rows: 20, reason: 'test', history: true })
+  expect(await manager.readScreen(session.id, human)).toMatchObject({ cols: 64, rows: 20, sizeRevision: 0 })
+  expect((await manager.readScreen(session.id, human)).screen.split('\n')[0]).toBe('from the replica')
+  // A row change and a same-size layout: one revision.
+  await replica.event({ seq: ++seq, kind: 'layout', cols: 64, rows: 24 })
+  await replica.event({ seq: ++seq, kind: 'layout', cols: 64, rows: 24 })
+  expect(await manager.readScreen(session.id, human)).toMatchObject({ cols: 64, rows: 24, sizeRevision: 1 })
+  // The record adopts another size (a reconcile): the raw revision is the replica's, unmoved.
+  tmuxSizes.set(session.id, { cols: 90, rows: 30 })
+  await manager.resizeAs(session.id, human, session.sizeEpoch, 90, 30)
+  expect(manager.get(session.id, human).sizeRevision).toBeGreaterThan(0)
+  expect(await manager.readScreen(session.id, human)).toMatchObject({ cols: 64, rows: 24, sizeRevision: 1 })
+  // A seed at another size (layouts a rebuild skipped) is a dimension change too.
+  await replica.event({ seq: seq + 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 90, rows: 30, reason: 'test', history: true })
+  expect(await manager.readScreen(session.id, human)).toMatchObject({ cols: 90, rows: 30, sizeRevision: 2 })
+  replica.close()
 })

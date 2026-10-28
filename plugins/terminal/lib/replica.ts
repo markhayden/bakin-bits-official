@@ -272,6 +272,8 @@ export class Replica implements LogConsumer {
   private widthGeneration = 0
   private widthOwed = 0
   private widthAsked = 0
+  /** Dimension changes applied (a layout, or a seed at another size), in the log's order (spec D3). */
+  private revision = 0
   readonly stats: ReplicaStats = { accepted: 0, rejected: {}, abandoned: 0, rebuilds: {}, seeds: {}, geometries: 0, skippedBytes: 0 }
 
   constructor(private options: ReplicaOptions) {}
@@ -296,6 +298,12 @@ export class Replica implements LogConsumer {
   maintain(): Promise<void> {
     return this.serial(async () => { if (this.links && this.links.orphans() > 0) await runSliced(this.links.sweepSteps()) })
   }
+  /**
+   * The raw path's size revision: moves once per dimension change the
+   * replica applied, in order (read it in `read` for one step with the
+   * screen). Its own count: the session record's (`adoptSize`) never moves it.
+   */
+  get sizeRevision(): number { return this.revision }
   /** A width change still waits for its geometry. */
   get geometryOwed(): boolean { return this.widthOwed !== 0 }
   /** Why the replica is waiting for a seed, while it is. */
@@ -402,6 +410,7 @@ export class Replica implements LogConsumer {
     this.appliedSeq = event.seq
     if (event.kind === 'layout') {
       const width = event.cols !== this.term.cols
+      if (width || event.rows !== this.term.rows) this.revision++
       this.term.resize(event.cols, event.rows)
       this.push(event, 0)
       if (this.tail.length > MAX_TAIL_EVENTS) { this.rebuild('tail bound', 0); return }
@@ -482,6 +491,8 @@ export class Replica implements LogConsumer {
   }
 
   private async applySeed(event: Extract<LogEvent, { kind: 'seed' }>): Promise<void> {
+    // At another size than the picture it replaces (layouts a rebuild skipped): a dimension change too.
+    if (this.term && (this.term.cols !== event.cols || this.term.rows !== event.rows)) this.revision++
     this.term?.dispose()
     clearTimeout(this.idleTimer)
     const { terminal, links } = profileTerminal(event.cols, event.rows)

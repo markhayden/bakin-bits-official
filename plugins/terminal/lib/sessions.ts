@@ -8,6 +8,7 @@ import type { Fidelity, RawSource } from './raw-display'
 import { Screen } from './screen'
 import { screenView, shadowDiff } from './shadow'
 import { Store } from './store'
+import { visibleText } from './terminal-state'
 
 interface WorktreeResult { ok: boolean; error?: string; worktreePath?: string }
 /** How long a launched terminal app has to confirm its pid (spec D7). */
@@ -667,9 +668,19 @@ export class Sessions {
     const current = this.get(id, principal)
     return { session: current, ...snapshot }
   }
-  /** The visible pane as text, with the grid it was read at (captured together). */
+  /**
+   * The visible pane as text, with the grid it was read at (captured
+   * together). On the raw path, all of it from the replica in one step: its
+   * screen, its dimensions and its size revision (spec D3, plan T34a).
+   */
   async readScreen(id: string, principal: Principal): Promise<{ screen: string; cols: number; rows: number; sizeRevision: number }> {
     const screen = await this.ensureScreen(id, principal)
+    if (this.rawPath(id)) {
+      const replica = this.driver.replica?.(id)
+      const view = await replica?.read((terminal) => ({ screen: visibleText(terminal), cols: terminal.cols, rows: terminal.rows, sizeRevision: replica.sizeRevision }))
+      if (!view) throw new TerminalError('Terminal output is not ready yet; retry', 503)
+      return view
+    }
     return screen.capture(() => {
       const session = this.get(id, principal)
       return { screen: screen.text(), cols: session.cols, rows: session.rows, sizeRevision: session.sizeRevision }

@@ -69,6 +69,11 @@ export const UNDERLINE = 0x10000000
 /** ExtendedAttrs.underlineStyle reports 5 (dashed) while a link is active, whatever is stored: read the raw bits. */
 export const rawUnderlineStyle = (extended: Extended) => (extended._ext & 0x1c000000) >> 26
 
+/** The visible rows as text, one line each (trailing spaces trimmed). */
+export const visibleText = (terminal: Term): string => {
+  const buffer = terminal.buffer.active
+  return Array.from({ length: terminal.rows }, (_, index) => buffer.getLine(buffer.baseY + index)?.translateToString(true) ?? '').join('\n')
+}
 export const linkUri = (terminal: Term, id: number) => id ? internals(terminal)._oscLinkService.getLinkData(id)?.uri ?? '(dangling)' : ''
 /**
  * Links compare by grouping, not by number (ids differ between terminals):

@@ -828,6 +828,17 @@ describe('Replica width changes (plan T34a)', () => {
     expect(r.geometryOwed).toBe(true)
     r.close()
   })
+  it('a width change moves the size revision once, at its layout (its geometry does not)', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 80, 10))
+    expect(r.sizeRevision).toBe(0)
+    await r.event(s.layout(60, 10))
+    expect(r.sizeRevision).toBe(1)
+    await r.event(s.geometry(tmuxPicture, 60, 10, 1))
+    expect(r.sizeRevision).toBe(1)
+    r.close()
+  })
   it('a checkpoint after a geometry is accepted and compacts the tail', async () => {
     const s = stream()
     const { r } = replica({ idleMs: 1e9 })
