@@ -16,7 +16,7 @@ import headless from '@xterm/headless'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
 import { carriedUtf8 } from './xterm-fixes'
 import {
-  cellKey, charsetName, fullState, HAS_EXTENDED, internals, learnCharsets, linkUri, nullCell, rawUnderlineStyle, savedKey, stateDiff,
+  cellKey, charsetName, fullState, HAS_EXTENDED, internals, learnCharsets, nullCell, rawUnderlineStyle, savedKey, stateDiff,
   type Buffer, type Extended, type Term,
 } from './terminal-state'
 
@@ -211,8 +211,9 @@ export function serialize(terminal: Term): string {
     if (line.loadCell(x, cell).getWidth() === 0) x--
     line.loadCell(x, cell)
     const extended = cell.bg & HAS_EXTENDED ? cell.extended : null
-    const uri = extended ? linkUri(terminal, extended.urlId) : ''
-    out += `\x1b[${active.y + 1};${x + 1}H` + (uri ? osc8(uri) : '') + sgr(cell.fg, cell.bg & ~HAS_EXTENDED, extended) + (cell.getChars() || ' ') + (uri ? osc8('') : '')
+    // The same link as the rest of its cells: reopened under its id.
+    const link = extended && extended.urlId ? linkParams(terminal, extended.urlId) : null
+    out += `\x1b[${active.y + 1};${x + 1}H` + (link ? osc8(link.uri, link.id) : '') + sgr(cell.fg, cell.bg & ~HAS_EXTENDED, extended) + (cell.getChars() || ' ') + (link ? osc8('') : '')
   } else out += `\x1b[${active.y + 1};${active.x + 1}H`
   const pen = core._inputHandler._curAttrData
   // The pen always carries its extended attributes (an underline colour is remembered while underline is off).
@@ -234,13 +235,16 @@ export function serialize(terminal: Term): string {
   else if (encoding === 'URXVT') out += '\x1b[?1015h'
   else if (encoding === 'UTF8') out += '\x1b[?1005h'
   if (core.coreService.isCursorHidden) out += '\x1b[?25l'
-  const style = core.optionsService.rawOptions.cursorStyle
-  const blink = core.optionsService.rawOptions.cursorBlink
-  out += `\x1b[${({ block: 1, underline: 3, bar: 5 } as Record<string, number>)[style]! + (blink ? 0 : 1)} q`
+  // DECSCUSR's override (the configured style is configuration, not state; RIS leaves no override).
+  const override = core.coreService.decPrivateModes
+  if (override.cursorStyle !== undefined) out += `\x1b[${({ block: 1, underline: 3, bar: 5 } as Record<string, number>)[override.cursorStyle]! + (override.cursorBlink ? 0 : 1)} q`
   if (modes.originMode) out += `\x1b[?6h\x1b[${active.y - active.scrollTop + 1};${active.x + 1}H`
-  // An open hyperlink in the pen.
+  // An open hyperlink in the pen: the same link its printed cells carry, so it continues under its id.
   const penExtended = pen.bg & HAS_EXTENDED ? pen.extended : null
-  if (penExtended && penExtended.urlId) out += osc8(linkUri(terminal, penExtended.urlId))
+  if (penExtended && penExtended.urlId) {
+    const link = linkParams(terminal, penExtended.urlId)
+    out += osc8(link.uri, link.id)
+  }
   return out
 }
 

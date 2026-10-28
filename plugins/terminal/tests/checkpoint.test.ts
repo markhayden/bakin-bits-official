@@ -32,6 +32,13 @@ async function joinAt(cols: number, rows: number, before: Uint8Array) {
   return { replica, viewer, offset, served: Boolean(last) }
 }
 
+/** The visible text of both buffers and DECSCUSR's override, read through the public API and the override itself. */
+function shown(term: Term) {
+  const rows = (buffer: typeof term.buffer.normal) => Array.from({ length: buffer.length }, (_, y) => buffer.getLine(y)!.translateToString(true))
+  const override = (term as unknown as { _core: { coreService: { decPrivateModes: { cursorStyle?: string; cursorBlink?: boolean } } } })._core.coreService.decPrivateModes
+  return { normal: rows(term.buffer.normal), alternate: term.buffer.active.type === 'alternate' ? rows(term.buffer.alternate) : [], cursor: `${override.cursorStyle}/${override.cursorBlink}` }
+}
+
 // Spike 3's named repros (Codex's included: pending wrap, DEC graphics under a saved cursor, BEL inside DCS, idle prompt).
 const NAMED: { name: string; cols: number; rows: number; before: Uint8Array; after: Uint8Array; atCut?: boolean }[] = [
   { name: 'pending wrap at the margin', cols: 4, rows: 3, before: enc('abcd\x07'), after: enc('E') },
@@ -52,6 +59,10 @@ const NAMED: { name: string; cols: number; rows: number; before: Uint8Array; aft
   { name: 'grapheme join state between 👍 and 🏽', cols: 20, rows: 3, before: enc('ok 👍'), after: enc('🏽X'), atCut: true },
   { name: 'a ZWJ sequence cut after the joiner', cols: 20, rows: 3, before: enc('🧑‍'), after: enc('💻X'), atCut: true },
   { name: 'idle text (a join state after any print)', cols: 20, rows: 3, before: enc('$ make'), after: enc('\r\n'), atCut: true },
+  { name: 'a literal ∅ is a character, not an empty cell', cols: 10, rows: 3, before: enc('a∅b'), after: enc('c') },
+  { name: 'a DECSCUSR override (blinking bar)', cols: 10, rows: 3, before: enc('\x1b[5 qx'), after: enc('y') },
+  { name: 'a DECSCUSR override reset (CSI 0 SP q)', cols: 10, rows: 3, before: enc('\x1b[4 q\x1b[0 qx'), after: enc('y') },
+  { name: 'a pending wrap inside a link', cols: 6, rows: 3, before: enc('\x1b]8;;https://a.example\x1b\\abcdef'), after: enc('gh\x1b]8;;\x1b\\') },
   { name: 'custom tab stops then the alternate screen', cols: 20, rows: 3, before: enc('\x1b[3g\x1b[1;5H\x1bH\x1b[H'), after: enc('\x1b[?1049h\tX') },
 ]
 
@@ -67,9 +78,29 @@ describe('checkpoint: continuation-exact joins', () => {
       // …and after what follows.
       await write(viewer, repro.after)
       expect(stateDiff(fullState(reference), fullState(viewer))).toBeNull()
+      // Independently of the state comparison: what is shown, and the cursor's look.
+      expect(shown(viewer)).toEqual(shown(reference))
       for (const term of [reference, replica, viewer]) term.dispose()
     })
   }
+})
+
+describe('checkpoint: link identity', () => {
+  it('an open link continued after a join is one link, not two', async () => {
+    const reference = terminal(20, 3)
+    await write(reference, '\x1b]8;;https://a.example\x1b\\link\x1b]8;;\x1b\\')
+    const { viewer } = await joinAt(20, 3, enc('\x1b]8;;https://a.example\x1b\\li'))
+    await write(viewer, 'nk\x1b]8;;\x1b\\')
+    const id = (term: Term, x: number) => (term.buffer.active.getLine(0)!.getCell(x) as unknown as { extended: { urlId: number } }).extended.urlId
+    expect(id(viewer, 0)).toBe(id(viewer, 3))
+    expect(stateDiff(fullState(reference), fullState(viewer))).toBeNull()
+  })
+  it('two separate links to the same address stay two (compared by grouping, not number)', async () => {
+    const term = terminal(30, 3)
+    await write(term, '\x1b]8;;https://a.example\x1b\\one\x1b]8;;\x1b\\ \x1b]8;;https://a.example\x1b\\two\x1b]8;;\x1b\\')
+    const result = takeCheckpoint(term)
+    expect('checkpoint' in result).toBe(true)
+  })
 })
 
 describe('checkpoint: acceptance', () => {
