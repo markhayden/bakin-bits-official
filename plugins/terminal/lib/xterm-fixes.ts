@@ -1,0 +1,55 @@
+/**
+ * Workarounds for bugs in the pinned xterm 6.0.0, applied identically to
+ * the browser terminal and the server's headless Screen. Each has a test
+ * that fails once upstream fixes the bug (drop the patch then).
+ */
+
+interface ParserTerminal {
+  parser: { registerCsiHandler(id: { prefix?: string; final: string }, callback: (params: (number | number[])[]) => boolean): { dispose(): void } }
+}
+
+/** The private xterm 6.0.0 internals the erase-above patch drives (checked at run time). */
+interface InputHandlerInternals {
+  _activeBuffer: { x: number; y: number; ybase: number; lines: { get(index: number): { isWrapped: boolean } | undefined } }
+  _bufferService: { cols: number }
+  _dirtyRowTracker: { markDirty(y: number): void }
+  _restrictCursor(maxCol?: number): void
+  _eraseInBufferLine(y: number, start: number, end: number, clearWrap: boolean, respectProtect: boolean): void
+  _resetBufferLine(y: number, respectProtect: boolean): void
+}
+
+function inputHandler(terminal: object): InputHandlerInternals | undefined {
+  const handler = (terminal as { _core?: { _inputHandler?: Partial<InputHandlerInternals> } })._core?._inputHandler
+  return handler && typeof handler._eraseInBufferLine === 'function' && typeof handler._resetBufferLine === 'function'
+    && typeof handler._restrictCursor === 'function' && handler._activeBuffer && handler._bufferService && handler._dirtyRowTracker
+    ? handler as InputHandlerInternals : undefined
+}
+
+/**
+ * xterm 6.0.0: ED 1 (erase above, CSI 1 J; selective: CSI ? 1 J) with the
+ * cursor in the last column clears the wrap flag of `lines.get(y + 1)` — a
+ * screen row used as a buffer index. With no scrollback on the bottom row
+ * it throws and the terminal's write queue never runs again; with
+ * scrollback it clears a history line's flag instead. Only that branch is
+ * done here, correctly; everything else is xterm's own.
+ */
+export function patchEraseAbove(terminal: ParserTerminal & object): void {
+  const erase = (respectProtect: boolean) => (params: (number | number[])[]) => {
+    if (params[0] !== 1) return false
+    const handler = inputHandler(terminal)
+    if (!handler) return false
+    const cols = handler._bufferService.cols
+    handler._restrictCursor(cols)
+    const buffer = handler._activeBuffer
+    if (buffer.x + 1 < cols) return false
+    handler._dirtyRowTracker.markDirty(buffer.y)
+    handler._eraseInBufferLine(buffer.y, 0, cols, true, respectProtect)
+    const below = buffer.lines.get(buffer.ybase + buffer.y + 1)
+    if (below) below.isWrapped = false
+    for (let y = buffer.y - 1; y >= 0; y--) handler._resetBufferLine(y, respectProtect)
+    handler._dirtyRowTracker.markDirty(0)
+    return true
+  }
+  terminal.parser.registerCsiHandler({ final: 'J' }, erase(false))
+  terminal.parser.registerCsiHandler({ prefix: '?', final: 'J' }, erase(true))
+}
