@@ -146,13 +146,23 @@ describe('control-mode output into the event log (real tmux)', () => {
     const write = (data: Uint8Array) => new Promise<void>((resolve) => replica.write(data, resolve))
     let seen = 0
     let seeds = 0
+    let afterSeed = 0
+    const doneAtSeed: boolean[] = []
     let done = false
     log.attach({
       event: async (event) => {
         if (event.kind === 'layout') { replica.resize(event.cols, event.rows); return }
-        if (event.kind === 'seed') { seeds++; replica.reset(); replica.resize(event.cols, event.rows); await write(event.bytes); return }
+        if (event.kind === 'seed') {
+          // Measured where the replica sees it: was the stream still running, and what follows it.
+          doneAtSeed.push(done)
+          replica.reset(); replica.resize(event.cols, event.rows); await write(event.bytes)
+          seeds++
+          afterSeed = 0
+          return
+        }
         const text = new TextDecoder().decode(event.bytes)
         seen += text.split('\n').length - 1
+        afterSeed += text.split('\n').length - 1
         if (text.includes('DONE')) done = true
         await write(event.bytes)
       },
@@ -166,14 +176,14 @@ describe('control-mode output into the event log (real tmux)', () => {
       const buffer = replica.buffer.active
       return Array.from({ length: buffer.length }, (_, y) => buffer.getLine(y)!.translateToString(true)).filter((row) => /^\d+$/.test(row)).map(Number)
     }
-    for (const at of [800, 1600, 2400]) {
+    for (const [index, at] of [800, 1600, 2400].entries()) {
       await until(() => seen >= at)
-      // A live boundary: the stream is still running when the seed lands, and keeps going after it.
-      expect(done).toBe(false)
       await reseed(client, log, 'w', `test at ${at}`)
-      const after = seen
-      await until(() => seen >= after + 200 || done)
-      expect(seen).toBeGreaterThan(after)
+      // A live boundary, at the replica: the seed was applied before the
+      // stream ended, and output followed it.
+      await until(() => seeds === index + 1 && (afterSeed >= 200 || done))
+      expect(doneAtSeed[index]).toBe(false)
+      expect(afterSeed).toBeGreaterThan(0)
       // Before the next seed replaces the evidence: exactly 1…k, past the seed point.
       await Bun.sleep(50)
       const numbers = numbersInReplica()

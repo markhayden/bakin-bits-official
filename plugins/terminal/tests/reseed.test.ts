@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import headless from '@xterm/headless'
 import { ControlClient, type ControlTransport } from '../lib/control'
 import { OutputLog, type LogEvent } from '../lib/output-log'
-import { RESEED_ATTEMPTS, RESEED_BACKOFF_MS, reseed, SEED_FORMATS, seedCommands, seedFrom } from '../lib/reseed'
+import { capturedRowWidth, RESEED_ATTEMPTS, RESEED_BACKOFF_MS, reseed, SEED_FORMATS, seedCommands, seedFrom } from '../lib/reseed'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from '../lib/terminal-profile'
 
 const formats = (values: Partial<Record<typeof SEED_FORMATS[number], string>>) => {
@@ -51,6 +51,27 @@ describe('seedFrom', () => {
     const terminal = await render(seed.bytes)
     await new Promise<void>((resolve) => terminal.write('X', resolve))
     expect(lines(terminal).slice(0, 2)).toEqual([full, 'X'])
+  })
+  it('a pending wrap on a row cleared after the wrap began still wraps the next character', async () => {
+    // tmux: 20 characters, then CSI 2 K (default background): the row is empty, the cursor still past the last column.
+    const seed = seedFrom([[formats({ cursor_x: '20', cursor_y: '0' })], [], [''], [''], ['']])
+    const terminal = await render(seed.bytes)
+    await new Promise<void>((resolve) => terminal.write('X', resolve))
+    // The cleared cells come back as spaces (D13's empty-cell degradation).
+    expect(lines(terminal)[0]!.trim()).toBe('')
+    expect(lines(terminal)[1]).toBe('X')
+  })
+  it('measures captured rows as the profile prints them', () => {
+    expect(capturedRowWidth('\x1b[31mab\x1b[0m中', 20, [8, 16])).toBe(4)
+    expect(capturedRowWidth('a\tb', 20, [4])).toBe(5)
+    expect(capturedRowWidth('👍🏽x', 20, [])).toBe(3)
+    expect(capturedRowWidth('\x1b]8;;https://x\x1b\\link\x1b]8;;\x1b\\', 20, [])).toBe(4)
+    expect(capturedRowWidth('x'.repeat(30), 20, [])).toBe(20)
+  })
+  it('tab stops hold on the alternate screen too', async () => {
+    const seed = seedFrom([[formats({ alternate_on: '1', pane_tabs: '4' })], [], ['\tX', '', '', '', ''], ['normal'], []])
+    const terminal = await render(seed.bytes)
+    expect(lines(terminal)[0]).toBe('    X')
   })
   it('attributes never leak from one block or row into the next', async () => {
     // Red text ends history; the screen starts in the default colour.

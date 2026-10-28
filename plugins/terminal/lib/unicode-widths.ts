@@ -75,3 +75,21 @@ export function applyTmuxWidths(terminal: UnicodeHost, table: readonly (readonly
   terminal.unicode.register(tmuxWidthProvider(loadGraphemeProvider(terminal), table))
   terminal.unicode.activeVersion = TMUX_WIDTHS_VERSION
 }
+
+/**
+ * The cells `text` (printable characters only: no escapes, tabs or
+ * controls) takes as xterm prints it with the profile's widths: graphemes
+ * joined, tmux's widths applied.
+ */
+export function textWidth(text: string, provider: UnicodeProvider): number {
+  let width = 0
+  let preceding = 0
+  for (const char of text) {
+    const properties = provider.charProperties(char.codePointAt(0)!, preceding)
+    const cells = (properties >> 1) & 3
+    // A joined character widens its cluster to its own width (xterm's print).
+    width += properties & 1 ? Math.max(0, cells - ((preceding >> 1) & 3)) : cells
+    preceding = properties
+  }
+  return width
+}
