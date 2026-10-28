@@ -8,8 +8,9 @@
  *
  * Reads the pinned version's internals (checked by the xterm pin test).
  */
-import type headless from '@xterm/headless'
-import { altEnteredCols, carriedUtf8 } from './xterm-fixes'
+import headless from '@xterm/headless'
+import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
+import { altEnteredCols, carriedUtf8Bytes } from './xterm-fixes'
 
 export type Term = InstanceType<typeof headless.Terminal>
 
@@ -28,11 +29,12 @@ export interface Internals {
     _curAttrData: { fg: number; bg: number; extended: Extended }
     _parser: {
       currentState: number; _parseStack: { state: number }; precedingJoinState: number; _collect: number
-      _params: { toArray(): unknown[] }
+      _params: { toArray(): unknown[]; _rejectDigits: boolean; _rejectSubDigits: boolean; _digitIsSub: boolean }
       _oscParser: { _state: number; _id: number; _active?: { _data?: string; _hitLimit?: boolean }[] }
       _dcsParser: { _ident: number; _active?: { _data?: string; _hitLimit?: boolean }[] }
     }
     _utf8Decoder: { interim: Uint8Array }
+    _stringDecoder: { _interim: number }
   }
   _charsetService: { glevel: number; charset: unknown; _charsets: unknown[] }
   coreService: { isCursorHidden: boolean; decPrivateModes: { cursorStyle?: string; cursorBlink?: boolean } }
@@ -74,9 +76,7 @@ export function extendedKey(terminal: Term, fg: number, extended: Extended | nul
 
 /** A cell's identity: content (empty is not a space, nor any character), width, attributes, link. */
 export function cellKey(terminal: Term, cell: Cell, links?: LinkNames): string {
-  // Extended attributes with no underline and no link draw nothing: the same as none.
-  const extended = extendedKey(terminal, cell.fg, cell.bg & HAS_EXTENDED ? cell.extended : null, links)
-  const key = extended === '-:' ? '' : extended
+  const key = extendedKey(terminal, cell.fg, cell.bg & HAS_EXTENDED ? cell.extended : null, links)
   return JSON.stringify([cell.getChars() === '' ? null : cell.getChars(), cell.getWidth(), cell.fg | 0, cell.bg & ~HAS_EXTENDED, key])
 }
 /** Cells of a row in a state: separated by a character no cell key contains. */
@@ -85,19 +85,22 @@ const CELLS = '\u0001'
 // Charsets compare by identity: each designation xterm knows, named once from a terminal the caller builds.
 const charsetNames: { code: string; map: unknown }[] = []
 export const CHARSET_CODES = ['0', 'A', 'B', '4', 'C', '5', 'R', 'f', 'Q', '9', 'K', 'Y', 'E', '6', 'Z', 'H', '7', '=']
-/** Learn xterm's charset maps from `scratch` (a profiled terminal), once. */
-export function learnCharsets(scratch: Term): void {
+/** Learn xterm's charset maps (shared objects) once, from a scratch terminal built like every other. */
+function learnCharsets(): void {
   if (charsetNames.length) return
+  const scratch = new headless.Terminal({ cols: 2, rows: 1, ...TERMINAL_OPTIONS })
+  applyTerminalProfile(scratch).setLive(false)
   const core = internals(scratch)
   for (const code of CHARSET_CODES) {
     core._writeBuffer.writeSync(`\x1b(${code}`)
     const map = core._charsetService._charsets[0]
     if (map && !charsetNames.some((known) => known.map === map)) charsetNames.push({ code, map })
   }
-  core._writeBuffer.writeSync('\x1b(B')
+  scratch.dispose()
 }
 export function charsetName(map: unknown): string {
   if (!map) return 'US'
+  learnCharsets()
   return charsetNames.find((known) => known.map === map)?.code ?? '?'
 }
 
@@ -158,8 +161,10 @@ export function fullState(terminal: Term) {
     // xterm's decoder and held back by the profile), and the payload an
     // OSC or DCS string has collected so far.
     parser: `${parser.currentState},${parser._parseStack.state},${parser.precedingJoinState}`,
-    sequence: parser.currentState ? `${JSON.stringify(parser._params.toArray())}:${parser._collect}` : '-',
-    utf8: `${[...handler._utf8Decoder.interim].join('.')}+${carriedUtf8(terminal)}`,
+    // Params with their continuation flags (past 32 params, digits are rejected).
+    sequence: parser.currentState ? `${JSON.stringify(parser._params.toArray())}:${parser._collect}:${+parser._params._rejectDigits}${+parser._params._rejectSubDigits}${+parser._params._digitIsSub}` : '-',
+    // Partial characters: UTF-8 in xterm's decoder and the bytes the profile holds back; a lone surrogate from a string write.
+    utf8: `${[...handler._utf8Decoder.interim].join('.')}+${carriedUtf8Bytes(terminal).join('.')}+${handler._stringDecoder._interim}`,
     osc: parser._oscParser._state ? `${parser._oscParser._state}:${parser._oscParser._id}:${payloads(parser._oscParser._active)}` : '-',
     dcs: parser._dcsParser._active?.length ? `${parser._dcsParser._ident}:${payloads(parser._dcsParser._active)}` : '-',
   }

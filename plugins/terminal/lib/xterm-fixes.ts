@@ -211,14 +211,16 @@ export function incompleteUtf8Tail(data: Uint8Array): number {
   return 0
 }
 
-const carried = new WeakMap<object, () => number>()
+const carried = new WeakMap<object, () => Uint8Array>()
 /**
  * Bytes of an incomplete UTF-8 sequence held back from `terminal`'s parser
  * (patchUtf8Boundaries), as of the parser's position (read it from a write
  * callback or after one): parser state outside xterm, so a checkpoint waits
  * for it to complete.
  */
-export function carriedUtf8(terminal: object): number { return carried.get(terminal)?.() ?? 0 }
+export function carriedUtf8(terminal: object): number { return carried.get(terminal)?.().length ?? 0 }
+/** The bytes themselves (two held tails of the same length can complete differently). */
+export function carriedUtf8Bytes(terminal: object): number[] { return [...(carried.get(terminal)?.() ?? [])] }
 
 /** Largest piece handed to xterm: below its own 128 KiB parse split, so it never cuts a codepoint itself. */
 export const WRITE_PIECE = 64 * 1024
@@ -240,12 +242,15 @@ export function patchUtf8Boundaries(terminal: { write(data: string | Uint8Array,
   // The tail carried as of where the parser is (not where the writer is: a
   // later write may already have taken it). Each write publishes the carry it
   // left once it is parsed, so a callback sees the state at its own position.
-  let carriedAtParse = 0
+  let carriedAtParse: Uint8Array = new Uint8Array(0)
+  // A reset discards the carry; publications queued before it are stale.
+  let generation = 0
   carried.set(terminal, () => carriedAtParse)
   // Pieces in order; the last carries the caller's callback, so it fires after all of them are parsed.
   const pieces = (data: string | Uint8Array, boundary: (end: number) => number, callback?: () => void) => {
-    const left = carry?.length ?? 0
-    const done = () => { carriedAtParse = left; callback?.() }
+    const left = carry ? carry.slice() : new Uint8Array(0)
+    const at = generation
+    const done = () => { if (at === generation) carriedAtParse = left; callback?.() }
     if (data.length === 0) { write(data, done); return }
     for (let offset = 0; offset < data.length;) {
       let end = Math.min(offset + WRITE_PIECE, data.length)
@@ -279,7 +284,7 @@ export function patchUtf8Boundaries(terminal: { write(data: string | Uint8Array,
       return end
     }, callback)
   }
-  terminal.reset = () => { carry = undefined; carriedAtParse = 0; reset() }
+  terminal.reset = () => { carry = undefined; carriedAtParse = new Uint8Array(0); generation++; reset() }
 }
 
 const tabStopState = new WeakMap<object, { get(): number | undefined; set(value: number | undefined): void }>()

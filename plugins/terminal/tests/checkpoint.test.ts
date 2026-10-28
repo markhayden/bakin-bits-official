@@ -69,6 +69,7 @@ const NAMED: { name: string; cols: number; rows: number; before: Uint8Array; aft
   { name: 'an open link that survived SGR 0', cols: 20, rows: 3, before: enc('\x1b]8;;https://a.example\x1b\\on\x1b[0m'), after: enc('ward\x1b]8;;\x1b\\'), atCut: true },
   // DECRC restores a bg without HAS_EXTENDED while the pen keeps its link: latent until an SGR sets the bit.
   { name: 'a latent link after DECRC, revived by an SGR', cols: 20, rows: 3, before: enc('\x1b7\x1b]8;;https://a.example\x1b\\a\x1b8'), after: enc('b\x1b[4mc\x1b]8;;\x1b\\'), atCut: true },
+  { name: 'a curly underline held by DECRC with the underline bit clear (the renderer still draws it)', cols: 20, rows: 3, before: enc('\x1b]8;;https://a.example\x1b\\\x1b7\x1b]8;;\x1b\\\x1b[4:3m\x1b8A\x1b[0m'), after: enc('B') },
   { name: 'a saved cursor with protection on', cols: 12, rows: 3, before: enc('\x1b[1"q\x1b7\x1b[0"qx'), after: enc('\x1b8P\x1b[?2K'), atCut: true },
   { name: 'a link the program named like a generated one', cols: 20, rows: 3, before: enc('\x1b]8;;https://a.example\x1b\\A\x1b]8;;\x1b\\'), after: enc('\x1b]8;id=bakin-1;https://a.example\x1b\\B\x1b]8;;\x1b\\'), atCut: true },
   { name: 'custom tab stops then the alternate screen', cols: 20, rows: 3, before: enc('\x1b[3g\x1b[1;5H\x1bH\x1b[H'), after: enc('\x1b[?1049h\tX') },
@@ -129,6 +130,28 @@ describe('checkpoint: what bytes cannot carry', () => {
     for (const term of [reference, viewer]) await write(term, '\x1b[?1049l\x1b[H\tX')
     expect(stateDiff(fullState(reference), fullState(viewer))).toBeNull()
     expect(shown(viewer)).toEqual(shown(reference))
+  })
+})
+
+describe('checkpoint: partial input is never accepted', () => {
+  it('a lone high surrogate from a string write', async () => {
+    const term = terminal(20, 3)
+    await write(term, '\ud83d')
+    expect('rejected' in takeCheckpoint(term)).toBe(true)
+  })
+  it('two held UTF-8 tails of the same length compare different', async () => {
+    const a = terminal(20, 3)
+    const b = terminal(20, 3)
+    await write(a, Uint8Array.of(0xe4))
+    await write(b, Uint8Array.of(0xe5))
+    expect(stateDiff(fullState(a), fullState(b))).toContain('utf8')
+  })
+  it('CSI continuation flags (past 32 params) compare different', async () => {
+    const a = terminal(20, 3)
+    const b = terminal(20, 3)
+    await write(a, '\x1b[' + '0;'.repeat(31) + '0')
+    await write(b, '\x1b[' + '0;'.repeat(31) + '0;')
+    expect(stateDiff(fullState(a), fullState(b))).toContain('sequence')
   })
 })
 

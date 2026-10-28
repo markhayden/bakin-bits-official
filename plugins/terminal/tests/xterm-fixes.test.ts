@@ -183,6 +183,13 @@ describe('UTF-8 chunk boundaries', () => {
     await new Promise<void>((resolve) => terminal.write('', resolve))
     expect(seen).toEqual([1, 0])
   })
+  it('a reset inside a queued callback is not undone by a later publication', async () => {
+    const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
+    applyTerminalProfile(terminal)
+    terminal.write(Uint8Array.of(0xe4), () => terminal.reset())
+    await new Promise<void>((resolve) => terminal.write('', resolve))
+    expect(carriedUtf8(terminal)).toBe(0)
+  })
   it('an empty write (a barrier: settled(), a checkpoint attempt) keeps a carried tail', async () => {
     const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
     applyTerminalProfile(terminal)

@@ -17,7 +17,7 @@ import headless from '@xterm/headless'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
 import { altEnteredCols, carriedUtf8, setAltEnteredCols } from './xterm-fixes'
 import {
-  cellKey, charsetName, fullState, HAS_EXTENDED, internals, learnCharsets, nullCell, rawUnderlineStyle, savedKey, stateDiff, tabStops, UNDERLINE,
+  cellKey, charsetName, fullState, HAS_EXTENDED, internals, nullCell, rawUnderlineStyle, savedKey, stateDiff, tabStops, UNDERLINE,
   type Buffer, type Extended, type Term,
 } from './terminal-state'
 
@@ -50,7 +50,6 @@ let defaultSlot = ''
 function learn(): void {
   if (defaultBlank) return
   const terminal = scratch(2, 1, 0)
-  learnCharsets(terminal)
   const core = internals(terminal)
   defaultBlank = cellKey(terminal, core.buffers.normal.lines.get(0)!.loadCell(0, nullCell(terminal)))
   defaultSlot = savedKey(core.buffers.normal)
@@ -279,13 +278,15 @@ export function serialize(terminal: Term): string {
 }
 
 /**
- * Between sequences, with no partial UTF-8 (in xterm's decoder or held back
- * by the profile): a point where bytes can rebuild the parser exactly.
+ * Between sequences, with no partial character (UTF-8 in xterm's decoder or
+ * held back by the profile, or a lone surrogate from a string write): a point
+ * where bytes can rebuild the parser exactly.
  */
 export function quiescent(terminal: Term): boolean {
   const handler = internals(terminal)._inputHandler
   const parser = handler._parser
   return parser.currentState === 0 && parser._parseStack.state === 0 && handler._utf8Decoder.interim[0] === 0 && carriedUtf8(terminal) === 0
+    && handler._stringDecoder._interim === 0
 }
 
 /** Set what the bytes cannot carry, once they are parsed. */

@@ -13,14 +13,42 @@ const SCROLLBACK = 200
 
 async function stream(seed: number, cols: number, rows: number) {
   const { bytes, events, used, r } = generate(seed, cols, rows)
+  // The one-shot reference first: the output between resizes concatenated
+  // and cut afresh (so no original chunk boundary survives), its state kept
+  // at every resize boundary to compare the replica there too.
+  const reference = emulator(cols, rows, SCROLLBACK)
+  const chunker = prng(seed ^ 0x5eed)
+  const atBoundary: ReturnType<typeof fullState>[] = []
+  let pending: Uint8Array[] = []
+  const flush = async () => {
+    const all = new Uint8Array(pending.reduce((n, part) => n + part.length, 0))
+    let at = 0
+    for (const part of pending) { all.set(part, at); at += part.length }
+    pending = []
+    for (let start = 0; start < all.length;) { const size = 1 + chunker.int(17); reference.write(all.subarray(start, start + size)); start += size }
+    await settled(reference)
+  }
+  for (const event of events) {
+    if (event.kind === 'output') { pending.push(event.bytes); continue }
+    await flush()
+    atBoundary.push(fullState(reference))
+    apply(reference, event)
+  }
+  await flush()
   const replica = new FuzzReplica(cols, rows, SCROLLBACK, 120)
   const joiners: { viewer: Awaited<ReturnType<FuzzReplica['join']>>['viewer']; offset: number; category: string }[] = []
   const categories: Record<string, number> = {}
   const cuts: number[] = []
   const problems: string[] = []
   let offset = 0
+  let boundary = 0
   for (let i = 0; i < events.length; i++) {
     const event = events[i]!
+    if (event.kind === 'resize') {
+      await settled(replica.term)
+      const drift = stateDiff(atBoundary[boundary++]!, fullState(replica.term))
+      if (drift) problems.push(`seed ${seed} ${cols}x${rows} replica vs reference before resize ${boundary}: ${drift}`)
+    }
     replica.apply(event)
     for (const joiner of joiners) apply(joiner.viewer, event)
     if (event.kind === 'output') offset += event.bytes.length
@@ -48,14 +76,6 @@ async function stream(seed: number, cols: number, rows: number) {
     }
   }
   await settled(replica.term)
-  // The one-shot reference: the same bytes, chunked differently (and the same resizes, in order).
-  const reference = emulator(cols, rows, SCROLLBACK)
-  const chunker = prng(seed ^ 0x5eed)
-  for (const event of events) {
-    if (event.kind === 'resize') { apply(reference, event); continue }
-    for (let at = 0; at < event.bytes.length;) { const size = 1 + chunker.int(17); reference.write(event.bytes.subarray(at, at + size)); at += size }
-  }
-  await settled(reference)
   const drift = stateDiff(fullState(reference), fullState(replica.term))
   if (drift) problems.push(`seed ${seed} ${cols}x${rows} replica vs reference: ${drift}`)
   for (const joiner of joiners) {
