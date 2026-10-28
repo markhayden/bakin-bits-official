@@ -5,7 +5,8 @@
  */
 [data-bakin-plugin="terminal"] .terminal-pane {
   overflow: auto;
-  overscroll-behavior: contain;
+  /* No rubber-band past the grid's edges (and no chaining to the page). */
+  overscroll-behavior: none;
   touch-action: pan-x pan-y;
   /* xterm's layers carry z-indexes; keep them below the view actions. */
   isolation: isolate;
