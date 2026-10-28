@@ -11,7 +11,7 @@ import { guardParser, patchEraseAbove } from '../lib/xterm-fixes'
 import { clientId } from './api'
 import { enableWebgl } from './terminal-renderer'
 import { TerminalSocketClient, type InputResult, type Presence } from './terminal-socket'
-import { pasteBytes, type ModifierState, type TerminalInputHandle } from './terminal-input'
+import { pasteText, type ModifierState, type TerminalInputHandle } from './terminal-input'
 import { ModifierInput } from './modifier-input'
 import { BASE_FONT, clampFont, fitWidthFont, minFont, pinchFont, resizePlan, reveal, revealClearOf, screenDevice, storedFont, storeFont } from './terminal-view'
 import '@xterm/xterm/css/xterm.css'
@@ -40,7 +40,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   /** Show the corner keyboard button (a touch screen with the keyboard down). */
   offerKeyboard?: boolean
   inputEnabled: boolean; inputHandle: RefObject<TerminalInputHandle | null>; viewHandle: RefObject<TerminalViewHandle | null>; onModifiersChange(state: ModifierState): void;
-  session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string): void; onClaim(data: string): void; onSession(session: Session): void; onPresence(presence: Presence): void; onResult(result: InputResult): void
+  session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string, paste?: boolean): void; onClaim(data: string): void; onSession(session: Session): void; onPresence(presence: Presence): void; onResult(result: InputResult): void
   /** The renderer hit a parser exception: this screen has stopped and must be rebuilt. */
   onRendererFailed(): void
 }) {
@@ -224,12 +224,11 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
         if (ready.current && callbacks.current.inputEnabled) modifiers.toggle(modifier, action)
       },
       reset,
-      send: (generation, data) => socket.current?.input(generation, data) ?? false,
-      paste(text, enter) {
+      send: (generation, data, paste) => socket.current?.input(generation, data, paste) ?? false,
+      pasteText(text) {
         if (!ready.current || !callbacks.current.inputEnabled || !callbacks.current.writable) return false
-        // Through xterm's input, like a key: the same queue, ownership and generation checks.
-        modifiers.text(pasteBytes(text, term.modes.bracketedPasteMode, enter), (bytes) => term.input(bytes, true))
-        return true
+        clearOnce()
+        return pasteText(text)
       },
     }
     viewHandle.current = {
@@ -272,7 +271,9 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     term.onData((data) => {
       if (callbacks.current.writable) {
         if (!ready.current || !callbacks.current.inputEnabled) { clearOnce(); return }
-        callbacks.current.onInput(modifiers.data(data))
+        // A paste goes as one (the server has tmux bracket it only if the program asked).
+        const paste = modifiers.isPasting
+        callbacks.current.onInput(modifiers.data(data), paste)
       }
       else if (data && data.charCodeAt(0) >= 0x20) callbacks.current.onClaim(data)
     })

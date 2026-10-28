@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { Button } from '@makinbakin/sdk/ui'
-import { ComposeSheet } from './compose-sheet'
+import { ComposeSheet, type PasteOutcome } from './compose-sheet'
 import { Joystick } from './joystick'
 import { CONTROL_LABELS, CONTROL_SHORTCUTS, keyFace, SHEET_KEYS, type ArrowKey, type Modifier, type ModifierState, type TerminalKey } from './terminal-input'
 import type { EditingSession } from './editing-session'
@@ -83,16 +83,19 @@ const MORE_ICON = <svg width="22" height="22" viewBox="0 0 24 24" fill="currentC
  * touching them neither ends the editing session nor drops a modifier.
  * Hide keyboard works even while sending is disabled.
  */
-export function KeyBar({ sessionId, session, disabled, modifiers, onKey, onModifier, onSheet, onCompose, onPaste, onKeyboard, onHide }: {
-  sessionId: string; session: Exclude<EditingSession, 'idle'>; disabled: boolean; modifiers: ModifierState
+export function KeyBar({ session, disabled, modifiers, draft, onKey, onModifier, onSheet, onCompose, onDraft, onPaste, onKeyboard, onHide }: {
+  session: Exclude<EditingSession, 'idle'>; disabled: boolean; modifiers: ModifierState
+  /** This session's compose draft, and whether this browser can keep it after the page is left. */
+  draft: { text: string; kept: boolean }
   onKey(key: TerminalKey): void
   onModifier(modifier: Modifier, action: 'tap' | 'lock'): void
   /** Open the key sheet (the keyboard goes down). */
   onSheet(): void
   /** Open the compose sheet (its textarea takes the keyboard within this tap). */
   onCompose(): void
-  /** Send compose text as a paste; true once it went. */
-  onPaste(text: string, enter: boolean): boolean
+  onDraft(text: string): void
+  /** Send compose text as a paste. */
+  onPaste(text: string, enter: boolean): PasteOutcome
   /** Back to the keyboard from the sheet (focuses the terminal within this tap). */
   onKeyboard(): void
   onHide(): void
@@ -116,8 +119,13 @@ export function KeyBar({ sessionId, session, disabled, modifiers, onKey, onModif
     // first usable key, or the sheet itself while sending is disabled.
     if (event.detail === 0) requestAnimationFrame(() => (sheet.current?.querySelector<HTMLButtonElement>('button:not(:disabled)') ?? sheet.current)?.focus())
   }
-  // Escape anywhere in the bar or a sheet goes back to the keyboard while one is open.
-  const escape = (event: React.KeyboardEvent) => { if (sheetOpen && event.key === 'Escape') { event.preventDefault(); onKeyboard() } }
+  // Escape anywhere in the bar or a sheet goes back to the keyboard while one is open
+  // (Recipes/TerminalInput): not inside a composition (an input method's own Escape), nor one already claimed.
+  const escape = (event: React.KeyboardEvent) => {
+    if (!sheetOpen || event.key !== 'Escape' || event.defaultPrevented || event.nativeEvent.isComposing) return
+    event.preventDefault()
+    onKeyboard()
+  }
   return <div className="terminal-key-accessory" data-terminal-keys="" onKeyDown={escape}>
     <div role="group" aria-label="Terminal keys" className="terminal-key-bar">
       {sendKey('Esc')}
@@ -131,7 +139,7 @@ export function KeyBar({ sessionId, session, disabled, modifiers, onKey, onModif
       <span aria-hidden="true" className="terminal-key-divider" />
       <Keycap label="Hide keyboard" face={HIDE_ICON} tone="function" className="terminal-keycap-hide" onPress={onHide} />
     </div>
-    {session === 'compose' && <ComposeSheet sessionId={sessionId} disabled={disabled} textarea={compose} onSend={onPaste} />}
+    {session === 'compose' && <ComposeSheet draft={draft.text} kept={draft.kept} disabled={disabled} textarea={compose} onDraft={onDraft} onSend={onPaste} />}
     {session === 'sheet' && <div ref={sheet} role="region" aria-label="More keys" tabIndex={-1} className="terminal-key-sheet">
       <div role="group" aria-label="Text" className="terminal-key-grid terminal-key-grid-labelled">
         <Keycap label="Compose" face={<><span className="terminal-keycap-face">✎</span><span className="terminal-keycap-label">Compose</span></>}

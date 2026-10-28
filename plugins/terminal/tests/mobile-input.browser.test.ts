@@ -317,13 +317,12 @@ browserTest('the compose sheet sends one paste (bracketed only when the program 
     await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.terminal-key-bar button')?.disabled === false)
     textarea = await openCompose()
     expect(await textarea.inputValue()).toBe('a draft')
-    // One paste (bracketed by the viewer, whose mode is tmux's), then Enter; the shell runs it.
+    // One paste (marked as one: tmux brackets it if the program asked), then Return; the shell runs it.
     await textarea.fill("printf 'COMPOSED_%s\\n' ONE")
-    const before = socket.typed().length
+    const before = socket.inputs().length
     await page.getByRole('button', { name: 'Paste + Enter', exact: true }).tap()
     await output('COMPOSED_ONE')
-    const sentBracketed = socket.typed().slice(before)
-    expect(sentBracketed.startsWith('\x1b[200~') && sentBracketed.includes('\x1b[201~\r')).toBe(true)
+    expect(socket.inputs().slice(before).map((frame) => [frame.data, frame.paste ?? false])).toEqual([["printf 'COMPOSED_%s\\n' ONE", true], ['\r', false]])
     // Paste + Enter puts the keyboard away (the response needs the screen); the draft is gone.
     await keys.waitFor({ state: 'detached' })
     // A program without bracketed paste (cat -v shows the markers if they arrive): tmux, which
@@ -349,6 +348,51 @@ browserTest('the compose sheet sends one paste (bracketed only when the program 
     try { await terminate(page, endpoint, headers, id) } finally { await browser.close() }
   }
 }, 90000)
+
+browserTest('a compose paste the server refuses keeps its draft, and says so', async () => {
+  const browser = await launchChromium()
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+  page.setDefaultTimeout(10000)
+  const endpoint = new URL('/api/plugins/terminal/session', process.env.TERMINAL_PREVIEW_URL!).href
+  const headers = { 'X-Bakin-Terminal-Client': 'mobile-compose-refused-test' }
+  let id: string | undefined
+  // The next paste frame is sent for a stale generation, which the server refuses.
+  let refuseNext = true
+  await page.routeWebSocket('**/api/plugins/terminal/socket**', (socket) => {
+    const server = socket.connectToServer()
+    socket.onMessage((message) => {
+      const frame = typeof message === 'string' ? JSON.parse(message) as Record<string, unknown> : undefined
+      if (frame?.type === 'input' && frame.paste && refuseNext) { refuseNext = false; frame.generation = 99_999; server.send(JSON.stringify(frame)); return }
+      server.send(message)
+    })
+  })
+  await fakeViewport(page, 390, 844)
+  try {
+    const created = await page.request.post(endpoint + 's', { headers, data: { title: 'Compose refused', cwd: '/tmp' } })
+    id = (await created.json()).id
+    await page.goto(new URL('/terminal/' + id, endpoint).href)
+    const keys = page.getByRole('group', { name: 'Terminal keys', exact: true })
+    await page.getByRole('button', { name: 'Show keyboard', exact: true }).tap()
+    await keys.waitFor()
+    await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.terminal-key-bar button')?.disabled === false)
+    await keys.getByRole('button', { name: 'More keys', exact: true }).tap()
+    await page.getByRole('region', { name: 'More keys' }).getByRole('button', { name: 'Compose', exact: true }).tap()
+    const textarea = page.getByRole('textbox', { name: 'Text to send', exact: true })
+    await textarea.fill('REFUSED_DRAFT')
+    await page.getByRole('button', { name: 'Paste', exact: true }).tap()
+    await page.getByText(/Your compose text is kept/).waitFor()
+    // Back in compose (after the page refreshed the session), the text is still there.
+    await page.reload()
+    await page.getByRole('button', { name: 'Show keyboard', exact: true }).tap()
+    await keys.waitFor()
+    await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.terminal-key-bar button')?.disabled === false)
+    await keys.getByRole('button', { name: 'More keys', exact: true }).tap()
+    await page.getByRole('region', { name: 'More keys' }).getByRole('button', { name: 'Compose', exact: true }).tap()
+    expect(await page.getByRole('textbox', { name: 'Text to send', exact: true }).inputValue()).toBe('REFUSED_DRAFT')
+  } finally {
+    try { await terminate(page, endpoint, headers, id) } finally { await browser.close() }
+  }
+}, 60000)
 
 browserTest('ownership changes and reconnects release the modifiers and disable the sending keys', async () => {
   const browser = await launchChromium()

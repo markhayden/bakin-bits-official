@@ -104,18 +104,26 @@ export class TerminalSocketClient {
     this.socket = undefined
   }
 
-  /** Queue input for `generation`; false when it cannot be sent (not synced). */
-  input(generation: number, data: string): boolean {
+  /**
+   * Queue input for `generation`: the sequence of the envelope that carries
+   * it (its result names it), or false when it cannot be sent (not synced).
+   * A `paste` travels alone, after everything queued before it, and the
+   * server delivers it as tmux pastes (lib/paste.ts).
+   */
+  input(generation: number, data: string, paste = false): number | false {
     if (!this.synced || !data) return false
-    if (this.pending && this.pending.generation !== generation) this.flush()
-    if (this.inFlight.size === 0 && !this.pending) {
-      this.envelope(generation, data)
-      return true
+    if (paste) {
+      this.flush()
+      return this.envelope(generation, data, true)
     }
+    if (this.pending && this.pending.generation !== generation) this.flush()
+    if (this.inFlight.size === 0 && !this.pending) return this.envelope(generation, data)
     this.pending = this.pending ? { generation, data: this.pending.data + data } : { generation, data }
+    // Pending input travels in the next envelope.
+    const carrier = this.viewerSeq + 1
     if (this.pending.data.length >= (this.options.coalesceBytes ?? 4096)) this.flush()
     else this.flushTimer ??= setTimeout(() => this.flush(), this.options.coalesceMs ?? 8)
-    return true
+    return carrier
   }
 
   /** Make this screen the session's size authority at `cols`×`rows`. */
@@ -132,10 +140,11 @@ export class TerminalSocketClient {
     return true
   }
 
-  private envelope(generation: number, data: string): void {
+  private envelope(generation: number, data: string, paste = false): number {
     const viewerSeq = ++this.viewerSeq
     this.inFlight.set(viewerSeq, generation)
-    this.socket?.send(JSON.stringify({ type: 'input', generation, viewerSeq, data }))
+    this.socket?.send(JSON.stringify({ type: 'input', generation, viewerSeq, data, ...(paste ? { paste: true } : {}) }))
+    return viewerSeq
   }
 
   private flush(): void {

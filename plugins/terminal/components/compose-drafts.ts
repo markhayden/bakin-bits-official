@@ -1,10 +1,12 @@
 /**
- * Compose drafts (spec D9 item 2): one per session, in this browser's
- * storage, which may be absent or full — a draft then lives only as long
- * as the sheet. Bounded: a longer draft is not kept.
+ * Compose drafts (spec D9 item 2): one per session, kept in this browser's
+ * storage so they survive leaving the page. Storage may be absent or full,
+ * and a draft longer than one paste can carry is not stored: the page then
+ * keeps it only while it is open (and says so).
  */
-export const DRAFT_LIMIT = 64 * 1024
+export const DRAFT_LIMIT_BYTES = 65536
 const key = (sessionId: string) => `bakin-terminal-compose:${sessionId}`
+const bytes = (text: string) => new TextEncoder().encode(text).length
 
 export function readDraft(sessionId: string, storage: () => Storage = () => window.localStorage): string {
   try {
@@ -15,12 +17,15 @@ export function readDraft(sessionId: string, storage: () => Storage = () => wind
   }
 }
 
-/** Keep `text` as the session's draft; empty (or past the limit) removes it. */
-export function writeDraft(sessionId: string, text: string, storage: () => Storage = () => window.localStorage): void {
+/** Store `text` as the session's draft (empty removes it); false when it could not be kept. */
+export function writeDraft(sessionId: string, text: string, storage: () => Storage = () => window.localStorage): boolean {
   try {
-    if (!text || text.length > DRAFT_LIMIT) storage().removeItem(key(sessionId))
-    else storage().setItem(key(sessionId), text)
+    // Too long to store: the stored copy would be stale, so it goes too.
+    if (!text || bytes(text) > DRAFT_LIMIT_BYTES) { storage().removeItem(key(sessionId)); return !text }
+    storage().setItem(key(sessionId), text)
+    return true
   } catch {
-    // Storage unavailable or full: the draft stays in the open sheet only.
+    // Storage unavailable or full: the draft lives only in the open page.
+    return false
   }
 }

@@ -258,10 +258,10 @@ export class Sessions {
    * several writable viewers never collide on it. Agents keep `write`'s
    * explicit sequence.
    */
-  writeNext(id: string, principal: Principal, generation: number, data: string): Promise<Session> {
-    return this.run(() => this.writeUnlocked(id, principal, generation, this.get(id, principal).inputSequence + 1, data))
+  writeNext(id: string, principal: Principal, generation: number, data: string, options: { paste?: boolean } = {}): Promise<Session> {
+    return this.run(() => this.writeUnlocked(id, principal, generation, this.get(id, principal).inputSequence + 1, data, options.paste ?? false))
   }
-  private async writeUnlocked(id: string, principal: Principal, generation: number, sequence: number, data: string): Promise<Session> {
+  private async writeUnlocked(id: string, principal: Principal, generation: number, sequence: number, data: string, paste = false): Promise<Session> {
     const session = this.get(id, principal)
     authorize(session, principal, this.enabled(), true, generation)
     if (session.state !== 'running') throw new TerminalError('Session has exited')
@@ -274,7 +274,7 @@ export class Sessions {
     session.lastActivityAt = this.now()
     this.save(session)
     try {
-      await this.driver.write(id, data)
+      await this.driver.write(id, data, paste)
     } catch (error) {
       throw new DeliveryUncertainError(error instanceof Error ? error.message : String(error))
     }

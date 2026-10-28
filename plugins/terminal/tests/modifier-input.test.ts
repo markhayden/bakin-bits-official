@@ -114,14 +114,13 @@ describe('modifier input', () => {
   })
 })
 
-describe('compose text', () => {
-  it('is sent untouched; a one-shot modifier ends, a lock stays', () => {
-    const { input } = setup()
-    const sent: string[] = []
-    input.toggle('ctrl', 'tap')
-    input.toggle('alt', 'lock')
-    input.text('c', (bytes) => sent.push(input.data(bytes)))
-    expect(sent).toEqual(['c'])
-    expect(input.modifiers).toEqual({ ctrl: 'off', alt: 'locked' })
+describe('a paste event', () => {
+  it('says the next data is pasted, until the event has passed', () => {
+    const { input, run } = setup()
+    expect(input.isPasting).toBe(false)
+    input.paste()
+    expect(input.isPasting).toBe(true)
+    run(0)
+    expect(input.isPasting).toBe(false)
   })
 })

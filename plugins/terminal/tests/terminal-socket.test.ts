@@ -53,7 +53,8 @@ describe('TerminalSocketClient', () => {
     expect(socket().sent[0]).toEqual({ type: 'hello', clientId: 'tab-0123456789abcdef' })
     expect(client.input(1, 'early')).toBe(false)
     socket().server({ type: 'sync', epoch: 1, session, snapshot: '', cursor: 0 })
-    expect(client.input(1, 'ls')).toBe(true)
+    // The envelope that carries it: its result names it.
+    expect(client.input(1, 'ls')).toBe(1)
     expect(socket().of('input')).toEqual([{ type: 'input', generation: 1, viewerSeq: 1, data: 'ls' }])
   })
 
@@ -82,6 +83,18 @@ describe('TerminalSocketClient', () => {
     socket().server({ type: 'result', viewerSeq: 1, status: 'accepted' })
     await until(() => socket().of('input').length === 3, 'batches flush in order')
     expect(socket().of('input').map((frame) => [frame.generation, frame.viewerSeq, frame.data])).toEqual([[1, 1, 'a'], [1, 2, 'bc'], [2, 3, 'd']])
+  })
+
+  it('a paste travels alone, after the input queued before it; each input names the envelope that carries it', () => {
+    const { client, socket } = setup()
+    client.connect(); socket().open()
+    socket().server({ type: 'sync', epoch: 1, session, snapshot: '', cursor: 0 })
+    expect(client.input(1, 'a')).toBe(1)
+    // In flight: b waits, to travel in the next envelope.
+    expect(client.input(1, 'b')).toBe(2)
+    expect(client.input(1, 'pasted\rtext', true)).toBe(3)
+    expect(client.input(1, 'c')).toBe(4)
+    expect(socket().of('input').map((frame) => [frame.viewerSeq, frame.data, frame.paste ?? false])).toEqual([[1, 'a', false], [2, 'b', false], [3, 'pasted\rtext', true]])
   })
 
   it('reports rejected and uncertain results and drops queued input after a rejection', async () => {

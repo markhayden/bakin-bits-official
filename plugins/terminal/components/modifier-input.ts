@@ -49,6 +49,8 @@ export class ModifierInput {
   constructor(private readonly notify: (state: ModifierState) => void, private readonly time: Scheduler = realTime) {}
 
   get modifiers(): ModifierState { return this.state }
+  /** Within a paste event: the next data is the pasted text. */
+  get isPasting(): boolean { return this.pasting }
 
   private set(next: ModifierState) {
     if (next === this.state) return
@@ -72,13 +74,6 @@ export class ModifierInput {
   /** A bar key: encode it with the current modifiers, consume the one-shot ones, and let `deliver` send the bytes untouched. */
   key(key: TerminalKey, application: boolean, deliver: (bytes: string) => void) {
     const bytes = encodeTerminalKey(key, application, activeModifiers(this.state))
-    this.clearOnce()
-    this.passthrough = true
-    try { deliver(bytes) } finally { this.passthrough = false }
-  }
-
-  /** Compose text, already encoded: sent untouched; one-shot modifiers end, locks stay. */
-  text(bytes: string, deliver: (bytes: string) => void) {
     this.clearOnce()
     this.passthrough = true
     try { deliver(bytes) } finally { this.passthrough = false }

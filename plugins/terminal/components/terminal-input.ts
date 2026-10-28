@@ -129,23 +129,10 @@ export function consumeModifiers(data: string, mods: ActiveModifiers, source: 't
   return control(data) ?? data
 }
 
-const PASTE_START = '\x1b[200~'
-const PASTE_END = '\x1b[201~'
-/**
- * Compose text as a terminal receives a paste (spec D9 item 2): line breaks
- * become CR; while the program has bracketed paste on, the text is wrapped
- * in its markers, with any marker inside it removed (repeatedly, so none
- * can be rebuilt from the pieces) so the text cannot end the paste early.
- * Paste + Enter adds a CR after it.
- */
-export function pasteBytes(text: string, bracketed: boolean, enter: boolean): string {
-  let body = text.replace(/\r?\n/g, '\r')
-  if (bracketed) {
-    for (let previous = ''; previous !== body;) { previous = body; body = body.split(PASTE_START).join('').split(PASTE_END).join('') }
-    body = PASTE_START + body + PASTE_END
-  }
-  return enter ? body + '\r' : body
-}
+/** Compose text as a terminal receives a paste (spec D9 item 2): line breaks become CR, as xterm's own paste makes them. */
+export const pasteText = (text: string): string => text.replace(/\r?\n/g, '\r')
+/** The most input one envelope may carry (the server's bound). */
+export const INPUT_LIMIT_BYTES = 65536
 
 export interface TerminalInputHandle {
   /** Focus the terminal's input (opens the on-screen keyboard when called from a tap). */
@@ -158,12 +145,16 @@ export interface TerminalInputHandle {
   modifier(modifier: Modifier, action?: 'tap' | 'lock'): void
   /** Clear every modifier, locks included. */
   reset(): void
-  /** Send typed/pasted text for `generation` over the viewer socket; false when not connected. */
-  send(generation: number, data: string): boolean
   /**
-   * Compose text through the terminal's input, as a paste (bracketed when
-   * the program asked for it), then Enter if `enter`; false when input is
-   * not possible now (not connected, or not this viewer's to type).
+   * Send typed/pasted text for `generation` over the viewer socket: the
+   * sequence of the envelope that carries it, or false when not connected.
+   * A `paste` is delivered as tmux pastes (lib/paste.ts).
    */
-  paste(text: string, enter: boolean): boolean
+  send(generation: number, data: string, paste?: boolean): number | false
+  /**
+   * Compose text ready to send as a paste (pasteText), ending a one-shot
+   * modifier; false when input is not possible now (not connected, or not
+   * this viewer's to type).
+   */
+  pasteText(text: string): string | false
 }

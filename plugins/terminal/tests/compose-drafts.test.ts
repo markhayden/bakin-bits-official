@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { DRAFT_LIMIT, readDraft, writeDraft } from '../components/compose-drafts'
+import { DRAFT_LIMIT_BYTES, readDraft, writeDraft } from '../components/compose-drafts'
 
 function memory() {
   const items = new Map<string, string>()
@@ -20,17 +20,19 @@ describe('compose drafts', () => {
     expect(readDraft('a', () => storage)).toBe('')
     expect(storage.items.size).toBe(1)
   })
-  it('does not keep a draft past the limit', () => {
+  it('says it could not keep a draft past the limit (in bytes), and drops the stale stored copy', () => {
     const storage = memory()
-    writeDraft('a', 'kept', () => storage)
-    writeDraft('a', 'x'.repeat(DRAFT_LIMIT + 1), () => storage)
+    expect(writeDraft('a', 'kept', () => storage)).toBe(true)
+    // 22,000 CJK characters are 66,000 bytes: past the limit though shorter than it in characters.
+    expect(writeDraft('a', '字'.repeat(22_000), () => storage)).toBe(false)
     expect(readDraft('a', () => storage)).toBe('')
+    expect(writeDraft('a', 'x'.repeat(DRAFT_LIMIT_BYTES), () => storage)).toBe(true)
   })
   it('works without storage: nothing saved, nothing thrown', () => {
     const broken = () => { throw new Error('SecurityError') }
     expect(readDraft('a', broken)).toBe('')
-    expect(() => writeDraft('a', 'text', broken)).not.toThrow()
+    expect(writeDraft('a', 'text', broken)).toBe(false)
     const full = { getItem: () => null, setItem: () => { throw new Error('QuotaExceededError') }, removeItem: () => {} } as unknown as Storage
-    expect(() => writeDraft('a', 'text', () => full)).not.toThrow()
+    expect(writeDraft('a', 'text', () => full)).toBe(false)
   })
 })

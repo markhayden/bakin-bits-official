@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { activeModifiers, afterSend, consumeModifiers, encodeTerminalKey, NO_MODIFIERS, pasteBytes, toggleModifier, type ModifierState } from '../components/terminal-input'
+import { activeModifiers, afterSend, consumeModifiers, encodeTerminalKey, NO_MODIFIERS, pasteText, toggleModifier, type ModifierState } from '../components/terminal-input'
 
 const none = { ctrl: false, alt: false }
 const ctrl = { ctrl: true, alt: false }
@@ -123,19 +123,8 @@ describe('modifier state', () => {
 })
 
 describe('compose text as a paste', () => {
-  it('turns line breaks into CR, and adds a CR for Paste + Enter', () => {
-    expect(pasteBytes('echo one\necho two\r\nlast', false, false)).toBe('echo one\recho two\rlast')
-    expect(pasteBytes('ls', false, true)).toBe('ls\r')
-  })
-  it('brackets the text only when the program enabled bracketed paste', () => {
-    expect(pasteBytes('a\nb', true, false)).toBe('\x1b[200~a\rb\x1b[201~')
-    expect(pasteBytes('a', true, true)).toBe('\x1b[200~a\x1b[201~\r')
-  })
-  it('removes paste markers inside bracketed text, repeatedly, so the text cannot end the paste early', () => {
-    expect(pasteBytes('x\x1b[201~; rm -rf ~', true, false)).toBe('\x1b[200~x; rm -rf ~\x1b[201~')
-    // A marker rebuilt from the pieces of removed ones is removed too.
-    expect(pasteBytes('\x1b[20\x1b[201~1~evil', true, false)).toBe('\x1b[200~evil\x1b[201~')
-    // Without bracketed paste, text is sent as written.
-    expect(pasteBytes('x\x1b[201~', false, false)).toBe('x\x1b[201~')
+  it('turns line breaks into CR, as the xterm paste does', () => {
+    expect(pasteText('echo one\necho two\r\nlast')).toBe('echo one\recho two\rlast')
+    expect(pasteText('ls')).toBe('ls')
   })
 })
