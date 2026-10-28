@@ -50,10 +50,13 @@ export function KeyBar({ session, disabled, modifiers, onKey, onModifier, onShee
     className={label ? 'terminal-keycap-wide' : undefined} disabled={disabled} onPress={() => onKey(key)} />
   const openSheet = (event: React.MouseEvent) => {
     onSheet()
-    // Opened from a keyboard (no pointer), focus moves into the sheet.
-    if (event.detail === 0) requestAnimationFrame(() => sheet.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus())
+    // Opened from a keyboard (no pointer), focus moves into the sheet: its
+    // first usable key, or the sheet itself while sending is disabled.
+    if (event.detail === 0) requestAnimationFrame(() => (sheet.current?.querySelector<HTMLButtonElement>('button:not(:disabled)') ?? sheet.current)?.focus())
   }
-  return <div className="terminal-key-accessory" data-terminal-keys="">
+  // Escape anywhere in the bar or sheet goes back to the keyboard while the sheet is open.
+  const escape = (event: React.KeyboardEvent) => { if (session === 'sheet' && event.key === 'Escape') { event.preventDefault(); onKeyboard() } }
+  return <div className="terminal-key-accessory" data-terminal-keys="" onKeyDown={escape}>
     <div role="group" aria-label="Terminal keys" className="terminal-key-bar">
       {sendKey('Esc')}
       {sendKey('Tab')}
@@ -66,8 +69,7 @@ export function KeyBar({ session, disabled, modifiers, onKey, onModifier, onShee
       <span aria-hidden="true" className="terminal-key-divider" />
       <Keycap label="Hide keyboard" face={HIDE_ICON} tone="function" className="terminal-keycap-hide" onPress={onHide} />
     </div>
-    {session === 'sheet' && <div ref={sheet} role="region" aria-label="More keys" className="terminal-key-sheet"
-      onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); onKeyboard() } }}>
+    {session === 'sheet' && <div ref={sheet} role="region" aria-label="More keys" tabIndex={-1} className="terminal-key-sheet">
       <div role="group" aria-label="Keys" className="terminal-key-grid">{SHEET_KEYS.map(key => sendKey(key))}</div>
       <div role="group" aria-label="Control" className="terminal-key-grid terminal-key-grid-labelled">{CONTROL_SHORTCUTS.map(key => sendKey(`Ctrl+${key}`, CONTROL_LABELS[key]))}</div>
       <div role="group" aria-label="Locks" className="terminal-key-grid terminal-key-grid-labelled">

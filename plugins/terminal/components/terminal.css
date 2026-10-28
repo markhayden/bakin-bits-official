@@ -107,7 +107,9 @@
   touch-action: manipulation;
   cursor: pointer;
 }
-/* 44 px to hit even when the cap is drawn smaller. */
+/* The hit area reaches halfway into each gap (6 px gaps: 3 px a side), so
+   neighbouring keys' areas meet without overlapping; 40 px caps + 2 px above
+   and below make 44 px tall targets. */
 [data-bakin-plugin="terminal"] .terminal-keycap::after { content: ""; position: absolute; inset: -2px -3px; }
 [data-bakin-plugin="terminal"] .terminal-keycap[data-tone="function"] { background: var(--terminal-keycap-function); }
 [data-bakin-plugin="terminal"] .terminal-keycap:active:not(:disabled) { background: var(--terminal-keycap-pressed); }
@@ -138,6 +140,7 @@
   background: var(--bakin-color-border-subtle);
 }
 /* The ••• sheet: every other key, in the slot below the bar. */
+[data-bakin-plugin="terminal"] .terminal-key-sheet:focus-visible { outline: 2px solid var(--bakin-color-focus-ring); outline-offset: -2px; }
 [data-bakin-plugin="terminal"] .terminal-key-sheet {
   display: flex;
   flex-direction: column;
@@ -161,10 +164,11 @@
 [data-bakin-plugin="terminal"] .terminal-keycap[data-state="locked"] .terminal-keycap-label { color: inherit; }
 /* The narrowest phones (320 px): smaller caps, the same 44 px hit areas. */
 @media (max-width: 369px) {
-  [data-bakin-plugin="terminal"] .terminal-key-accessory { --terminal-keycap-size: 38px; }
+  /* 40 px caps in 4 px gaps: hit areas reach 2 px a side, 44 px wide, never overlapping. */
+  [data-bakin-plugin="terminal"] .terminal-key-accessory { --terminal-keycap-size: 40px; }
   [data-bakin-plugin="terminal"] .terminal-key-bar { gap: 4px; padding: 0 4px; }
   [data-bakin-plugin="terminal"] .terminal-key-bar .terminal-keycap { padding: 0 6px; }
-  [data-bakin-plugin="terminal"] .terminal-key-bar .terminal-keycap::after { inset: -2px -3px; }
+  [data-bakin-plugin="terminal"] .terminal-key-bar .terminal-keycap::after { inset: -2px -2px; }
   [data-bakin-plugin="terminal"] .terminal-keycap-hide { min-width: 44px; }
   [data-bakin-plugin="terminal"] .terminal-key-grid:not(.terminal-key-grid-labelled) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }

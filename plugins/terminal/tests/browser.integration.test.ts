@@ -74,7 +74,9 @@ browserTest('browser creates a real shell, sends input and reconnects without lo
     await page.getByRole('button', { name: 'Session actions', exact: true }).click()
     await page.getByRole('menuitem', { name: 'Terminate', exact: true }).click()
     await page.getByRole('button', { name: 'Terminate', exact: true }).click()
-    await controls.getByRole('status').filter({ hasText: 'Ended' }).waitFor()
+    // Whichever header is showing says so: the compact row only once it is
+    // stuck to the top, which depends on the page's height when the session ends.
+    await workspace.locator('[data-slot="workspace-page-compact-header"], [data-slot="workspace-page-header"]').getByRole('status').filter({ hasText: 'Ended' }).first().waitFor()
     completed = true
     expect(errors).toEqual([])
   } finally {

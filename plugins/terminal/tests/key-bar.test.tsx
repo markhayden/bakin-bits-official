@@ -81,3 +81,18 @@ test('while sending is disabled every sending key and modifier is off, but hide 
   fireEvent.click(row.getByRole('button', { name: 'Hide keyboard' }))
   expect(sent).toEqual(['hide'])
 })
+
+test('while sending is disabled the sheet still takes focus and Escape anywhere goes back', () => {
+  const { view, row, sent } = bar({ session: 'sheet', disabled: true })
+  const sheet = view.getByRole('region', { name: 'More keys' })
+  expect(sheet.getAttribute('tabindex')).toBe('-1')
+  fireEvent.keyDown(row.getByRole('button', { name: 'Back to keyboard' }), { key: 'Escape' })
+  fireEvent.keyDown(sheet, { key: 'Escape' })
+  expect(sent).toEqual(['keyboard', 'keyboard'])
+})
+
+test('Escape on the bar does nothing while typing (it belongs to the terminal then)', () => {
+  const { row, sent } = bar()
+  fireEvent.keyDown(row.getByRole('button', { name: 'More keys' }), { key: 'Escape' })
+  expect(sent).toEqual([])
+})

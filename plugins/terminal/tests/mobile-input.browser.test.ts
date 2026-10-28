@@ -130,7 +130,21 @@ browserTest('the phone key bar follows the typing session and its keys send exac
       const caps = [...row.querySelectorAll('button')].map(cap => cap.getBoundingClientRect().width)
       return { fits: row.scrollWidth <= row.clientWidth, narrowest: Math.min(...caps) }
     })).toEqual({ fits: true, narrowest: expect.any(Number) })
-    expect(await page.evaluate(() => Math.min(...[...document.querySelectorAll('.terminal-key-bar button')].map(cap => cap.getBoundingClientRect().width)))).toBeGreaterThanOrEqual(38)
+    expect(await page.evaluate(() => Math.min(...[...document.querySelectorAll('.terminal-key-bar button')].map(cap => cap.getBoundingClientRect().width)))).toBeGreaterThanOrEqual(40)
+    // Hit areas meet in the gaps but never overlap: 1.5 px either side of each
+    // gap's middle (hit testing rounds fractional points), the nearer key answers.
+    expect(await page.evaluate(() => {
+      const caps = [...document.querySelectorAll<HTMLButtonElement>('.terminal-key-bar button')]
+      const wrong: string[] = []
+      for (let i = 0; i + 1 < caps.length; i++) {
+        const a = caps[i]!.getBoundingClientRect(), b = caps[i + 1]!.getBoundingClientRect()
+        if (b.left - a.right > 8) continue
+        const y = a.top + a.height / 2, middle = (a.right + b.left) / 2
+        if (document.elementFromPoint(middle - 1.5, y)?.closest('button') !== caps[i]) wrong.push(`${caps[i]!.ariaLabel} right`)
+        if (document.elementFromPoint(middle + 1.5, y)?.closest('button') !== caps[i + 1]) wrong.push(`${caps[i + 1]!.ariaLabel} left`)
+      }
+      return wrong
+    })).toEqual([])
     const images = join(import.meta.dir, '../test-results/mobile-input')
     mkdirSync(images, { recursive: true })
     await page.screenshot({ path: join(images, (process.env.TERMINAL_BROWSER ?? 'chromium') + '-keyboard-open.png') })
@@ -140,6 +154,25 @@ browserTest('the phone key bar follows the typing session and its keys send exac
     await input.dispatchEvent('compositionstart')
     await keys.getByRole('button', { name: 'Control', exact: true }).waitFor()
     await input.dispatchEvent('compositionend')
+
+    // (Focus reports while the sheet opens are covered in modifier-input.test.ts:
+    // tmux consumes ?1004h today, so the browser terminal never reports focus.)
+
+    // IME: a composed commit under a locked Control is sent as typed, never as a control key (Chromium drives a real composition).
+    if (process.env.TERMINAL_BROWSER !== 'webkit') {
+      await keys.getByRole('button', { name: 'More keys', exact: true }).tap()
+      await sheet.getByRole('button', { name: 'Control lock', exact: true }).tap()
+      await keys.getByRole('button', { name: 'Back to keyboard', exact: true }).tap()
+      const ime = await page.context().newCDPSession(page)
+      const before = socket.typed().length
+      await ime.send('Input.imeSetComposition', { text: 'c', selectionStart: 1, selectionEnd: 1 })
+      await ime.send('Input.insertText', { text: 'c' })
+      await socket.waitFor((frame) => frame.type === 'input' && String(frame.data).includes('c'))
+      expect(socket.typed().slice(before)).not.toContain('\x03')
+      await ime.detach()
+      await keys.getByRole('button', { name: 'Control, locked', exact: true }).tap()
+      await page.keyboard.press('Backspace')
+    }
 
     // Hide keyboard ends the session: no bar, the corner button is back.
     await keys.getByRole('button', { name: 'Hide keyboard', exact: true }).tap()

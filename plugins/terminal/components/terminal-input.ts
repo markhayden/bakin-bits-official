@@ -47,10 +47,11 @@ const tilde = { Delete: 3, 'Page Up': 5, 'Page Down': 6 } as const
 const parameter = (mods: ActiveModifiers) => 1 + (mods.alt ? 2 : 0) + (mods.ctrl ? 4 : 0)
 const prefix = (mods: ActiveModifiers, data: string) => (mods.alt ? '\x1b' : '') + data
 
-/** Ctrl applied to one typed character, as xterm 6 maps keys; undefined when it has no control form. */
+/** Ctrl alone on one unshifted character, as xterm 6 maps keys; undefined when it has no control form. */
 function control(char: string): string | undefined {
   if (/^[a-z]$/i.test(char)) return String.fromCharCode(char.toUpperCase().charCodeAt(0) & 31)
-  return ({ ' ': '\x00', '@': '\x00', '[': '\x1b', '\\': '\x1c', ']': '\x1d', '^': '\x1e', '_': '\x1f', '?': '\x7f' } as Record<string, string>)[char]
+  if (char >= '3' && char <= '7') return String.fromCharCode(char.charCodeAt(0) - 51 + 27)
+  return ({ ' ': '\x00', '8': '\x7f', '[': '\x1b', '\\': '\x1c', ']': '\x1d' } as Record<string, string>)[char]
 }
 
 /** Matches xterm 6's keyboard protocol (DECCKM included) for a key with the bar's modifiers. */
@@ -61,7 +62,12 @@ export function encodeTerminalKey(key: TerminalKey, application: boolean, mods: 
     if (mods.ctrl || mods.alt) return '\x1b[1;' + parameter(mods) + suffix
     return (application ? '\x1bO' : '\x1b[') + suffix
   }
-  if (key in tilde) return '\x1b[' + tilde[key as keyof typeof tilde] + (mods.ctrl || mods.alt ? ';' + parameter(mods) : '') + '~'
+  if (key in tilde) {
+    const code = tilde[key as keyof typeof tilde]
+    // xterm modifies Page Up/Down only when Ctrl is held; Delete with any modifier.
+    const modified = code === 3 ? mods.ctrl || mods.alt : mods.ctrl
+    return '\x1b[' + code + (modified ? ';' + parameter(mods) : '') + '~'
+  }
   switch (key) {
     case 'Esc': return prefix(mods, '\x1b')
     case 'Enter': return prefix(mods, '\r')
@@ -73,24 +79,45 @@ export function encodeTerminalKey(key: TerminalKey, application: boolean, mods: 
   }
 }
 
+/** Merge the bar's modifiers into an xterm modifier parameter (1 + shift·1 + alt·2 + ctrl·4). */
+const merge = (existing: number, mods: ActiveModifiers) => ((existing - 1) | (mods.alt ? 2 : 0) | (mods.ctrl ? 4 : 0)) + 1
+
 /**
  * The bar's modifiers applied to what the terminal's input produced: one
- * typed character, or a cursor/tilde key from a hardware keyboard. Words
- * (autocorrect, dictation), paste and IME composition are sent as typed.
+ * typed character, or a key from a hardware keyboard (its own modifiers
+ * merged with the bar's). Words (autocorrect, dictation), paste and IME
+ * composition are sent as typed.
  */
 export function consumeModifiers(data: string, mods: ActiveModifiers, source: 'text' | 'paste' | 'composition' = 'text'): string {
   if (source !== 'text' || !(mods.ctrl || mods.alt)) return data
-  const sequence = data.startsWith('\x1b') ? data.slice(1) : undefined
-  const cursorKey = sequence === undefined ? null : /^(?:O|\[)([ABCDHF])$/.exec(sequence)
-  if (cursorKey) return '\x1b[1;' + parameter(mods) + cursorKey[1]
-  const tildeKey = sequence === undefined ? null : /^\[([356])~$/.exec(sequence)
-  if (tildeKey) return '\x1b[' + tildeKey[1] + ';' + parameter(mods) + '~'
+  if (data.startsWith('\x1b') && data.length > 1) {
+    const sequence = data.slice(1)
+    const cursorKey = /^(?:O|\[)([ABCDHF])$/.exec(sequence)
+    if (cursorKey) return '\x1b[1;' + parameter(mods) + cursorKey[1]
+    const modifiedCursor = /^\[1;(\d+)([ABCDHF])$/.exec(sequence)
+    if (modifiedCursor) return '\x1b[1;' + merge(Number(modifiedCursor[1]), mods) + modifiedCursor[2]
+    const tildeKey = /^\[([356])(?:;(\d+))?~$/.exec(sequence)
+    if (tildeKey) {
+      const existing = Number(tildeKey[2] ?? 1)
+      // Page Up/Down take modifiers only once Ctrl is part of them (xterm); Delete always.
+      const ctrlHeld = mods.ctrl || ((existing - 1) & 4) !== 0
+      const parameterNow = tildeKey[1] === '3' || ctrlHeld ? merge(existing, mods) : existing
+      return '\x1b[' + tildeKey[1] + (parameterNow > 1 ? ';' + parameterNow : '') + '~'
+    }
+    return data
+  }
   if (data === '\r') return prefix(mods, '\r')
   if (data === '\x7f') return prefix(mods, mods.ctrl ? '\x08' : '\x7f')
-  if (data.length !== 1 || data < ' ' || data > '~') return data
-  const char = mods.ctrl ? control(data) : data
-  if (char === undefined) return mods.alt ? '\x1b' + data : data
-  return prefix(mods, char)
+  if (data === '\t') return data
+  // A control character a hardware keyboard already made (Ctrl+C, Escape): Option still prefixes it.
+  if (data.length === 1 && (data < ' ' || data === '\x7f')) return prefix(mods, data)
+  if (data.length !== 1 || data > '~') return data
+  if (mods.alt) {
+    // xterm: Option + letter or space carries Ctrl too; Option + anything else is ESC + the character.
+    if (/^[a-z]$/i.test(data) || data === ' ') return '\x1b' + (mods.ctrl ? control(data)! : data)
+    return '\x1b' + data
+  }
+  return control(data) ?? data
 }
 
 export interface TerminalInputHandle {

@@ -8,7 +8,8 @@ import { clampSize } from '../lib/sizing'
 import { clientId } from './api'
 import { enableWebgl } from './terminal-renderer'
 import { TerminalSocketClient, type InputResult, type Presence } from './terminal-socket'
-import { activeModifiers, afterSend, consumeModifiers, encodeTerminalKey, NO_MODIFIERS, toggleModifier, type ModifierState, type TerminalInputHandle } from './terminal-input'
+import type { ModifierState, TerminalInputHandle } from './terminal-input'
+import { ModifierInput } from './modifier-input'
 import { BASE_FONT, clampFont, fitWidthFont, minFont, pinchFont, resizePlan, reveal, revealClearOf, screenDevice, storedFont, storeFont } from './terminal-view'
 import '@xterm/xterm/css/xterm.css'
 
@@ -39,7 +40,6 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   const fit = useRef<FitAddon | null>(null)
   const socket = useRef<TerminalSocketClient | null>(null)
   const sentSize = useRef('')
-  const modifiers = useRef<ModifierState>(NO_MODIFIERS)
   const ready = useRef(false)
   // Re-plan the sizing screen's grid (pane changes and acknowledged sizes both ask).
   const replan = useRef<() => void>(() => {})
@@ -154,23 +154,13 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
 
   useEffect(() => {
     ready.current = false
-    const setModifiers = (next: ModifierState) => {
-      if (next === modifiers.current) return
-      modifiers.current = next
-      callbacks.current.onModifiersChange(next)
-    }
+    // The bar's modifiers, and which onData is the operator's keystroke (spec D9 item 9).
+    const modifiers = new ModifierInput((state) => callbacks.current.onModifiersChange(state))
     // Disconnection, ownership/session change and backgrounding release everything, locks included.
-    const reset = () => setModifiers(NO_MODIFIERS)
-    // Leaving the terminal and every send consume the one-shot modifiers only.
-    const clearOnce = () => setModifiers(afterSend(modifiers.current))
-    // Paste and IME composition are sent as typed: their onData never takes a modifier.
-    let raw = false
-    let rawEnd: ReturnType<typeof setTimeout> | undefined
-    const rawInput = () => { clearTimeout(rawEnd); raw = true; clearOnce() }
-    const rawSettled = () => { clearTimeout(rawEnd); rawEnd = setTimeout(() => { raw = false }, 0) }
-    // Bar keys arrive already encoded; their onData must not apply the modifiers again.
-    let encoded = false
-    reset()
+    const reset = () => modifiers.reset()
+    // Leaving the terminal consumes the one-shot modifiers only.
+    const clearOnce = () => modifiers.clearOnce()
+    callbacks.current.onModifiersChange(modifiers.modifiers)
     const background = getComputedStyle(pane.current!).backgroundColor
     const term = new Terminal({ cols: session.cols, rows: session.rows, scrollback: 2000, fontSize: callbacks.current.zoom ?? BASE_FONT, screenReaderMode: true, convertEol: false, theme: { background } })
     terminal.current = term
@@ -184,13 +174,10 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       blur: () => term.blur(),
       key(key) {
         if (!ready.current || !callbacks.current.inputEnabled) { clearOnce(); return }
-        const data = encodeTerminalKey(key, term.modes.applicationCursorKeysMode, activeModifiers(modifiers.current))
-        clearOnce()
-        encoded = true
-        try { term.input(data, true) } finally { encoded = false }
+        modifiers.key(key, term.modes.applicationCursorKeysMode, (bytes) => term.input(bytes, true))
       },
       modifier(modifier, action = 'tap') {
-        if (ready.current && callbacks.current.inputEnabled) setModifiers(toggleModifier(modifiers.current, modifier, action))
+        if (ready.current && callbacks.current.inputEnabled) modifiers.toggle(modifier, action)
       },
       reset,
       send: (generation, data) => socket.current?.input(generation, data) ?? false,
@@ -218,10 +205,19 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     // Focusing the terminal to type goes back to the cursor (like ↓ Live).
     const typing = () => resumeFollow()
     textarea.addEventListener('focus', typing)
-    const paste = () => { rawInput(); rawSettled() }
-    textarea.addEventListener('paste', paste, true)
-    textarea.addEventListener('compositionstart', rawInput, true)
-    textarea.addEventListener('compositionend', rawSettled, true)
+    // What the operator did to the terminal's input, seen on the way down
+    // (capture on the container), so before any of xterm's own listeners on
+    // the input, capture-phase ones included.
+    const host = element.current!
+    const operator = (event: Event) => {
+      if (event.target !== textarea) return
+      if (event.type === 'paste') modifiers.paste()
+      else if (event.type === 'compositionstart') modifiers.compositionStart()
+      else if (event.type === 'compositionend') modifiers.compositionEnd()
+      else modifiers.userEvent()
+    }
+    const OPERATOR_EVENTS = ['keydown', 'keypress', 'beforeinput', 'input', 'paste', 'compositionstart', 'compositionend'] as const
+    for (const type of OPERATOR_EVENTS) host.addEventListener(type, operator, true)
     document.addEventListener('focusin', leave)
     document.addEventListener('pointerdown', leave)
     document.addEventListener('visibilitychange', hide)
@@ -232,9 +228,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     term.onData((data) => {
       if (callbacks.current.writable) {
         if (!ready.current || !callbacks.current.inputEnabled) { clearOnce(); return }
-        const next = encoded ? data : consumeModifiers(data, activeModifiers(modifiers.current), raw ? 'paste' : 'text')
-        if (!encoded) clearOnce()
-        callbacks.current.onInput(next)
+        callbacks.current.onInput(modifiers.data(data))
       }
       else if (data && data.charCodeAt(0) >= 0x20) callbacks.current.onClaim(data)
     })
@@ -292,10 +286,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       window.removeEventListener('focus', resume)
       client.close(); socket.current = null; sentSize.current = ''
       textarea.removeEventListener('focus', typing)
-      clearTimeout(rawEnd)
-      textarea.removeEventListener('paste', paste, true)
-      textarea.removeEventListener('compositionstart', rawInput, true)
-      textarea.removeEventListener('compositionend', rawSettled, true)
+      modifiers.dispose()
+      for (const type of OPERATOR_EVENTS) host.removeEventListener(type, operator, true)
       document.removeEventListener('focusin', leave)
       document.removeEventListener('pointerdown', leave)
       document.removeEventListener('visibilitychange', hide)
