@@ -146,6 +146,14 @@ describe('checkpoint: partial input is never accepted', () => {
     await write(b, Uint8Array.of(0xe5))
     expect(stateDiff(fullState(a), fullState(b))).toContain('utf8')
   })
+  it('underline styles held with the underline bit clear compare different (the renderer draws them)', async () => {
+    const held = (style: number) => `\x1b]8;;https://a.example\x1b\\\x1b7\x1b]8;;\x1b\\\x1b[4:${style}m\x1b8A\x1b[0m`
+    const a = terminal(20, 3)
+    const b = terminal(20, 3)
+    await write(a, held(3))
+    await write(b, held(4))
+    expect(stateDiff(fullState(a), fullState(b))).toContain('row 0')
+  })
   it('CSI continuation flags (past 32 params) compare different', async () => {
     const a = terminal(20, 3)
     const b = terminal(20, 3)

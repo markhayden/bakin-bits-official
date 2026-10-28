@@ -81,6 +81,10 @@ export const BRANCHES: Record<string, Branch> = {
   'selective-erase': (r) => `\x1b[?${r.int(3)}${r.pick(['J', 'K'])}`,
   queries: (r) => r.pick(['\x1b[c', '\x1b[>c', '\x1b[6n', '\x1b[5n', '\x1b[18t', '\x1b[?2004$p']),
   'long-line': (r) => 'w'.repeat(20 + r.int(60)),
+  // Enough lines to fill and trim the scrollback.
+  'flood-lines': (r) => 'x\r\n'.repeat(60 + r.int(200)),
+  // A string cut short by CAN or SUB.
+  'osc-cancel': (r) => r.pick(['\x1b]8;;https://x\x18', '\x1b]0;title\x1a', '\x1bP$q\x18m', '\x1b]52;c;aGVs\x18']),
   ris: () => '\x1bc',
 }
 /** Branches drawn rarely (a reset wipes the state every other branch builds). */
@@ -107,8 +111,15 @@ export function generate(seed: number, cols: number, rows: number, branches = 26
     events.push({ kind: 'output', bytes: bytes.subarray(i, i + size) })
     i += size
   }
+  // Sometimes one write past WRITE_PIECE with a three-byte character across its boundary.
+  const large = r.int(4) === 0
+  if (large) {
+    const big = new TextEncoder().encode('a'.repeat(65534) + '漢字 after a large write\r\n')
+    events.splice(r.int(events.length), 0, { kind: 'output', bytes: big })
+    used['large-write'] = 1
+  }
   for (let k = 0; k < 3; k++) {
-    events.splice(r.int(events.length), 0, { kind: 'resize', cols: Math.max(8, cols + r.int(21) - 10), rows: Math.max(3, rows + r.int(7) - 3) })
+    events.splice(r.int(events.length), 0, { kind: 'resize', cols: Math.max(2, cols + r.int(21) - 10), rows: Math.max(1, rows + r.int(7) - 3) })
     used.resize = (used.resize ?? 0) + 1
   }
   return { bytes, events, used, r }

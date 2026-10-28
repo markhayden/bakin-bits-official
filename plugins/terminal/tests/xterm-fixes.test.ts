@@ -190,6 +190,16 @@ describe('UTF-8 chunk boundaries', () => {
     await new Promise<void>((resolve) => terminal.write('', resolve))
     expect(carriedUtf8(terminal)).toBe(0)
   })
+  it('a reset where the parser is keeps a tail from a write queued behind it', async () => {
+    const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
+    applyTerminalProfile(terminal)
+    terminal.write('A', () => terminal.reset())
+    terminal.write(Uint8Array.of(0xe4))
+    await new Promise<void>((resolve) => terminal.write('', resolve))
+    expect(carriedUtf8(terminal)).toBe(1)
+    await writeBytes(terminal, Uint8Array.of(0xb8, 0xad))
+    expect(terminal.buffer.active.getLine(0)!.translateToString(true)).toBe('中')
+  })
   it('an empty write (a barrier: settled(), a checkpoint attempt) keeps a carried tail', async () => {
     const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
     applyTerminalProfile(terminal)
@@ -244,5 +254,37 @@ describe('tab stops across alternate-screen switches', () => {
     terminal.resize(30, 3)
     await write(terminal, tabbed + '\x1b[?1049l\x1b[H')
     expect(await column(terminal)).toBe(8)
+  })
+})
+
+describe('a grapheme cluster split across writes at the margin (wraparound off)', () => {
+  const lead = '\x1b[?7l\x1b[1;10HZ'
+  const first = '👨\u200d'
+  const rest = '👩\u200d👧X'
+  const layouts = async (make: () => Term) => {
+    const whole = make()
+    await write(whole, lead + first + rest)
+    const split = make()
+    await write(split, lead + first)
+    await write(split, rest)
+    const row = (term: Term) => [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((x) => (term.buffer.active.getLine(0)!.getCell(x) as unknown as { getChars(): string }).getChars()).join('|')
+    return [row(whole), row(split)]
+  }
+  it('stock xterm 6.0.0 lays the split write out differently (fails once upstream fixes it)', async () => {
+    const [whole, split] = await layouts(() => {
+      const term = new headless.Terminal({ cols: 10, rows: 3, allowProposedApi: true })
+      loadGraphemeProvider(term as never)
+      ;(term as unknown as { unicode: { activeVersion: string } }).unicode.activeVersion = '15-graphemes'
+      return term
+    })
+    expect(split).not.toBe(whole)
+  })
+  it('patched, chunking does not change the layout', async () => {
+    const [whole, split] = await layouts(() => {
+      const term = new headless.Terminal({ cols: 10, rows: 3, allowProposedApi: true })
+      applyTerminalProfile(term)
+      return term
+    })
+    expect(split).toBe(whole)
   })
 })

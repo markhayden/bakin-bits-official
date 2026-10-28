@@ -238,19 +238,27 @@ export const WRITE_PIECE = 64 * 1024
 export function patchUtf8Boundaries(terminal: { write(data: string | Uint8Array, callback?: () => void): void; reset(): void }): void {
   const write = terminal.write.bind(terminal)
   const reset = terminal.reset.bind(terminal)
-  let carry: Uint8Array | undefined
+  // The incomplete tail and the write call it came from (calls are numbered in submission order).
+  let carry: { bytes: Uint8Array; owner: number } | undefined
+  let submitted = 0
+  // The last write call the parser has finished, and where the last reset happened (in those numbers).
+  let parsed = 0
+  let resetAt = 0
   // The tail carried as of where the parser is (not where the writer is: a
   // later write may already have taken it). Each write publishes the carry it
-  // left once it is parsed, so a callback sees the state at its own position.
+  // left once it is parsed, so a callback sees the state at its own position;
+  // a carry from before the last reset is gone.
   let carriedAtParse: Uint8Array = new Uint8Array(0)
-  // A reset discards the carry; publications queued before it are stale.
-  let generation = 0
   carried.set(terminal, () => carriedAtParse)
   // Pieces in order; the last carries the caller's callback, so it fires after all of them are parsed.
   const pieces = (data: string | Uint8Array, boundary: (end: number) => number, callback?: () => void) => {
-    const left = carry ? carry.slice() : new Uint8Array(0)
-    const at = generation
-    const done = () => { if (at === generation) carriedAtParse = left; callback?.() }
+    const id = ++submitted
+    const left = carry
+    const done = () => {
+      parsed = id
+      carriedAtParse = left && left.owner > resetAt ? left.bytes : new Uint8Array(0)
+      callback?.()
+    }
     if (data.length === 0) { write(data, done); return }
     for (let offset = 0; offset < data.length;) {
       let end = Math.min(offset + WRITE_PIECE, data.length)
@@ -270,12 +278,12 @@ export function patchUtf8Boundaries(terminal: { write(data: string | Uint8Array,
     }
     let bytes = data
     if (carry) {
-      bytes = new Uint8Array(carry.length + data.length)
-      bytes.set(carry)
-      bytes.set(data, carry.length)
+      bytes = new Uint8Array(carry.bytes.length + data.length)
+      bytes.set(carry.bytes)
+      bytes.set(data, carry.bytes.length)
     }
     const tail = incompleteUtf8Tail(bytes)
-    carry = tail ? bytes.slice(bytes.length - tail) : undefined
+    carry = tail ? { bytes: bytes.slice(bytes.length - tail), owner: submitted + 1 } : undefined
     const complete = tail ? bytes.subarray(0, bytes.length - tail) : bytes
     // Back off to the lead byte of a codepoint that would be cut: it is at
     // most three bytes back (invalid input with longer runs is cut where it is).
@@ -284,7 +292,14 @@ export function patchUtf8Boundaries(terminal: { write(data: string | Uint8Array,
       return end
     }, callback)
   }
-  terminal.reset = () => { carry = undefined; carriedAtParse = new Uint8Array(0); generation++; reset() }
+  // A reset happens where the parser is: it drops a tail held from writes
+  // already parsed, never one from a write still queued behind it.
+  terminal.reset = () => {
+    resetAt = parsed
+    if (carry && carry.owner <= parsed) carry = undefined
+    carriedAtParse = new Uint8Array(0)
+    reset()
+  }
 }
 
 const tabStopState = new WeakMap<object, { get(): number | undefined; set(value: number | undefined): void }>()
@@ -327,5 +342,43 @@ export function patchSharedTabStops(terminal: object): void {
     if (!leaving) return
     enteredAt = cols()
     set.alt.tabs = leaving
+  }
+}
+
+interface PrintLine { getWidth(index: number): number; setCellFromCodepoint(index: number, codepoint: number, width: number, attributes: unknown): void }
+interface PrintInternals {
+  print(data: Uint32Array, start: number, end: number): void
+  _activeBuffer: { x: number; y: number; ybase: number; lines: { get(index: number): PrintLine | undefined } }
+  _parser: { precedingJoinState: number }
+  _unicodeService: { charProperties(codepoint: number, preceding: number): number }
+}
+
+/**
+ * xterm 6.0.0: every print call first clears a wide cell before the cursor
+ * (so a character never overwrites half of one). When the call's first
+ * character joins the cluster in that cell — a write split inside a
+ * grapheme cluster, at the margin with wraparound off — the clear erases
+ * the cluster it is joining, so the same bytes lay out differently by
+ * chunking. That one clear is skipped when the first character joins.
+ */
+export function patchSplitClusterReset(terminal: object): void {
+  const handler = core(terminal)?._inputHandler as PrintInternals | undefined
+  if (!handler || typeof handler.print !== 'function' || !handler._unicodeService || !handler._parser) return
+  const print = handler.print.bind(handler)
+  handler.print = (data, start, end) => {
+    const buffer = handler._activeBuffer
+    const x = buffer.x
+    const joins = end > start && x > 0 && (handler._unicodeService.charProperties(data[start]!, handler._parser.precedingJoinState) & 1) !== 0
+    const line = joins ? buffer.lines.get(buffer.ybase + buffer.y) : undefined
+    if (!line || line.getWidth(x - 1) !== 2) { print(data, start, end); return }
+    const set = line.setCellFromCodepoint
+    let first = true
+    // The clear is print's first cell write: skip exactly that one.
+    line.setCellFromCodepoint = function (index, codepoint, width, attributes) {
+      const clear = first && index === x - 1 && codepoint === 0 && width === 1
+      first = false
+      if (!clear) set.call(this, index, codepoint, width, attributes)
+    }
+    try { print(data, start, end) } finally { delete (line as Partial<PrintLine>).setCellFromCodepoint }
   }
 }

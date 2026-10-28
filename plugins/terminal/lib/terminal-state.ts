@@ -60,9 +60,9 @@ export const linkUri = (terminal: Term, id: number) => id ? internals(terminal).
  */
 export type LinkNames = Map<number, number>
 /**
- * Underline style and colour are cell state only while underline is set
- * (xterm sets the style whenever underline is turned on, so one left behind
- * with underline off is never read again).
+ * Extended attributes: underline style and colour (compared whether or not
+ * the underline bit is set: a DECRC can leave a style the renderer draws)
+ * and the link.
  */
 export function extendedKey(terminal: Term, fg: number, extended: Extended | null, links?: LinkNames): string {
   if (!extended) return ''
@@ -71,13 +71,15 @@ export function extendedKey(terminal: Term, fg: number, extended: Extended | nul
     if (!links.has(extended.urlId)) links.set(extended.urlId, links.size)
     link = `#${links.get(extended.urlId)}:${link}`
   }
-  return `${fg & UNDERLINE ? `${rawUnderlineStyle(extended)}:${extended.underlineColor}` : '-'}:${link}`
+  return `${fg & UNDERLINE ? 'u' : '-'}${rawUnderlineStyle(extended)}:${extended.underlineColor}:${link}`
 }
 
 /** A cell's identity: content (empty is not a space, nor any character), width, attributes, link. */
 export function cellKey(terminal: Term, cell: Cell, links?: LinkNames): string {
   const key = extendedKey(terminal, cell.fg, cell.bg & HAS_EXTENDED ? cell.extended : null, links)
-  return JSON.stringify([cell.getChars() === '' ? null : cell.getChars(), cell.getWidth(), cell.fg | 0, cell.bg & ~HAS_EXTENDED, key])
+  // Fields joined by a control character, which a printed cell can never hold; an empty cell has no content field at all.
+  const chars = cell.getChars()
+  return `${chars === '' ? '\u0003' : chars}\u0002${cell.getWidth()}\u0002${cell.fg | 0}\u0002${cell.bg & ~HAS_EXTENDED}\u0002${key}`
 }
 /** Cells of a row in a state: separated by a character no cell key contains. */
 const CELLS = '\u0001'
