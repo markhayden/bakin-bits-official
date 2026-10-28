@@ -213,8 +213,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       if (event.target !== textarea) return
       if (event.type === 'paste') modifiers.paste()
       else if (event.type === 'compositionstart') modifiers.compositionStart()
-      else if (event.type === 'compositionend') modifiers.compositionEnd()
-      else modifiers.userEvent(event.type as 'keydown' | 'keypress' | 'beforeinput' | 'input')
+      else if (event.type === 'compositionend') modifiers.compositionEnd((event as CompositionEvent).data ?? '')
+      else modifiers.userEvent()
     }
     const OPERATOR_EVENTS = ['keydown', 'keypress', 'beforeinput', 'input', 'paste', 'compositionstart', 'compositionend'] as const
     for (const type of OPERATOR_EVENTS) host.addEventListener(type, operator, true)

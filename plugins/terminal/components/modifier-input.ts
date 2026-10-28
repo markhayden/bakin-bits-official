@@ -43,17 +43,15 @@ export class ModifierInput {
   /**
    * The operator acted on the terminal's input: data in this task is theirs.
    * The canvas listens in capture on xterm's container, so this runs before
-   * xterm's own handlers. A new keystroke after a composition ended means
-   * that composition committed nothing (xterm's deferred read came first).
+   * xterm's own handlers.
    */
-  userEvent(kind: 'keydown' | 'keypress' | 'beforeinput' | 'input' = 'keydown') {
-    if (this.committed && (kind === 'keydown' || kind === 'keypress')) this.endComposition()
+  userEvent() {
     this.user = true
     this.time.clear(this.userTimer)
     this.userTimer = this.time.set(() => { this.user = false; this.pasting = false }, 0)
   }
   /** Paste is the operator's, and sent exactly as pasted: no modifier, lock or not. */
-  paste() { this.userEvent('input'); this.pasting = true; this.clearOnce() }
+  paste() { this.userEvent(); this.pasting = true; this.clearOnce() }
   private endComposition() {
     this.time.clear(this.commitTimer)
     this.composing = false
@@ -65,8 +63,15 @@ export class ModifierInput {
     this.committed = false
     this.clearOnce()
   }
-  /** xterm delivers the composed text after compositionend (a deferred read): stay raw until it arrives. */
-  compositionEnd() {
+  /**
+   * `committed` is the composition's final text (CompositionEvent.data).
+   * xterm delivers it after compositionend, from a deferred read or a flush
+   * on the next key, so the composition stays raw until that text arrives
+   * (capped). A composition that committed nothing ends at once: no text is
+   * coming, and the next keystroke takes the modifiers again.
+   */
+  compositionEnd(committed: string) {
+    if (!committed) { this.endComposition(); return }
     this.committed = true
     this.time.clear(this.commitTimer)
     this.commitTimer = this.time.set(() => this.endComposition(), COMPOSITION_COMMIT_MS)
