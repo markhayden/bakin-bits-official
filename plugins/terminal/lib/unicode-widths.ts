@@ -70,6 +70,19 @@ export function loadGraphemeProvider(terminal: UnicodeHost): UnicodeProvider {
   return base
 }
 
+/** The profile's provider without a terminal (for measuring text), built once. */
+let measuring: UnicodeProvider | undefined
+export function profileWidths(): UnicodeProvider {
+  if (measuring) return measuring
+  // The addon only registers its providers on the host it activates on.
+  const host: UnicodeHost = {
+    loadAddon: (addon) => addon.activate(host as never),
+    unicode: { activeVersion: '', register: () => undefined },
+  }
+  measuring = tmuxWidthProvider(loadGraphemeProvider(host))
+  return measuring
+}
+
 /** The grapheme provider with tmux's widths applied, active on `terminal`. */
 export function applyTmuxWidths(terminal: UnicodeHost, table: readonly (readonly [number, number, 0 | 1 | 2])[] = TMUX_WIDTHS): void {
   terminal.unicode.register(tmuxWidthProvider(loadGraphemeProvider(terminal), table))

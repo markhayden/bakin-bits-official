@@ -1,5 +1,5 @@
 import { applyTmuxWidths } from './unicode-widths'
-import { patchAltBufferCapacity, patchEraseAbove, patchLinkLifetime, patchReflowStaleMaps, patchUtf8Boundaries } from './xterm-fixes'
+import { patchAltBufferCapacity, patchEraseAbove, patchLinkLifetime, patchReflowStaleMaps, patchSharedTabStops, patchUtf8Boundaries } from './xterm-fixes'
 
 /** The xterm surface the profile drives; both @xterm/xterm and @xterm/headless provide it. */
 export interface ProfileTerminal {
@@ -112,6 +112,7 @@ export function applyTerminalProfile(terminal: ProfileTerminal & object, effects
   patchAltBufferCapacity(terminal)
   patchReflowStaleMaps(terminal)
   patchUtf8Boundaries(terminal)
+  patchSharedTabStops(terminal)
   const links = patchLinkLifetime(terminal)
   return { setLive: (value) => { live = value }, links }
 }

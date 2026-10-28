@@ -263,3 +263,28 @@ export function patchUtf8Boundaries(terminal: { write(data: string | Uint8Array,
   }
   terminal.reset = () => { carry = undefined; reset() }
 }
+
+/**
+ * xterm 6.0.0 keeps tab stops per buffer and resets the alternate buffer's
+ * on every switch (it clears the buffer, stops included, before saying it
+ * switched); tmux has one set for the pane. Each switch hands the stops of
+ * the buffer being left to the one being activated.
+ */
+export function patchSharedTabStops(terminal: object): void {
+  type Tabs = Record<number, boolean | undefined>
+  interface BufferSet { normal: { tabs: Tabs }; alt: { tabs: Tabs }; active: unknown; activateNormalBuffer(): void; activateAltBuffer(fill?: unknown): void }
+  const set = core(terminal)?.buffers as BufferSet | undefined
+  if (!set || typeof set.activateNormalBuffer !== 'function' || typeof set.activateAltBuffer !== 'function') return
+  const toNormal = set.activateNormalBuffer.bind(set)
+  const toAlt = set.activateAltBuffer.bind(set)
+  set.activateNormalBuffer = () => {
+    const leaving = set.active === set.alt ? { ...set.alt.tabs } : undefined
+    toNormal()
+    if (leaving) set.normal.tabs = leaving
+  }
+  set.activateAltBuffer = (fill) => {
+    const leaving = set.active === set.normal ? { ...set.normal.tabs } : undefined
+    toAlt(fill)
+    if (leaving) set.alt.tabs = leaving
+  }
+}

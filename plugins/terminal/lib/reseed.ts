@@ -11,9 +11,8 @@
  */
 import type { ControlClient } from './control'
 import type { OutputLog } from './output-log'
-import headless from '@xterm/headless'
 import { TERMINAL_OPTIONS } from './terminal-profile'
-import { loadGraphemeProvider, textWidth, tmuxWidthProvider, type UnicodeProvider } from './unicode-widths'
+import { profileWidths, textWidth } from './unicode-widths'
 
 /** Pane state the seed restores, read in the same group as the captures. */
 export const SEED_FORMATS = [
@@ -129,13 +128,6 @@ function rows(lines: string[]): string {
 }
 const blocks = (...captures: string[][]) => captures.filter((capture) => capture.length).map(rows).join('\r\n')
 
-let widths: UnicodeProvider | undefined
-/** The profile's width provider, for measuring captured rows. */
-function provider(): UnicodeProvider {
-  if (!widths) widths = tmuxWidthProvider(loadGraphemeProvider(new headless.Terminal({ cols: 2, rows: 1, allowProposedApi: true }) as never))
-  return widths
-}
-
 /**
  * The column a captured visual row leaves the cursor at: its characters'
  * widths, escape sequences skipped, tabs to the next stop.
@@ -143,7 +135,7 @@ function provider(): UnicodeProvider {
 export function capturedRowWidth(row: string, cols: number, stops: number[]): number {
   let column = 0
   let text = ''
-  const settle = () => { column += textWidth(text, provider()); text = '' }
+  const settle = () => { column += textWidth(text, profileWidths()); text = '' }
   for (let i = 0; i < row.length; i++) {
     const char = row[i]!
     if (char === '\x1b') {
@@ -188,8 +180,8 @@ export function seedFrom(replies: string[][]): Seed {
   const cursorY = number(formats, 'cursor_y')
   const upper = number(formats, 'scroll_region_upper')
   // RIS first: the seed describes a whole terminal. Tab stops before any
-  // content (captured rows can hold literal tabs), in each buffer: xterm's
-  // alternate buffer keeps its own.
+  // content (captured rows can hold literal tabs); the profile hands them to
+  // the alternate buffer on every switch (patchSharedTabStops).
   const stops = formats.pane_tabs!.split(',').filter(Boolean).map(Number)
   const tabs = '\x1b[3g' + stops.map((stop) => `\x1b[1;${stop + 1}H\x1bH`).join('') + '\x1b[H'
   let seed = '\x1bc' + tabs
@@ -198,7 +190,7 @@ export function seedFrom(replies: string[][]): Seed {
     // (A saved cursor in a pending wrap is placed on the last column.)
     seed += blocks(history, savedNormal)
     // (Clamped, as tmux restores it on leaving the alternate screen.)
-    seed += `\x1b[${number(formats, 'alternate_saved_y') + 1};${Math.min(number(formats, 'alternate_saved_x'), cols - 1) + 1}H\x1b[?1049h${tabs}\x1b[2J` + rows(screen)
+    seed += `\x1b[${number(formats, 'alternate_saved_y') + 1};${Math.min(number(formats, 'alternate_saved_x'), cols - 1) + 1}H\x1b[?1049h\x1b[H\x1b[2J` + rows(screen)
   } else seed += blocks(history, screen)
   seed += `\x1b[${upper + 1};${number(formats, 'scroll_region_lower') + 1}r\x1b[0m`
   if (formats.keypad_cursor_flag === '1') seed += '\x1b[?1h'

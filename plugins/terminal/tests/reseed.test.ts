@@ -68,10 +68,12 @@ describe('seedFrom', () => {
     expect(capturedRowWidth('\x1b]8;;https://x\x1b\\link\x1b]8;;\x1b\\', 20, [])).toBe(4)
     expect(capturedRowWidth('x'.repeat(30), 20, [])).toBe(20)
   })
-  it('tab stops hold on the alternate screen too', async () => {
+  it('tab stops hold on the alternate screen, also on a later entry', async () => {
     const seed = seedFrom([[formats({ alternate_on: '1', pane_tabs: '4' })], [], ['\tX', '', '', '', ''], ['normal'], []])
     const terminal = await render(seed.bytes)
     expect(lines(terminal)[0]).toBe('    X')
+    await new Promise<void>((resolve) => terminal.write('\x1b[?1049l\x1b[?1049h\x1b[H\tY', resolve))
+    expect(lines(terminal)[0]).toBe('    Y')
   })
   it('attributes never leak from one block or row into the next', async () => {
     // Red text ends history; the screen starts in the default colour.

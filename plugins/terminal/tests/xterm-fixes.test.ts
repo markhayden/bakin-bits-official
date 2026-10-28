@@ -190,3 +190,24 @@ describe('UTF-8 chunk boundaries', () => {
     expect(terminal.buffer.active.getLine(0)!.translateToString(true)).not.toContain('中')
   })
 })
+
+describe('tab stops across alternate-screen switches', () => {
+  const tabbed = '\x1b[3g\x1b[1;5H\x1bH\x1b[H'
+  const column = (terminal: Term) => new Promise<number>((resolve) => terminal.write('\tX', () => resolve(terminal.buffer.active.cursorX - 1)))
+  it('stock xterm 6.0.0 resets the alternate buffer\'s stops on every entry (fails once upstream shares them)', async () => {
+    const stock = new headless.Terminal({ cols: 20, rows: 3, allowProposedApi: true })
+    await write(stock, tabbed + '\x1b[?1049h')
+    expect(await column(stock)).toBe(8)
+  })
+  it('patched, one set of stops holds across switches, set from either buffer, as in tmux', async () => {
+    const terminal = new headless.Terminal({ cols: 20, rows: 3, allowProposedApi: true })
+    applyTerminalProfile(terminal)
+    await write(terminal, tabbed + '\x1b[?1049h')
+    expect(await column(terminal)).toBe(4)
+    await write(terminal, '\x1b[?1049l\x1b[?1049h\r')
+    expect(await column(terminal)).toBe(4)
+    // Changed on the alternate screen, kept after leaving it.
+    await write(terminal, '\x1b[3g\x1b[1;3H\x1bH\x1b[?1049l\r')
+    expect(await column(terminal)).toBe(2)
+  })
+})
