@@ -9,6 +9,7 @@
  * Reads the pinned version's internals (checked by the xterm pin test).
  */
 import type headless from '@xterm/headless'
+import { altEnteredCols, carriedUtf8 } from './xterm-fixes'
 
 export type Term = InstanceType<typeof headless.Terminal>
 
@@ -25,7 +26,12 @@ export interface Internals {
   buffers: { normal: Buffer; alt: Buffer; active: Buffer }
   _inputHandler: {
     _curAttrData: { fg: number; bg: number; extended: Extended }
-    _parser: { currentState: number; _parseStack: { state: number }; precedingJoinState: number; _collect: number; _oscParser: { _state: number }; _dcsParser: { _active?: unknown[] } }
+    _parser: {
+      currentState: number; _parseStack: { state: number }; precedingJoinState: number; _collect: number
+      _params: { toArray(): unknown[] }
+      _oscParser: { _state: number; _id: number; _active?: { _data?: string; _hitLimit?: boolean }[] }
+      _dcsParser: { _ident: number; _active?: { _data?: string; _hitLimit?: boolean }[] }
+    }
     _utf8Decoder: { interim: Uint8Array }
   }
   _charsetService: { glevel: number; charset: unknown; _charsets: unknown[] }
@@ -68,7 +74,9 @@ export function extendedKey(terminal: Term, fg: number, extended: Extended | nul
 
 /** A cell's identity: content (empty is not a space, nor any character), width, attributes, link. */
 export function cellKey(terminal: Term, cell: Cell, links?: LinkNames): string {
-  const key = extendedKey(terminal, cell.fg, cell.bg & HAS_EXTENDED ? cell.extended : null, links)
+  // Extended attributes with no underline and no link draw nothing: the same as none.
+  const extended = extendedKey(terminal, cell.fg, cell.bg & HAS_EXTENDED ? cell.extended : null, links)
+  const key = extended === '-:' ? '' : extended
   return JSON.stringify([cell.getChars() === '' ? null : cell.getChars(), cell.getWidth(), cell.fg | 0, cell.bg & ~HAS_EXTENDED, key])
 }
 /** Cells of a row in a state: separated by a character no cell key contains. */
@@ -95,7 +103,13 @@ export function charsetName(map: unknown): string {
 
 /** DECSC keeps an absolute buffer row: compared exactly. */
 export const savedKey = (buffer: Buffer) => `${buffer.savedX},${buffer.savedY},${buffer.savedCurAttrData.fg},${buffer.savedCurAttrData.bg},${charsetName(buffer.savedCharset)}`
-const stops = (tabs: Record<number, boolean | undefined>) => Object.keys(tabs).filter((column) => tabs[Number(column)]).join(',')
+/**
+ * Every tab stop, including stale ones past the width after a shrink: a
+ * later widening shows them again, and bytes cannot set one past the width,
+ * so a checkpoint with them is rejected rather than restored without them.
+ */
+export const tabStops = (tabs: Record<number, boolean | undefined>) => Object.keys(tabs).map(Number).filter((column) => tabs[column])
+const stops = (tabs: Record<number, boolean | undefined>) => tabStops(tabs).join(',')
 
 function bufferState(terminal: Term, buffer: Buffer, links: LinkNames) {
   const rows: string[] = []
@@ -115,7 +129,6 @@ export function fullState(terminal: Term) {
   const parser = handler._parser
   const charsets = core._charsetService
   const pen = handler._curAttrData
-  const penExtended = pen.bg & HAS_EXTENDED ? pen.extended : null
   const alternate = terminal.buffer.active.type === 'alternate'
   const links: LinkNames = new Map()
   const normal = bufferState(terminal, core.buffers.normal, links)
@@ -131,14 +144,28 @@ export function fullState(terminal: Term) {
     mouseEncoding: core.coreMouseService?.activeEncoding,
     charsets: [charsets.glevel, charsetName(charsets.charset), ...[0, 1, 2, 3].map((g) => charsetName(charsets._charsets[g]))].join(','),
     // The pen, and the underline it remembers while underline is off (a later SGR 4 reuses the colour).
-    pen: `${pen.fg},${pen.bg & ~HAS_EXTENDED},${extendedKey(terminal, pen.fg, penExtended, links)},remembered:${rawUnderlineStyle(pen.extended)}:${pen.extended.underlineColor}`,
+    // The pen's extended attributes are read whether or not its HAS_EXTENDED
+    // bit is set: an open link survives SGR 0 there and the next print uses it.
+    // With its HAS_EXTENDED bit: a link held while the bit is clear (after a
+    // DECRC, say) is latent — not printed until an SGR sets the bit again.
+    pen: `${pen.fg},${pen.bg & ~HAS_EXTENDED},ext:${pen.bg & HAS_EXTENDED ? 1 : 0},${extendedKey(terminal, pen.fg, pen.extended, links)},remembered:${rawUnderlineStyle(pen.extended)}:${pen.extended.underlineColor}`,
     // The inactive alternate buffer is cleared on every switch except its DECSC slot, which a later 1049h + ESC 8 reads.
+    // Where the alternate screen was entered (the shared tab stops' rule on leaving it).
+    altEntered: alternate ? String(altEnteredCols(terminal)) : '-',
     altSaved: alternate ? '-' : `${savedKey(core.buffers.alt)},lines:${core.buffers.alt.lines.length}/${core.buffers.alt.lines.maxLength},tabs:${stops(core.buffers.alt.tabs)}`,
-    // Parser state that changes how the next bytes are read (collect only matters mid-sequence).
-    parser: `${parser.currentState},${parser._parseStack.state},${parser.precedingJoinState},${parser.currentState ? parser._collect : '-'},${[...handler._utf8Decoder.interim].join('.')},${parser._oscParser._state},${parser._dcsParser._active?.length ?? 0}`,
+    // Parser state that changes how the next bytes are read: the state, the
+    // join state, mid-sequence params and intermediates, partial UTF-8 (in
+    // xterm's decoder and held back by the profile), and the payload an
+    // OSC or DCS string has collected so far.
+    parser: `${parser.currentState},${parser._parseStack.state},${parser.precedingJoinState}`,
+    sequence: parser.currentState ? `${JSON.stringify(parser._params.toArray())}:${parser._collect}` : '-',
+    utf8: `${[...handler._utf8Decoder.interim].join('.')}+${carriedUtf8(terminal)}`,
+    osc: parser._oscParser._state ? `${parser._oscParser._state}:${parser._oscParser._id}:${payloads(parser._oscParser._active)}` : '-',
+    dcs: parser._dcsParser._active?.length ? `${parser._dcsParser._ident}:${payloads(parser._dcsParser._active)}` : '-',
   }
 }
 export type TerminalState = ReturnType<typeof fullState>
+const payloads = (handlers: { _data?: string; _hitLimit?: boolean }[] | undefined) => JSON.stringify((handlers ?? []).map((handler) => [handler._data ?? '', Boolean(handler._hitLimit)]))
 
 /** The first difference between two states, named by field (null when equal). */
 export function stateDiff(a: TerminalState, b: TerminalState): string | null {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import headless from '@xterm/headless'
-import { patchEraseAbove, WRITE_PIECE } from '../lib/xterm-fixes'
+import { carriedUtf8, patchEraseAbove, WRITE_PIECE } from '../lib/xterm-fixes'
 import { Screen } from '../lib/screen'
 import { applyTerminalProfile } from '../lib/terminal-profile'
 import { loadGraphemeProvider } from '../lib/unicode-widths'
@@ -171,6 +171,26 @@ describe('UTF-8 chunk boundaries', () => {
     bytes[bytes.length - 1] = 0x41
     await writeBytes(terminal, bytes)
     expect(terminal.buffer.active.getLine(0)!.translateToString(true)).toContain('A')
+  })
+  it('the carried tail is reported as of the parser\'s position, not the writer\'s', async () => {
+    const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
+    applyTerminalProfile(terminal)
+    const zh = Buffer.from('中X')
+    const seen: number[] = []
+    // Queued back to back: the second write takes the carry before the first is parsed.
+    terminal.write(zh.subarray(0, 1), () => seen.push(carriedUtf8(terminal)))
+    terminal.write(zh.subarray(1), () => seen.push(carriedUtf8(terminal)))
+    await new Promise<void>((resolve) => terminal.write('', resolve))
+    expect(seen).toEqual([1, 0])
+  })
+  it('an empty write (a barrier: settled(), a checkpoint attempt) keeps a carried tail', async () => {
+    const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
+    applyTerminalProfile(terminal)
+    const zh = Buffer.from('中X')
+    await writeBytes(terminal, zh.subarray(0, 2))
+    await new Promise<void>((resolve) => terminal.write('', resolve))
+    await writeBytes(terminal, zh.subarray(2))
+    expect(terminal.buffer.active.getLine(0)!.translateToString(true)).toBe('中X')
   })
   it('a string write drops a carried tail instead of handing it to xterm\'s decoder', async () => {
     const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })

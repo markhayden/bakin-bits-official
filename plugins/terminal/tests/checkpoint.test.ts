@@ -66,6 +66,9 @@ const NAMED: { name: string; cols: number; rows: number; before: Uint8Array; aft
   { name: 'protected (DECSCA) cells, an erase that spares them, and a protected pen', cols: 12, rows: 3, before: enc('ab\x1b[1"qPROT\x1b[0"qcd\x1b[1"q'), after: enc('X\x1b[1;1H\x1b[?2Kafter'), atCut: true },
   { name: 'a protected cell after a reset (SGR 0 clears protection)', cols: 12, rows: 3, before: enc('\x1b[1"qP\x1b[0"qU'), after: enc('\x1b[?2Kx'), atCut: true },
   { name: 'DECSET 12 (cursor blinking set by the program)', cols: 12, rows: 3, before: enc('\x1b[?12hx'), after: enc('y'), atCut: true },
+  { name: 'an open link that survived SGR 0', cols: 20, rows: 3, before: enc('\x1b]8;;https://a.example\x1b\\on\x1b[0m'), after: enc('ward\x1b]8;;\x1b\\'), atCut: true },
+  // DECRC restores a bg without HAS_EXTENDED while the pen keeps its link: latent until an SGR sets the bit.
+  { name: 'a latent link after DECRC, revived by an SGR', cols: 20, rows: 3, before: enc('\x1b7\x1b]8;;https://a.example\x1b\\a\x1b8'), after: enc('b\x1b[4mc\x1b]8;;\x1b\\'), atCut: true },
   { name: 'a saved cursor with protection on', cols: 12, rows: 3, before: enc('\x1b[1"q\x1b7\x1b[0"qx'), after: enc('\x1b8P\x1b[?2K'), atCut: true },
   { name: 'a link the program named like a generated one', cols: 20, rows: 3, before: enc('\x1b]8;;https://a.example\x1b\\A\x1b]8;;\x1b\\'), after: enc('\x1b]8;id=bakin-1;https://a.example\x1b\\B\x1b]8;;\x1b\\'), atCut: true },
   { name: 'custom tab stops then the alternate screen', cols: 20, rows: 3, before: enc('\x1b[3g\x1b[1;5H\x1bH\x1b[H'), after: enc('\x1b[?1049h\tX') },
@@ -105,6 +108,27 @@ describe('checkpoint: link identity', () => {
     await write(term, '\x1b]8;;https://a.example\x1b\\one\x1b]8;;\x1b\\ \x1b]8;;https://a.example\x1b\\two\x1b]8;;\x1b\\')
     const result = takeCheckpoint(term)
     expect('checkpoint' in result).toBe(true)
+  })
+})
+
+describe('checkpoint: what bytes cannot carry', () => {
+  it('the width the alternate screen was entered at (leaving it after a resize resets the stops)', async () => {
+    const build = async () => {
+      const term = terminal(20, 3)
+      await write(term, '\x1b[3g\x1b[1;5H\x1bH\x1b[?1049h')
+      term.resize(25, 3)
+      return term
+    }
+    const reference = await build()
+    const replica = await build()
+    const result = takeCheckpoint(replica)
+    expect('checkpoint' in result && result.checkpoint.altEnteredCols).toBe(20)
+    if (!('checkpoint' in result)) return
+    const viewer = terminal(25, 3)
+    await restoreCheckpoint(viewer, result.checkpoint)
+    for (const term of [reference, viewer]) await write(term, '\x1b[?1049l\x1b[H\tX')
+    expect(stateDiff(fullState(reference), fullState(viewer))).toBeNull()
+    expect(shown(viewer)).toEqual(shown(reference))
   })
 })
 

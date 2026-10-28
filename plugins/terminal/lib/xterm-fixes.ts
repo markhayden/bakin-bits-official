@@ -214,7 +214,8 @@ export function incompleteUtf8Tail(data: Uint8Array): number {
 const carried = new WeakMap<object, () => number>()
 /**
  * Bytes of an incomplete UTF-8 sequence held back from `terminal`'s parser
- * (patchUtf8Boundaries): parser state outside xterm, so a checkpoint waits
+ * (patchUtf8Boundaries), as of the parser's position (read it from a write
+ * callback or after one): parser state outside xterm, so a checkpoint waits
  * for it to complete.
  */
 export function carriedUtf8(terminal: object): number { return carried.get(terminal)?.() ?? 0 }
@@ -229,27 +230,35 @@ export const WRITE_PIECE = 64 * 1024
  * writes itself at 128 KiB, anywhere. So every write reaches xterm in pieces
  * of at most WRITE_PIECE that end on a codepoint boundary (a string on a
  * surrogate pair's boundary); an incomplete UTF-8 tail is carried into the
- * next byte write. A string write or a reset drops a carried tail: those
- * bytes can no longer complete.
+ * next byte write. Text written as a string, or a reset, drops a carried
+ * tail (those bytes can no longer complete); an empty write keeps it.
  */
 export function patchUtf8Boundaries(terminal: { write(data: string | Uint8Array, callback?: () => void): void; reset(): void }): void {
   const write = terminal.write.bind(terminal)
   const reset = terminal.reset.bind(terminal)
   let carry: Uint8Array | undefined
-  carried.set(terminal, () => carry?.length ?? 0)
-  // Pieces in order; the caller's callback rides the last, so it fires after all of them are parsed.
+  // The tail carried as of where the parser is (not where the writer is: a
+  // later write may already have taken it). Each write publishes the carry it
+  // left once it is parsed, so a callback sees the state at its own position.
+  let carriedAtParse = 0
+  carried.set(terminal, () => carriedAtParse)
+  // Pieces in order; the last carries the caller's callback, so it fires after all of them are parsed.
   const pieces = (data: string | Uint8Array, boundary: (end: number) => number, callback?: () => void) => {
-    if (data.length === 0) { write(data, callback); return }
+    const left = carry?.length ?? 0
+    const done = () => { carriedAtParse = left; callback?.() }
+    if (data.length === 0) { write(data, done); return }
     for (let offset = 0; offset < data.length;) {
       let end = Math.min(offset + WRITE_PIECE, data.length)
       if (end < data.length) end = boundary(end)
-      write(data.slice(offset, end), end === data.length ? callback : undefined)
+      write(data.slice(offset, end), end === data.length ? done : undefined)
       offset = end
     }
   }
   terminal.write = (data, callback) => {
     if (typeof data === 'string') {
-      carry = undefined
+      // An empty write is a barrier (a caller waiting for the parser), not
+      // text: the carried tail still completes with the next bytes.
+      if (data) carry = undefined
       // Never between a surrogate pair's halves.
       pieces(data, (end) => (/[\ud800-\udbff]/.test(data[end - 1]!) ? end - 1 : end), callback)
       return
@@ -270,8 +279,17 @@ export function patchUtf8Boundaries(terminal: { write(data: string | Uint8Array,
       return end
     }, callback)
   }
-  terminal.reset = () => { carry = undefined; reset() }
+  terminal.reset = () => { carry = undefined; carriedAtParse = 0; reset() }
 }
+
+const tabStopState = new WeakMap<object, { get(): number | undefined; set(value: number | undefined): void }>()
+/**
+ * The width the alternate screen was entered at (patchSharedTabStops):
+ * leaving it at another width resets the stops. State outside xterm, so a
+ * checkpoint carries it and a restore sets it.
+ */
+export const altEnteredCols = (terminal: object): number | undefined => tabStopState.get(terminal)?.get()
+export const setAltEnteredCols = (terminal: object, cols: number | undefined): void => tabStopState.get(terminal)?.set(cols)
 
 /**
  * xterm 6.0.0 keeps tab stops per buffer and resets the alternate buffer's
@@ -290,6 +308,7 @@ export function patchSharedTabStops(terminal: object): void {
   const toNormal = set.activateNormalBuffer.bind(set)
   const toAlt = set.activateAltBuffer.bind(set)
   let enteredAt: number | undefined
+  tabStopState.set(terminal, { get: () => enteredAt, set: (value) => { enteredAt = value } })
   set.activateNormalBuffer = () => {
     const leaving = set.active === set.alt ? { ...set.alt.tabs } : undefined
     toNormal()

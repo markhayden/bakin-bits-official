@@ -6,17 +6,18 @@
  *
  * A checkpoint is taken only when the parser is between sequences, and is
  * accepted only when restoring it into a scratch terminal reproduces the
- * full state (lib/terminal-state.ts). The grapheme join state (what the
- * next combining character joins) cannot be rebuilt from bytes — any escape
- * clears it — so it travels beside them and is set after they are parsed.
+ * full state (lib/terminal-state.ts). Three facts cannot be rebuilt from
+ * bytes, so they travel beside them and are set after the bytes are parsed:
+ * the grapheme join state (any escape clears it), the pen's HAS_EXTENDED bit
+ * (a latent link), and the width the alternate screen was entered at.
  *
  * Reads the pinned version's internals (checked by the xterm pin test).
  */
 import headless from '@xterm/headless'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
-import { carriedUtf8 } from './xterm-fixes'
+import { altEnteredCols, carriedUtf8, setAltEnteredCols } from './xterm-fixes'
 import {
-  cellKey, charsetName, fullState, HAS_EXTENDED, internals, learnCharsets, nullCell, rawUnderlineStyle, savedKey, stateDiff,
+  cellKey, charsetName, fullState, HAS_EXTENDED, internals, learnCharsets, nullCell, rawUnderlineStyle, savedKey, stateDiff, tabStops, UNDERLINE,
   type Buffer, type Extended, type Term,
 } from './terminal-state'
 
@@ -32,6 +33,10 @@ export interface Checkpoint {
   data: string
   /** The parser's grapheme join state after `data` (xterm's packed character properties; 0 for none). */
   joinState: number
+  /** The pen's HAS_EXTENDED bit: a link it holds with the bit clear is latent. */
+  penHasExtended: boolean
+  /** The width the alternate screen was entered at, while it is active (patchSharedTabStops). */
+  altEnteredCols: number | null
 }
 
 /** A terminal built the way every emulator is (the profile), live effects off. */
@@ -189,7 +194,7 @@ function savedSlot(terminal: Term, buffer: Buffer, y?: number): string {
     + (extended ? osc8('https://bakin.invalid/checkpoint') : '') + '\x1b7' + (extended ? osc8('') : '') + '\x1b[0m' + (protectedSlot ? protection(false) : '') + '\x1b(B'
 }
 function bufferTail(terminal: Term, buffer: Buffer, slot: boolean): string {
-  let out = '\x1b[3g' + Object.keys(buffer.tabs).filter((column) => buffer.tabs[Number(column)]).map((column) => `\x1b[1;${Number(column) + 1}H\x1bH`).join('')
+  let out = '\x1b[3g' + tabStops(buffer.tabs).map((column) => `\x1b[1;${column + 1}H\x1bH`).join('')
   if (slot) out += savedSlot(terminal, buffer, buffer.savedY - buffer.ybase)
   return out + `\x1b[${buffer.scrollTop + 1};${buffer.scrollBottom + 1}r`
 }
@@ -215,7 +220,8 @@ export function serialize(terminal: Term): string {
   if (!alternate && (alt.lines.length === 0 || savedKey(alt) !== defaultSlot)) out += '\x1b[?47h' + savedSlot(terminal, alt, alt.savedY) + '\x1b[?47l'
   if (alternate) {
     // The normal buffer's slot is in place; enter the alternate screen without saving (47h, not 1049h).
-    out += bufferTail(terminal, normal, false) + '\x1b(B\x0f\x1b[?47h\x1b[0m\x1b[H'
+    // The normal buffer keeps the cursor it had at the switch (the region's DECSTBM above homed it).
+    out += bufferTail(terminal, normal, false) + `\x1b[${normal.y + 1};${Math.min(normal.x, terminal.cols - 1) + 1}H` + '\x1b(B\x0f\x1b[?47h\x1b[0m\x1b[H'
     out += printLines(terminal, alt, 0)
   }
   out += bufferTail(terminal, active, alternate)
@@ -237,6 +243,8 @@ export function serialize(terminal: Term): string {
   const pen = core._inputHandler._curAttrData
   // The pen always carries its extended attributes (an underline colour is remembered while underline is off).
   out += sgr(pen.fg, pen.bg & ~HAS_EXTENDED, pen.extended)
+  // An underline style remembered while underline is off (a DECRC can turn the underline back on with it).
+  if (!(pen.fg & UNDERLINE) && rawUnderlineStyle(pen.extended) > 0) out += `\x1b[4:${rawUnderlineStyle(pen.extended)}m\x1b[24m`
   if (pen.bg & PROTECTED) out += protection(true)
   const modes = terminal.modes as typeof terminal.modes & { synchronizedOutputMode?: boolean }
   if (modes.applicationCursorKeysMode) out += '\x1b[?1h'
@@ -261,10 +269,10 @@ export function serialize(terminal: Term): string {
   const override = core.coreService.decPrivateModes
   if (override.cursorStyle !== undefined) out += `\x1b[${({ block: 1, underline: 3, bar: 5 } as Record<string, number>)[override.cursorStyle]! + (override.cursorBlink ? 0 : 1)} q`
   if (modes.originMode) out += `\x1b[?6h\x1b[${active.y - active.scrollTop + 1};${active.x + 1}H`
-  // An open hyperlink in the pen: the same link its printed cells carry, so it continues under its id.
-  const penExtended = pen.bg & HAS_EXTENDED ? pen.extended : null
-  if (penExtended && penExtended.urlId) {
-    const link = linkParams(terminal, penExtended.urlId)
+  // An open hyperlink in the pen (also with its HAS_EXTENDED bit clear: it
+  // survives SGR 0 and the next print uses it), under the id its cells carry.
+  if (pen.extended.urlId) {
+    const link = linkParams(terminal, pen.extended.urlId)
     out += osc8(link.uri, link.id)
   }
   return out
@@ -280,15 +288,23 @@ export function quiescent(terminal: Term): boolean {
   return parser.currentState === 0 && parser._parseStack.state === 0 && handler._utf8Decoder.interim[0] === 0 && carriedUtf8(terminal) === 0
 }
 
+/** Set what the bytes cannot carry, once they are parsed. */
+function finish(terminal: Term, checkpoint: Checkpoint): void {
+  const handler = internals(terminal)._inputHandler
+  handler._parser.precedingJoinState = checkpoint.joinState
+  if (checkpoint.penHasExtended) handler._curAttrData.bg |= HAS_EXTENDED
+  else handler._curAttrData.bg &= ~HAS_EXTENDED
+  if (checkpoint.altEnteredCols !== null) setAltEnteredCols(terminal, checkpoint.altEnteredCols)
+}
 /** Rebuild `terminal` (fresh: same size and scrollback) from `checkpoint`, synchronously. */
 export function restoreCheckpointSync(terminal: Term, checkpoint: Checkpoint): void {
   internals(terminal)._writeBuffer.writeSync(checkpoint.data)
-  internals(terminal)._inputHandler._parser.precedingJoinState = checkpoint.joinState
+  finish(terminal, checkpoint)
 }
-/** Rebuild `terminal` from `checkpoint` through its write queue: bytes written after it parse after the join state is set. */
+/** Rebuild `terminal` from `checkpoint` through its write queue: bytes written after it parse after its side state is set. */
 export function restoreCheckpoint(terminal: Term, checkpoint: Checkpoint): Promise<void> {
   return new Promise<void>((resolve) => terminal.write(checkpoint.data, () => {
-    internals(terminal)._inputHandler._parser.precedingJoinState = checkpoint.joinState
+    finish(terminal, checkpoint)
     resolve()
   }))
 }
@@ -304,6 +320,8 @@ export function takeCheckpoint(terminal: Term): { checkpoint: Checkpoint } | { r
   const checkpoint: Checkpoint = {
     format: CHECKPOINT_FORMAT, cols: terminal.cols, rows: terminal.rows, scrollback,
     data: serialize(terminal), joinState: internals(terminal)._inputHandler._parser.precedingJoinState,
+    penHasExtended: (internals(terminal)._inputHandler._curAttrData.bg & HAS_EXTENDED) !== 0,
+    altEnteredCols: terminal.buffer.active.type === 'alternate' ? altEnteredCols(terminal) ?? null : null,
   }
   const restored = scratch(terminal.cols, terminal.rows, scrollback)
   try {
