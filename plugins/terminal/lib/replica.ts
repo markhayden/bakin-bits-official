@@ -34,7 +34,9 @@
  *   at a time: width changes while one is out need one more (the newest
  *   generation). A geometry that cannot be installed (sizes disagree) is a
  *   `width` rebuild. While history is owed (an overload's), it is the screen
- *   alone, like every seed then.
+ *   alone, like every seed then. One nothing owes when it lands (a seed
+ *   since covered its width change) is dropped; one of the screen alone
+ *   landing on a picture with its history is asked for again in full.
  * - A parser failure or an invalid log ends it. The log's own overflow
  *   stays the last safeguard (recovery, T35).
  */
@@ -426,6 +428,11 @@ export class Replica implements LogConsumer {
 
   /** Install a width change's geometry (the event is the tail's, for viewers), or rebuild. */
   private async geometry(event: Extract<LogEvent, { kind: 'geometry' }>): Promise<void> {
+    // Nothing owed: a seed since it was asked for has every width change before it (it supersedes this).
+    if (!this.widthOwed) return
+    // Asked for the screen alone while history was owed, landing on a picture with its history: it would take
+    // that history away. Asked for again, in full (the capture's scope is the replica's state when it lands).
+    if (!event.history && !this.historyPending) { this.widthAsked = 0; this.askGeometry(); return }
     const started = this.now()
     const terminal = this.term!
     const { terminal: source } = profileTerminal(event.cols, event.rows)
