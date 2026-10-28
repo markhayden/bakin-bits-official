@@ -302,3 +302,29 @@ describe('streamed restore (the raw path)', () => {
     expect(multibyte).toBeGreaterThanOrEqual(4)
   }, 120000)
 })
+
+describe('checkpoint: a full buffer whose first line wraps from a trimmed one', () => {
+  // The restore prints a filler before that line, and the buffer trims it as the last line is printed:
+  // xterm keeps savedY across a trim, so the slot must be saved a printed line earlier.
+  const flood = Array.from({ length: 80 }, (_, i) => `\x1b[3${i % 8}mline ${i} ${'lorem ipsum '.repeat(3)}\x1b[0m`).join('\r\n')
+  const cases: [string, string, string][] = [
+    ['a slot on the top screen row', '', '\x1b[1;1H\x1b7'],
+    ['a slot mid-screen, with its attributes', '', '\x1b[3;3H\x1b[31m\x1b7\x1b[0m'],
+    ['a slot on the last row', '', '\x1b[5;1H\x1b7'],
+    ['a slot in the history', '\x1b[2;4H\x1b[32m\x1b7\x1b[0m\x1b[H', ''],
+    ['a slot on the first line (saved on the filler)', '\x1b[1;4H\x1b[32m\x1b7\x1b[0m\x1b[H', ''],
+  ]
+  for (const [name, head, tail] of cases) {
+    it(`restores ${name}`, async () => {
+      const source = emulator(20, 5, 30)
+      source.write('\x1bc' + head + flood + tail)
+      await settled(source)
+      expect(source.buffer.normal.getLine(0)!.isWrapped).toBe(true)
+      const result = takeCheckpoint(source)
+      expect('rejected' in result ? result.rejected : 'accepted').toBe('accepted')
+      const viewer = emulator(20, 5, 30)
+      await restoreCheckpoint(viewer, (result as { checkpoint: Checkpoint }).checkpoint)
+      expect(stateDiff(fullState(viewer), fullState(source))).toBeNull()
+    })
+  }
+})

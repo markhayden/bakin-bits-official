@@ -278,11 +278,20 @@ export function* serializeSteps(terminal: Term): Generator<void, string[]> {
   const active = alternate ? alt : normal
   let out = '\x1bc'
   // A first line that wraps from a line already scrolled away: a filler it wraps from.
-  if (normal.lines.get(0)?.isWrapped) out += '\x1b[0m' + 'x'.repeat(terminal.cols)
+  const filler = Boolean(normal.lines.get(0)?.isWrapped)
+  // A filler in a full buffer is trimmed once, as the last line is printed; xterm keeps savedY across a
+  // trim, so a slot saved before it would sit a row low: it is saved one printed line earlier.
+  const trimmed = filler && normal.lines.length + 1 > normal.lines.maxLength
+  const slot = savedKey(normal) === defaultSlot ? -1 : normal.savedY - (trimmed ? 1 : 0)
+  if (filler) {
+    out += '\x1b[0m' + 'x'.repeat(terminal.cols)
+    // Saved on the filler itself; its last cell is printed again so the first line still wraps from it.
+    if (slot === -1 && trimmed && savedKey(normal) !== defaultSlot) out += savedSlot(terminal, normal) + `\x1b[${terminal.cols}Gx`
+  }
   const text = new Text()
   text.add(out)
   out = ''
-  yield* printLines(terminal, text, normal, nonce, 0, savedKey(normal) === defaultSlot ? -1 : normal.savedY)
+  yield* printLines(terminal, text, normal, nonce, 0, slot)
   // The inactive alternate buffer's DECSC slot: 47h (switch without saving or clearing), the slot, 47l.
   if (!alternate && (alt.lines.length === 0 || savedKey(alt) !== defaultSlot)) out += '\x1b[?47h' + savedSlot(terminal, alt, alt.savedY) + '\x1b[?47l'
   if (alternate) {
