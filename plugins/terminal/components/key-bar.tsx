@@ -1,4 +1,7 @@
 import { useEffect, useRef } from 'react'
+import { flushSync } from 'react-dom'
+import { Button } from '@makinbakin/sdk/ui'
+import { ComposeSheet, type PasteOutcome } from './compose-sheet'
 import { Joystick } from './joystick'
 import { CONTROL_LABELS, CONTROL_SHORTCUTS, keyFace, SHEET_KEYS, type ArrowKey, type Modifier, type ModifierState, type TerminalKey } from './terminal-input'
 import type { EditingSession } from './editing-session'
@@ -18,9 +21,10 @@ function Keycap({ label, face, tone, state, disabled, className, onPress, onKeyD
   label: string; face: React.ReactNode; tone?: 'function'; state?: ModifierState[Modifier]
   disabled?: boolean; className?: string; onPress(event: React.MouseEvent): void; onKeyDown?(event: React.KeyboardEvent): void
 }) {
-  return <button type="button" className={`terminal-keycap${className ? ' ' + className : ''}`} data-tone={tone} data-state={state}
+  // The kit Button (focus ring, disabled state, activation), drawn as a keycap by the plugin's scoped CSS.
+  return <Button variant="ghost" size="icon-lg" className={`terminal-keycap${className ? ' ' + className : ''}`} data-tone={tone} data-state={state}
     aria-label={label} aria-pressed={state === undefined ? undefined : state !== 'off'} disabled={disabled}
-    onMouseDown={keepFocus} onClick={onPress} onKeyDown={onKeyDown}>{face}</button>
+    onMouseDown={keepFocus} onClick={onPress} onKeyDown={onKeyDown}>{face}</Button>
 }
 
 const ARROWS_ICON = <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5l3.2 4.2H8.8z" /><path d="M12 21.5l-3.2-4.2h6.4z" /><path d="M2.5 12l4.2-3.2v6.4z" /><path d="M21.5 12l-4.2 3.2V8.8z" /><circle cx="12" cy="12" r="2" /></svg>
@@ -41,32 +45,32 @@ function ArrowJoystick({ disabled, onArrow }: { disabled: boolean; onArrow(key: 
   useEffect(() => { if (disabled) stick.current?.cancel() }, [disabled])
   useEffect(() => () => stick.current?.cancel(), [])
   const mine = (event: React.PointerEvent) => event.pointerId === pointer.current
-  return <button type="button" className="terminal-keycap terminal-joystick" aria-label="Arrow keys" disabled={disabled}
+  return <Button variant="ghost" size="icon-lg" className="terminal-keycap terminal-joystick" aria-label="Arrow keys" disabled={disabled}
     onMouseDown={keepFocus}
-    onPointerDown={(event) => {
+    onPointerDown={(event: React.PointerEvent<HTMLButtonElement>) => {
       if (disabled || event.button !== 0 || pointer.current !== undefined) return
       pointer.current = event.pointerId
       event.currentTarget.setPointerCapture?.(event.pointerId)
       stick.current!.start(event.clientX, event.clientY)
     }}
-    onPointerMove={(event) => { if (mine(event)) stick.current!.move(event.clientX, event.clientY) }}
-    onPointerUp={(event) => {
+    onPointerMove={(event: React.PointerEvent<HTMLButtonElement>) => { if (mine(event)) stick.current!.move(event.clientX, event.clientY) }}
+    onPointerUp={(event: React.PointerEvent<HTMLButtonElement>) => {
       if (!mine(event)) return
       pointer.current = undefined
       const box = event.currentTarget.getBoundingClientRect()
       stick.current!.end(event.clientX - box.left, event.clientY - box.top, box.width, box.height)
     }}
-    onPointerCancel={(event) => { if (mine(event)) { pointer.current = undefined; stick.current!.cancel() } }}
-    onLostPointerCapture={(event) => { if (mine(event)) { pointer.current = undefined; stick.current!.cancel() } }}
+    onPointerCancel={(event: React.PointerEvent<HTMLButtonElement>) => { if (mine(event)) { pointer.current = undefined; stick.current!.cancel() } }}
+    onLostPointerCapture={(event: React.PointerEvent<HTMLButtonElement>) => { if (mine(event)) { pointer.current = undefined; stick.current!.cancel() } }}
     // Pointer presses are handled above; the click that follows them sends nothing.
-    onClick={(event) => event.preventDefault()}
-    onKeyDown={(event) => {
+    onClick={(event: React.MouseEvent) => event.preventDefault()}
+    onKeyDown={(event: React.KeyboardEvent) => {
       const key = ARROW_KEYS[event.key]
       if (!key || disabled) return
       event.preventDefault()
       event.stopPropagation()
       send.current(key)
-    }}>{ARROWS_ICON}</button>
+    }}>{ARROWS_ICON}</Button>
 }
 
 const HIDE_ICON = <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="11" rx="2" /><path d="M6 7.5h.01M9.5 7.5h.01M13 7.5h.01M16.5 7.5h.01M7 11.5h10" /><path d="M9 18.5l3 2.5 3-2.5" /></svg>
@@ -79,17 +83,31 @@ const MORE_ICON = <svg width="22" height="22" viewBox="0 0 24 24" fill="currentC
  * touching them neither ends the editing session nor drops a modifier.
  * Hide keyboard works even while sending is disabled.
  */
-export function KeyBar({ session, disabled, modifiers, onKey, onModifier, onSheet, onKeyboard, onHide }: {
+export function KeyBar({ session, disabled, modifiers, draft, onKey, onModifier, onSheet, onCompose, onDraft, onPaste, onKeyboard, onHide }: {
   session: Exclude<EditingSession, 'idle'>; disabled: boolean; modifiers: ModifierState
+  /** This session's compose draft, and whether this browser can keep it after the page is left. */
+  draft: { text: string; kept: boolean }
   onKey(key: TerminalKey): void
   onModifier(modifier: Modifier, action: 'tap' | 'lock'): void
   /** Open the key sheet (the keyboard goes down). */
   onSheet(): void
+  /** Open the compose sheet (its textarea takes the keyboard within this tap). */
+  onCompose(): void
+  onDraft(text: string): void
+  /** Send compose text as a paste. */
+  onPaste(text: string, enter: boolean): PasteOutcome
   /** Back to the keyboard from the sheet (focuses the terminal within this tap). */
   onKeyboard(): void
   onHide(): void
 }) {
   const sheet = useRef<HTMLDivElement>(null)
+  const compose = useRef<HTMLTextAreaElement>(null)
+  // Rendered and focused within the tap, so a phone raises the keyboard for the textarea.
+  const openCompose = () => {
+    flushSync(onCompose)
+    compose.current?.focus()
+  }
+  const sheetOpen = session === 'sheet' || session === 'compose'
   const modifierKey = (modifier: Modifier) => <Keycap key={modifier} label={modifierLabel(modifier, modifiers[modifier])} face={<>{MODIFIER_FACES[modifier]}{modifiers[modifier] === 'locked' && <span className="terminal-keycap-lock" aria-hidden="true" />}</>}
     state={modifiers[modifier]} disabled={disabled} onPress={() => onModifier(modifier, 'tap')} />
   const sendKey = (key: TerminalKey, label?: string) => <Keycap key={key} label={label ? `${key} ${label}` : key}
@@ -101,8 +119,13 @@ export function KeyBar({ session, disabled, modifiers, onKey, onModifier, onShee
     // first usable key, or the sheet itself while sending is disabled.
     if (event.detail === 0) requestAnimationFrame(() => (sheet.current?.querySelector<HTMLButtonElement>('button:not(:disabled)') ?? sheet.current)?.focus())
   }
-  // Escape anywhere in the bar or sheet goes back to the keyboard while the sheet is open.
-  const escape = (event: React.KeyboardEvent) => { if (session === 'sheet' && event.key === 'Escape') { event.preventDefault(); onKeyboard() } }
+  // Escape anywhere in the bar or a sheet goes back to the keyboard while one is open
+  // (Recipes/TerminalInput): not inside a composition (an input method's own Escape), nor one already claimed.
+  const escape = (event: React.KeyboardEvent) => {
+    if (!sheetOpen || event.key !== 'Escape' || event.defaultPrevented || event.nativeEvent.isComposing) return
+    event.preventDefault()
+    onKeyboard()
+  }
   return <div className="terminal-key-accessory" data-terminal-keys="" onKeyDown={escape}>
     <div role="group" aria-label="Terminal keys" className="terminal-key-bar">
       {sendKey('Esc')}
@@ -110,13 +133,18 @@ export function KeyBar({ session, disabled, modifiers, onKey, onModifier, onShee
       {modifierKey('ctrl')}
       {modifierKey('alt')}
       <ArrowJoystick disabled={disabled} onArrow={onKey} />
-      {session === 'sheet'
+      {sheetOpen
         ? <Keycap label="Back to keyboard" face="abc" tone="function" className="terminal-key-push" onPress={onKeyboard} />
         : <Keycap label="More keys" face={MORE_ICON} tone="function" className="terminal-key-push" onPress={openSheet} />}
       <span aria-hidden="true" className="terminal-key-divider" />
       <Keycap label="Hide keyboard" face={HIDE_ICON} tone="function" className="terminal-keycap-hide" onPress={onHide} />
     </div>
+    {session === 'compose' && <ComposeSheet draft={draft.text} kept={draft.kept} disabled={disabled} textarea={compose} onDraft={onDraft} onSend={onPaste} />}
     {session === 'sheet' && <div ref={sheet} role="region" aria-label="More keys" tabIndex={-1} className="terminal-key-sheet">
+      <div role="group" aria-label="Text" className="terminal-key-grid terminal-key-grid-labelled">
+        <Keycap label="Compose" face={<><span className="terminal-keycap-face">✎</span><span className="terminal-keycap-label">Compose</span></>}
+          className="terminal-keycap-wide" onPress={openCompose} />
+      </div>
       <div role="group" aria-label="Keys" className="terminal-key-grid">{SHEET_KEYS.map(key => sendKey(key))}</div>
       <div role="group" aria-label="Control" className="terminal-key-grid terminal-key-grid-labelled">{CONTROL_SHORTCUTS.map(key => sendKey(`Ctrl+${key}`, CONTROL_LABELS[key]))}</div>
       <div role="group" aria-label="Locks" className="terminal-key-grid terminal-key-grid-labelled">

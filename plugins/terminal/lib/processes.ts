@@ -1,9 +1,13 @@
+import { randomUUID } from 'node:crypto'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { Session } from './contracts'
 import { TerminalError } from './contracts'
 import { ControlClient } from './control'
 import { OutputLog, parseLayoutChange } from './output-log'
 import { Replica } from './replica'
 import { reseed } from './reseed'
+import { stripPasteMarkers } from './paste'
 import { TerminalService, terminalEnvironment } from './service'
 
 /** A tmux client on a session that is not Bakin's own bridge or control client: a terminal app (Ghostty and friends) or anything else that attached. */
@@ -22,8 +26,13 @@ export interface ProcessDriver {
   /** `clientsChanged` fires when a tmux client attaches to, resizes on, or detaches from the session. */
   attach(session: Session, output: (data: Uint8Array) => void, clientsChanged: () => void): void
   connected(id: string): boolean
-  /** Resolves once tmux has accepted the bytes for the pane (not that the program read them). */
-  write(id: string, data: string): Promise<void>
+  /**
+   * Resolves once tmux has accepted the bytes for the pane (not that the
+   * program read them). A `paste` is delivered as tmux pastes (bracketed
+   * only if the program enabled bracketed paste; lib/paste.ts), then a
+   * Return if `enter` — only once the paste went.
+   */
+  write(id: string, data: string, options?: WriteOptions): Promise<void>
   /** Set the pane title native clients show (`@bakin_title`). */
   title(session: Session): Promise<void>
   /** tmux first (resize-window), then the bridge PTY. */
@@ -49,6 +58,11 @@ export interface ProcessDriver {
 /** Shown inside the terminal app as it attaches (tmux status line, five seconds). */
 export const ATTACH_HINT = 'Detach: Ctrl-b d · Scrollback: Ctrl-b [ · Closing the window also detaches'
 
+export interface WriteOptions { paste?: boolean; enter?: boolean }
+
+/** The tmux buffers Bakin's pastes use (lib/paste.ts). */
+const PASTE_BUFFER_PREFIX = 'bakin-paste-'
+
 /**
  * The hybrid bridge per session: a PTY `attach-session` client whose redraw
  * stream is the output viewers render today (and the reattach-recovery
@@ -59,6 +73,7 @@ export const ATTACH_HINT = 'Detach: Ctrl-b d · Scrollback: Ctrl-b [ · Closing 
  */
 export class TmuxProcesses implements ProcessDriver {
   private bridges = new Map<string, ReturnType<typeof Bun.spawn>>()
+  private pastesSwept = false
   private controls = new Map<string, ControlClient>()
   private logs = new Map<string, OutputLog>()
   private replicas = new Map<string, Replica>()
@@ -128,7 +143,7 @@ export class TmuxProcesses implements ProcessDriver {
     if (!control || control.isClosed) throw new TerminalError('Terminal attachment is disconnected', 503)
     return control
   }
-  async write(id: string, data: string): Promise<void> {
+  async write(id: string, data: string, options: WriteOptions = {}): Promise<void> {
     const control = this.control(id)
     await control.ready
     // Browser and agent input always reaches the program: a native client's
@@ -137,7 +152,65 @@ export class TmuxProcesses implements ProcessDriver {
     // blocks and would break the control client's FIFO correlation.
     const [mode] = await control.command(['display-message', '-p', '-t', id, '#{pane_in_mode}'])
     if (mode?.trim() === '1') await control.command(['send-keys', '-X', '-t', id, 'cancel'])
-    await control.sendKeys(id, new TextEncoder().encode(data))
+    if (!options.paste) { await control.sendKeys(id, new TextEncoder().encode(data)); return }
+    const text = stripPasteMarkers(data)
+    if (text) await this.paste(control, id, text)
+    if (options.enter) await control.sendKeys(id, new Uint8Array([0x0d]))
+  }
+  /**
+   * A paste as tmux makes one (lib/paste.ts): bracketed only if the program
+   * enabled bracketed paste. The text travels through a private file (a
+   * control command line cannot hold line breaks) into a buffer that the
+   * paste deletes; `-r` keeps line breaks and `-S` every other byte as sent.
+   * File and buffer are cleaned up independently (the control connection
+   * may be what failed), and what a crash left behind goes at the first
+   * paste of a later process.
+   */
+  private async paste(control: ControlClient, id: string, text: string): Promise<void> {
+    const dir = join(this.service.root, 'paste')
+    if (!this.pastesSwept) this.pastesSwept = await this.sweepPastes(dir)
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    const name = `${PASTE_BUFFER_PREFIX}${randomUUID()}`
+    const file = join(dir, name)
+    let pasted = false
+    try {
+      writeFileSync(file, text, { mode: 0o600 })
+      await control.command(['load-buffer', '-b', name, file])
+      await control.command(['paste-buffer', '-p', '-r', '-S', '-d', '-b', name, '-t', id])
+      pasted = true
+    } finally {
+      // Each cleanup independent of the other; what fails is left to the next paste's sweep.
+      try {
+        rmSync(file, { force: true })
+      } catch {
+        this.pastesSwept = false
+      }
+      // Not pasted (the paste deletes it): the buffer may exist. Its own tmux client, not the control connection.
+      if (!pasted && !await this.deletePasteBuffers((buffer) => buffer === name)) this.pastesSwept = false
+    }
+  }
+  /** Delete the paste buffers `which` picks; true only when tmux answered and each one went. */
+  private async deletePasteBuffers(which: (name: string) => boolean): Promise<boolean> {
+    try {
+      // Not `optional`: a tmux that cannot be reached is a failure, not an empty list.
+      const listed = (await this.service.command(['list-buffers', '-F', '#{buffer_name}'])).split('\n')
+      for (const name of listed.filter((buffer) => buffer.startsWith(PASTE_BUFFER_PREFIX) && which(buffer))) {
+        await this.service.command(['delete-buffer', '-b', name])
+      }
+      return true
+    } catch {
+      return false
+    }
+  }
+  /** Paste files and buffers left by a crash or a failed cleanup; true when everything went. */
+  private async sweepPastes(dir: string): Promise<boolean> {
+    let clean = true
+    try {
+      rmSync(dir, { recursive: true, force: true })
+    } catch {
+      clean = false
+    }
+    return await this.deletePasteBuffers(() => true) && clean
   }
   connected(id: string): boolean { return this.bridges.has(id) && !this.controls.get(id)?.isClosed }
   async resize(id: string, cols: number, rows: number): Promise<void> {

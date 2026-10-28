@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { activeModifiers, afterSend, consumeModifiers, encodeTerminalKey, NO_MODIFIERS, toggleModifier, type ModifierState } from '../components/terminal-input'
+import { activeModifiers, afterSend, consumeModifiers, encodeTerminalKey, NO_MODIFIERS, pasteText, toggleModifier, type ModifierState } from '../components/terminal-input'
 
 const none = { ctrl: false, alt: false }
 const ctrl = { ctrl: true, alt: false }
@@ -119,5 +119,12 @@ describe('modifier state', () => {
     // Long-pressing an armed or locked key locks it (a lock never toggles off by holding).
     expect(toggleModifier({ ctrl: 'once', alt: 'off' }, 'ctrl', 'lock')).toEqual({ ctrl: 'locked', alt: 'off' })
     expect(toggleModifier({ ctrl: 'locked', alt: 'off' }, 'ctrl', 'lock')).toEqual({ ctrl: 'locked', alt: 'off' })
+  })
+})
+
+describe('compose text as a paste', () => {
+  it('turns line breaks into CR, as the xterm paste does', () => {
+    expect(pasteText('echo one\necho two\r\nlast')).toBe('echo one\recho two\rlast')
+    expect(pasteText('ls')).toBe('ls')
   })
 })

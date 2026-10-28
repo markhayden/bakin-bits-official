@@ -129,6 +129,11 @@ export function consumeModifiers(data: string, mods: ActiveModifiers, source: 't
   return control(data) ?? data
 }
 
+/** Compose text as a terminal receives a paste (spec D9 item 2): line breaks become CR, as xterm's own paste makes them. */
+export const pasteText = (text: string): string => text.replace(/\r?\n/g, '\r')
+/** The most input one envelope may carry (the server's bound). */
+export const INPUT_LIMIT_BYTES = 65536
+
 export interface TerminalInputHandle {
   /** Focus the terminal's input (opens the on-screen keyboard when called from a tap). */
   focus(): void
@@ -140,6 +145,19 @@ export interface TerminalInputHandle {
   modifier(modifier: Modifier, action?: 'tap' | 'lock'): void
   /** Clear every modifier, locks included. */
   reset(): void
-  /** Send typed/pasted text for `generation` over the viewer socket; false when not connected. */
-  send(generation: number, data: string): boolean
+  /**
+   * Send typed/pasted text for `generation` over the viewer socket: the
+   * sequence of the envelope that carries it on the current connection, or
+   * false when not connected. A `paste` is delivered as tmux pastes
+   * (lib/paste.ts), then Return if `enter`, only once the paste went.
+   */
+  send(generation: number, data: string, options?: { paste?: boolean; enter?: boolean }): number | false
+  /** The current connection (sequences restart with each). */
+  connection(): number
+  /**
+   * Compose text ready to send as a paste (pasteText), ending a one-shot
+   * modifier; false when input is not possible now (not connected, or not
+   * this viewer's to type).
+   */
+  pasteText(text: string): string | false
 }

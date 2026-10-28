@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Button } from '@makinbakin/sdk/ui'
 import { ArrowDown, Keyboard, ZoomOut } from 'lucide-react'
 import type { Session } from '../lib/contracts'
@@ -11,7 +12,7 @@ import { guardParser } from '../lib/xterm-fixes'
 import { clientId } from './api'
 import { enableWebgl } from './terminal-renderer'
 import { TerminalSocketClient, type InputResult, type Presence } from './terminal-socket'
-import type { ModifierState, TerminalInputHandle } from './terminal-input'
+import { pasteText, type ModifierState, type TerminalInputHandle } from './terminal-input'
 import { ModifierInput } from './modifier-input'
 import { BASE_FONT, clampFont, fitWidthFont, minFont, pinchFont, resizePlan, reveal, revealClearOf, screenDevice, storedFont, storeFont } from './terminal-view'
 import '@xterm/xterm/css/xterm.css'
@@ -20,9 +21,10 @@ import '@xterm/xterm/css/xterm.css'
 export interface TerminalViewHandle { fitToDevice(): boolean; refit(): void }
 
 /**
- * Links the profile keeps (http, https, mailto) open as xterm's own default
- * does: confirmed, in a new window with no opener. xterm's default handler
- * offers only http(s), so mailto needs this one.
+ * Links the profile keeps (http, https, mailto) — OSC 8 hyperlinks, and
+ * plain-text URLs through the web-links addon (spec D9 item 4) — open as
+ * xterm's own default does: confirmed, in a new window with no opener.
+ * xterm's default handler offers only http(s), so mailto needs this one.
  */
 const LINK_HANDLER = {
   allowNonHttpProtocols: true,
@@ -39,7 +41,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   /** Show the corner keyboard button (a touch screen with the keyboard down). */
   offerKeyboard?: boolean
   inputEnabled: boolean; inputHandle: RefObject<TerminalInputHandle | null>; viewHandle: RefObject<TerminalViewHandle | null>; onModifiersChange(state: ModifierState): void;
-  session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string): void; onClaim(data: string): void; onSession(session: Session): void; onPresence(presence: Presence): void; onResult(result: InputResult): void
+  session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string, paste?: boolean): void; onClaim(data: string): void; onSession(session: Session): void; onPresence(presence: Presence): void; onResult(result: InputResult): void
   /** The renderer hit a parser exception: this screen has stopped and must be rebuilt. */
   onRendererFailed(): void
 }) {
@@ -194,6 +196,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     pane.current!.setAttribute('data-font-size', String(term.options.fontSize))
     fit.current = new FitAddon()
     term.loadAddon(fit.current)
+    term.loadAddon(new WebLinksAddon((event, uri) => LINK_HANDLER.activate(event, uri)))
     term.open(element.current!)
     // Show/hide cursor as the output sets it; a sync's snapshot ends with it too.
     cursorVisibility.current = trackCursorVisibility(term)
@@ -224,7 +227,13 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
         if (ready.current && callbacks.current.inputEnabled) modifiers.toggle(modifier, action)
       },
       reset,
-      send: (generation, data) => socket.current?.input(generation, data) ?? false,
+      send: (generation, data, options) => socket.current?.input(generation, data, options) ?? false,
+      connection: () => socket.current?.connection ?? 0,
+      pasteText(text) {
+        if (!ready.current || !callbacks.current.inputEnabled || !callbacks.current.writable) return false
+        clearOnce()
+        return pasteText(text)
+      },
     }
     viewHandle.current = {
       fitToDevice() {
@@ -246,6 +255,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     }
     const hide = () => { if (document.hidden) reset() }
     const textarea = term.textarea!
+    // No QuickType suggestions inserted into the terminal (spec D9 item 2); compose has its own textarea.
+    textarea.setAttribute('autocomplete', 'off')
     // Focusing the terminal to type goes back to the cursor (like ↓ Live).
     const typing = () => resumeFollow()
     textarea.addEventListener('focus', typing)
@@ -264,7 +275,10 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     term.onData((data) => {
       if (callbacks.current.writable) {
         if (!ready.current || !callbacks.current.inputEnabled) { clearOnce(); return }
-        callbacks.current.onInput(modifiers.data(data))
+        // A paste goes as one (the server has tmux bracket it only if the program asked), sent
+        // exactly; only the data the paste event announced, never what is typed after it.
+        const paste = modifiers.takePaste()
+        callbacks.current.onInput(paste ? data : modifiers.data(data), paste)
       }
       else if (data && data.charCodeAt(0) >= 0x20) callbacks.current.onClaim(data)
     })

@@ -278,6 +278,123 @@ browserTest('return on the on-screen keyboard sends the line and puts the keyboa
   }
 }, 60000)
 
+browserTest('the compose sheet sends one paste (bracketed only when the program asks), keeps its draft, and Paste + Enter puts the keyboard away', async () => {
+  const browser = await launchChromium()
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+  page.setDefaultTimeout(10000)
+  const endpoint = new URL('/api/plugins/terminal/session', process.env.TERMINAL_PREVIEW_URL!).href
+  const headers = { 'X-Bakin-Terminal-Client': 'mobile-compose-sheet-test' }
+  let id: string | undefined
+  const socket = await viewerSocket(page)
+  await fakeViewport(page, 390, 844)
+  const output = async (text: string) => page.waitForFunction(text => document.querySelector('.xterm-accessibility-tree')?.textContent?.replace(/\s+/g, ' ').includes(text), text)
+  try {
+    const created = await page.request.post(endpoint + 's', { headers, data: { title: 'Compose', cwd: '/tmp' } })
+    id = (await created.json()).id
+    await page.goto(new URL('/terminal/' + id, endpoint).href)
+    const keys = page.getByRole('group', { name: 'Terminal keys', exact: true })
+    const input = page.locator('.xterm-helper-textarea')
+    await page.getByRole('button', { name: 'Show keyboard', exact: true }).tap()
+    await keys.waitFor()
+    await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.terminal-key-bar button')?.disabled === false)
+    expect(await input.getAttribute('autocomplete')).toBe('off')
+    // ••• then Compose: the compose textarea has the keyboard, the row stays (abc goes back).
+    const openCompose = async () => {
+      await keys.getByRole('button', { name: 'More keys', exact: true }).tap()
+      await page.getByRole('region', { name: 'More keys' }).getByRole('button', { name: 'Compose', exact: true }).tap()
+      const textarea = page.getByRole('textbox', { name: 'Text to send', exact: true })
+      await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Text to send')
+      return textarea
+    }
+    let textarea = await openCompose()
+    await textarea.fill('a draft')
+    await keys.getByRole('button', { name: 'Back to keyboard', exact: true }).tap()
+    await page.waitForFunction(() => document.activeElement?.classList.contains('xterm-helper-textarea'))
+    // The draft is kept for this session, across a reload too.
+    await page.reload()
+    await page.getByRole('button', { name: 'Show keyboard', exact: true }).tap()
+    await keys.waitFor()
+    await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.terminal-key-bar button')?.disabled === false)
+    textarea = await openCompose()
+    expect(await textarea.inputValue()).toBe('a draft')
+    // One paste (marked as one: tmux brackets it if the program asked), then Return; the shell runs it.
+    await textarea.fill("printf 'COMPOSED_%s\\n' ONE")
+    const before = socket.inputs().length
+    await page.getByRole('button', { name: 'Paste + Enter', exact: true }).tap()
+    await output('COMPOSED_ONE')
+    // One envelope: the paste, then the Return once it went.
+    expect(socket.inputs().slice(before).map((frame) => [frame.data, frame.paste ?? false, frame.enter ?? false])).toEqual([["printf 'COMPOSED_%s\\n' ONE", true, true]])
+    // Paste + Enter puts the keyboard away (the response needs the screen); the draft is gone.
+    await keys.waitFor({ state: 'detached' })
+    // A program without bracketed paste (cat -v shows the markers if they arrive): tmux, which
+    // knows the program's mode, leaves them off (the viewer's own mode is tmux's, always on).
+    // Paste goes back to typing.
+    await page.getByRole('button', { name: 'Show keyboard', exact: true }).tap()
+    await keys.waitFor()
+    await page.keyboard.type('cat -v')
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(300)
+    textarea = await openCompose()
+    expect(await textarea.inputValue()).toBe('')
+    await textarea.fill('PLAIN_LINE')
+    const plainFrom = socket.typed().length
+    await page.getByRole('button', { name: 'Paste', exact: true }).tap()
+    await socket.waitFor(() => socket.typed().slice(plainFrom).includes('PLAIN_LINE'))
+    await page.waitForFunction(() => document.activeElement?.classList.contains('xterm-helper-textarea'))
+    expect(await keys.count()).toBe(1)
+    await page.keyboard.press('Enter')
+    await output('PLAIN_LINE')
+    expect(await page.evaluate(() => document.querySelector('.xterm-accessibility-tree')?.textContent ?? '')).not.toContain('[200~')
+  } finally {
+    try { await terminate(page, endpoint, headers, id) } finally { await browser.close() }
+  }
+}, 90000)
+
+browserTest('a compose paste the server refuses keeps its draft, and says so', async () => {
+  const browser = await launchChromium()
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+  page.setDefaultTimeout(10000)
+  const endpoint = new URL('/api/plugins/terminal/session', process.env.TERMINAL_PREVIEW_URL!).href
+  const headers = { 'X-Bakin-Terminal-Client': 'mobile-compose-refused-test' }
+  let id: string | undefined
+  // The next paste frame is sent for a stale generation, which the server refuses.
+  let refuseNext = true
+  await page.routeWebSocket('**/api/plugins/terminal/socket**', (socket) => {
+    const server = socket.connectToServer()
+    socket.onMessage((message) => {
+      const frame = typeof message === 'string' ? JSON.parse(message) as Record<string, unknown> : undefined
+      if (frame?.type === 'input' && frame.paste && refuseNext) { refuseNext = false; frame.generation = 99_999; server.send(JSON.stringify(frame)); return }
+      server.send(message)
+    })
+  })
+  await fakeViewport(page, 390, 844)
+  try {
+    const created = await page.request.post(endpoint + 's', { headers, data: { title: 'Compose refused', cwd: '/tmp' } })
+    id = (await created.json()).id
+    await page.goto(new URL('/terminal/' + id, endpoint).href)
+    const keys = page.getByRole('group', { name: 'Terminal keys', exact: true })
+    await page.getByRole('button', { name: 'Show keyboard', exact: true }).tap()
+    await keys.waitFor()
+    await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.terminal-key-bar button')?.disabled === false)
+    await keys.getByRole('button', { name: 'More keys', exact: true }).tap()
+    await page.getByRole('region', { name: 'More keys' }).getByRole('button', { name: 'Compose', exact: true }).tap()
+    const textarea = page.getByRole('textbox', { name: 'Text to send', exact: true })
+    await textarea.fill('REFUSED_DRAFT')
+    await page.getByRole('button', { name: 'Paste', exact: true }).tap()
+    await page.getByText(/Your compose text is kept/).waitFor()
+    // Back in compose (after the page refreshed the session), the text is still there.
+    await page.reload()
+    await page.getByRole('button', { name: 'Show keyboard', exact: true }).tap()
+    await keys.waitFor()
+    await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.terminal-key-bar button')?.disabled === false)
+    await keys.getByRole('button', { name: 'More keys', exact: true }).tap()
+    await page.getByRole('region', { name: 'More keys' }).getByRole('button', { name: 'Compose', exact: true }).tap()
+    expect(await page.getByRole('textbox', { name: 'Text to send', exact: true }).inputValue()).toBe('REFUSED_DRAFT')
+  } finally {
+    try { await terminate(page, endpoint, headers, id) } finally { await browser.close() }
+  }
+}, 60000)
+
 browserTest('ownership changes and reconnects release the modifiers and disable the sending keys', async () => {
   const browser = await launchChromium()
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })

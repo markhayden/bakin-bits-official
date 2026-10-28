@@ -23,6 +23,15 @@ describe('the phone editing session', () => {
     expect(run(['focus-input', 'open-sheet', 'hide'])).toBe('idle')
     expect(run(['focus-input', 'open-sheet', 'focus-outside'])).toBe('idle')
   })
+  it('keeps the compose sheet while its textarea or the keys have focus, or the keyboard goes down; leaves it like the sheet', () => {
+    expect(run(['focus-input', 'open-sheet', 'open-compose'])).toBe('compose')
+    expect(run(['focus-input', 'open-sheet', 'open-compose', 'focus-keys'])).toBe('compose')
+    expect(run(['focus-input', 'open-sheet', 'open-compose', 'focus-lost'])).toBe('compose')
+    expect(run(['focus-input', 'open-sheet', 'open-compose', 'abc'])).toBe('typing')
+    expect(run(['focus-input', 'open-sheet', 'open-compose', 'focus-input'])).toBe('typing')
+    expect(run(['focus-input', 'open-sheet', 'open-compose', 'hide'])).toBe('idle')
+    expect(run(['focus-input', 'open-sheet', 'open-compose', 'focus-outside'])).toBe('idle')
+  })
   it('ignores key focus and focus loss while idle', () => {
     expect(run(['focus-keys'])).toBe('idle')
     expect(run(['focus-lost'])).toBe('idle')

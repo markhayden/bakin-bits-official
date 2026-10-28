@@ -21,7 +21,7 @@ function fakeManager(initial = session()) {
   const sessionListeners = new Set<(session: Session) => void>()
   let natives: NativeClient[] = []
   const nativeListeners = new Set<() => void>()
-  const writes: Array<{ principal: Principal; data: string }> = []
+  const writes: Array<{ principal: Principal; data: string; paste: boolean; enter: boolean }> = []
   let writeError: Error | undefined
   const manager: ViewerManager = {
     get: (id) => { if (id !== current.id) throw new TerminalError('Session not found', 404); return current },
@@ -47,9 +47,9 @@ function fakeManager(initial = session()) {
     onSessionChange: (_id, listener) => { sessionListeners.add(listener); return () => sessionListeners.delete(listener) },
     nativeClients: () => natives,
     onNatives: (_id, listener) => { nativeListeners.add(listener); return () => nativeListeners.delete(listener) },
-    writeNext: async (_id, principal, _generation, data) => {
+    writeNext: async (_id, principal, _generation, data, options) => {
       if (writeError) throw writeError
-      writes.push({ principal, data })
+      writes.push({ principal, data, paste: options?.paste ?? false, enter: options?.enter ?? false })
       current = { ...current, inputSequence: current.inputSequence + 1 }
       return current
     },
@@ -188,6 +188,23 @@ describe('TerminalViewer', () => {
     expect(peer.of('result').map((result) => [result.viewerSeq, result.status])).toEqual([[1, 'accepted'], [3, 'rejected'], [2, 'uncertain'], [3, 'rejected']])
     expect(writes.map((write) => write.data)).toEqual(['ls\r'])
     expect(writes[0]!.principal).toEqual({ kind: 'human', id: CLIENT })
+  })
+
+  it('passes a paste on as one, and plain input as plain', async () => {
+    const { manager, writes } = fakeManager()
+    const peer = fakeSocket()
+    new TerminalViewer(manager, peer.socket, 's1', options)
+    peer.client({ type: 'hello', clientId: CLIENT })
+    await until(() => peer.of('sync').length === 1, 'sync')
+    peer.client({ type: 'input', generation: 1, viewerSeq: 1, data: 'one\rtwo', paste: true })
+    peer.client({ type: 'input', generation: 1, viewerSeq: 2, data: '\x1b[200~literal\x1b[201~' })
+    peer.client({ type: 'input', generation: 1, viewerSeq: 3, data: 'ls', paste: true, enter: true })
+    // Enter belongs to a paste: on plain input it means nothing.
+    peer.client({ type: 'input', generation: 1, viewerSeq: 4, data: 'x', enter: true })
+    await until(() => peer.of('result').length === 4, 'results')
+    expect(writes.map((write) => [write.data, write.paste, write.enter])).toEqual([
+      ['one\rtwo', true, false], ['\x1b[200~literal\x1b[201~', false, false], ['ls', true, true], ['x', false, false],
+    ])
   })
 
   it('pushes session changes as they are saved', async () => {

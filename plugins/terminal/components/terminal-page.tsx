@@ -11,7 +11,9 @@ import type { SessionOptionsData } from '../lib/session-options'
 import { api } from './api'
 import { KeyBar } from './key-bar'
 import { lineTail, useCoarsePointer, useEditingSession, useEnterHidesKeyboard } from './editing-session'
-import { NO_MODIFIERS, type ModifierState, type TerminalInputHandle } from './terminal-input'
+import { INPUT_LIMIT_BYTES, NO_MODIFIERS, type ModifierState, type TerminalInputHandle } from './terminal-input'
+import { readDraft, writeDraft } from './compose-drafts'
+import type { PasteOutcome } from './compose-sheet'
 import { TerminalCanvas, type TerminalViewHandle } from './terminal-canvas'
 import { SizeControl } from './size-control'
 import { estimateTerminalSize } from './terminal-size'
@@ -46,6 +48,17 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const inputHandle = useRef<TerminalInputHandle | null>(null)
   // The last chunk sent: a trailing `\` makes the next Return a line continuation.
   const lastSent = useRef('')
+  // Compose drafts by session: held here (they outlive the sheet), stored when they fit, cleared
+  // only once the server accepted their paste — and only the revision that was sent, never a
+  // later edit. `composing` names each compose paste's envelope by connection and sequence.
+  const drafts = useRef(new Map<string, { text: string; kept: boolean; revision: number }>())
+  const composing = useRef(new Map<number, { sessionId: string; connection: number; revision: number }>())
+  const [, setDraftVersion] = useState(0)
+  const draftFor = (id: string) => drafts.current.get(id) ?? { text: readDraft(id), kept: true, revision: 0 }
+  const setDraft = (id: string, text: string) => {
+    drafts.current.set(id, { text, kept: writeDraft(id, text), revision: draftFor(id).revision + 1 })
+    setDraftVersion(version => version + 1)
+  }
   const viewHandle = useRef<TerminalViewHandle | null>(null)
   // Viewer-socket presence, not session state: whether the screen or app that
   // sizes the open session is away, and how many terminal apps are attached.
@@ -189,17 +202,49 @@ function Workspace({ sessionId }: { sessionId?: string }) {
       toast(`New sessions start at ${target.cols}×${target.rows}`, 'success')
     } catch (error) { setError(error instanceof Error ? error.message : 'Default size not saved') }
   }
-  function input(data: string) {
-    if (!session || !inputEnabled) return
-    lastSent.current = lineTail(lastSent.current, data)
+  /** Send input; the envelope's sequence (its result names it), or false when not sent. */
+  function input(data: string, options: { paste?: boolean; enter?: boolean } = {}): number | false {
+    if (!session || !inputEnabled) return false
+    lastSent.current = lineTail(lastSent.current, options.enter ? data + '\r' : data)
     markActivity()
     // The viewer socket sequences and coalesces; a refused envelope comes back as a result.
-    if (!inputHandle.current?.send(session.generation, data)) setError('Input not sent: the terminal is reconnecting.')
+    const sent = inputHandle.current?.send(session.generation, data, options) ?? false
+    if (!sent) setError('Input not sent: the terminal is reconnecting.')
+    return sent
+  }
+  /**
+   * Compose text as one paste, then Return if asked — one envelope, so the
+   * Return goes only once the paste did. The draft clears when the server
+   * accepts it, if it is still the text that was sent.
+   */
+  function sendCompose(text: string, enter: boolean): PasteOutcome {
+    const data = session && inputHandle.current?.pasteText(text)
+    if (!session || !data || !inputHandle.current) return 'unavailable'
+    if (new TextEncoder().encode(data).length + (enter ? 1 : 0) > INPUT_LIMIT_BYTES) return 'too-long'
+    const sent = input(data, { paste: true, enter })
+    if (!sent) return 'unavailable'
+    composing.current.set(sent, { sessionId: session.id, connection: inputHandle.current.connection(), revision: draftFor(session.id).revision })
+    // After Paste + Enter the response needs the screen (as Return from the keyboard): the keyboard goes away.
+    if (enter) { editingEvent('hide'); (document.activeElement as HTMLElement | null)?.blur() }
+    else { inputHandle.current?.focus(); editingEvent('abc') }
+    return 'sent'
+  }
+  // A connection that ends takes its envelopes with it: their compose entries retire, their drafts stay.
+  const streamChanged = (status: string) => {
+    setStreamStatus(status)
+    if (status !== 'Connected') composing.current.clear()
   }
   const handleResult = useCallback((result: InputResult) => {
+    const entry = composing.current.get(result.viewerSeq)
+    composing.current.delete(result.viewerSeq)
+    // Only this connection's envelope (sequences restart with each).
+    const composed = entry && entry.connection === inputHandle.current?.connection() ? entry : undefined
+    if (composed && result.status === 'accepted' && draftFor(composed.sessionId).revision === composed.revision) setDraft(composed.sessionId, '')
     if (result.status === 'accepted') return
     epoch.current++
-    setError(result.status === 'uncertain' ? `May have been delivered: ${result.error ?? 'the connection dropped'}` : `Input not sent: ${result.error ?? 'refused'}`)
+    // A compose draft whose paste did not go stays, so it can be checked and sent again by hand.
+    const kept = composed !== undefined ? ' Your compose text is kept.' : ''
+    setError(result.status === 'uncertain' ? `May have been delivered: ${result.error ?? 'the connection dropped'}.${kept}` : `Input not sent: ${result.error ?? 'refused'}.${kept}`)
     void refresh()
   }, [refresh])
   // Claim-on-type: typing while watching takes over, after a one-time confirm
@@ -391,9 +436,11 @@ function Workspace({ sessionId }: { sessionId?: string }) {
         itself restructures the body and would remount the terminal (dropping
         the keyboard). */}
     <WorkspacePageBody inputAccessory={session && !ended && !session.historyDeleted
-      ? keyed && editing !== 'idle' ? <KeyBar key={session.id} session={editing} disabled={!inputEnabled} modifiers={modifiers}
+      ? keyed && editing !== 'idle' ? <KeyBar key={session.id} session={editing} disabled={!inputEnabled} modifiers={modifiers} draft={draftFor(session.id)}
           onKey={key => inputHandle.current?.key(key)} onModifier={(modifier, action) => inputHandle.current?.modifier(modifier, action)}
           onSheet={() => { editingEvent('open-sheet'); inputHandle.current?.blur() }}
+          onCompose={() => editingEvent('open-compose')}
+          onDraft={text => setDraft(session.id, text)} onPaste={sendCompose}
           onKeyboard={() => { inputHandle.current?.focus(); editingEvent('abc') }}
           onHide={() => { editingEvent('hide'); inputHandle.current?.blur() }} /> : <></>
       : undefined}>
@@ -408,7 +455,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
           {session.cleanupReason && <Alert tone="attention"><AlertDescription>{session.cleanupReason}</AlertDescription></Alert>}
           </Stack>}
           <Separator />
-          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} offerKeyboard={keyed && editing === 'idle' && Boolean(inputEnabled)} inputEnabled={Boolean(inputEnabled)} inputHandle={inputHandle} viewHandle={viewHandle} onModifiersChange={setModifiers} captureTab={captureTab} attempt={attempt} onStatus={setStreamStatus} onInput={input} onClaim={handleClaim} onSession={update} onPresence={setPresence} onResult={handleResult} onRendererFailed={rendererFailed} />}
+          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} offerKeyboard={keyed && editing === 'idle' && Boolean(inputEnabled)} inputEnabled={Boolean(inputEnabled)} inputHandle={inputHandle} viewHandle={viewHandle} onModifiersChange={setModifiers} captureTab={captureTab} attempt={attempt} onStatus={streamChanged} onInput={(data, paste) => input(data, { paste })} onClaim={handleClaim} onSession={update} onPresence={setPresence} onResult={handleResult} onRendererFailed={rendererFailed} />}
         </>)}
       </Stack>
     </WorkspacePageBody>
