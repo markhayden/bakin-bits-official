@@ -85,11 +85,19 @@ export function sgr(fg: number, bg: number, extended: Extended | null): string {
 }
 
 const osc8 = (uri: string, id = '') => `\x1b]8;${id ? 'id=' + id : ''};${uri}\x1b\\`
-/** A link is one registry entry kept alive by every line it was printed on: each segment reopens it under one id. */
+/**
+ * A link is one registry entry kept alive by every line it was printed on:
+ * each segment reopens it under one id. A link the program gave no id gets
+ * one with this checkpoint's nonce, so it cannot merge with a program's id.
+ */
+let nonce = ''
 function linkParams(terminal: Term, urlId: number): { uri: string; id: string } {
   const data = internals(terminal)._oscLinkService.getLinkData(urlId)
-  return { uri: data?.uri ?? '(dangling)', id: data?.id ?? `bakin-${urlId}` }
+  return { uri: data?.uri ?? '(dangling)', id: data?.id ?? `bakin.${nonce}.${urlId}` }
 }
+/** DECSCA's protection (BgFlags.PROTECTED): not part of SGR, so a reset leaves it. */
+const PROTECTED = 0x20000000
+const protection = (on: boolean) => on ? '\x1b[1"q' : '\x1b[0"q'
 
 /**
  * Lines [from, end) of `buffer`, printed from the cursor; wrapped lines wrap
@@ -101,6 +109,8 @@ function printLines(terminal: Term, buffer: Buffer, from: number, slotLine = -1)
   const cell = nullCell(terminal)
   let out = ''
   let link = ''
+  let protectedNow = false
+  const protect = (on: boolean) => { if (on !== protectedNow) { out += protection(on); protectedNow = on } }
   for (let y = from; y < buffer.lines.length; y++) {
     const line = buffer.lines.get(y)!
     let slotDue = y === slotLine
@@ -121,6 +131,7 @@ function printLines(terminal: Term, buffer: Buffer, from: number, slotLine = -1)
         while (x + run < end && cellKey(terminal, line.loadCell(x + run, cell)) === key) run++
         line.loadCell(x, cell)
         if (link) { out += osc8(''); link = '' }
+        protect((cell.bg & PROTECTED) !== 0)
         if (key !== defaultBlank) {
           const attributes = sgr(cell.fg, cell.bg & ~HAS_EXTENDED, null)
           out += attributes + `\x1b[${run}X`
@@ -136,6 +147,7 @@ function printLines(terminal: Term, buffer: Buffer, from: number, slotLine = -1)
       const params = extended && extended.urlId ? linkParams(terminal, extended.urlId) : null
       const key = params ? `${params.id}\u0000${params.uri}` : ''
       if (key !== link) { out += params ? osc8(params.uri, params.id) : osc8(''); link = key }
+      protect((cell.bg & PROTECTED) !== 0)
       const attributes = sgr(cell.fg, cell.bg & ~HAS_EXTENDED, extended)
       if (attributes !== pen) { out += attributes; pen = attributes }
       out += cell.getChars()
@@ -154,6 +166,7 @@ function printLines(terminal: Term, buffer: Buffer, from: number, slotLine = -1)
     }
   }
   if (link) out += osc8('')
+  protect(false)
   return out + '\x1b[0m'
 }
 
@@ -166,9 +179,10 @@ function savedSlot(terminal: Term, buffer: Buffer, y?: number): string {
   // changing fg/bg, so ESC 7 saves it exactly.
   const extended = buffer.savedCurAttrData.bg & HAS_EXTENDED
   const column = Math.min(buffer.savedX, terminal.cols - 1) + 1
+  const protectedSlot = (buffer.savedCurAttrData.bg & PROTECTED) !== 0
   return `\x1b(${charsetCode(buffer.savedCharset)}\x0f` + (y === undefined ? `\x1b[${column}G` : `\x1b[${y + 1};${column}H`)
-    + sgr(buffer.savedCurAttrData.fg, buffer.savedCurAttrData.bg & ~HAS_EXTENDED, null)
-    + (extended ? osc8('https://bakin.invalid/checkpoint') : '') + '\x1b7' + (extended ? osc8('') : '') + '\x1b[0m\x1b(B'
+    + sgr(buffer.savedCurAttrData.fg, buffer.savedCurAttrData.bg & ~HAS_EXTENDED, null) + (protectedSlot ? protection(true) : '')
+    + (extended ? osc8('https://bakin.invalid/checkpoint') : '') + '\x1b7' + (extended ? osc8('') : '') + '\x1b[0m' + (protectedSlot ? protection(false) : '') + '\x1b(B'
 }
 function bufferTail(terminal: Term, buffer: Buffer, slot: boolean): string {
   let out = '\x1b[3g' + Object.keys(buffer.tabs).filter((column) => buffer.tabs[Number(column)]).map((column) => `\x1b[1;${Number(column) + 1}H\x1bH`).join('')
@@ -183,6 +197,7 @@ function charsetTail(terminal: Term): string {
 /** Serialize `terminal` (no check: see `takeCheckpoint`). */
 export function serialize(terminal: Term): string {
   learn()
+  nonce = Math.random().toString(36).slice(2, 10)
   const core = internals(terminal)
   const normal = core.buffers.normal
   const alt = core.buffers.alt
@@ -218,6 +233,7 @@ export function serialize(terminal: Term): string {
   const pen = core._inputHandler._curAttrData
   // The pen always carries its extended attributes (an underline colour is remembered while underline is off).
   out += sgr(pen.fg, pen.bg & ~HAS_EXTENDED, pen.extended)
+  if (pen.bg & PROTECTED) out += protection(true)
   const modes = terminal.modes as typeof terminal.modes & { synchronizedOutputMode?: boolean }
   if (modes.applicationCursorKeysMode) out += '\x1b[?1h'
   if (modes.applicationKeypadMode) out += '\x1b='

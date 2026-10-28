@@ -125,8 +125,8 @@ export function fullState(terminal: Term) {
     type: terminal.buffer.active.type, cols: terminal.cols, rows: terminal.rows,
     normal, alt,
     modes: JSON.stringify(terminal.modes), cursorHidden: core.coreService.isCursorHidden,
-    // The configured cursor and DECSCUSR's override (unset after RIS or CSI 0 SP q).
-    cursorStyle: `${core.optionsService.rawOptions.cursorStyle}/${core.optionsService.rawOptions.cursorBlink}/override:${overrides.cursorStyle}/${overrides.cursorBlink}`,
+    // DECSCUSR's override (unset after RIS or CSI 0 SP q); the configured style is configuration, not state.
+    cursorStyle: `${overrides.cursorStyle}/${overrides.cursorBlink}`,
     mouseEncoding: core.coreMouseService?.activeEncoding,
     charsets: [charsets.glevel, charsetName(charsets.charset), ...[0, 1, 2, 3].map((g) => charsetName(charsets._charsets[g]))].join(','),
     // The pen, and the underline it remembers while underline is off (a later SGR 4 reuses the colour).

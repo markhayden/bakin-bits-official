@@ -63,6 +63,9 @@ const NAMED: { name: string; cols: number; rows: number; before: Uint8Array; aft
   { name: 'a DECSCUSR override (blinking bar)', cols: 10, rows: 3, before: enc('\x1b[5 qx'), after: enc('y') },
   { name: 'a DECSCUSR override reset (CSI 0 SP q)', cols: 10, rows: 3, before: enc('\x1b[4 q\x1b[0 qx'), after: enc('y') },
   { name: 'a pending wrap inside a link', cols: 6, rows: 3, before: enc('\x1b]8;;https://a.example\x1b\\abcdef'), after: enc('gh\x1b]8;;\x1b\\') },
+  { name: 'protected (DECSCA) cells, an erase that spares them, and a protected pen', cols: 12, rows: 3, before: enc('ab\x1b[1"qPROT\x1b[0"qcd\x1b[1"q'), after: enc('X\x1b[1;1H\x1b[?2Kafter'), atCut: true },
+  { name: 'a saved cursor with protection on', cols: 12, rows: 3, before: enc('\x1b[1"q\x1b7\x1b[0"qx'), after: enc('\x1b8P\x1b[?2K'), atCut: true },
+  { name: 'a link the program named like a generated one', cols: 20, rows: 3, before: enc('\x1b]8;;https://a.example\x1b\\A\x1b]8;;\x1b\\'), after: enc('\x1b]8;id=bakin-1;https://a.example\x1b\\B\x1b]8;;\x1b\\'), atCut: true },
   { name: 'custom tab stops then the alternate screen', cols: 20, rows: 3, before: enc('\x1b[3g\x1b[1;5H\x1bH\x1b[H'), after: enc('\x1b[?1049h\tX') },
 ]
 
