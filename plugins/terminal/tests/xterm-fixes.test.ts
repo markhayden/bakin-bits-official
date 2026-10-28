@@ -233,6 +233,17 @@ describe('a grapheme cluster split across writes at the margin (wraparound off)'
     const cells = (term: Term) => [0, 1].map((x) => { const cell = term.buffer.active.getLine(0)!.getCell(x)!; return `${cell.getChars()}/${cell.getWidth()}` }).join('|')
     expect(cells(split)).toBe(cells(whole))
   })
+  it('patched, a print after an ignored escape keeps xterm\'s clear (only a write boundary is a continuation)', async () => {
+    const run = async (profiled: boolean) => {
+      const term = new headless.Terminal({ cols: 2, rows: 1, allowProposedApi: true })
+      if (profiled) applyTerminalProfile(term)
+      else { loadGraphemeProvider(term as never); (term as unknown as { unicode: { activeVersion: string } }).unicode.activeVersion = '15-graphemes' }
+      // A malformed CSI is ignored, and xterm keeps the join state through it.
+      await write(term, '\x1b[?7l漢漢\x1b[1?mX')
+      return [0, 1].map((x) => { const cell = term.buffer.active.getLine(0)!.getCell(x)!; return `${cell.getChars()}/${cell.getWidth()}` }).join('|')
+    }
+    expect(await run(true)).toBe(await run(false))
+  })
   it('patched, chunking does not change the layout', async () => {
     const [whole, split] = await layouts(() => {
       const term = new headless.Terminal({ cols: 10, rows: 3, allowProposedApi: true })

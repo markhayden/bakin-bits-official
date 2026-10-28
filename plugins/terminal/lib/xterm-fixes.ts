@@ -273,7 +273,7 @@ interface PrintLine { getWidth(index: number): number; setCellFromCodepoint(inde
 interface PrintInternals {
   print(data: Uint32Array, start: number, end: number): void
   _activeBuffer: { x: number; y: number; ybase: number; lines: { get(index: number): PrintLine | undefined } }
-  _parser: { precedingJoinState: number }
+  _parser: { parse(data: Uint32Array, length: number, promiseResult?: boolean): unknown }
 }
 
 /**
@@ -282,26 +282,41 @@ interface PrintInternals {
  * inside one call does not — so where a write boundary splits a run, the
  * same bytes lay out differently by chunking (a cluster at the margin with
  * wraparound off loses its base; a wide character overwritten in its
- * second cell loses its first). A print call that continues the previous
- * one (no control or escape in between, which is exactly when the join
- * state is still set) skips that clear, as the unsplit run would.
+ * second cell loses its first). A print that continues the previous parse
+ * chunk's final print (that chunk ended in the middle of a printing run,
+ * and this one starts with it) skips the clear, as the unsplit run would.
+ * Prints after any escape or control are untouched.
  */
 export function patchChunkedPrintClear(terminal: object): void {
   const handler = core(terminal)?._inputHandler as PrintInternals | undefined
-  if (!handler || typeof handler.print !== 'function' || !handler._parser) return
+  const parser = handler?._parser
+  if (!handler || !parser || typeof handler.print !== 'function' || typeof parser.parse !== 'function') return
   const print = handler.print.bind(handler)
+  const parse = parser.parse.bind(parser)
+  // Where the previous chunk's last print ended, that chunk's length, and whether this chunk's first print continues it.
+  let printedTo = -1
+  let chunkLength = 0
+  let continues = false
+  parser.parse = (data, length, promiseResult) => {
+    continues = printedTo === chunkLength && length > 0
+    printedTo = -1
+    chunkLength = length
+    return parse(data, length, promiseResult)
+  }
   handler.print = (data, start, end) => {
+    const first = continues && start === 0
+    continues = false
+    printedTo = end
     const buffer = handler._activeBuffer
     const x = buffer.x
-    const continues = end > start && x > 0 && handler._parser.precedingJoinState !== 0
-    const line = continues ? buffer.lines.get(buffer.ybase + buffer.y) : undefined
+    const line = first && x > 0 ? buffer.lines.get(buffer.ybase + buffer.y) : undefined
     if (!line || line.getWidth(x - 1) !== 2) { print(data, start, end); return }
     const set = line.setCellFromCodepoint
-    let first = true
+    let leading = true
     // The clear is print's first cell write: skip exactly that one.
     line.setCellFromCodepoint = function (index, codepoint, width, attributes) {
-      const clear = first && index === x - 1 && codepoint === 0 && width === 1
-      first = false
+      const clear = leading && index === x - 1 && codepoint === 0 && width === 1
+      leading = false
       if (!clear) set.call(this, index, codepoint, width, attributes)
     }
     try { print(data, start, end) } finally { delete (line as Partial<PrintLine>).setCellFromCodepoint }
