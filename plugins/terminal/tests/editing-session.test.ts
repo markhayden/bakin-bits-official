@@ -30,19 +30,25 @@ describe('the phone editing session', () => {
 })
 
 describe('Enter puts the on-screen keyboard away', () => {
-  const enter = { key: 'Enter', code: '', isComposing: false, shiftKey: false, altKey: false, ctrlKey: false, metaKey: false }
+  const enter = { key: 'Enter', code: '', keyCode: 13, isComposing: false, shiftKey: false, altKey: false, ctrlKey: false, metaKey: false }
+  const send = { continued: false, modified: false }
   it('for an on-screen keyboard: no physical key code, or a visibly covered screen', () => {
-    expect(enterHidesKeyboard(enter, undefined)).toBe(true)
-    expect(enterHidesKeyboard({ ...enter, code: 'Enter' }, 300)).toBe(true)
+    expect(enterHidesKeyboard(enter, undefined, send)).toBe(true)
+    expect(enterHidesKeyboard({ ...enter, code: 'Enter' }, 300, send)).toBe(true)
   })
   it('not for a hardware keyboard (a physical key code and an uncovered screen)', () => {
-    expect(enterHidesKeyboard({ ...enter, code: 'Enter' }, 0)).toBe(false)
-    expect(enterHidesKeyboard({ ...enter, code: 'NumpadEnter' }, 55)).toBe(false)
-    expect(enterHidesKeyboard({ ...enter, code: 'Enter' }, undefined)).toBe(false)
+    expect(enterHidesKeyboard({ ...enter, code: 'Enter' }, 0, send)).toBe(false)
+    expect(enterHidesKeyboard({ ...enter, code: 'NumpadEnter' }, 55, send)).toBe(false)
+    expect(enterHidesKeyboard({ ...enter, code: 'Enter' }, undefined, send)).toBe(false)
   })
   it('not for other keys, an IME confirming its text, or a modified Enter', () => {
-    expect(enterHidesKeyboard({ ...enter, key: 'a' }, 300)).toBe(false)
-    expect(enterHidesKeyboard({ ...enter, isComposing: true }, 300)).toBe(false)
-    expect(enterHidesKeyboard({ ...enter, shiftKey: true }, 300)).toBe(false)
+    expect(enterHidesKeyboard({ ...enter, key: 'a' }, 300, send)).toBe(false)
+    expect(enterHidesKeyboard({ ...enter, isComposing: true }, 300, send)).toBe(false)
+    expect(enterHidesKeyboard({ ...enter, shiftKey: true }, 300, send)).toBe(false)
+  })
+  it('not for a Return that continues the line, or an IME key (229)', () => {
+    expect(enterHidesKeyboard(enter, 300, { continued: true, modified: false })).toBe(false)
+    expect(enterHidesKeyboard(enter, 300, { continued: false, modified: true })).toBe(false)
+    expect(enterHidesKeyboard({ ...enter, keyCode: 229 }, 300, send)).toBe(false)
   })
 })

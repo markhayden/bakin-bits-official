@@ -44,6 +44,8 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const [assignment, setAssignment] = useState('')
   const [captureTab, setCaptureTab] = useState(true)
   const inputHandle = useRef<TerminalInputHandle | null>(null)
+  // The last chunk sent: a trailing `\` makes the next Return a line continuation.
+  const lastSent = useRef('')
   const viewHandle = useRef<TerminalViewHandle | null>(null)
   // Viewer-socket presence, not session state: whether the screen or app that
   // sizes the open session is away, and how many terminal apps are attached.
@@ -147,11 +149,13 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const keyed = Boolean(session && !ended && !session.historyDeleted && touch)
   const [editing, editingEvent] = useEditingSession(keyed)
   // Return on the phone keyboard sends the line and puts the keyboard away, so the response has the screen.
-  useEnterHidesKeyboard(keyed && editing === 'typing', () => { editingEvent('hide'); inputHandle.current?.blur() })
+  useEnterHidesKeyboard(keyed && editing === 'typing', () => { editingEvent('hide'); inputHandle.current?.blur() },
+    () => ({ continued: lastSent.current.endsWith('\\'), modified: modifiers.ctrl !== 'off' || modifiers.alt !== 'off' }))
   // Invalidate stale writes before newly enabled controls can accept input.
   useLayoutEffect(() => { epoch.current++ }, [sessionId, session?.generation, connected, serviceReady])
   const chipTone = session?.historyDeleted || ended ? 'neutral' : !connected ? 'attention' : writable ? 'success' : 'neutral'
-  const chipLabel = session?.historyDeleted ? 'Output deleted' : ended ? 'Ended' : !connected ? streamStatus.split(' / ')[0] : writable ? "You're driving" : ownerAgentName ? `You're watching ${ownerAgentName}` : "You're watching"
+  // One word (the tooltip has the rest, e.g. "Watching Patch").
+  const chipLabel = session?.historyDeleted ? 'Output deleted' : ended ? 'Ended' : !connected ? streamStatus.split(' / ')[0] : writable ? 'Driving' : 'Watching'
   const statusChip = session && <Badge size="xs" variant="solid" tone={chipTone} role="status" title={status}>{chipLabel}</Badge>
   // Shown while the session is also open in a terminal app on this Mac (bakin terminal attach).
   const appChip = session && !ended && presence.nativeClients > 0 && <Badge size="xs" variant="outline" title="Also open in a terminal app on this Mac"><AppWindow size={12} />Open in a terminal app</Badge>
@@ -179,6 +183,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   }
   function input(data: string) {
     if (!session || !inputEnabled) return
+    lastSent.current = data
     markActivity()
     // The viewer socket sequences and coalesces; a refused envelope comes back as a result.
     if (!inputHandle.current?.send(session.generation, data)) setError('Input not sent: the terminal is reconnecting.')

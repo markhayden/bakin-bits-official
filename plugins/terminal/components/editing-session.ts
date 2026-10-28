@@ -40,11 +40,14 @@ export const SOFT_KEYBOARD_PX = 150
  * Whether Enter from the terminal's input should put the keyboard away
  * (Mark, 2026-10-28: after sending, the response needs the screen). Only the
  * on-screen keyboard: a hardware keyboard would lose focus for nothing.
- * On-screen keyboards leave KeyboardEvent.code empty; failing that, a
- * visibly covered screen says one is up.
+ * Android's on-screen keyboards leave KeyboardEvent.code empty; iOS reports
+ * "Enter", so there a visibly covered screen says one is up. When neither
+ * tells (a floating keyboard, a zoomed page) the keyboard simply stays.
  */
-export function enterHidesKeyboard(event: Pick<KeyboardEvent, 'key' | 'code' | 'isComposing' | 'shiftKey' | 'altKey' | 'ctrlKey' | 'metaKey'>, covered: number | undefined): boolean {
-  if (event.key !== 'Enter' || event.isComposing || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return false
+export function enterHidesKeyboard(event: Pick<KeyboardEvent, 'key' | 'code' | 'keyCode' | 'isComposing' | 'shiftKey' | 'altKey' | 'ctrlKey' | 'metaKey'>, covered: number | undefined, line: { continued: boolean; modified: boolean }): boolean {
+  if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229 || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return false
+  // A new line, not a send: `\` + Return, or Return with the bar's ⌃/⌥ (Option+Return in Claude Code).
+  if (line.continued || line.modified) return false
   return event.code === '' || (covered !== undefined && covered > SOFT_KEYBOARD_PX)
 }
 
@@ -88,19 +91,24 @@ export function useEditingSession(enabled: boolean): [EditingSession, (event: Se
   return [session, dispatch]
 }
 
-/** Enter on the on-screen keyboard sends the line, then `hide` puts the keyboard away. */
-export function useEnterHidesKeyboard(enabled: boolean, hide: () => void) {
-  const latest = useRef(hide)
-  latest.current = hide
+/**
+ * Enter on the on-screen keyboard sends the line, then `hide` puts the
+ * keyboard away. `line()` says whether this Return continues the line
+ * instead (the last thing sent ended in `\`, or a bar modifier is on).
+ */
+export function useEnterHidesKeyboard(enabled: boolean, hide: () => void, line: () => { continued: boolean; modified: boolean }) {
+  const latest = useRef({ hide, line })
+  latest.current = { hide, line }
   useEffect(() => {
     if (!enabled) return
     let pending: ReturnType<typeof setTimeout> | undefined
     const keydown = (event: KeyboardEvent) => {
       if (!isTerminalInput(event.target instanceof Element ? event.target : null)) return
-      if (!enterHidesKeyboard(event, coveredByKeyboard())) return
+      // Before xterm handles the key (capture): the line and modifiers are as they were.
+      if (!enterHidesKeyboard(event, coveredByKeyboard(), latest.current.line())) return
       // After xterm has sent the Enter in this same event.
       clearTimeout(pending)
-      pending = setTimeout(() => latest.current(), 0)
+      pending = setTimeout(() => latest.current.hide(), 0)
     }
     document.addEventListener('keydown', keydown, true)
     return () => { clearTimeout(pending); document.removeEventListener('keydown', keydown, true) }
