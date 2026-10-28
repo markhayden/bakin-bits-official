@@ -216,6 +216,49 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
   }
 }, 60_000)
 
+browserTest('a hidden cursor (Claude Code) never drags another screen sideways while typing', async () => {
+  const browser = await launchChromium()
+  const desk = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+  const phone = await (await browser.newContext({ viewport: { width: 390, height: 664 }, hasTouch: true, isMobile: true })).newPage()
+  for (const page of [desk, phone]) page.setDefaultTimeout(10000)
+  const headers = { 'X-Bakin-Terminal-Client': 'sizing-browser-test-0003' }
+  const endpoint = new URL('/api/plugins/terminal/session', process.env.TERMINAL_PREVIEW_URL!).href
+  let id: string | undefined
+  try {
+    await desk.goto(process.env.TERMINAL_PREVIEW_URL!)
+    await desk.getByRole('button', { name: 'New terminal' }).first().click()
+    await desk.getByRole('textbox', { name: 'Working directory' }).fill('/tmp')
+    const creation = desk.waitForResponse((response) => response.url().endsWith('/terminal/sessions') && response.request().method() === 'POST')
+    await desk.getByRole('button', { name: 'Start terminal', exact: true }).click()
+    id = (await (await creation).json()).id
+    await desk.locator('.xterm-helper-textarea').waitFor({ state: 'attached' })
+    await desk.waitForFunction(() => document.querySelector('.terminal-pane')?.getAttribute('data-fit') === 'pane')
+    await phone.goto(new URL('/terminal/' + id, endpoint).href)
+    await phone.locator('.xterm-helper-textarea').waitFor({ state: 'attached' })
+    await phone.waitForFunction(() => document.querySelector('.terminal-pane')?.getAttribute('data-fit') === 'width')
+    // Like Claude Code: hide the cursor and leave it far right (here after a long padded line), then wait for input.
+    await desk.locator('.xterm-helper-textarea').focus()
+    await desk.keyboard.type("printf 'HIDDEN_READY\\n\\033[?25l%150s|'; cat")
+    await desk.keyboard.press('Enter')
+    await phone.waitForFunction(() => document.querySelector('.xterm-accessibility-tree')?.textContent?.includes('HIDDEN_READY'))
+    await phone.waitForTimeout(300)
+    const scrollLeft = () => phone.evaluate(() => document.querySelector('.terminal-pane')!.scrollLeft)
+    expect(await scrollLeft()).toBe(0)
+    // Typing redraws; the view stays where the operator left it.
+    await desk.keyboard.type('abc')
+    await phone.waitForTimeout(400)
+    expect(await scrollLeft()).toBe(0)
+    // The cursor shown again (a shell or vim) is followed sideways as before.
+    await desk.keyboard.press('Control+C')
+    await desk.keyboard.type("printf '\\033[?25h%150s'; cat")
+    await desk.keyboard.press('Enter')
+    await phone.waitForFunction(() => document.querySelector('.terminal-pane')!.scrollLeft > 100)
+  } finally {
+    if (id) await desk.request.post(endpoint, { headers, data: { id, operation: 'terminate' } }).catch(() => undefined)
+    await browser.close()
+  }
+}, 60_000)
+
 for (const renderer of ['webgl', 'dom'] as const) {
   browserTest(`a new session starts at the grid its creator's pane fits (${renderer} renderer)`, async () => {
     const browser = await launchChromium()

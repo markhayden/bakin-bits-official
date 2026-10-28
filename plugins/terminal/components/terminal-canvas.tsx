@@ -25,6 +25,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   const pane = useRef<HTMLDivElement>(null)
   const element = useRef<HTMLDivElement>(null)
   const actions = useRef<HTMLDivElement>(null)
+  // DECTCEM as the output last set it (xterm keeps this private).
+  const cursorHidden = useRef(false)
   // This screen sizes the grid only while it holds the session's size claim;
   // every other screen renders the real grid at a font fitted to its width.
   const authority = session.state === 'running' && session.sizeAuthority?.viewer === clientId()
@@ -134,6 +136,10 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     const controls = actions.current?.getBoundingClientRect()
     const cover = controls && { left: controls.left - view.left, top: controls.top - view.top, width: controls.width, height: controls.height }
     const next = revealClearOf(el, target, reveal(el, target, cell.height), cover)
+    // A hidden cursor (Claude Code draws its own caret and leaves the real
+    // one wherever its last line ended) is followed down to the input rows,
+    // never sideways: typing must not drag the view.
+    if (cursorHidden.current) next.left = el.scrollLeft
     if (next.left !== el.scrollLeft || next.top !== el.scrollTop) el.scrollTo(next.left, next.top)
   }
   function overflows(): boolean {
@@ -168,6 +174,14 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     fit.current = new FitAddon()
     term.loadAddon(fit.current)
     term.open(element.current!)
+    cursorHidden.current = false
+    // Track show/hide cursor (CSI ? 25 h/l) and let xterm handle it as well.
+    const cursorMode = (hidden: boolean) => (params: (number | number[])[]) => {
+      if (params.includes(25)) cursorHidden.current = hidden
+      return false
+    }
+    term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, cursorMode(false))
+    term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, cursorMode(true))
     const disposeRenderer = enableWebgl(term)
     inputHandle.current = {
       focus: () => term.focus(),
@@ -235,6 +249,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       onSync: (sync) => {
         // A sync is a complete picture: the snapshot, then output after its cursor.
         term.reset()
+        cursorHidden.current = false
         if (sync.snapshot) term.write(Uint8Array.from(atob(sync.snapshot), (value) => value.charCodeAt(0)))
         callbacks.current.onSession(sync.session)
         ready.current = sync.session.state !== 'completed'
