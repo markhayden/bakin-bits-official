@@ -250,7 +250,7 @@ describe('restoreCheckpoint', () => {
     const chunk = line.repeat(Math.ceil(16 * 1024 / line.length))
     const data = Array.from({ length: Math.ceil(52_000_000 / chunk.length) }, () => chunk)
     const viewer = terminal(80, 24, 10)
-    const checkpoint: Checkpoint = { format: CHECKPOINT_FORMAT, cols: 80, rows: 24, scrollback: 10, data, joinState: 0, penHasExtended: true, altEnteredCols: null }
+    const checkpoint: Checkpoint = { format: CHECKPOINT_FORMAT, cols: 80, rows: 24, scrollback: 10, data, joinState: 0, penHasExtended: true, altEnteredCols: null, altEntry: null }
     await restoreCheckpoint(viewer, checkpoint)
     // The side state is set once every piece is parsed.
     expect(((viewer as unknown as { _core: { _inputHandler: { _curAttrData: { bg: number } } } })._core._inputHandler._curAttrData.bg & 0x10000000) !== 0).toBe(true)

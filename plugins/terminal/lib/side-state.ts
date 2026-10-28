@@ -4,7 +4,7 @@
  * headless serializer: what the checkpoint's text cannot carry, set once
  * that text is parsed.
  */
-import { HAS_EXTENDED, setAltEnteredCols } from './xterm-fixes'
+import { HAS_EXTENDED, setAltEnteredCols, setAltEntry } from './xterm-fixes'
 
 /** What a restore sets once the checkpoint's text is parsed. */
 export interface CheckpointSideState {
@@ -14,6 +14,8 @@ export interface CheckpointSideState {
   penHasExtended: boolean
   /** The columns the alternate screen was entered at, while it is active (xterm-fixes' tab stops). */
   altEnteredCols: number | null
+  /** How the active alternate screen was entered (xterm-fixes' altEntry: a width rebase reads it). */
+  altEntry: 'saved' | 'unsaved' | null
 }
 
 interface RestoreInternals {
@@ -32,4 +34,5 @@ export function restoreSideState(terminal: object, side: CheckpointSideState): v
   if (side.penHasExtended) handler._curAttrData.bg |= HAS_EXTENDED
   else handler._curAttrData.bg &= ~HAS_EXTENDED
   if (side.altEnteredCols !== null) setAltEnteredCols(terminal, side.altEnteredCols)
+  setAltEntry(terminal, side.altEntry)
 }

@@ -35,7 +35,7 @@ import type { LogConsumer, LogEvent } from './output-log'
 import { SeedDeferred, type SeedScope } from './reseed'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
 import { internals, HAS_EXTENDED, type Term } from './terminal-state'
-import { altEnteredCols, guardParser, type patchLinkLifetime } from './xterm-fixes'
+import { altEnteredCols, altEntry, guardParser, type patchLinkLifetime } from './xterm-fixes'
 
 type LinkLifetime = ReturnType<typeof patchLinkLifetime>
 
@@ -433,6 +433,7 @@ export class Replica implements LogConsumer {
         joinState: handler._parser.precedingJoinState,
         penHasExtended: (handler._curAttrData.bg & HAS_EXTENDED) !== 0,
         altEnteredCols: terminal.buffer.active.type === 'alternate' ? altEnteredCols(terminal) ?? null : null,
+        altEntry: terminal.buffer.active.type === 'alternate' ? altEntry(terminal) ?? null : null,
       },
     }
     this.options.diagnostic?.({ kind: 'seeded', reason: event.reason, history: event.history })

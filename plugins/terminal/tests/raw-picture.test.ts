@@ -3,7 +3,7 @@ import { RawPicture, type PictureHeader, type PictureTarget } from '../component
 
 const encode = (text: string) => new TextEncoder().encode(text)
 const header = (type: 'join' | 'rebase', epoch: number, text: string, extra: Record<string, unknown> = {}): PictureHeader =>
-  ({ type, epoch, bytes: encode(text).length, checkpoint: { cols: 80, rows: 24, joinState: 0, penHasExtended: false, altEnteredCols: null }, ...extra })
+  ({ type, epoch, bytes: encode(text).length, checkpoint: { cols: 80, rows: 24, joinState: 0, penHasExtended: false, altEnteredCols: null, altEntry: null }, ...extra })
 
 /** Terminals that log what is done to them; writes call back when `flush` says so. */
 function harness() {

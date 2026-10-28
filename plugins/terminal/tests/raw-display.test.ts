@@ -7,7 +7,7 @@ import type { Cut, ReplicaListener, ReplicaState } from '../lib/replica'
 const encode = (text: string) => new TextEncoder().encode(text)
 
 function checkpoint(data: string[]): Checkpoint {
-  return { format: 1, cols: 80, rows: 24, scrollback: 10_000, data, joinState: 0, penHasExtended: false, altEnteredCols: null } as Checkpoint
+  return { format: 1, cols: 80, rows: 24, scrollback: 10_000, data, joinState: 0, penHasExtended: false, altEnteredCols: null, altEntry: null } as Checkpoint
 }
 function cut(data: string[], baseSeq: number, tail: LogEvent[] = [], history = true): Cut {
   return { checkpoint: checkpoint(data), baseSeq, tail, throughSeq: tail.at(-1)?.seq ?? baseSeq, history }

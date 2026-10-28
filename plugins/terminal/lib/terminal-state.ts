@@ -10,7 +10,7 @@
  */
 import headless from '@xterm/headless'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
-import { altEnteredCols, HAS_EXTENDED } from './xterm-fixes'
+import { altEnteredCols, altEntry, HAS_EXTENDED } from './xterm-fixes'
 
 export type Term = InstanceType<typeof headless.Terminal>
 
@@ -187,7 +187,7 @@ function stateFields(terminal: Term, links: LinkNames) {
     pen: `${pen.fg},${pen.bg & ~HAS_EXTENDED},ext:${pen.bg & HAS_EXTENDED ? 1 : 0},${extendedKey(terminal, pen.fg, pen.extended, links)},remembered:${rawUnderlineStyle(pen.extended)}:${pen.extended.underlineColor}`,
     // The inactive alternate buffer is cleared on every switch except its DECSC slot, which a later 1049h + ESC 8 reads.
     // Where the alternate screen was entered (the shared tab stops' rule on leaving it).
-    altEntered: alternate ? String(altEnteredCols(terminal)) : '-',
+    altEntered: alternate ? `${altEnteredCols(terminal)}/${altEntry(terminal)}` : '-',
     altSaved: alternate ? '-' : `${savedKey(core.buffers.alt)},lines:${core.buffers.alt.lines.length}/${core.buffers.alt.lines.maxLength},tabs:${stops(core.buffers.alt.tabs)}`,
     // Parser state that changes how the next bytes are read: the state, the
     // join state, mid-sequence params and intermediates, partial UTF-8 (in

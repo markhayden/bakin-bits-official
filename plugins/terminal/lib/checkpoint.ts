@@ -15,8 +15,8 @@
  */
 import headless from '@xterm/headless'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
-import { restoreSideState } from './side-state'
-import { altEnteredCols } from './xterm-fixes'
+import { type CheckpointSideState, restoreSideState } from './side-state'
+import { altEnteredCols, altEntry } from './xterm-fixes'
 import {
   BLANK_CONTENT, cellKey, charsetName, compareSteps, drain, HAS_EXTENDED, internals, IS_COMBINED, lineWords, nullCell, rawUnderlineStyle,
   savedKey, tabStops, UNDERLINE, type Buffer, type Extended, type Term,
@@ -25,19 +25,14 @@ import {
 /** Bumped whenever the bytes or fields change meaning. */
 export const CHECKPOINT_FORMAT = 1
 
-export interface Checkpoint {
+/** The serialized terminal and the side state its bytes cannot carry (lib/side-state.ts). */
+export interface Checkpoint extends CheckpointSideState {
   format: typeof CHECKPOINT_FORMAT
   cols: number
   rows: number
   scrollback: number
   /** The serialized terminal, in pieces written in order (each one cheap to restore: see `pieces`). */
   data: readonly string[]
-  /** The parser's grapheme join state after `data` (xterm's packed character properties; 0 for none). */
-  joinState: number
-  /** The pen's HAS_EXTENDED bit: a link it holds with the bit clear is latent. */
-  penHasExtended: boolean
-  /** The width the alternate screen was entered at, while it is active (patchSharedTabStops). */
-  altEnteredCols: number | null
 }
 
 /** A terminal built the way every emulator is (the profile), live effects off. */
@@ -413,6 +408,7 @@ export function* checkpointSteps(terminal: Term): Generator<void, CheckpointResu
     data: yield* serializeSteps(terminal), joinState: handler._parser.precedingJoinState,
     penHasExtended: (handler._curAttrData.bg & HAS_EXTENDED) !== 0,
     altEnteredCols: terminal.buffer.active.type === 'alternate' ? altEnteredCols(terminal) ?? null : null,
+    altEntry: terminal.buffer.active.type === 'alternate' ? altEntry(terminal) ?? null : null,
   }
   yield
   const restored = scratch(terminal.cols, terminal.rows, scrollback)

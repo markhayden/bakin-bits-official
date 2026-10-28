@@ -263,7 +263,7 @@ describe('TerminalSocketClient', () => {
 })
 
 describe('TerminalSocketClient on the raw path', () => {
-  const checkpoint = { cols: 100, rows: 30, joinState: 0, penHasExtended: false, altEnteredCols: null }
+  const checkpoint = { cols: 100, rows: 30, joinState: 0, penHasExtended: false, altEnteredCols: null, altEntry: null }
   function raw() {
     const pictures: string[] = []
     const displays: string[] = []

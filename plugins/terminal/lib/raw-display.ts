@@ -112,7 +112,7 @@ export function* checkpointText(data: readonly string[]): Generator<Uint8Array> 
 }
 
 function sideState(checkpoint: Checkpoint): Record<string, unknown> {
-  return { format: checkpoint.format, cols: checkpoint.cols, rows: checkpoint.rows, scrollback: checkpoint.scrollback, joinState: checkpoint.joinState, penHasExtended: checkpoint.penHasExtended, altEnteredCols: checkpoint.altEnteredCols }
+  return { format: checkpoint.format, cols: checkpoint.cols, rows: checkpoint.rows, scrollback: checkpoint.scrollback, joinState: checkpoint.joinState, penHasExtended: checkpoint.penHasExtended, altEnteredCols: checkpoint.altEnteredCols, altEntry: checkpoint.altEntry }
 }
 
 function* eventFrames(event: LogEvent): Generator<Frame> {
