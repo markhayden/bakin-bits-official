@@ -92,9 +92,24 @@ describe('TerminalSocketClient', () => {
     expect(client.input(1, 'a')).toBe(1)
     // In flight: b waits, to travel in the next envelope.
     expect(client.input(1, 'b')).toBe(2)
-    expect(client.input(1, 'pasted\rtext', true)).toBe(3)
-    expect(client.input(1, 'c')).toBe(4)
-    expect(socket().of('input').map((frame) => [frame.viewerSeq, frame.data, frame.paste ?? false])).toEqual([[1, 'a', false], [2, 'b', false], [3, 'pasted\rtext', true]])
+    expect(client.input(1, 'pasted\rtext', { paste: true })).toBe(3)
+    expect(client.input(1, 'ls', { paste: true, enter: true })).toBe(4)
+    expect(client.input(1, 'c')).toBe(5)
+    expect(socket().of('input').map((frame) => [frame.viewerSeq, frame.data, frame.paste ?? false, frame.enter ?? false])).toEqual([
+      [1, 'a', false, false], [2, 'b', false, false], [3, 'pasted\rtext', true, false], [4, 'ls', true, true],
+    ])
+  })
+
+  it('counts its connections: sequences restart with each one', () => {
+    const { client, socket } = setup()
+    client.connect(); socket().open()
+    const first = client.connection
+    socket().server({ type: 'sync', epoch: 1, session, snapshot: '', cursor: 0 })
+    expect(client.input(1, 'a')).toBe(1)
+    client.reconnect(); socket().open()
+    socket().server({ type: 'sync', epoch: 2, session, snapshot: '', cursor: 0 })
+    expect(client.connection).toBe(first + 1)
+    expect(client.input(1, 'b')).toBe(1)
   })
 
   it('reports rejected and uncertain results and drops queued input after a rejection', async () => {

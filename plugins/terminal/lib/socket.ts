@@ -26,7 +26,7 @@
  */
 import { z } from 'zod'
 import type { PluginSocket } from '@makinbakin/sdk/types'
-import type { NativeClient } from './processes'
+import type { NativeClient, WriteOptions } from './processes'
 import { DeliveryUncertainError, screenDevice, TerminalError, type Principal, type Session, type SizeClaimant } from './contracts'
 
 export const ACK_WINDOW = 256 * 1024
@@ -53,7 +53,7 @@ export interface ViewerManager {
   onSessionChange(id: string, listener: (session: Session) => void): () => void
   nativeClients(id: string): NativeClient[]
   onNatives(id: string, listener: () => void): () => void
-  writeNext(id: string, principal: Principal, generation: number, data: string, options?: { paste?: boolean }): Promise<Session>
+  writeNext(id: string, principal: Principal, generation: number, data: string, options?: WriteOptions): Promise<Session>
   claim(id: string, principal: Principal, cols: number, rows: number, claimant: SizeClaimant): Promise<Session>
   resizeAs(id: string, principal: Principal, epoch: number, cols: number, rows: number): Promise<Session>
 }
@@ -61,8 +61,8 @@ export interface ViewerManager {
 const message = z.discriminatedUnion('type', [
   z.object({ type: z.literal('hello'), clientId: z.string().regex(CLIENT_ID) }),
   z.object({ type: z.literal('ack'), epoch: z.number().int().nonnegative(), bytes: z.number().int().nonnegative() }),
-  // `paste`: the data is one paste (lib/paste.ts), delivered as tmux pastes.
-  z.object({ type: z.literal('input'), generation: z.number().int().nonnegative(), viewerSeq: z.number().int().positive(), data: z.string().max(65536), paste: z.boolean().optional() }),
+  // `paste`: the data is one paste (lib/paste.ts), delivered as tmux pastes; `enter`: then Return, once it went.
+  z.object({ type: z.literal('input'), generation: z.number().int().nonnegative(), viewerSeq: z.number().int().positive(), data: z.string().max(65536), paste: z.boolean().optional(), enter: z.boolean().optional() }),
   z.object({ type: z.literal('claim'), cols: z.number().int().min(1).max(400), rows: z.number().int().min(1).max(150), device: screenDevice }),
   z.object({ type: z.literal('resize'), epoch: z.number().int().nonnegative(), cols: z.number().int().min(1).max(400), rows: z.number().int().min(1).max(150) }),
   z.object({ type: z.literal('pong') }),
@@ -154,7 +154,7 @@ export class TerminalViewer {
         this.acked = Math.min(this.sent, Math.max(this.acked, parsed.bytes))
         if (this.sent - this.acked < this.window()) { clearTimeout(this.evict); this.evict = undefined; this.wake?.() }
         return
-      case 'input': return this.input(parsed.generation, parsed.viewerSeq, parsed.data, parsed.paste ?? false)
+      case 'input': return this.input(parsed.generation, parsed.viewerSeq, parsed.data, { paste: parsed.paste ?? false, enter: (parsed.paste ?? false) && (parsed.enter ?? false) })
       case 'claim':
       case 'resize':
         try {
@@ -287,14 +287,14 @@ export class TerminalViewer {
     }
   }
 
-  private async input(generation: number, viewerSeq: number, data: string, paste: boolean): Promise<void> {
+  private async input(generation: number, viewerSeq: number, data: string, options: WriteOptions): Promise<void> {
     if (viewerSeq !== this.lastViewerSeq + 1) {
       this.send({ type: 'result', viewerSeq, status: 'rejected', error: 'Input is out of order on this connection' })
       return
     }
     this.lastViewerSeq = viewerSeq
     try {
-      await this.manager.writeNext(this.sessionId, this.principal!, generation, data, { paste })
+      await this.manager.writeNext(this.sessionId, this.principal!, generation, data, options)
       this.send({ type: 'result', viewerSeq, status: 'accepted' })
     } catch (error) {
       const status = error instanceof DeliveryUncertainError ? 'uncertain' : 'rejected'

@@ -47,7 +47,7 @@ processTest('a viewer paste is bracketed only when the program enabled bracketed
     const session = await manager.create({ title: 'Paste', cwd: root }, human, { cols: 100, rows: 30, kind: 'browser', device: 'desktop' })
     const screen = async () => (await manager!.readScreen(session.id, human)).screen
     const type = (data: string) => manager!.writeNext(session.id, human, session.generation, data)
-    const paste = (data: string) => manager!.writeNext(session.id, human, session.generation, data, { paste: true })
+    const paste = (data: string, enter = false) => manager!.writeNext(session.id, human, session.generation, data, { paste: true, enter })
     await until(async () => (await screen()).trim().length > 0, 'prompt')
     // cat -v shows markers if they arrive; the shell turns bracketed paste off before running it.
     await type('stty -echo; cat -v\r')
@@ -77,6 +77,16 @@ processTest('a viewer paste is bracketed only when the program enabled bracketed
     await until(async () => (await screen()).replace(/\s+/g, ' ').includes('61 1b 62 01 63 7f'), 'exact bytes')
     expect((await service.command(['list-buffers', '-F', '#{buffer_name}'])).trim()).toBe('')
     expect(readdirSync(join(root, 'paste'))).toEqual([])
+    // Paste + Enter: the Return follows the paste, in one write.
+    await paste("printf 'RAN_%s\\n' AFTER_PASTE", true)
+    await until(async () => (await screen()).includes('RAN_AFTER_PASTE'), 'paste then Return')
+    // A paste that fails sends no Return (here its file cannot be written): the line is not run.
+    rmSync(join(root, 'paste'), { recursive: true, force: true })
+    writeFileSync(join(root, 'paste'), 'not a directory')
+    await expect(paste("printf 'NEVER_%s\\n' RUN", true)).rejects.toThrow()
+    await Bun.sleep(500)
+    expect(await screen()).not.toContain('NEVER_RUN')
+    rmSync(join(root, 'paste'), { force: true })
   } finally {
     await manager?.shutdown()
     await service.command(['kill-server'], true)

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
 import { relative, isAbsolute } from 'node:path'
 import { authorize, createSchema, DAY, DeliveryUncertainError, TerminalError, type CreateInput, type Principal, type Session, type SizeClaimant, type TerminalSettings } from './contracts'
-import type { NativeClient, ProcessDriver } from './processes'
+import type { NativeClient, ProcessDriver, WriteOptions } from './processes'
 import { claimSize, clampSize, nextSize } from './sizing'
 import { Screen } from './screen'
 import { Store } from './store'
@@ -258,10 +258,10 @@ export class Sessions {
    * several writable viewers never collide on it. Agents keep `write`'s
    * explicit sequence.
    */
-  writeNext(id: string, principal: Principal, generation: number, data: string, options: { paste?: boolean } = {}): Promise<Session> {
-    return this.run(() => this.writeUnlocked(id, principal, generation, this.get(id, principal).inputSequence + 1, data, options.paste ?? false))
+  writeNext(id: string, principal: Principal, generation: number, data: string, options: WriteOptions = {}): Promise<Session> {
+    return this.run(() => this.writeUnlocked(id, principal, generation, this.get(id, principal).inputSequence + 1, data, options))
   }
-  private async writeUnlocked(id: string, principal: Principal, generation: number, sequence: number, data: string, paste = false): Promise<Session> {
+  private async writeUnlocked(id: string, principal: Principal, generation: number, sequence: number, data: string, options: WriteOptions = {}): Promise<Session> {
     const session = this.get(id, principal)
     authorize(session, principal, this.enabled(), true, generation)
     if (session.state !== 'running') throw new TerminalError('Session has exited')
@@ -274,7 +274,7 @@ export class Sessions {
     session.lastActivityAt = this.now()
     this.save(session)
     try {
-      await this.driver.write(id, data, paste)
+      await this.driver.write(id, data, options)
     } catch (error) {
       throw new DeliveryUncertainError(error instanceof Error ? error.message : String(error))
     }

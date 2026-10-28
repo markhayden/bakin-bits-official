@@ -147,10 +147,13 @@ export interface TerminalInputHandle {
   reset(): void
   /**
    * Send typed/pasted text for `generation` over the viewer socket: the
-   * sequence of the envelope that carries it, or false when not connected.
-   * A `paste` is delivered as tmux pastes (lib/paste.ts).
+   * sequence of the envelope that carries it on the current connection, or
+   * false when not connected. A `paste` is delivered as tmux pastes
+   * (lib/paste.ts), then Return if `enter`, only once the paste went.
    */
-  send(generation: number, data: string, paste?: boolean): number | false
+  send(generation: number, data: string, options?: { paste?: boolean; enter?: boolean }): number | false
+  /** The current connection (sequences restart with each). */
+  connection(): number
   /**
    * Compose text ready to send as a paste (pasteText), ending a one-shot
    * modifier; false when input is not possible now (not connected, or not

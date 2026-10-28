@@ -21,7 +21,7 @@ function fakeManager(initial = session()) {
   const sessionListeners = new Set<(session: Session) => void>()
   let natives: NativeClient[] = []
   const nativeListeners = new Set<() => void>()
-  const writes: Array<{ principal: Principal; data: string; paste: boolean }> = []
+  const writes: Array<{ principal: Principal; data: string; paste: boolean; enter: boolean }> = []
   let writeError: Error | undefined
   const manager: ViewerManager = {
     get: (id) => { if (id !== current.id) throw new TerminalError('Session not found', 404); return current },
@@ -49,7 +49,7 @@ function fakeManager(initial = session()) {
     onNatives: (_id, listener) => { nativeListeners.add(listener); return () => nativeListeners.delete(listener) },
     writeNext: async (_id, principal, _generation, data, options) => {
       if (writeError) throw writeError
-      writes.push({ principal, data, paste: options?.paste ?? false })
+      writes.push({ principal, data, paste: options?.paste ?? false, enter: options?.enter ?? false })
       current = { ...current, inputSequence: current.inputSequence + 1 }
       return current
     },
@@ -198,8 +198,13 @@ describe('TerminalViewer', () => {
     await until(() => peer.of('sync').length === 1, 'sync')
     peer.client({ type: 'input', generation: 1, viewerSeq: 1, data: 'one\rtwo', paste: true })
     peer.client({ type: 'input', generation: 1, viewerSeq: 2, data: '\x1b[200~literal\x1b[201~' })
-    await until(() => peer.of('result').length === 2, 'results')
-    expect(writes.map((write) => [write.data, write.paste])).toEqual([['one\rtwo', true], ['\x1b[200~literal\x1b[201~', false]])
+    peer.client({ type: 'input', generation: 1, viewerSeq: 3, data: 'ls', paste: true, enter: true })
+    // Enter belongs to a paste: on plain input it means nothing.
+    peer.client({ type: 'input', generation: 1, viewerSeq: 4, data: 'x', enter: true })
+    await until(() => peer.of('result').length === 4, 'results')
+    expect(writes.map((write) => [write.data, write.paste, write.enter])).toEqual([
+      ['one\rtwo', true, false], ['\x1b[200~literal\x1b[201~', false, false], ['ls', true, true], ['x', false, false],
+    ])
   })
 
   it('pushes session changes as they are saved', async () => {

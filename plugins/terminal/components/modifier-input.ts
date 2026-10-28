@@ -49,8 +49,13 @@ export class ModifierInput {
   constructor(private readonly notify: (state: ModifierState) => void, private readonly time: Scheduler = realTime) {}
 
   get modifiers(): ModifierState { return this.state }
-  /** Within a paste event: the next data is the pasted text. */
-  get isPasting(): boolean { return this.pasting }
+  /** Whether this data is the paste a paste event announced: true once, for the first data after it. */
+  takePaste(): boolean {
+    const pasting = this.pasting
+    this.pasting = false
+    this.time.clear(this.pasteTimer)
+    return pasting
+  }
 
   private set(next: ModifierState) {
     if (next === this.state) return

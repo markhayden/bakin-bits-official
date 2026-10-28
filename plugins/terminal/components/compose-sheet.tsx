@@ -30,10 +30,10 @@ export function ComposeSheet({ draft, kept, disabled, textarea, onDraft, onSend 
   onDraft(text: string): void
   onSend(text: string, enter: boolean): PasteOutcome
 }) {
-  const [text, setText] = useState(draft)
+  // The page's draft is the text (it clears it once a paste is accepted).
+  const text = draft
   const [outcome, setOutcome] = useState<PasteOutcome | undefined>()
   const change = (next: string) => {
-    setText(next)
     setOutcome(undefined)
     onDraft(next)
   }

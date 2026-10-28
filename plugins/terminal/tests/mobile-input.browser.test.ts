@@ -322,7 +322,8 @@ browserTest('the compose sheet sends one paste (bracketed only when the program 
     const before = socket.inputs().length
     await page.getByRole('button', { name: 'Paste + Enter', exact: true }).tap()
     await output('COMPOSED_ONE')
-    expect(socket.inputs().slice(before).map((frame) => [frame.data, frame.paste ?? false])).toEqual([["printf 'COMPOSED_%s\\n' ONE", true], ['\r', false]])
+    // One envelope: the paste, then the Return once it went.
+    expect(socket.inputs().slice(before).map((frame) => [frame.data, frame.paste ?? false, frame.enter ?? false])).toEqual([["printf 'COMPOSED_%s\\n' ONE", true, true]])
     // Paste + Enter puts the keyboard away (the response needs the screen); the draft is gone.
     await keys.waitFor({ state: 'detached' })
     // A program without bracketed paste (cat -v shows the markers if they arrive): tmux, which

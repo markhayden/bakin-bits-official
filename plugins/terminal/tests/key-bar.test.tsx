@@ -126,8 +126,15 @@ test('Compose in the sheet opens the compose sheet and puts the keyboard in its 
   expect(view.queryByRole('region', { name: 'More keys' })).toBeNull()
 })
 
-test('the compose sheet shows the draft, reports every edit, and sends the text once as Paste or Paste + Enter', () => {
-  const { view, sent } = bar({ session: 'compose', draft: { text: 'echo one', kept: true } })
+test("the compose sheet shows the page's draft, reports every edit, and sends the text once as Paste or Paste + Enter", () => {
+  const sent: string[] = []
+  // The page owns the draft: the textarea follows it.
+  function Page() {
+    const [draft, setDraft] = useState('echo one')
+    return <KeyBar session="compose" disabled={false} modifiers={NO_MODIFIERS} draft={{ text: draft, kept: true }} onDraft={(text) => { sent.push(`draft:${text}`); setDraft(text) }}
+      onKey={() => {}} onModifier={() => {}} onSheet={() => {}} onCompose={() => {}} onPaste={(text, enter) => { sent.push(`paste:${enter}:${text}`); return 'sent' }} onKeyboard={() => {}} onHide={() => {}} />
+  }
+  const view = render(<Page />)
   const textarea = view.getByRole('textbox', { name: 'Text to send' }) as HTMLTextAreaElement
   expect(textarea.value).toBe('echo one')
   fireEvent.change(textarea, { target: { value: 'echo one\necho two' } })

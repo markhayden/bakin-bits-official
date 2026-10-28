@@ -115,12 +115,20 @@ describe('modifier input', () => {
 })
 
 describe('a paste event', () => {
-  it('says the next data is pasted, until the event has passed', () => {
-    const { input, run } = setup()
-    expect(input.isPasting).toBe(false)
+  it('marks the one data it announced as the paste, never what is typed after it', () => {
+    const { input } = setup()
+    expect(input.takePaste()).toBe(false)
     input.paste()
-    expect(input.isPasting).toBe(true)
+    expect(input.takePaste()).toBe(true)
+    // A key typed straight after (before the event's own timer): not a paste, and it takes the modifiers.
+    input.toggle('ctrl', 'lock')
+    expect(input.takePaste()).toBe(false)
+    expect(input.data('c')).toBe('\x03')
+  })
+  it('expires when no data followed the event', () => {
+    const { input, run } = setup()
+    input.paste()
     run(0)
-    expect(input.isPasting).toBe(false)
+    expect(input.takePaste()).toBe(false)
   })
 })

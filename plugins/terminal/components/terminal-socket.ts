@@ -50,6 +50,9 @@ export class TerminalSocketClient {
   private synced = false
   private stopped = false
   private viewerSeq = 0
+  private connections = 0
+  /** Which connection this is: sequences restart with each one, so a result means nothing without it. */
+  get connection(): number { return this.connections }
   /** Sent envelopes awaiting their result: viewerSeq → generation. */
   private inFlight = new Map<number, number>()
   private pending: { generation: number; data: string } | undefined
@@ -72,6 +75,7 @@ export class TerminalSocketClient {
     const socket = (this.options.createSocket ?? ((url) => new WebSocket(url) as unknown as SocketLike))(this.options.url)
     socket.binaryType = 'arraybuffer'
     this.socket = socket
+    this.connections++
     socket.onopen = () => { socket.send(JSON.stringify({ type: 'hello', clientId: this.options.clientId })) }
     socket.onmessage = (event) => { if (this.socket === socket) this.receive(event.data) }
     socket.onclose = (event) => { if (this.socket === socket) this.dropped(event.code) }
@@ -106,15 +110,16 @@ export class TerminalSocketClient {
 
   /**
    * Queue input for `generation`: the sequence of the envelope that carries
-   * it (its result names it), or false when it cannot be sent (not synced).
-   * A `paste` travels alone, after everything queued before it, and the
-   * server delivers it as tmux pastes (lib/paste.ts).
+   * it on this connection (its result names it), or false when it cannot be
+   * sent (not synced). A `paste` travels alone, after everything queued
+   * before it; the server delivers it as tmux pastes (lib/paste.ts), then
+   * Return if `enter`, only once the paste went.
    */
-  input(generation: number, data: string, paste = false): number | false {
+  input(generation: number, data: string, options: { paste?: boolean; enter?: boolean } = {}): number | false {
     if (!this.synced || !data) return false
-    if (paste) {
+    if (options.paste) {
       this.flush()
-      return this.envelope(generation, data, true)
+      return this.envelope(generation, data, options.enter ? { paste: true, enter: true } : { paste: true })
     }
     if (this.pending && this.pending.generation !== generation) this.flush()
     if (this.inFlight.size === 0 && !this.pending) return this.envelope(generation, data)
@@ -140,10 +145,10 @@ export class TerminalSocketClient {
     return true
   }
 
-  private envelope(generation: number, data: string, paste = false): number {
+  private envelope(generation: number, data: string, paste: { paste: true; enter?: true } | Record<string, never> = {}): number {
     const viewerSeq = ++this.viewerSeq
     this.inFlight.set(viewerSeq, generation)
-    this.socket?.send(JSON.stringify({ type: 'input', generation, viewerSeq, data, ...(paste ? { paste: true } : {}) }))
+    this.socket?.send(JSON.stringify({ type: 'input', generation, viewerSeq, data, ...paste }))
     return viewerSeq
   }
 

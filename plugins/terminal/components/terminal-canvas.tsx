@@ -224,7 +224,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
         if (ready.current && callbacks.current.inputEnabled) modifiers.toggle(modifier, action)
       },
       reset,
-      send: (generation, data, paste) => socket.current?.input(generation, data, paste) ?? false,
+      send: (generation, data, options) => socket.current?.input(generation, data, options) ?? false,
+      connection: () => socket.current?.connection ?? 0,
       pasteText(text) {
         if (!ready.current || !callbacks.current.inputEnabled || !callbacks.current.writable) return false
         clearOnce()
@@ -271,9 +272,10 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     term.onData((data) => {
       if (callbacks.current.writable) {
         if (!ready.current || !callbacks.current.inputEnabled) { clearOnce(); return }
-        // A paste goes as one (the server has tmux bracket it only if the program asked).
-        const paste = modifiers.isPasting
-        callbacks.current.onInput(modifiers.data(data), paste)
+        // A paste goes as one (the server has tmux bracket it only if the program asked), sent
+        // exactly; only the data the paste event announced, never what is typed after it.
+        const paste = modifiers.takePaste()
+        callbacks.current.onInput(paste ? data : modifiers.data(data), paste)
       }
       else if (data && data.charCodeAt(0) >= 0x20) callbacks.current.onClaim(data)
     })
