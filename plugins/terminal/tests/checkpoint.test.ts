@@ -274,13 +274,15 @@ describe('streamed restore (the raw path)', () => {
       const result = takeCheckpoint(source)
       if ('rejected' in result) continue
       const { checkpoint } = result
-      const whole = emulator(40, 10, 200)
+      // Restored at the checkpoint's own size (the stream resized its source); the reference equals the source.
+      const whole = emulator(checkpoint.cols, checkpoint.rows, checkpoint.scrollback)
       await restoreCheckpoint(whole, checkpoint)
+      expect(stateDiff(fullState(whole), fullState(source)), `seed ${seed} reference`).toBeNull()
       const bytes = new TextEncoder().encode(checkpoint.data.join(''))
       compared++
       if (bytes.length > checkpoint.data.join('').length) multibyte++
       for (const size of SIZES) {
-        const streamed = emulator(40, 10, 200)
+        const streamed = emulator(checkpoint.cols, checkpoint.rows, checkpoint.scrollback)
         await new Promise<void>((resolve) => {
           for (let at = 0; at < bytes.length; at += size) {
             const last = at + size >= bytes.length
