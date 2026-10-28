@@ -55,8 +55,10 @@ describe('typed text under the bar modifiers', () => {
     expect(consumeModifiers(']', ctrl)).toBe('\x1d')
     // Ctrl+3–7 are ESC FS GS RS US and Ctrl+8 is DEL (Ctrl+6 in Vim).
     expect(['3', '4', '5', '6', '7', '8'].map(digit => consumeModifiers(digit, ctrl))).toEqual(['\x1b', '\x1c', '\x1d', '\x1e', '\x1f', '\x7f'])
-    // Shifted characters have no control form in xterm.
-    for (const char of ['?', '@', '^', '_', '2']) expect(consumeModifiers(char, ctrl)).toBe(char)
+    // xterm maps Ctrl+_ (Readline undo) and Ctrl+@; other shifted characters have no control form.
+    expect(consumeModifiers('_', ctrl)).toBe('\x1f')
+    expect(consumeModifiers('@', ctrl)).toBe('\x00')
+    for (const char of ['?', '^', '2']) expect(consumeModifiers(char, ctrl)).toBe(char)
     expect(consumeModifiers('b', alt)).toBe('\x1bb')
     expect(consumeModifiers('c', both)).toBe('\x1b\x03')
     expect(consumeModifiers(' ', both)).toBe('\x1b\x00')
@@ -83,6 +85,12 @@ describe('typed text under the bar modifiers', () => {
     expect(consumeModifiers('\x03', alt)).toBe('\x1b\x03')
     expect(consumeModifiers('\x03', ctrl)).toBe('\x03')
     expect(consumeModifiers('\t', both)).toBe('\t')
+    // Keys the keyboard already ESC-prefixed (Meta/Alt): the bar's Control still applies, as xterm's Ctrl+Alt does.
+    expect(consumeModifiers('\x1b\x7f', ctrl)).toBe('\x1b\x08')
+    expect(consumeModifiers('\x1bc', ctrl)).toBe('\x1b\x03')
+    expect(consumeModifiers('\x1b ', ctrl)).toBe('\x1b\x00')
+    expect(consumeModifiers('\x1b.', ctrl)).toBe('\x1b.')
+    expect(consumeModifiers('\x1bc', alt)).toBe('\x1bc')
     expect(consumeModifiers('\x1b[Z', both)).toBe('\x1b[Z')
   })
   it('leaves paste, IME, words and unsupported characters as typed', () => {

@@ -47,11 +47,11 @@ const tilde = { Delete: 3, 'Page Up': 5, 'Page Down': 6 } as const
 const parameter = (mods: ActiveModifiers) => 1 + (mods.alt ? 2 : 0) + (mods.ctrl ? 4 : 0)
 const prefix = (mods: ActiveModifiers, data: string) => (mods.alt ? '\x1b' : '') + data
 
-/** Ctrl alone on one unshifted character, as xterm 6 maps keys; undefined when it has no control form. */
+/** Ctrl alone on one character, as xterm 6 maps keys; undefined when it has no control form. */
 function control(char: string): string | undefined {
   if (/^[a-z]$/i.test(char)) return String.fromCharCode(char.toUpperCase().charCodeAt(0) & 31)
   if (char >= '3' && char <= '7') return String.fromCharCode(char.charCodeAt(0) - 51 + 27)
-  return ({ ' ': '\x00', '8': '\x7f', '[': '\x1b', '\\': '\x1c', ']': '\x1d' } as Record<string, string>)[char]
+  return ({ ' ': '\x00', '@': '\x00', '8': '\x7f', '[': '\x1b', '\\': '\x1c', ']': '\x1d', '_': '\x1f' } as Record<string, string>)[char]
 }
 
 /** Matches xterm 6's keyboard protocol (DECCKM included) for a key with the bar's modifiers. */
@@ -96,6 +96,13 @@ export function consumeModifiers(data: string, mods: ActiveModifiers, source: 't
     if (cursorKey) return '\x1b[1;' + parameter(mods) + cursorKey[1]
     const modifiedCursor = /^\[1;(\d+)([ABCDHF])$/.exec(sequence)
     if (modifiedCursor) return '\x1b[1;' + merge(Number(modifiedCursor[1]), mods) + modifiedCursor[2]
+    // A key the keyboard already ESC-prefixed (Meta/Alt): the bar's Control applies as xterm's Ctrl+Alt does.
+    if (sequence.length === 1) {
+      if (!mods.ctrl) return data
+      if (sequence === '\x7f') return '\x1b\x08'
+      if (/^[a-z]$/i.test(sequence) || sequence === ' ') return '\x1b' + control(sequence)!
+      return data
+    }
     const tildeKey = /^\[([356])(?:;(\d+))?~$/.exec(sequence)
     if (tildeKey) {
       const existing = Number(tildeKey[2] ?? 1)

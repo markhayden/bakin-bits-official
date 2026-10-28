@@ -19,6 +19,7 @@ export class ModifierInput {
   private state: ModifierState = NO_MODIFIERS
   private passthrough = false
   private user = false
+  private pasting = false
   private userTimer: Timer | undefined
   private composing = false
   private committed = false
@@ -39,14 +40,25 @@ export class ModifierInput {
   clearOnce() { this.set(afterSend(this.state)) }
   toggle(modifier: Modifier, action: 'tap' | 'lock' = 'tap') { this.set(toggleModifier(this.state, modifier, action)) }
 
-  /** The operator acted on the terminal's input (keydown, keypress, beforeinput, input): data in this task is theirs. The canvas listens in capture on xterm's container, so this runs before xterm's own handlers. */
-  userEvent() {
+  /**
+   * The operator acted on the terminal's input: data in this task is theirs.
+   * The canvas listens in capture on xterm's container, so this runs before
+   * xterm's own handlers. A new keystroke after a composition ended means
+   * that composition committed nothing (xterm's deferred read came first).
+   */
+  userEvent(kind: 'keydown' | 'keypress' | 'beforeinput' | 'input' = 'keydown') {
+    if (this.committed && (kind === 'keydown' || kind === 'keypress')) this.endComposition()
     this.user = true
     this.time.clear(this.userTimer)
-    this.userTimer = this.time.set(() => { this.user = false }, 0)
+    this.userTimer = this.time.set(() => { this.user = false; this.pasting = false }, 0)
   }
-  /** Paste is the operator's, and sent as typed. */
-  paste() { this.userEvent(); this.clearOnce() }
+  /** Paste is the operator's, and sent exactly as pasted: no modifier, lock or not. */
+  paste() { this.userEvent('input'); this.pasting = true; this.clearOnce() }
+  private endComposition() {
+    this.time.clear(this.commitTimer)
+    this.composing = false
+    this.committed = false
+  }
   compositionStart() {
     this.time.clear(this.commitTimer)
     this.composing = true
@@ -57,7 +69,7 @@ export class ModifierInput {
   compositionEnd() {
     this.committed = true
     this.time.clear(this.commitTimer)
-    this.commitTimer = this.time.set(() => { this.composing = false; this.committed = false }, COMPOSITION_COMMIT_MS)
+    this.commitTimer = this.time.set(() => this.endComposition(), COMPOSITION_COMMIT_MS)
   }
 
   /** A bar key: encode it with the current modifiers, consume the one-shot ones, and let `deliver` send the bytes untouched. */
@@ -72,13 +84,10 @@ export class ModifierInput {
   data(data: string): string {
     if (this.passthrough) return data
     if (this.composing) {
-      if (this.committed) {
-        this.time.clear(this.commitTimer)
-        this.composing = false
-        this.committed = false
-      }
+      if (this.committed) this.endComposition()
       return data
     }
+    if (this.pasting) return data
     // xterm's own replies (focus reports, terminal answers) are not keystrokes.
     if (!this.user) return data
     const sent = consumeModifiers(data, activeModifiers(this.state))

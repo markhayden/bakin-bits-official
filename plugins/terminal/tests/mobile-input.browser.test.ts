@@ -174,6 +174,22 @@ browserTest('the phone key bar follows the typing session and its keys send exac
       await page.keyboard.press('Backspace')
     }
 
+    // A paste under a locked Control is sent exactly as pasted (bracketed when the shell asked for it).
+    await keys.getByRole('button', { name: 'More keys', exact: true }).tap()
+    await sheet.getByRole('button', { name: 'Control lock', exact: true }).tap()
+    await keys.getByRole('button', { name: 'Back to keyboard', exact: true }).tap()
+    const beforePaste = socket.typed().length
+    await input.evaluate((el) => {
+      const data = new DataTransfer()
+      data.setData('text/plain', 'c')
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
+    })
+    await socket.waitFor((frame) => frame.type === 'input' && String(frame.data).includes('c') && socket.typed().length > beforePaste)
+    expect(['c', '\x1b[200~c\x1b[201~']).toContain(socket.typed().slice(beforePaste))
+    expect(await keys.getByRole('button', { name: 'Control, locked', exact: true }).isVisible()).toBe(true)
+    await keys.getByRole('button', { name: 'Control, locked', exact: true }).tap()
+    await page.keyboard.press('Backspace')
+
     // Hide keyboard ends the session: no bar, the corner button is back.
     await keys.getByRole('button', { name: 'Hide keyboard', exact: true }).tap()
     await keys.waitFor({ state: 'detached' })

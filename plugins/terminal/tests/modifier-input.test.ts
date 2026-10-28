@@ -67,7 +67,7 @@ describe('modifier input', () => {
     input.compositionStart()
     input.compositionEnd()
     run(1)
-    input.userEvent()
+    // xterm's deferred read delivers the commit from a timer: no keystroke in between.
     expect(input.data('c')).toBe('c')
     // The commit ended the composition: the next keystroke takes the lock again.
     input.userEvent()
@@ -102,5 +102,31 @@ describe('modifier input', () => {
     input.reset()
     expect(input.modifiers).toEqual({ ctrl: 'off', alt: 'off' })
     expect(seen.at(-1)).toEqual({ ctrl: 'off', alt: 'off' })
+  })
+  it('sends a paste exactly as pasted, even under a lock', () => {
+    const { input } = setup()
+    input.toggle('ctrl', 'lock')
+    input.paste()
+    expect(input.data('c')).toBe('c')
+    expect(input.modifiers.ctrl).toBe('locked')
+  })
+  it('ends a composition that committed nothing at the next keystroke', () => {
+    const { input, run } = setup()
+    input.toggle('ctrl', 'lock')
+    input.compositionStart()
+    input.compositionEnd()
+    run(1)
+    // xterm's deferred read found nothing: no onData. The operator's next keystroke takes the lock.
+    input.userEvent('keydown')
+    expect(input.data('c')).toBe('\x03')
+  })
+  it('keeps waiting for the commit through the input events that carry it (iOS)', () => {
+    const { input } = setup()
+    input.toggle('ctrl', 'lock')
+    input.compositionStart()
+    input.compositionEnd()
+    input.userEvent('beforeinput')
+    input.userEvent('input')
+    expect(input.data('c')).toBe('c')
   })
 })
