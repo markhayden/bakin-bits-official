@@ -62,45 +62,110 @@
   [data-bakin-plugin="terminal"] .terminal-size-detail { display: none; }
 }
 
-/* The phone key bar (spec D9 item 9): one row above the keyboard. The page
-   renders it only while the keyboard is up. The strip scrolls sideways under
-   a fade; ••• stays put. Keys never select text or open iOS's long-press
-   callout, and a sideways flick scrolls the strip without pressing a key. */
-[data-bakin-plugin="terminal"] .terminal-key-bar {
+/* The phone key bar v2 (spec D9 item 9): iOS-style keycaps in one row above
+   the keyboard, and the ••• sheet below it in the same accessory slot. Caps
+   are filled (no outlines), 40 px tall with a 44 px hit area, glyph faces,
+   built from the kit's colour tokens so light and dark both read as keys. */
+[data-bakin-plugin="terminal"] .terminal-key-accessory {
+  --terminal-keycap: color-mix(in srgb, var(--bakin-color-text-primary) 20%, var(--bakin-color-canvas-default));
+  --terminal-keycap-function: color-mix(in srgb, var(--bakin-color-text-primary) 11%, var(--bakin-color-canvas-default));
+  --terminal-keycap-pressed: color-mix(in srgb, var(--bakin-color-text-primary) 34%, var(--bakin-color-canvas-default));
+  --terminal-keycap-size: 44px;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--bakin-color-text-primary) 5%, var(--bakin-color-canvas-default));
   border-top: 1px solid var(--bakin-color-border-subtle);
-  background: var(--bakin-color-canvas-default);
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
 }
-[data-bakin-plugin="terminal"] .terminal-key-strip {
+[data-bakin-plugin="terminal"] .terminal-key-bar {
   display: flex;
-  flex: 1;
-  min-width: 0;
   align-items: center;
-  gap: var(--bakin-layout-gap-dense);
-  padding: var(--bakin-layout-space-1) var(--bakin-layout-space-2);
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scrollbar-width: none;
-  touch-action: pan-x;
-  mask-image: linear-gradient(to right, #000 calc(100% - var(--bakin-layout-space-6)), transparent);
+  gap: 6px;
+  height: 54px;
+  padding: 0 6px;
+  box-sizing: border-box;
 }
-[data-bakin-plugin="terminal"] .terminal-key-strip::-webkit-scrollbar { display: none; }
-[data-bakin-plugin="terminal"] .terminal-key-strip > * { flex-shrink: 0; }
+[data-bakin-plugin="terminal"] .terminal-keycap {
+  position: relative;
+  flex-shrink: 0;
+  min-width: var(--terminal-keycap-size);
+  height: 40px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--terminal-keycap);
+  color: var(--bakin-color-text-primary);
+  font: 500 17px/1 -apple-system, "SF Pro Text", var(--bakin-typography-family-ui), system-ui, sans-serif;
+  box-shadow: 0 1px 0 color-mix(in srgb, black 40%, transparent);
+  touch-action: manipulation;
+  cursor: pointer;
+}
+/* 44 px to hit even when the cap is drawn smaller. */
+[data-bakin-plugin="terminal"] .terminal-keycap::after { content: ""; position: absolute; inset: -2px -3px; }
+[data-bakin-plugin="terminal"] .terminal-keycap[data-tone="function"] { background: var(--terminal-keycap-function); }
+[data-bakin-plugin="terminal"] .terminal-keycap:active:not(:disabled) { background: var(--terminal-keycap-pressed); }
+[data-bakin-plugin="terminal"] .terminal-keycap:focus-visible { outline: 2px solid var(--bakin-color-focus-ring); outline-offset: 1px; }
+[data-bakin-plugin="terminal"] .terminal-keycap:disabled { opacity: 0.4; cursor: default; }
+/* A modifier on for the next key is inverted; locked adds a bar under its glyph. */
+[data-bakin-plugin="terminal"] .terminal-keycap[data-state="once"],
+[data-bakin-plugin="terminal"] .terminal-keycap[data-state="locked"] {
+  background: var(--bakin-color-text-primary);
+  color: var(--bakin-color-canvas-default);
+}
+[data-bakin-plugin="terminal"] .terminal-keycap-lock {
+  position: absolute;
+  left: 50%;
+  bottom: 5px;
+  width: 14px;
+  height: 2px;
+  margin-left: -7px;
+  border-radius: 1px;
+  background: currentColor;
+}
+[data-bakin-plugin="terminal"] .terminal-keycap-hide { min-width: 52px; }
+[data-bakin-plugin="terminal"] .terminal-key-spacer { flex: 1; min-width: 0; }
 [data-bakin-plugin="terminal"] .terminal-key-divider {
-  align-self: center;
+  flex-shrink: 0;
   width: 1px;
-  height: var(--bakin-layout-space-6);
-  margin: 0 var(--bakin-layout-space-1);
+  height: 26px;
   background: var(--bakin-color-border-subtle);
 }
-[data-bakin-plugin="terminal"] .terminal-key-pin { font-family: var(--bakin-typography-family-mono, ui-monospace, monospace); }
-[data-bakin-plugin="terminal"] .terminal-key-more {
-  flex-shrink: 0;
-  padding: var(--bakin-layout-space-1) var(--bakin-layout-space-2);
-  border-left: 1px solid var(--bakin-color-border-subtle);
+/* The ••• sheet: every other key, in the slot below the bar. */
+[data-bakin-plugin="terminal"] .terminal-key-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(300px, 45dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 8px 12px;
+  box-sizing: border-box;
+}
+[data-bakin-plugin="terminal"] .terminal-key-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+}
+[data-bakin-plugin="terminal"] .terminal-key-grid .terminal-keycap { min-width: 0; height: 44px; }
+[data-bakin-plugin="terminal"] .terminal-key-grid-labelled { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+[data-bakin-plugin="terminal"] .terminal-keycap-wide { justify-content: flex-start; padding: 0 12px; }
+[data-bakin-plugin="terminal"] .terminal-keycap-face { font-family: var(--bakin-typography-family-mono, ui-monospace, monospace); font-size: 15px; min-width: 26px; text-align: left; }
+[data-bakin-plugin="terminal"] .terminal-keycap-label { font-size: 15px; font-weight: 400; color: var(--bakin-color-text-muted); }
+[data-bakin-plugin="terminal"] .terminal-keycap[data-state="locked"] .terminal-keycap-label { color: inherit; }
+/* The narrowest phones (320 px): smaller caps, the same 44 px hit areas. */
+@media (max-width: 369px) {
+  [data-bakin-plugin="terminal"] .terminal-key-accessory { --terminal-keycap-size: 38px; }
+  [data-bakin-plugin="terminal"] .terminal-key-bar { gap: 4px; padding: 0 4px; }
+  [data-bakin-plugin="terminal"] .terminal-key-bar .terminal-keycap { padding: 0 6px; }
+  [data-bakin-plugin="terminal"] .terminal-key-bar .terminal-keycap::after { inset: -2px -3px; }
+  [data-bakin-plugin="terminal"] .terminal-keycap-hide { min-width: 44px; }
+  [data-bakin-plugin="terminal"] .terminal-key-grid:not(.terminal-key-grid-labelled) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 

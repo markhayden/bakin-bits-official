@@ -10,8 +10,8 @@ import { attachCommand, shortId, type Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
 import { api } from './api'
 import { KeyBar } from './key-bar'
-import { isTerminalInput, useCoarsePointer, useKeyboardUp } from './keyboard-state'
-import { DEFAULT_PINS, type TerminalInputHandle } from './terminal-input'
+import { useCoarsePointer, useEditingSession } from './editing-session'
+import { NO_MODIFIERS, type ModifierState, type TerminalInputHandle } from './terminal-input'
 import { TerminalCanvas, type TerminalViewHandle } from './terminal-canvas'
 import { SizeControl } from './size-control'
 import { estimateTerminalSize } from './terminal-size'
@@ -50,7 +50,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const [presence, setPresence] = useState<Presence>({ sizeFrozen: false, nativeClients: 0 })
   // Terminal apps attached per session, for the list (refreshed with it).
   const [apps, setApps] = useState<Record<string, number>>({})
-  const [ctrl, setCtrl] = useState(false)
+  const [modifiers, setModifiers] = useState<ModifierState>(NO_MODIFIERS)
   const [attempt, setAttempt] = useState(0)
   const [streamStatus, setStreamStatus] = useState('Connecting')
   useEffect(() => { setCaptureTab(true); setAttempt(0); setStreamStatus('Connecting') }, [sessionId])
@@ -145,7 +145,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   // Phones and tablets get the key bar, only while the on-screen keyboard is up (spec D9 item 9).
   const touch = useCoarsePointer()
   const keyed = Boolean(session && !ended && !session.historyDeleted && touch)
-  const keyboardUp = useKeyboardUp(keyed, isTerminalInput)
+  const [editing, editingEvent] = useEditingSession(keyed)
   // Invalidate stale writes before newly enabled controls can accept input.
   useLayoutEffect(() => { epoch.current++ }, [sessionId, session?.generation, connected, serviceReady])
   const chipTone = session?.historyDeleted || ended ? 'neutral' : !connected ? 'attention' : writable ? 'success' : 'neutral'
@@ -376,7 +376,11 @@ function Workspace({ sessionId }: { sessionId?: string }) {
         itself restructures the body and would remount the terminal (dropping
         the keyboard). */}
     <WorkspacePageBody inputAccessory={session && !ended && !session.historyDeleted
-      ? keyboardUp ? <KeyBar key={session.id} disabled={!inputEnabled} ctrl={ctrl} onCtrl={() => inputHandle.current?.toggleCtrl()} onKey={key => inputHandle.current?.key(key)} onFocusTerminal={() => inputHandle.current?.focus()} arrow="Up" pins={DEFAULT_PINS} /> : <></>
+      ? keyed && editing !== 'idle' ? <KeyBar key={session.id} session={editing} disabled={!inputEnabled} modifiers={modifiers}
+          onKey={key => inputHandle.current?.key(key)} onModifier={(modifier, action) => inputHandle.current?.modifier(modifier, action)}
+          onSheet={() => { editingEvent('open-sheet'); inputHandle.current?.blur() }}
+          onKeyboard={() => { inputHandle.current?.focus(); editingEvent('abc') }}
+          onHide={() => { editingEvent('hide'); inputHandle.current?.blur() }} /> : <></>
       : undefined}>
       <Stack as="section" gap="none" className="min-h-0 flex-1 overflow-y-auto" aria-label="Selected terminal">
         {(loadError && all.length > 0 || error) && <Stack gap="item" className="shrink-0 p-bakin-4">
@@ -389,7 +393,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
           {session.cleanupReason && <Alert tone="attention"><AlertDescription>{session.cleanupReason}</AlertDescription></Alert>}
           </Stack>}
           <Separator />
-          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} offerKeyboard={keyed && !keyboardUp && Boolean(inputEnabled)} inputEnabled={Boolean(inputEnabled)} inputHandle={inputHandle} viewHandle={viewHandle} onCtrlChange={setCtrl} captureTab={captureTab} attempt={attempt} onStatus={setStreamStatus} onInput={input} onClaim={handleClaim} onSession={update} onPresence={setPresence} onResult={handleResult} />}
+          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} offerKeyboard={keyed && editing === 'idle' && Boolean(inputEnabled)} inputEnabled={Boolean(inputEnabled)} inputHandle={inputHandle} viewHandle={viewHandle} onModifiersChange={setModifiers} captureTab={captureTab} attempt={attempt} onStatus={setStreamStatus} onInput={input} onClaim={handleClaim} onSession={update} onPresence={setPresence} onResult={handleResult} />}
         </>)}
       </Stack>
     </WorkspacePageBody>

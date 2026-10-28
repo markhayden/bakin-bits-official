@@ -1,63 +1,81 @@
-import { useState } from 'react'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Ellipsis } from 'lucide-react'
-import { Stack } from '@makinbakin/sdk/layout'
-import { Button, Popover, PopoverContent, PopoverTitle, PopoverTrigger, Text } from '@makinbakin/sdk/ui'
-import { CONTROL_LABELS, CONTROL_SHORTCUTS, keyFace, MENU_KEYS, type ArrowKey, type TerminalKey } from './terminal-input'
+import { useRef } from 'react'
+import { CONTROL_LABELS, CONTROL_SHORTCUTS, keyFace, SHEET_KEYS, type Modifier, type ModifierState, type TerminalKey } from './terminal-input'
+import type { EditingSession } from './editing-session'
 
-const ARROW_ICONS = { Up: ArrowUp, Down: ArrowDown, Left: ArrowLeft, Right: ArrowRight } as const
+const MODIFIER_NAMES: Record<Modifier, string> = { ctrl: 'Control', alt: 'Option' }
+const MODIFIER_FACES: Record<Modifier, string> = { ctrl: '⌃', alt: '⌥' }
+
+function modifierLabel(modifier: Modifier, state: ModifierState[Modifier]): string {
+  const name = MODIFIER_NAMES[modifier]
+  return state === 'locked' ? `${name}, locked` : state === 'once' ? `${name}, on for the next key` : name
+}
+
+// Keys keep focus where it is: the terminal's input keeps the keyboard up.
+const keepFocus = (event: React.MouseEvent) => event.preventDefault()
+
+function Keycap({ label, face, tone, state, disabled, className, onPress, onKeyDown }: {
+  label: string; face: React.ReactNode; tone?: 'function'; state?: ModifierState[Modifier]
+  disabled?: boolean; className?: string; onPress(event: React.MouseEvent): void; onKeyDown?(event: React.KeyboardEvent): void
+}) {
+  return <button type="button" className={`terminal-keycap${className ? ' ' + className : ''}`} data-tone={tone} data-state={state}
+    aria-label={label} aria-pressed={state === undefined ? undefined : state !== 'off'} disabled={disabled}
+    onMouseDown={keepFocus} onClick={onPress} onKeyDown={onKeyDown}>{face}</button>
+}
+
+const HIDE_ICON = <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="11" rx="2" /><path d="M6 7.5h.01M9.5 7.5h.01M13 7.5h.01M16.5 7.5h.01M7 11.5h10" /><path d="M9 18.5l3 2.5 3-2.5" /></svg>
+const MORE_ICON = <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle cx="19" cy="12" r="1.8" /></svg>
 
 /**
- * The phone key bar (spec D9 item 9): shown by the page only while the
- * on-screen keyboard is up. A sideways-scrolling strip (Esc, Tab, latching
- * Ctrl, one arrow key, then pinned keys) and a fixed ••• menu with every
- * other key. Every key keeps focus on the terminal, so the keyboard stays up,
- * and one activation sends exactly one key. `data-terminal-keys` marks the
- * bar and its portalled menu as part of the terminal: touching them does not
- * drop the Ctrl latch.
+ * The phone key bar (spec D9 item 9, v2): one row of iOS-style keycaps shown
+ * while the operator is typing, and the ••• key sheet that stands in for the
+ * keyboard. `data-terminal-keys` marks both as part of the terminal, so
+ * touching them neither ends the editing session nor drops a modifier.
+ * Hide keyboard works even while sending is disabled.
  */
-export function KeyBar({ disabled, ctrl, onCtrl, onKey, onFocusTerminal, arrow, pins }: {
-  disabled: boolean; ctrl: boolean; onCtrl(): void; onKey(key: TerminalKey): void
-  /** Put focus back on the terminal's input (the menu closing hands it back there, never to •••). */
-  onFocusTerminal(): void
-  /** The arrow key's face: the direction a tap sends. */
-  arrow: ArrowKey
-  pins: readonly TerminalKey[]
+export function KeyBar({ session, disabled, modifiers, onKey, onModifier, onSheet, onKeyboard, onHide }: {
+  session: Exclude<EditingSession, 'idle'>; disabled: boolean; modifiers: ModifierState
+  onKey(key: TerminalKey): void
+  onModifier(modifier: Modifier, action: 'tap' | 'lock'): void
+  /** Open the key sheet (the keyboard goes down). */
+  onSheet(): void
+  /** Back to the keyboard from the sheet (focuses the terminal within this tap). */
+  onKeyboard(): void
+  onHide(): void
 }) {
-  const [menu, setMenu] = useState(false)
-  const preserveFocus = (event: React.MouseEvent) => event.preventDefault()
-  // Opened by touch, the menu leaves focus on the terminal (moving it would
-  // drop the keyboard); closing always hands focus back to the terminal.
-  const openFocus = (type: string) => type !== 'touch'
-  const closeFocus = () => { onFocusTerminal(); return false }
-  const ArrowIcon = ARROW_ICONS[arrow]
-  const stripKey = (key: TerminalKey, className = '') => <Button key={key} size="lg" variant="outline" aria-label={key} className={className} disabled={disabled} onMouseDown={preserveFocus} onClick={() => onKey(key)}>{keyFace(key)}</Button>
-  const menuKey = (key: TerminalKey, label?: string) => <Button key={key} variant="outline" aria-label={label ? `${key} ${label}` : key} disabled={disabled} onMouseDown={preserveFocus} onClick={() => { onKey(key); setMenu(false) }} className={label ? 'justify-start' : undefined}>
-    <Text as="span" mono>{keyFace(key)}</Text>{label && <Text as="span" tone="muted" weight="regular">{label}</Text>}
-  </Button>
-  // A keypad, not a page layout: fixed columns (portalled, so styled inline
-  // rather than by the plugin stylesheet).
-  const keypad = (columns: number) => ({ display: 'grid', gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, gap: 'var(--bakin-layout-space-2)' })
-  const group = (name: string, columns: number, keys: React.ReactNode) => <Stack as="section" gap="dense" aria-label={name}>
-    <Text as="h3" size="meta" tone="muted" weight="semibold" aria-hidden="true">{name}</Text>
-    <div style={keypad(columns)}>{keys}</div>
-  </Stack>
-  return <div role="toolbar" aria-label="Terminal keys" data-terminal-keys="" className="terminal-key-bar">
-    <div className="terminal-key-strip" data-terminal-keys="">
-      {stripKey('Esc')}{stripKey('Tab')}
-      <Button size="lg" variant={ctrl ? 'primary' : 'outline'} aria-pressed={ctrl} disabled={disabled} onMouseDown={preserveFocus} onClick={onCtrl}>Ctrl</Button>
-      <Button size="icon-lg" variant="outline" aria-label={arrow} disabled={disabled} onMouseDown={preserveFocus} onClick={() => onKey(arrow)}><ArrowIcon aria-hidden="true" /></Button>
+  const sheet = useRef<HTMLDivElement>(null)
+  const modifierKey = (modifier: Modifier) => <Keycap key={modifier} label={modifierLabel(modifier, modifiers[modifier])} face={<>{MODIFIER_FACES[modifier]}{modifiers[modifier] === 'locked' && <span className="terminal-keycap-lock" aria-hidden="true" />}</>}
+    state={modifiers[modifier]} disabled={disabled} onPress={() => onModifier(modifier, 'tap')} />
+  const sendKey = (key: TerminalKey, label?: string) => <Keycap key={key} label={label ? `${key} ${label}` : key}
+    face={label ? <><span className="terminal-keycap-face">{keyFace(key)}</span><span className="terminal-keycap-label">{label}</span></> : keyFace(key)}
+    className={label ? 'terminal-keycap-wide' : undefined} disabled={disabled} onPress={() => onKey(key)} />
+  const openSheet = (event: React.MouseEvent) => {
+    onSheet()
+    // Opened from a keyboard (no pointer), focus moves into the sheet.
+    if (event.detail === 0) requestAnimationFrame(() => sheet.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus())
+  }
+  return <div className="terminal-key-accessory" data-terminal-keys="">
+    <div role="group" aria-label="Terminal keys" className="terminal-key-bar">
+      {sendKey('Esc')}
+      {sendKey('Tab')}
+      {modifierKey('ctrl')}
+      {modifierKey('alt')}
+      <span className="terminal-key-spacer" />
+      {session === 'sheet'
+        ? <Keycap label="Back to keyboard" face="abc" tone="function" onPress={onKeyboard} />
+        : <Keycap label="More keys" face={MORE_ICON} tone="function" onPress={openSheet} />}
       <span aria-hidden="true" className="terminal-key-divider" />
-      {pins.map(key => stripKey(key, 'terminal-key-pin'))}
+      <Keycap label="Hide keyboard" face={HIDE_ICON} tone="function" className="terminal-keycap-hide" onPress={onHide} />
     </div>
-    <div className="terminal-key-more">
-      <Popover open={menu} onOpenChange={setMenu}>
-        <PopoverTrigger render={<Button size="icon-lg" variant={menu ? 'primary' : 'outline'} aria-label="More keys" onMouseDown={preserveFocus} />}><Ellipsis aria-hidden="true" /></PopoverTrigger>
-        <PopoverContent side="top" align="end" initialFocus={openFocus} finalFocus={closeFocus} data-terminal-keys="">
-          <PopoverTitle className="sr-only">More keys</PopoverTitle>
-          {group('Keys', 4, MENU_KEYS.map(key => menuKey(key)))}
-          {group('Control', 2, CONTROL_SHORTCUTS.map(key => menuKey(`Ctrl+${key}`, CONTROL_LABELS[key])))}
-        </PopoverContent>
-      </Popover>
-    </div>
+    {session === 'sheet' && <div ref={sheet} role="region" aria-label="More keys" className="terminal-key-sheet"
+      onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); onKeyboard() } }}>
+      <div role="group" aria-label="Keys" className="terminal-key-grid">{SHEET_KEYS.map(key => sendKey(key))}</div>
+      <div role="group" aria-label="Control" className="terminal-key-grid terminal-key-grid-labelled">{CONTROL_SHORTCUTS.map(key => sendKey(`Ctrl+${key}`, CONTROL_LABELS[key]))}</div>
+      <div role="group" aria-label="Locks" className="terminal-key-grid terminal-key-grid-labelled">
+        {(['ctrl', 'alt'] as const).map(modifier => <Keycap key={modifier} label={`${MODIFIER_NAMES[modifier]} lock`}
+          face={<><span className="terminal-keycap-face">{MODIFIER_FACES[modifier]}</span><span className="terminal-keycap-label">{MODIFIER_NAMES[modifier]} lock</span></>}
+          className="terminal-keycap-wide" state={modifiers[modifier] === 'locked' ? 'locked' : 'off'} disabled={disabled}
+          onPress={() => onModifier(modifier, modifiers[modifier] === 'locked' ? 'tap' : 'lock')} />)}
+      </div>
+    </div>}
   </div>
 }

@@ -8,17 +8,17 @@ import { clampSize } from '../lib/sizing'
 import { clientId } from './api'
 import { enableWebgl } from './terminal-renderer'
 import { TerminalSocketClient, type InputResult, type Presence } from './terminal-socket'
-import { consumeControl, encodeTerminalKey, type TerminalInputHandle } from './terminal-input'
+import { activeModifiers, afterSend, consumeModifiers, encodeTerminalKey, NO_MODIFIERS, toggleModifier, type ModifierState, type TerminalInputHandle } from './terminal-input'
 import { BASE_FONT, clampFont, fitWidthFont, minFont, pinchFont, resizePlan, reveal, revealClearOf, screenDevice, storedFont, storeFont } from './terminal-view'
 import '@xterm/xterm/css/xterm.css'
 
 /** What the page asks of the canvas: "Fit to this device" claims the size; refit applies a new smallest-text choice. */
 export interface TerminalViewHandle { fitToDevice(): boolean; refit(): void }
 
-export function TerminalCanvas({ session, writable, captureTab, attempt, offerKeyboard = false, inputEnabled, inputHandle, viewHandle, onCtrlChange, onStatus, onInput, onClaim, onSession, onPresence, onResult }: {
+export function TerminalCanvas({ session, writable, captureTab, attempt, offerKeyboard = false, inputEnabled, inputHandle, viewHandle, onModifiersChange, onStatus, onInput, onClaim, onSession, onPresence, onResult }: {
   /** Show the corner keyboard button (a touch screen with the keyboard down). */
   offerKeyboard?: boolean
-  inputEnabled: boolean; inputHandle: RefObject<TerminalInputHandle | null>; viewHandle: RefObject<TerminalViewHandle | null>; onCtrlChange(armed: boolean): void;
+  inputEnabled: boolean; inputHandle: RefObject<TerminalInputHandle | null>; viewHandle: RefObject<TerminalViewHandle | null>; onModifiersChange(state: ModifierState): void;
   session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string): void; onClaim(data: string): void; onSession(session: Session): void; onPresence(presence: Presence): void; onResult(result: InputResult): void
 }) {
   const pane = useRef<HTMLDivElement>(null)
@@ -31,15 +31,15 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   const [zoom, setZoom] = useState(() => storedFont())
   // Manual pans, selections (and History) stop the view chasing the cursor.
   const [paused, setPaused] = useState(false)
-  const callbacks = useRef({ onInput, onClaim, onSession, onPresence, onResult, writable, authority, inputEnabled, onCtrlChange, captureTab: false, sizeEpoch: session.sizeEpoch, zoom, paused })
-  callbacks.current = { onInput, onClaim, onSession, onPresence, onResult, writable, authority, inputEnabled, onCtrlChange, captureTab, sizeEpoch: session.sizeEpoch, zoom, paused }
+  const callbacks = useRef({ onInput, onClaim, onSession, onPresence, onResult, writable, authority, inputEnabled, onModifiersChange, captureTab: false, sizeEpoch: session.sizeEpoch, zoom, paused })
+  callbacks.current = { onInput, onClaim, onSession, onPresence, onResult, writable, authority, inputEnabled, onModifiersChange, captureTab, sizeEpoch: session.sizeEpoch, zoom, paused }
   const [status, setStatus] = useState('Connecting')
   useEffect(() => { onStatus(status) }, [status, onStatus])
   const terminal = useRef<Terminal | null>(null)
   const fit = useRef<FitAddon | null>(null)
   const socket = useRef<TerminalSocketClient | null>(null)
   const sentSize = useRef('')
-  const ctrl = useRef(false)
+  const modifiers = useRef<ModifierState>(NO_MODIFIERS)
   const ready = useRef(false)
   // Re-plan the sizing screen's grid (pane changes and acknowledged sizes both ask).
   const replan = useRef<() => void>(() => {})
@@ -154,8 +154,22 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
 
   useEffect(() => {
     ready.current = false
-    const setCtrl = (armed: boolean) => { ctrl.current = armed; callbacks.current.onCtrlChange(armed) }
-    const reset = () => setCtrl(false)
+    const setModifiers = (next: ModifierState) => {
+      if (next === modifiers.current) return
+      modifiers.current = next
+      callbacks.current.onModifiersChange(next)
+    }
+    // Disconnection, ownership/session change and backgrounding release everything, locks included.
+    const reset = () => setModifiers(NO_MODIFIERS)
+    // Leaving the terminal and every send consume the one-shot modifiers only.
+    const clearOnce = () => setModifiers(afterSend(modifiers.current))
+    // Paste and IME composition are sent as typed: their onData never takes a modifier.
+    let raw = false
+    let rawEnd: ReturnType<typeof setTimeout> | undefined
+    const rawInput = () => { clearTimeout(rawEnd); raw = true; clearOnce() }
+    const rawSettled = () => { clearTimeout(rawEnd); rawEnd = setTimeout(() => { raw = false }, 0) }
+    // Bar keys arrive already encoded; their onData must not apply the modifiers again.
+    let encoded = false
     reset()
     const background = getComputedStyle(pane.current!).backgroundColor
     const term = new Terminal({ cols: session.cols, rows: session.rows, scrollback: 2000, fontSize: callbacks.current.zoom ?? BASE_FONT, screenReaderMode: true, convertEol: false, theme: { background } })
@@ -167,13 +181,17 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     const disposeRenderer = enableWebgl(term)
     inputHandle.current = {
       focus: () => term.focus(),
+      blur: () => term.blur(),
       key(key) {
-        if (!ready.current || !callbacks.current.inputEnabled) { reset(); return }
-        const data = encodeTerminalKey(key, term.modes.applicationCursorKeysMode, ctrl.current)
-        reset()
-        term.input(data, true)
+        if (!ready.current || !callbacks.current.inputEnabled) { clearOnce(); return }
+        const data = encodeTerminalKey(key, term.modes.applicationCursorKeysMode, activeModifiers(modifiers.current))
+        clearOnce()
+        encoded = true
+        try { term.input(data, true) } finally { encoded = false }
       },
-      toggleCtrl() { if (ready.current && callbacks.current.inputEnabled) setCtrl(!ctrl.current) },
+      modifier(modifier, action = 'tap') {
+        if (ready.current && callbacks.current.inputEnabled) setModifiers(toggleModifier(modifiers.current, modifier, action))
+      },
       reset,
       send: (generation, data) => socket.current?.input(generation, data) ?? false,
     }
@@ -193,28 +211,30 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     }
     const leave = (event: Event) => {
       const target = event.target
-      if (!(target instanceof Element) || !target.closest('.terminal-xterm, [data-terminal-keys]')) reset()
+      if (!(target instanceof Element) || !target.closest('.terminal-xterm, [data-terminal-keys]')) clearOnce()
     }
     const hide = () => { if (document.hidden) reset() }
     const textarea = term.textarea!
     // Focusing the terminal to type goes back to the cursor (like ↓ Live).
     const typing = () => resumeFollow()
     textarea.addEventListener('focus', typing)
-    textarea.addEventListener('paste', reset, true)
-    textarea.addEventListener('compositionstart', reset, true)
+    const paste = () => { rawInput(); rawSettled() }
+    textarea.addEventListener('paste', paste, true)
+    textarea.addEventListener('compositionstart', rawInput, true)
+    textarea.addEventListener('compositionend', rawSettled, true)
     document.addEventListener('focusin', leave)
     document.addEventListener('pointerdown', leave)
     document.addEventListener('visibilitychange', hide)
-    window.addEventListener('blur', reset)
+    window.addEventListener('blur', clearOnce)
     term.attachCustomKeyEventHandler((event) => event.key !== 'Tab' || (callbacks.current.inputEnabled && callbacks.current.captureTab))
     // Watching + typing claims the session (claim-on-type); the page decides
     // whether to confirm. Drop control keys so a stray Ctrl-key can't claim.
     term.onData((data) => {
       if (callbacks.current.writable) {
-        if (!ready.current || !callbacks.current.inputEnabled) { reset(); return }
-        const next = consumeControl(data, ctrl.current)
-        reset()
-        callbacks.current.onInput(next.data)
+        if (!ready.current || !callbacks.current.inputEnabled) { clearOnce(); return }
+        const next = encoded ? data : consumeModifiers(data, activeModifiers(modifiers.current), raw ? 'paste' : 'text')
+        if (!encoded) clearOnce()
+        callbacks.current.onInput(next)
       }
       else if (data && data.charCodeAt(0) >= 0x20) callbacks.current.onClaim(data)
     })
@@ -272,12 +292,14 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       window.removeEventListener('focus', resume)
       client.close(); socket.current = null; sentSize.current = ''
       textarea.removeEventListener('focus', typing)
-      textarea.removeEventListener('paste', reset, true)
-      textarea.removeEventListener('compositionstart', reset, true)
+      clearTimeout(rawEnd)
+      textarea.removeEventListener('paste', paste, true)
+      textarea.removeEventListener('compositionstart', rawInput, true)
+      textarea.removeEventListener('compositionend', rawSettled, true)
       document.removeEventListener('focusin', leave)
       document.removeEventListener('pointerdown', leave)
       document.removeEventListener('visibilitychange', hide)
-      window.removeEventListener('blur', reset)
+      window.removeEventListener('blur', clearOnce)
       disposeRenderer(); term.dispose(); terminal.current = null
     }
   }, [session.id, attempt])

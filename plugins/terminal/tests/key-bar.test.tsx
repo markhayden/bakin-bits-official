@@ -2,70 +2,82 @@ import './setup-dom'
 import { afterEach, expect, test } from 'bun:test'
 import { cleanup, fireEvent, render, within } from '@testing-library/react'
 import { KeyBar } from '../components/key-bar'
-import { DEFAULT_PINS, type TerminalKey } from '../components/terminal-input'
+import { NO_MODIFIERS, type ModifierState } from '../components/terminal-input'
 afterEach(cleanup)
 
-function bar(options: { disabled?: boolean; ctrl?: boolean; arrow?: 'Up' | 'Down' | 'Left' | 'Right' } = {}) {
+function bar(options: { session?: 'typing' | 'sheet'; disabled?: boolean; modifiers?: ModifierState } = {}) {
   const sent: string[] = []
-  const view = render(<KeyBar disabled={options.disabled ?? false} ctrl={options.ctrl ?? false} onCtrl={() => sent.push('Ctrl')} onKey={(key: TerminalKey) => sent.push(key)} onFocusTerminal={() => sent.push('focus')} arrow={options.arrow ?? 'Up'} pins={DEFAULT_PINS} />)
-  return { view, sent, strip: within(view.container.querySelector<HTMLElement>('.terminal-key-strip')!) }
+  const view = render(<KeyBar session={options.session ?? 'typing'} disabled={options.disabled ?? false} modifiers={options.modifiers ?? NO_MODIFIERS}
+    onKey={key => sent.push(key)} onModifier={(modifier, action) => sent.push(`${modifier}:${action}`)}
+    onSheet={() => sent.push('sheet')} onKeyboard={() => sent.push('keyboard')} onHide={() => sent.push('hide')} />)
+  return { view, sent, row: within(view.getByRole('group', { name: 'Terminal keys' })) }
 }
 
-test('the strip holds Esc, Tab, Ctrl, one arrow key and the default pins, each sending exactly once', () => {
-  const { strip, sent } = bar()
-  const names = strip.getAllByRole('button').map(button => button.getAttribute('aria-label') ?? button.textContent)
-  expect(names).toEqual(['Esc', 'Tab', 'Ctrl', 'Up', 'Shift+Tab', 'Ctrl+C', 'Ctrl+R', 'Enter'])
-  expect(strip.getByRole('button', { name: 'Ctrl+C' }).textContent).toBe('^C')
-  expect(strip.getByRole('button', { name: 'Shift+Tab' }).textContent).toBe('⇧Tab')
-  const tab = strip.getByRole('button', { name: 'Tab' })
-  fireEvent.pointerDown(tab)
+test('one row: esc, tab, the two modifiers, •••, and hide keyboard, each acting once', () => {
+  const { row, sent } = bar()
+  expect(row.getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual(['Esc', 'Tab', 'Control', 'Option', 'More keys', 'Hide keyboard'])
+  expect(row.getByRole('button', { name: 'Esc' }).textContent).toBe('esc')
+  expect(row.getByRole('button', { name: 'Tab' }).textContent).toBe('⇥')
+  const tab = row.getByRole('button', { name: 'Tab' })
   fireEvent.mouseDown(tab)
   fireEvent.click(tab)
-  fireEvent.click(strip.getByRole('button', { name: 'Up' }))
-  fireEvent.click(strip.getByRole('button', { name: 'Ctrl' }))
-  fireEvent.click(strip.getByRole('button', { name: 'Ctrl+C' }))
-  expect(sent).toEqual(['Tab', 'Up', 'Ctrl', 'Ctrl+C'])
+  fireEvent.click(row.getByRole('button', { name: 'Control' }))
+  fireEvent.click(row.getByRole('button', { name: 'More keys' }))
+  fireEvent.click(row.getByRole('button', { name: 'Hide keyboard' }))
+  expect(sent).toEqual(['Tab', 'ctrl:tap', 'sheet', 'hide'])
 })
 
-test('the arrow key sends the direction on its face', () => {
-  const { strip, sent } = bar({ arrow: 'Left' })
-  fireEvent.click(strip.getByRole('button', { name: 'Left' }))
-  expect(sent).toEqual(['Left'])
-})
-
-test('key presses keep focus where it is', () => {
-  const { strip } = bar()
-  const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
-  strip.getByRole('button', { name: 'Esc' }).dispatchEvent(event)
-  expect(event.defaultPrevented).toBe(true)
-})
-
-test('••• holds the other keys, all four arrows and the labelled Control shortcuts', () => {
-  const { view, sent } = bar()
-  expect(view.getByRole('button', { name: 'More keys' })).toBeTruthy()
-  const keys = within(view.getByRole('region', { name: 'Keys' }))
-  expect(keys.getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual(['Enter', 'Backspace', 'Delete', 'Shift+Tab', 'Home', 'End', 'Page Up', 'Page Down', 'Left', 'Down', 'Up', 'Right'])
-  const control = within(view.getByRole('region', { name: 'Control' }))
-  expect(control.getByRole('button', { name: 'Ctrl+C Interrupt' }).textContent).toBe('^CInterrupt')
-  expect(control.getAllByRole('button')).toHaveLength(10)
-  fireEvent.click(control.getByRole('button', { name: 'Ctrl+R Search history' }))
-  fireEvent.click(keys.getByRole('button', { name: 'Page Up' }))
-  expect(sent).toEqual(['Ctrl+R', 'Page Up'])
-})
-
-test('the bar and its menu mark themselves as part of the terminal (the Ctrl latch survives touching them)', () => {
-  const { view } = bar()
-  expect(view.getByRole('toolbar', { name: 'Terminal keys' }).hasAttribute('data-terminal-keys')).toBe(true)
-  expect(view.getByRole('region', { name: 'Keys' }).closest('[data-terminal-keys]')).toBeTruthy()
-})
-
-test('watching disables every sending key while ••• stays available and Ctrl shows its latch', () => {
-  const { view, sent } = bar({ disabled: true, ctrl: true })
-  for (const button of view.getAllByRole('button').filter(button => button.getAttribute('aria-label') !== 'More keys')) {
-    expect((button as HTMLButtonElement).disabled).toBe(true)
-    fireEvent.click(button)
+test('pressing a key keeps focus where it is (the keyboard stays up)', () => {
+  const { row } = bar()
+  for (const name of ['Esc', 'Control', 'More keys', 'Hide keyboard']) {
+    const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    row.getByRole('button', { name }).dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(true)
   }
-  expect(sent).toEqual([])
-  expect((view.getByRole('button', { name: 'More keys' }) as HTMLButtonElement).disabled).toBe(false)
-  expect(view.getByRole('button', { name: 'Ctrl' }).getAttribute('aria-pressed')).toBe('true')
+})
+
+test('modifiers announce armed and locked, not by colour alone', () => {
+  const { row, view } = bar({ modifiers: { ctrl: 'once', alt: 'locked' } })
+  const ctrl = row.getByRole('button', { name: 'Control, on for the next key' })
+  expect(ctrl.getAttribute('aria-pressed')).toBe('true')
+  expect(ctrl.getAttribute('data-state')).toBe('once')
+  const alt = row.getByRole('button', { name: 'Option, locked' })
+  expect(alt.querySelector('.terminal-keycap-lock')).toBeTruthy()
+  expect(view.container.querySelector('[data-terminal-keys]')).toBeTruthy()
+})
+
+test('the sheet holds every other key, labelled Control shortcuts and lock toggles; abc goes back', () => {
+  const { view, row, sent } = bar({ session: 'sheet', modifiers: { ctrl: 'locked', alt: 'off' } })
+  expect(row.queryByRole('button', { name: 'More keys' })).toBeNull()
+  fireEvent.click(row.getByRole('button', { name: 'Back to keyboard' }))
+  const sheet = within(view.getByRole('region', { name: 'More keys' }))
+  expect(within(sheet.getByRole('group', { name: 'Keys' })).getAllByRole('button').map(button => button.getAttribute('aria-label')))
+    .toEqual(['Esc', 'Tab', 'Shift+Tab', 'Enter', 'Backspace', 'Delete', 'Left', 'Down', 'Up', 'Right', 'Home', 'End', 'Page Up', 'Page Down', '|', '~', '/', '-'])
+  const control = within(sheet.getByRole('group', { name: 'Control' }))
+  expect(control.getAllByRole('button')).toHaveLength(10)
+  fireEvent.click(control.getByRole('button', { name: 'Ctrl+C Interrupt' }))
+  fireEvent.click(sheet.getByRole('button', { name: 'Left' }))
+  // A locked modifier's toggle releases it; an unlocked one locks.
+  const locks = within(sheet.getByRole('group', { name: 'Locks' }))
+  expect(locks.getByRole('button', { name: 'Control lock' }).getAttribute('aria-pressed')).toBe('true')
+  fireEvent.click(locks.getByRole('button', { name: 'Control lock' }))
+  fireEvent.click(locks.getByRole('button', { name: 'Option lock' }))
+  expect(sent).toEqual(['keyboard', 'Ctrl+C', 'Left', 'ctrl:tap', 'alt:lock'])
+})
+
+test('Escape inside the sheet goes back to the keyboard', () => {
+  const { view, sent } = bar({ session: 'sheet' })
+  fireEvent.keyDown(within(view.getByRole('region', { name: 'More keys' })).getByRole('button', { name: 'Home' }), { key: 'Escape' })
+  expect(sent).toEqual(['keyboard'])
+})
+
+test('while sending is disabled every sending key and modifier is off, but hide and ••• still work', () => {
+  const { view, row, sent } = bar({ disabled: true })
+  for (const button of view.getAllByRole('button')) {
+    const name = button.getAttribute('aria-label')
+    expect((button as HTMLButtonElement).disabled).toBe(name !== 'More keys' && name !== 'Hide keyboard')
+  }
+  fireEvent.click(row.getByRole('button', { name: 'Tab' }))
+  fireEvent.click(row.getByRole('button', { name: 'Hide keyboard' }))
+  expect(sent).toEqual(['hide'])
 })
