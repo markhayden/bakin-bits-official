@@ -15,7 +15,8 @@
  */
 import headless from '@xterm/headless'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
-import { altEnteredCols, setAltEnteredCols } from './xterm-fixes'
+import { restoreSideState } from './side-state'
+import { altEnteredCols } from './xterm-fixes'
 import {
   BLANK_CONTENT, cellKey, charsetName, compareSteps, drain, HAS_EXTENDED, internals, IS_COMBINED, lineWords, nullCell, rawUnderlineStyle,
   savedKey, tabStops, UNDERLINE, type Buffer, type Extended, type Term,
@@ -364,23 +365,6 @@ export function quiescent(terminal: Term): boolean {
     && handler._stringDecoder._interim === 0
 }
 
-/** What a restore sets once the checkpoint's text is parsed (the bytes cannot carry it). */
-export type CheckpointSideState = Pick<Checkpoint, 'joinState' | 'penHasExtended' | 'altEnteredCols'>
-
-/**
- * Set what the bytes cannot carry, once they are parsed: the last step of
- * every restore. A streamed restore (the raw path's join, components/) writes
- * the checkpoint's UTF-8 in any pieces — split inside a character too,
- * xterm's decoder carries it — and calls this from the last write's callback,
- * before anything else is written.
- */
-export function restoreSideState(terminal: Term, checkpoint: CheckpointSideState): void {
-  const handler = internals(terminal)._inputHandler
-  handler._parser.precedingJoinState = checkpoint.joinState
-  if (checkpoint.penHasExtended) handler._curAttrData.bg |= HAS_EXTENDED
-  else handler._curAttrData.bg &= ~HAS_EXTENDED
-  if (checkpoint.altEnteredCols !== null) setAltEnteredCols(terminal, checkpoint.altEnteredCols)
-}
 /** Rebuild `terminal` (fresh: same size and scrollback) from `checkpoint`, synchronously. */
 export function restoreCheckpointSync(terminal: Term, checkpoint: Checkpoint): void {
   const writer = internals(terminal)._writeBuffer

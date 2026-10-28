@@ -10,7 +10,7 @@
  */
 import headless from '@xterm/headless'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
-import { altEnteredCols } from './xterm-fixes'
+import { altEnteredCols, HAS_EXTENDED } from './xterm-fixes'
 
 export type Term = InstanceType<typeof headless.Terminal>
 
@@ -64,7 +64,7 @@ export const internals = (terminal: Term): Internals => (terminal as unknown as 
 export const nullCell = (terminal: Term): Cell => terminal.buffer.normal.getNullCell() as unknown as Cell
 
 /** BgFlags.HAS_EXTENDED and FgFlags.UNDERLINE in the pinned version. */
-export const HAS_EXTENDED = 0x10000000
+export { HAS_EXTENDED }
 export const UNDERLINE = 0x10000000
 /** ExtendedAttrs.underlineStyle reports 5 (dashed) while a link is active, whatever is stored: read the raw bits. */
 export const rawUnderlineStyle = (extended: Extended) => (extended._ext & 0x1c000000) >> 26

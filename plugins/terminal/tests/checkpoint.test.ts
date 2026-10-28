@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import headless from '@xterm/headless'
-import { CHECKPOINT_FORMAT, restoreCheckpoint, restoreSideState, takeCheckpoint, type Checkpoint } from '../lib/checkpoint'
+import { CHECKPOINT_FORMAT, restoreCheckpoint, takeCheckpoint, type Checkpoint } from '../lib/checkpoint'
+import { restoreSideState } from '../lib/side-state'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from '../lib/terminal-profile'
 import { compareSteps, drain, fullState, stateDiff, type Term } from '../lib/terminal-state'
 import { apply, emulator, generate, settled } from './helpers/terminal-fuzz'

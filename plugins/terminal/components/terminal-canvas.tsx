@@ -8,6 +8,7 @@ import type { Session } from '../lib/contracts'
 import { clampSize } from '../lib/sizing'
 import { trackCursorVisibility } from '../lib/cursor-visibility'
 import { applyTerminalProfile, isAllowedLink, TERMINAL_OPTIONS } from '../lib/terminal-profile'
+import { restoreSideState } from '../lib/side-state'
 import { guardParser } from '../lib/xterm-fixes'
 import { clientId } from './api'
 import { enableWebgl } from './terminal-renderer'
@@ -66,6 +67,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   const socket = useRef<TerminalSocketClient | null>(null)
   const sentSize = useRef('')
   const ready = useRef(false)
+  /** This connection takes the raw path (a join, not a sync). */
+  const rawPath = useRef(false)
   // Re-plan the sizing screen's grid (pane changes and acknowledged sizes both ask).
   const replan = useRef<() => void>(() => {})
 
@@ -191,36 +194,83 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     const clearOnce = () => modifiers.clearOnce()
     callbacks.current.onModifiersChange(modifiers.modifiers)
     const background = getComputedStyle(pane.current!).backgroundColor
-    const term = new Terminal({ cols: session.cols, rows: session.rows, ...TERMINAL_OPTIONS, fontSize: callbacks.current.zoom ?? BASE_FONT, screenReaderMode: true, convertEol: false, theme: { background }, linkHandler: LINK_HANDLER })
-    terminal.current = term
-    pane.current!.setAttribute('data-font-size', String(term.options.fontSize))
-    fit.current = new FitAddon()
-    term.loadAddon(fit.current)
-    term.loadAddon(new WebLinksAddon((event, uri) => LINK_HANDLER.activate(event, uri)))
-    term.open(element.current!)
-    // Show/hide cursor as the output sets it; a sync's snapshot ends with it too.
-    cursorVisibility.current = trackCursorVisibility(term)
-    // The shared profile (spec D13): queries are tmux's to answer (a viewer's
-    // replies would be typed into the pane), links and clipboard are policed,
-    // and the xterm 6.0.0 workarounds apply.
-    applyTerminalProfile(term)
-    // A parser exception would wedge every later write: the screen is
-    // rebuilt (a fresh connection and sync) instead.
-    // Failed, it stops: no input, and its socket closes (a failed screen
-    // never reconnects itself; only a rebuild does).
-    const parser = guardParser(term, () => {
-      ready.current = false
-      reset()
-      socket.current?.close()
-      setStatus('Renderer failed')
-      callbacks.current.onRendererFailed()
-    })
-    const disposeRenderer = enableWebgl(term)
+    const host = element.current!
+    // Follow the cursor once per rendered batch, unless the operator panned away.
+    let follow = 0
+    /**
+     * A terminal and everything that belongs to it: its addons and
+     * renderer, the shared profile, the parser guard, the cursor tracker and
+     * its own listeners. The bridge path keeps one per connection; the raw
+     * path (spec D13) mounts a fresh one per picture (components/raw-picture.ts).
+     */
+    const mount = (cols: number, rows: number) => {
+      const term = new Terminal({ cols, rows, ...TERMINAL_OPTIONS, fontSize: terminal.current?.options.fontSize ?? callbacks.current.zoom ?? BASE_FONT, screenReaderMode: true, convertEol: false, theme: { background }, linkHandler: LINK_HANDLER })
+      const fitAddon = new FitAddon()
+      term.loadAddon(fitAddon)
+      term.loadAddon(new WebLinksAddon((event, uri) => LINK_HANDLER.activate(event, uri)))
+      term.open(host)
+      pane.current!.setAttribute('data-font-size', String(term.options.fontSize))
+      // Show/hide cursor as the output sets it; a sync's snapshot ends with it too.
+      const cursor = trackCursorVisibility(term)
+      // The shared profile (spec D13): queries are tmux's to answer (a viewer's
+      // replies would be typed into the pane), links and clipboard are policed,
+      // and the xterm 6.0.0 workarounds apply.
+      const profile = applyTerminalProfile(term)
+      // A parser exception would wedge every later write: the screen is
+      // rebuilt (a fresh connection and sync) instead. Failed, it stops: no
+      // input, and its socket closes (a failed screen never reconnects
+      // itself; only a rebuild does).
+      const parser = guardParser(term, () => {
+        if (terminal.current !== term) return
+        ready.current = false
+        reset()
+        socket.current?.close()
+        setStatus('Renderer failed')
+        callbacks.current.onRendererFailed()
+      })
+      const disposeRenderer = enableWebgl(term)
+      const textarea = term.textarea!
+      // No QuickType suggestions inserted into the terminal (spec D9 item 2); compose has its own textarea.
+      textarea.setAttribute('autocomplete', 'off')
+      // Focusing the terminal to type goes back to the cursor (like ↓ Live).
+      const typing = () => resumeFollow()
+      textarea.addEventListener('focus', typing)
+      term.attachCustomKeyEventHandler((event) => event.key !== 'Tab' || (callbacks.current.inputEnabled && callbacks.current.captureTab))
+      // Watching + typing claims the session (claim-on-type); the page decides
+      // whether to confirm. Drop control keys so a stray Ctrl-key can't claim.
+      term.onData((data) => {
+        if (callbacks.current.writable) {
+          if (!ready.current || !callbacks.current.inputEnabled) { clearOnce(); return }
+          // A paste goes as one (the server has tmux bracket it only if the program asked), sent
+          // exactly; only the data the paste event announced, never what is typed after it.
+          const paste = modifiers.takePaste()
+          callbacks.current.onInput(paste ? data : modifiers.data(data), paste)
+        }
+        else if (data && data.charCodeAt(0) >= 0x20) callbacks.current.onClaim(data)
+      })
+      term.onRender(() => { if (!follow) follow = requestAnimationFrame(() => { follow = 0; followCursor() }) })
+      term.onSelectionChange(() => { if (term.hasSelection()) pause(true) })
+      terminal.current = term
+      fit.current = fitAddon
+      cursorVisibility.current = cursor
+      return {
+        term, profile, parser,
+        dispose() {
+          textarea.removeEventListener('focus', typing)
+          disposeRenderer()
+          term.dispose()
+        },
+      }
+    }
+    let bundle = mount(session.cols, session.rows)
+    // The raw path sizes this screen from the picture and its ordered layouts, never from session updates.
+    rawPath.current = false
     inputHandle.current = {
-      focus: () => term.focus(),
-      blur: () => term.blur(),
+      focus: () => bundle.term.focus(),
+      blur: () => bundle.term.blur(),
       key(key) {
         if (!ready.current || !callbacks.current.inputEnabled) { clearOnce(); return }
+        const term = bundle.term
         modifiers.key(key, term.modes.applicationCursorKeysMode, (bytes) => term.input(bytes, true))
       },
       modifier(modifier, action = 'tap') {
@@ -237,6 +287,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     }
     viewHandle.current = {
       fitToDevice() {
+        const term = bundle.term
         const box = paneBox()
         const rendered = screen()
         if (!box || !rendered?.clientWidth) return false
@@ -254,46 +305,23 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       if (!(target instanceof Element) || !target.closest('.terminal-xterm, [data-terminal-keys]')) clearOnce()
     }
     const hide = () => { if (document.hidden) reset() }
-    const textarea = term.textarea!
-    // No QuickType suggestions inserted into the terminal (spec D9 item 2); compose has its own textarea.
-    textarea.setAttribute('autocomplete', 'off')
-    // Focusing the terminal to type goes back to the cursor (like ↓ Live).
-    const typing = () => resumeFollow()
-    textarea.addEventListener('focus', typing)
     // A paste is sent exactly as pasted. Seen on the way down (capture on
     // xterm's container), so before xterm's own handlers send it.
-    const host = element.current!
-    const paste = (event: Event) => { if (event.target === textarea) modifiers.paste() }
+    const paste = (event: Event) => { if (event.target === bundle.term.textarea) modifiers.paste() }
     host.addEventListener('paste', paste, true)
     document.addEventListener('focusin', leave)
     document.addEventListener('pointerdown', leave)
     document.addEventListener('visibilitychange', hide)
     window.addEventListener('blur', clearOnce)
-    term.attachCustomKeyEventHandler((event) => event.key !== 'Tab' || (callbacks.current.inputEnabled && callbacks.current.captureTab))
-    // Watching + typing claims the session (claim-on-type); the page decides
-    // whether to confirm. Drop control keys so a stray Ctrl-key can't claim.
-    term.onData((data) => {
-      if (callbacks.current.writable) {
-        if (!ready.current || !callbacks.current.inputEnabled) { clearOnce(); return }
-        // A paste goes as one (the server has tmux bracket it only if the program asked), sent
-        // exactly; only the data the paste event announced, never what is typed after it.
-        const paste = modifiers.takePaste()
-        callbacks.current.onInput(paste ? data : modifiers.data(data), paste)
-      }
-      else if (data && data.charCodeAt(0) >= 0x20) callbacks.current.onClaim(data)
-    })
-    // Follow the cursor once per rendered batch, unless the operator panned away.
-    let follow = 0
-    term.onRender(() => { if (!follow) follow = requestAnimationFrame(() => { follow = 0; followCursor() }) })
-    term.onSelectionChange(() => { if (term.hasSelection()) pause(true) })
     const url = new URL(`/api/plugins/terminal/socket?id=${encodeURIComponent(session.id)}`, window.location.href)
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
     const client = new TerminalSocketClient({
       url: url.href, clientId: clientId(),
       onSync: (sync) => {
         // A sync is a complete picture: the snapshot, then output after its cursor.
-        term.reset()
-        if (sync.snapshot) term.write(Uint8Array.from(atob(sync.snapshot), (value) => value.charCodeAt(0)))
+        rawPath.current = false
+        bundle.term.reset()
+        if (sync.snapshot) bundle.term.write(Uint8Array.from(atob(sync.snapshot), (value) => value.charCodeAt(0)))
         callbacks.current.onSession(sync.session)
         ready.current = sync.session.state !== 'completed'
         // Every sync re-fits: the server may hold any size by now.
@@ -301,12 +329,36 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
         requestAnimationFrame(applyView)
       },
       // A failed screen stops acknowledging: its output is discarded, not shown.
-      onOutput: (bytes, done) => term.write(bytes, () => { if (!parser.failed) done() }),
+      onOutput: (bytes, done) => { const { term, parser } = bundle; term.write(bytes, () => { if (!parser.failed) done() }) },
+      // The raw path: every picture in a fresh terminal at its own size (keyboard focus kept).
+      onPicture: (header) => {
+        rawPath.current = true
+        const focused = document.activeElement === bundle.term.textarea
+        bundle.dispose()
+        bundle = mount(header.checkpoint.cols, header.checkpoint.rows)
+        const { term, profile, parser } = bundle
+        // Replayed bells, titles and clipboard offers stay silent until the barrier.
+        profile.setLive(false)
+        if (focused) term.focus()
+        sentSize.current = ''
+        requestAnimationFrame(applyView)
+        let discarded = false
+        return {
+          write: (data, done) => { if (discarded) return; term.write(data, () => { if (!parser.failed) done() }) },
+          resize: (cols, rows) => { if (discarded) return; term.resize(cols, rows); requestAnimationFrame(applyView) },
+          finish: (side) => { if (!discarded) restoreSideState(term, side) },
+          live: () => { if (!discarded) profile.setLive(true) },
+          // Cancelled by a newer picture (or the connection): it stays shown until that one mounts.
+          discard: () => { discarded = true },
+        }
+      },
+      onDisplay: (state) => { pane.current?.setAttribute('data-display', state) },
       onSession: (next) => callbacks.current.onSession(next),
       onPresence: (presence) => callbacks.current.onPresence(presence),
       onResult: (result) => callbacks.current.onResult(result),
       onStatus: (next) => {
         if (next !== 'Connected') { ready.current = false; reset() }
+        else ready.current = true
         setStatus(next)
       },
     })
@@ -336,21 +388,21 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       window.removeEventListener('online', online)
       window.removeEventListener('focus', resume)
       client.close(); socket.current = null; sentSize.current = ''
-      textarea.removeEventListener('focus', typing)
       modifiers.dispose()
       host.removeEventListener('paste', paste, true)
       document.removeEventListener('focusin', leave)
       document.removeEventListener('pointerdown', leave)
       document.removeEventListener('visibilitychange', hide)
       window.removeEventListener('blur', clearOnce)
-      disposeRenderer(); term.dispose(); terminal.current = null
+      bundle.dispose(); terminal.current = null
     }
   }, [session.id, attempt])
   useLayoutEffect(() => { inputHandle.current?.reset() }, [inputEnabled, session.generation, session.id, attempt])
   // A new grid: other screens refit their font to it; the authority re-plans
   // against its pane (which may have moved again before this answer came).
   useEffect(() => {
-    terminal.current?.resize(session.cols, session.rows)
+    // The raw path's grid follows its picture and layouts, in order (components/raw-picture.ts).
+    if (!rawPath.current) terminal.current?.resize(session.cols, session.rows)
     if (callbacks.current.authority) replan.current()
     else requestAnimationFrame(applyView)
   }, [session.cols, session.rows])

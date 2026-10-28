@@ -81,7 +81,8 @@ export function patchAltBufferCapacity(terminal: { onResize(listener: () => void
 // BufferLine cell layout (xterm 6.0.0): 3 words per cell; content word bit 21
 // marks combined (grapheme) content, bg word bit 28 marks extended attributes.
 const COMBINED = 0x200000
-const HAS_EXTENDED = 0x10000000
+/** A cell's (or the pen's) bg bit: it has an extended-attribute entry (xterm 6.0.0's packing). */
+export const HAS_EXTENDED = 0x10000000
 
 /**
  * xterm 6.0.0: a line's combined (grapheme) and extended-attribute maps keep

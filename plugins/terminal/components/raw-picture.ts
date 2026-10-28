@@ -14,7 +14,7 @@
  * credit runs on. xterm runs a queued write's callback even after its
  * terminal is disposed, so a frame's own record (not the callback) decides.
  */
-import type { CheckpointSideState } from '../lib/checkpoint'
+import type { CheckpointSideState } from '../lib/side-state'
 
 /** Where a picture is drawn: a fresh terminal per header (components/terminal-canvas.tsx). */
 export interface PictureTarget {

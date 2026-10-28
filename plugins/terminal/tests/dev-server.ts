@@ -29,6 +29,8 @@ const manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProce
   settings: () => ({ enabledAgents: [{ id: 'patch' }] }),
   prepare: async () => ({ ok: false, error: 'Preview has no Git plugin. Use an existing checkout.' }),
   release: async () => ({ ok: false }),
+  // TERMINAL_PREVIEW_RAW=1: every session's viewers take the raw path (spec D13; T38a's setting in the plugin).
+  rawPath: () => process.env.TERMINAL_PREVIEW_RAW === '1',
 })
 const built = await Bun.build({
   entrypoints: [join(import.meta.dir, 'live.fixture.tsx')], outdir: root, target: 'browser', format: 'esm',
