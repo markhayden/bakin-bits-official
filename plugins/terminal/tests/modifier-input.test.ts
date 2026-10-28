@@ -113,3 +113,15 @@ describe('modifier input', () => {
     expect(input.data('\x1b[D')).toBe('\x1b[1;5D')
   })
 })
+
+describe('compose text', () => {
+  it('is sent untouched; a one-shot modifier ends, a lock stays', () => {
+    const { input } = setup()
+    const sent: string[] = []
+    input.toggle('ctrl', 'tap')
+    input.toggle('alt', 'lock')
+    input.text('c', (bytes) => sent.push(input.data(bytes)))
+    expect(sent).toEqual(['c'])
+    expect(input.modifiers).toEqual({ ctrl: 'off', alt: 'locked' })
+  })
+})

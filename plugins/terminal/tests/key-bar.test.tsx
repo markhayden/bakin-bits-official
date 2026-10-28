@@ -1,15 +1,17 @@
 import './setup-dom'
 import { afterEach, expect, test } from 'bun:test'
+import { useState } from 'react'
 import { cleanup, fireEvent, render, within } from '@testing-library/react'
 import { KeyBar } from '../components/key-bar'
 import { NO_MODIFIERS, type ModifierState } from '../components/terminal-input'
 afterEach(cleanup)
 
-function bar(options: { session?: 'typing' | 'sheet'; disabled?: boolean; modifiers?: ModifierState } = {}) {
+function bar(options: { session?: 'typing' | 'sheet' | 'compose'; disabled?: boolean; modifiers?: ModifierState } = {}) {
   const sent: string[] = []
-  const view = render(<KeyBar session={options.session ?? 'typing'} disabled={options.disabled ?? false} modifiers={options.modifiers ?? NO_MODIFIERS}
+  const view = render(<KeyBar sessionId="s1" session={options.session ?? 'typing'} disabled={options.disabled ?? false} modifiers={options.modifiers ?? NO_MODIFIERS}
     onKey={key => sent.push(key)} onModifier={(modifier, action) => sent.push(`${modifier}:${action}`)}
-    onSheet={() => sent.push('sheet')} onKeyboard={() => sent.push('keyboard')} onHide={() => sent.push('hide')} />)
+    onSheet={() => sent.push('sheet')} onCompose={() => sent.push('compose')} onPaste={(text, enter) => { sent.push(`paste:${enter}:${text}`); return true }}
+    onKeyboard={() => sent.push('keyboard')} onHide={() => sent.push('hide')} />)
   return { view, sent, row: within(view.getByRole('group', { name: 'Terminal keys' })) }
 }
 
@@ -105,4 +107,57 @@ test('the joystick sends arrows from the keyboard when focused, and a click alon
   fireEvent.keyDown(stick, { key: 'a' })
   fireEvent.click(stick)
   expect(sent).toEqual(['Left', 'Up'])
+})
+
+test('Compose in the sheet opens the compose sheet and puts the keyboard in its textarea within the tap', () => {
+  localStorage.clear()
+  function Harness() {
+    const [session, setSession] = useState<'sheet' | 'compose'>('sheet')
+    return <KeyBar sessionId="s1" session={session} disabled={false} modifiers={NO_MODIFIERS} onKey={() => {}} onModifier={() => {}}
+      onSheet={() => {}} onCompose={() => setSession('compose')} onPaste={() => true} onKeyboard={() => {}} onHide={() => {}} />
+  }
+  const view = render(<Harness />)
+  fireEvent.click(view.getByRole('button', { name: 'Compose' }))
+  const textarea = view.getByRole('textbox', { name: 'Text to send' })
+  expect(document.activeElement).toBe(textarea)
+  // The row stays, with abc back to the keyboard.
+  expect(view.getByRole('button', { name: 'Back to keyboard' })).toBeTruthy()
+  expect(view.queryByRole('region', { name: 'More keys' })).toBeNull()
+})
+
+test('the compose sheet sends its text once as Paste or Paste + Enter, keeps a draft per session, and clears it when sent', () => {
+  localStorage.clear()
+  const { view, sent } = bar({ session: 'compose' })
+  const textarea = view.getByRole('textbox', { name: 'Text to send' })
+  const paste = view.getByRole('button', { name: 'Paste' })
+  expect((paste as HTMLButtonElement).disabled).toBe(true)
+  fireEvent.change(textarea, { target: { value: 'echo one\necho two' } })
+  expect(localStorage.getItem('bakin-terminal-compose:s1')).toBe('echo one\necho two')
+  // A remount (a new page) finds the draft.
+  cleanup()
+  const again = bar({ session: 'compose' })
+  expect((again.view.getByRole('textbox', { name: 'Text to send' }) as HTMLTextAreaElement).value).toBe('echo one\necho two')
+  const mousedown = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+  again.view.getByRole('button', { name: 'Paste + Enter' }).dispatchEvent(mousedown)
+  expect(mousedown.defaultPrevented).toBe(true)
+  fireEvent.click(again.view.getByRole('button', { name: 'Paste + Enter' }))
+  expect(again.sent).toEqual(['paste:true:echo one\necho two'])
+  expect((again.view.getByRole('textbox', { name: 'Text to send' }) as HTMLTextAreaElement).value).toBe('')
+  expect(localStorage.getItem('bakin-terminal-compose:s1')).toBeNull()
+  expect(sent).toEqual([])
+})
+
+test('a send that does not go keeps the draft; sending is disabled while typing is, the draft still editable', () => {
+  localStorage.clear()
+  localStorage.setItem('bakin-terminal-compose:s1', 'kept')
+  const refused: string[] = []
+  const view = render(<KeyBar sessionId="s1" session="compose" disabled={false} modifiers={NO_MODIFIERS} onKey={() => {}} onModifier={() => {}}
+    onSheet={() => {}} onCompose={() => {}} onPaste={(text) => { refused.push(text); return false }} onKeyboard={() => {}} onHide={() => {}} />)
+  fireEvent.click(view.getByRole('button', { name: 'Paste' }))
+  expect(refused).toEqual(['kept'])
+  expect(localStorage.getItem('bakin-terminal-compose:s1')).toBe('kept')
+  cleanup()
+  const disabled = bar({ session: 'compose', disabled: true })
+  expect((disabled.view.getByRole('button', { name: 'Paste' }) as HTMLButtonElement).disabled).toBe(true)
+  expect((disabled.view.getByRole('textbox', { name: 'Text to send' }) as HTMLTextAreaElement).disabled).toBe(false)
 })

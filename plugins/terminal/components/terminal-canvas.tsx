@@ -10,7 +10,7 @@ import { guardParser, patchEraseAbove } from '../lib/xterm-fixes'
 import { clientId } from './api'
 import { enableWebgl } from './terminal-renderer'
 import { TerminalSocketClient, type InputResult, type Presence } from './terminal-socket'
-import type { ModifierState, TerminalInputHandle } from './terminal-input'
+import { pasteBytes, type ModifierState, type TerminalInputHandle } from './terminal-input'
 import { ModifierInput } from './modifier-input'
 import { BASE_FONT, clampFont, fitWidthFont, minFont, pinchFont, resizePlan, reveal, revealClearOf, screenDevice, storedFont, storeFont } from './terminal-view'
 import '@xterm/xterm/css/xterm.css'
@@ -206,6 +206,12 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       },
       reset,
       send: (generation, data) => socket.current?.input(generation, data) ?? false,
+      paste(text, enter) {
+        if (!ready.current || !callbacks.current.inputEnabled || !callbacks.current.writable) return false
+        // Through xterm's input, like a key: the same queue, ownership and generation checks.
+        modifiers.text(pasteBytes(text, term.modes.bracketedPasteMode, enter), (bytes) => term.input(bytes, true))
+        return true
+      },
     }
     viewHandle.current = {
       fitToDevice() {
@@ -227,6 +233,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     }
     const hide = () => { if (document.hidden) reset() }
     const textarea = term.textarea!
+    // No QuickType suggestions inserted into the terminal (spec D9 item 2); compose has its own textarea.
+    textarea.setAttribute('autocomplete', 'off')
     // Focusing the terminal to type goes back to the cursor (like ↓ Live).
     const typing = () => resumeFollow()
     textarea.addEventListener('focus', typing)

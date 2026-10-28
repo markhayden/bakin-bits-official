@@ -5,9 +5,10 @@ import { isKey } from './modifier-input'
  * The phone editing session (spec D9 item 9). The key bar shows while the
  * operator is typing, not by measuring the keyboard: WebKit offers no
  * keyboard API, and Safari 26's floating toolbar defeats viewport
- * heuristics. `sheet` is the ••• key sheet standing in for the keyboard.
+ * heuristics. `sheet` is the ••• key sheet standing in for the keyboard;
+ * `compose` is the compose sheet, whose own textarea has the keyboard.
  */
-export type EditingSession = 'idle' | 'typing' | 'sheet'
+export type EditingSession = 'idle' | 'typing' | 'sheet' | 'compose'
 export type SessionEvent =
   /** The terminal's input took focus (a tap on the terminal, the keyboard button, abc). */
   | 'focus-input'
@@ -17,14 +18,16 @@ export type SessionEvent =
   | 'focus-lost'
   /** Focus moved to something else on the page. */
   | 'focus-outside'
-  | 'open-sheet' | 'abc' | 'hide'
+  | 'open-sheet' | 'open-compose' | 'abc' | 'hide'
 
 export function nextSession(state: EditingSession, event: SessionEvent): EditingSession {
   switch (event) {
     case 'focus-input': case 'abc': return 'typing'
     case 'open-sheet': return 'sheet'
+    case 'open-compose': return 'compose'
     case 'hide': case 'focus-outside': return 'idle'
-    case 'focus-lost': return state === 'sheet' ? 'sheet' : 'idle'
+    // The sheets stay when the keyboard goes down (the system's Done, a tap on a key).
+    case 'focus-lost': return state === 'sheet' || state === 'compose' ? state : 'idle'
     case 'focus-keys': return state
   }
 }

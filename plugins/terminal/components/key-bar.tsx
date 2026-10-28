@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react'
+import { flushSync } from 'react-dom'
 import { Button } from '@makinbakin/sdk/ui'
+import { ComposeSheet } from './compose-sheet'
 import { Joystick } from './joystick'
 import { CONTROL_LABELS, CONTROL_SHORTCUTS, keyFace, SHEET_KEYS, type ArrowKey, type Modifier, type ModifierState, type TerminalKey } from './terminal-input'
 import type { EditingSession } from './editing-session'
@@ -81,17 +83,28 @@ const MORE_ICON = <svg width="22" height="22" viewBox="0 0 24 24" fill="currentC
  * touching them neither ends the editing session nor drops a modifier.
  * Hide keyboard works even while sending is disabled.
  */
-export function KeyBar({ session, disabled, modifiers, onKey, onModifier, onSheet, onKeyboard, onHide }: {
-  session: Exclude<EditingSession, 'idle'>; disabled: boolean; modifiers: ModifierState
+export function KeyBar({ sessionId, session, disabled, modifiers, onKey, onModifier, onSheet, onCompose, onPaste, onKeyboard, onHide }: {
+  sessionId: string; session: Exclude<EditingSession, 'idle'>; disabled: boolean; modifiers: ModifierState
   onKey(key: TerminalKey): void
   onModifier(modifier: Modifier, action: 'tap' | 'lock'): void
   /** Open the key sheet (the keyboard goes down). */
   onSheet(): void
+  /** Open the compose sheet (its textarea takes the keyboard within this tap). */
+  onCompose(): void
+  /** Send compose text as a paste; true once it went. */
+  onPaste(text: string, enter: boolean): boolean
   /** Back to the keyboard from the sheet (focuses the terminal within this tap). */
   onKeyboard(): void
   onHide(): void
 }) {
   const sheet = useRef<HTMLDivElement>(null)
+  const compose = useRef<HTMLTextAreaElement>(null)
+  // Rendered and focused within the tap, so a phone raises the keyboard for the textarea.
+  const openCompose = () => {
+    flushSync(onCompose)
+    compose.current?.focus()
+  }
+  const sheetOpen = session === 'sheet' || session === 'compose'
   const modifierKey = (modifier: Modifier) => <Keycap key={modifier} label={modifierLabel(modifier, modifiers[modifier])} face={<>{MODIFIER_FACES[modifier]}{modifiers[modifier] === 'locked' && <span className="terminal-keycap-lock" aria-hidden="true" />}</>}
     state={modifiers[modifier]} disabled={disabled} onPress={() => onModifier(modifier, 'tap')} />
   const sendKey = (key: TerminalKey, label?: string) => <Keycap key={key} label={label ? `${key} ${label}` : key}
@@ -103,8 +116,8 @@ export function KeyBar({ session, disabled, modifiers, onKey, onModifier, onShee
     // first usable key, or the sheet itself while sending is disabled.
     if (event.detail === 0) requestAnimationFrame(() => (sheet.current?.querySelector<HTMLButtonElement>('button:not(:disabled)') ?? sheet.current)?.focus())
   }
-  // Escape anywhere in the bar or sheet goes back to the keyboard while the sheet is open.
-  const escape = (event: React.KeyboardEvent) => { if (session === 'sheet' && event.key === 'Escape') { event.preventDefault(); onKeyboard() } }
+  // Escape anywhere in the bar or a sheet goes back to the keyboard while one is open.
+  const escape = (event: React.KeyboardEvent) => { if (sheetOpen && event.key === 'Escape') { event.preventDefault(); onKeyboard() } }
   return <div className="terminal-key-accessory" data-terminal-keys="" onKeyDown={escape}>
     <div role="group" aria-label="Terminal keys" className="terminal-key-bar">
       {sendKey('Esc')}
@@ -112,13 +125,18 @@ export function KeyBar({ session, disabled, modifiers, onKey, onModifier, onShee
       {modifierKey('ctrl')}
       {modifierKey('alt')}
       <ArrowJoystick disabled={disabled} onArrow={onKey} />
-      {session === 'sheet'
+      {sheetOpen
         ? <Keycap label="Back to keyboard" face="abc" tone="function" className="terminal-key-push" onPress={onKeyboard} />
         : <Keycap label="More keys" face={MORE_ICON} tone="function" className="terminal-key-push" onPress={openSheet} />}
       <span aria-hidden="true" className="terminal-key-divider" />
       <Keycap label="Hide keyboard" face={HIDE_ICON} tone="function" className="terminal-keycap-hide" onPress={onHide} />
     </div>
+    {session === 'compose' && <ComposeSheet sessionId={sessionId} disabled={disabled} textarea={compose} onSend={onPaste} />}
     {session === 'sheet' && <div ref={sheet} role="region" aria-label="More keys" tabIndex={-1} className="terminal-key-sheet">
+      <div role="group" aria-label="Text" className="terminal-key-grid terminal-key-grid-labelled">
+        <Keycap label="Compose" face={<><span className="terminal-keycap-face">✎</span><span className="terminal-keycap-label">Compose</span></>}
+          className="terminal-keycap-wide" onPress={openCompose} />
+      </div>
       <div role="group" aria-label="Keys" className="terminal-key-grid">{SHEET_KEYS.map(key => sendKey(key))}</div>
       <div role="group" aria-label="Control" className="terminal-key-grid terminal-key-grid-labelled">{CONTROL_SHORTCUTS.map(key => sendKey(`Ctrl+${key}`, CONTROL_LABELS[key]))}</div>
       <div role="group" aria-label="Locks" className="terminal-key-grid terminal-key-grid-labelled">

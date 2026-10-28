@@ -77,6 +77,13 @@ export class ModifierInput {
     try { deliver(bytes) } finally { this.passthrough = false }
   }
 
+  /** Compose text, already encoded: sent untouched; one-shot modifiers end, locks stay. */
+  text(bytes: string, deliver: (bytes: string) => void) {
+    this.clearOnce()
+    this.passthrough = true
+    try { deliver(bytes) } finally { this.passthrough = false }
+  }
+
   /** What to send for one onData event. */
   data(data: string): string {
     // xterm flushes an empty composition as "": it is not a key.

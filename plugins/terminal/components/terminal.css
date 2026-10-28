@@ -156,6 +156,13 @@
   height: 26px;
   background: var(--bakin-color-border-subtle);
 }
+/* The compose sheet: a textarea and its two sends, in the slot below the bar. */
+[data-bakin-plugin="terminal"] .terminal-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 8px 12px;
+}
 /* The ••• sheet: every other key, in the slot below the bar. */
 [data-bakin-plugin="terminal"] .terminal-key-sheet:focus-visible { outline: 2px solid var(--bakin-color-focus-ring); outline-offset: -2px; }
 [data-bakin-plugin="terminal"] .terminal-key-sheet {

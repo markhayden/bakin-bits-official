@@ -391,9 +391,17 @@ function Workspace({ sessionId }: { sessionId?: string }) {
         itself restructures the body and would remount the terminal (dropping
         the keyboard). */}
     <WorkspacePageBody inputAccessory={session && !ended && !session.historyDeleted
-      ? keyed && editing !== 'idle' ? <KeyBar key={session.id} session={editing} disabled={!inputEnabled} modifiers={modifiers}
+      ? keyed && editing !== 'idle' ? <KeyBar key={session.id} sessionId={session.id} session={editing} disabled={!inputEnabled} modifiers={modifiers}
           onKey={key => inputHandle.current?.key(key)} onModifier={(modifier, action) => inputHandle.current?.modifier(modifier, action)}
           onSheet={() => { editingEvent('open-sheet'); inputHandle.current?.blur() }}
+          onCompose={() => editingEvent('open-compose')}
+          onPaste={(text, enter) => {
+            if (!inputHandle.current?.paste(text, enter)) return false
+            // After Paste + Enter the response needs the screen (as Return from the keyboard): the keyboard goes away.
+            if (enter) { editingEvent('hide'); (document.activeElement as HTMLElement | null)?.blur() }
+            else { inputHandle.current.focus(); editingEvent('abc') }
+            return true
+          }}
           onKeyboard={() => { inputHandle.current?.focus(); editingEvent('abc') }}
           onHide={() => { editingEvent('hide'); inputHandle.current?.blur() }} /> : <></>
       : undefined}>
