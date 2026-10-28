@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { BATCH_BYTES, BATCH_MS, MAX_QUEUED_BYTES, OutputLog, parseLayoutChange, type LogEvent } from '../lib/output-log'
+import { BATCH_BYTES, BATCH_MS, MAX_QUEUED_BYTES, MAX_QUEUED_EVENTS, OutputLog, parseLayoutChange, type LogEvent } from '../lib/output-log'
 
 function consumer(slow?: () => Promise<void>) {
   const events: LogEvent[] = []
@@ -101,6 +101,60 @@ describe('OutputLog', () => {
     await Bun.sleep(0)
     expect(events).toEqual([])
     expect(log.pendingBytes).toBe(0)
+  })
+})
+
+describe('OutputLog consumers', () => {
+  it('output before a consumer attaches, or not yet delivered when it detaches, never reaches the next one', async () => {
+    const log = new OutputLog()
+    log.output(new TextEncoder().encode('old'))
+    const first = consumer()
+    const detach = log.attach(first.consumer)
+    log.output(new TextEncoder().encode('mine'))
+    detach()
+    const second = consumer()
+    log.attach(second.consumer)
+    log.output(new TextEncoder().encode('new'))
+    log.flush()
+    await Bun.sleep(0)
+    expect(first.events.map(text)).toEqual([])
+    expect(second.events.map(text)).toEqual(['new'])
+  })
+  it('a detached consumer whose event never settles does not stall its replacement', async () => {
+    const log = new OutputLog()
+    const detach = log.attach({ event: () => new Promise(() => {}), invalid: () => {} })
+    log.output(new Uint8Array(1))
+    log.flush()
+    await Bun.sleep(0)
+    detach()
+    const next = consumer()
+    log.attach(next.consumer)
+    log.output(new TextEncoder().encode('x'))
+    log.flush()
+    await Bun.sleep(0)
+    expect(next.events.map(text)).toEqual(['x'])
+  })
+  it('a detached consumer that fails later does not invalidate its replacement\'s log', async () => {
+    const log = new OutputLog()
+    let fail!: (error: Error) => void
+    const detach = log.attach({ event: () => new Promise((_, reject) => { fail = reject }), invalid: () => {} })
+    log.output(new Uint8Array(1))
+    log.flush()
+    await Bun.sleep(0)
+    detach()
+    const next = consumer()
+    log.attach(next.consumer)
+    fail(new Error('late'))
+    await Bun.sleep(0)
+    expect(log.invalidReason).toBeUndefined()
+    expect(next.invalid).toEqual([])
+  })
+  it('layout events count against the bound too', () => {
+    const log = new OutputLog()
+    const stalled = consumer(() => new Promise(() => {}))
+    log.attach(stalled.consumer)
+    for (let i = 0; i <= MAX_QUEUED_EVENTS + 1; i++) log.layout(80 + (i % 2), 24)
+    expect(stalled.invalid).toEqual(['overflow'])
   })
 })
 

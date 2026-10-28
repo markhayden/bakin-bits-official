@@ -152,6 +152,20 @@ describe('ControlClient', () => {
     client.close()
     expect(closed).toEqual(['too far behind'])
   })
+  it('%exit ends the connection at once: pending commands reject with it, even while the process lingers', async () => {
+    const written: string[] = []
+    let killed = 0
+    const transport: ControlTransport = { write: (line) => { written.push(line) }, close: () => { killed++ }, exited: new Promise(() => {}) }
+    const closed: string[] = []
+    const client = new ControlClient(transport, { closed: (reason) => closed.push(reason) })
+    attached(client)
+    const pending = client.command(['display-message', '-p', 'x'])
+    client.feed('%exit too far behind\n')
+    await expect(pending).rejects.toThrow('closed')
+    expect(client.isClosed).toBe(true)
+    expect(closed).toEqual(['too far behind'])
+    expect(killed).toBe(1)
+  })
   it('reports EOF without %exit as eof, and a protocol fault by its reason', async () => {
     const eof = fakeTransport()
     const closed: string[] = []

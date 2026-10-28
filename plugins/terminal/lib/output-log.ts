@@ -15,6 +15,8 @@
 export const BATCH_BYTES = 64 * 1024
 export const BATCH_MS = 16
 export const MAX_QUEUED_BYTES = 8 * 1024 * 1024
+/** Events (layout changes included) waiting for the consumer before the log overflows. */
+export const MAX_QUEUED_EVENTS = 4096
 
 export type LogEvent =
   /** `offset`: output bytes before this event in the log. */
@@ -33,37 +35,40 @@ export function parseLayoutChange(line: string): { window: string; cols: number;
   return match ? { window: match[1]!, cols: Number(match[2]), rows: Number(match[3]) } : undefined
 }
 
+/** One consumer's attachment: its own queue and delivery, so a detached one can never touch its successor. */
+interface Attachment { consumer: LogConsumer; queue: LogEvent[]; queuedBytes: number; delivering: boolean; live: boolean }
+
 export class OutputLog {
   private seq = 0
   private offset = 0
   private batch: Uint8Array[] = []
   private batchBytes = 0
   private timer: ReturnType<typeof setTimeout> | undefined
-  private queue: LogEvent[] = []
-  private queuedBytes = 0
-  private delivering = false
-  private consumer: LogConsumer | undefined
+  private attachment: Attachment | undefined
   private failure: string | undefined
 
   /** Why the log is invalid, once it is. */
   get invalidReason(): string | undefined { return this.failure }
-  get pendingBytes(): number { return this.queuedBytes + this.batchBytes }
+  get pendingBytes(): number { return (this.attachment?.queuedBytes ?? 0) + this.batchBytes }
 
-  /** The one consumer. Events before it attached are not replayed: it starts from a known state (D13 reseed). */
+  /** The one consumer. Nothing from before it attached reaches it: it starts from a known state (D13 reseed). */
   attach(consumer: LogConsumer): () => void {
-    if (this.consumer) throw new Error('The output log already has a consumer')
-    this.consumer = consumer
+    if (this.attachment) throw new Error('The output log already has a consumer')
+    const attachment: Attachment = { consumer, queue: [], queuedBytes: 0, delivering: false, live: true }
+    this.attachment = attachment
     if (this.failure) consumer.invalid(this.failure)
     return () => {
-      if (this.consumer !== consumer) return
-      this.consumer = undefined
-      this.queue = []
-      this.queuedBytes = 0
+      if (this.attachment !== attachment) return
+      attachment.live = false
+      this.attachment = undefined
+      // Output not yet delivered belonged to this consumer's stream only.
+      this.dropBatch()
     }
   }
 
   output(bytes: Uint8Array): void {
-    if (this.failure || bytes.length === 0) return
+    // Without a consumer, output is not kept.
+    if (this.failure || bytes.length === 0 || !this.attachment) return
     this.batch.push(bytes)
     this.batchBytes += bytes.length
     if (this.batchBytes >= BATCH_BYTES) this.flush()
@@ -99,42 +104,47 @@ export class OutputLog {
   invalidate(reason: string): void {
     if (this.failure) return
     this.failure = reason
+    this.dropBatch()
+    const attachment = this.attachment
+    if (!attachment) return
+    attachment.queue = []
+    attachment.queuedBytes = 0
+    attachment.consumer.invalid(reason)
+  }
+
+  private dropBatch(): void {
     clearTimeout(this.timer)
     this.timer = undefined
     this.batch = []
     this.batchBytes = 0
-    this.queue = []
-    this.queuedBytes = 0
-    this.consumer?.invalid(reason)
   }
 
   private push(event: LogEvent): void {
-    if (!this.consumer || this.failure) return
-    this.queue.push(event)
-    if (event.kind === 'output') this.queuedBytes += event.bytes.length
-    if (this.queuedBytes > MAX_QUEUED_BYTES) { this.invalidate('overflow'); return }
-    void this.deliver()
+    const attachment = this.attachment
+    if (!attachment || this.failure) return
+    attachment.queue.push(event)
+    if (event.kind === 'output') attachment.queuedBytes += event.bytes.length
+    if (attachment.queuedBytes > MAX_QUEUED_BYTES || attachment.queue.length > MAX_QUEUED_EVENTS) { this.invalidate('overflow'); return }
+    void this.deliver(attachment)
   }
 
-  private async deliver(): Promise<void> {
-    if (this.delivering) return
-    this.delivering = true
+  private async deliver(attachment: Attachment): Promise<void> {
+    if (attachment.delivering) return
+    attachment.delivering = true
     try {
-      while (this.queue.length && this.consumer && !this.failure) {
-        const event = this.queue.shift()!
-        const consumer = this.consumer
+      while (attachment.live && !this.failure && attachment.queue.length) {
+        const event = attachment.queue.shift()!
         try {
-          await consumer.event(event)
+          await attachment.consumer.event(event)
         } catch (error) {
-          this.invalidate(`consumer failed: ${error instanceof Error ? error.message : String(error)}`)
+          // A consumer that has been replaced cannot fail its successor's log.
+          if (attachment.live) this.invalidate(`consumer failed: ${error instanceof Error ? error.message : String(error)}`)
           return
-        } finally {
-          // A failure or a detach already emptied the accounting.
-          if (event.kind === 'output' && this.consumer === consumer && !this.failure) this.queuedBytes -= event.bytes.length
         }
+        if (event.kind === 'output' && attachment.live && !this.failure) attachment.queuedBytes -= event.bytes.length
       }
     } finally {
-      this.delivering = false
+      attachment.delivering = false
     }
   }
 }

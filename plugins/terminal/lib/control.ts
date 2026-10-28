@@ -144,7 +144,6 @@ export class ControlClient {
   private pending: Pending[] = []
   private closed = false
   private attached = false
-  private exitReason: string | undefined
   private parser: ControlParser
   /** Settles when tmux has answered the attach. */
   readonly ready: Promise<void>
@@ -154,8 +153,9 @@ export class ControlClient {
     this.parser = new ControlParser({
       block: (block) => this.answer(block),
       notification: (line) => {
-        // `%exit` means this control client is ending, not the program (D4).
-        if (line === '%exit' || line.startsWith('%exit ')) this.exitReason = line.slice(6).trim() || 'exit'
+        // `%exit` means this control client is ending, not the program (D4):
+        // the connection is over now, whatever the process does next.
+        if (line === '%exit' || line.startsWith('%exit ')) { this.close(line.slice(6).trim() || 'exit'); return }
         handlers.notification?.(line)
       },
       output: (pane, bytes) => handlers.output?.(pane, bytes),
@@ -168,7 +168,7 @@ export class ControlClient {
     })
     // An unawaited ready must not become an unhandled rejection on exit.
     this.ready.catch(() => undefined)
-    void transport.exited.then(() => this.fail(this.exitReason ?? 'eof'))
+    void transport.exited.then(() => this.fail('eof'))
   }
   /** Spawn `tmux -C attach` for `session` on the private socket. */
   static attach(tmux: string, socket: string, session: string, env: Record<string, string>, handlers: ControlHandlers): ControlClient {
@@ -182,7 +182,12 @@ export class ControlClient {
     }, handlers)
     client.pid = child.pid
     void (async () => {
-      for await (const chunk of child.stdout) client.feed(chunk)
+      try {
+        for await (const chunk of child.stdout) client.feed(chunk)
+      } finally {
+        // The stream ended (or broke) before the process did: the connection is over.
+        client.close('eof')
+      }
     })()
     return client
   }
