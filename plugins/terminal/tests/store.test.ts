@@ -39,7 +39,7 @@ test('appending at the retention limit costs the same as appending below it (no 
   expect(store.bytes('busy')).toBeLessThanOrEqual(10 * 1024 * 1024)
   expect(store.bytes('busy')).toBeGreaterThan(10 * 1024 * 1024 - 400)
   expect(store.bytes()).toBe(store.bytes('busy'))
-  // Measured: about 0.3 s with running totals; the per-append SUM took minutes.
+  // Measured on the M4: about 0.5 s with running totals; the per-append SUM took 88 s.
   expect(elapsed).toBeLessThan(5000)
 })
 test('retained totals survive a reopen: they are rebuilt from the output', () => {
