@@ -53,3 +53,38 @@ export function patchEraseAbove(terminal: ParserTerminal & object): void {
   terminal.parser.registerCsiHandler({ final: 'J' }, erase(false))
   terminal.parser.registerCsiHandler({ prefix: '?', final: 'J' }, erase(true))
 }
+
+/**
+ * xterm runs its parser from the write queue with no catch: one exception
+ * (a bug, or a throwing handler) leaves the queue with callbacks that never
+ * fire, so every later write, capture and drain hangs. This guards the
+ * per-instance parse step: a failure is reported once, later parses do
+ * nothing, and xterm's own bookkeeping still runs the write callbacks, so
+ * the owner can reject instead of hanging.
+ */
+export function guardParser(terminal: object, onFailure: (error: unknown) => void): { readonly failed: boolean } {
+  const handler = (terminal as { _core?: { _inputHandler?: { parse?: (data: unknown, promiseResult?: boolean) => unknown; _logSlowResolvingAsync?: (promise: Promise<unknown>) => void } } })._core?._inputHandler
+  let failed = false
+  const fail = (error: unknown) => { if (!failed) { failed = true; onFailure(error) } }
+  // xterm also races an async handler's promise in a debug branch that
+  // rethrows its rejection, unhandled. Keep only the warning; the rejection
+  // is reported through the returned promise below.
+  if (handler && typeof handler._logSlowResolvingAsync === 'function') {
+    const log = handler._logSlowResolvingAsync.bind(handler)
+    handler._logSlowResolvingAsync = (promise) => log(promise.catch(() => true))
+  }
+  if (handler && typeof handler.parse === 'function') {
+    const parse = handler.parse.bind(handler)
+    handler.parse = (data, promiseResult) => {
+      if (failed) return undefined
+      try {
+        const result = parse(data, promiseResult)
+        return result instanceof Promise ? result.catch((error: unknown) => { fail(error); return false }) : result
+      } catch (error) {
+        fail(error)
+        return undefined
+      }
+    }
+  }
+  return { get failed() { return failed } }
+}
