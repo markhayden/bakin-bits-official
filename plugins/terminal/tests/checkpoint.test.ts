@@ -2,7 +2,8 @@ import { describe, expect, it } from 'bun:test'
 import headless from '@xterm/headless'
 import { CHECKPOINT_FORMAT, restoreCheckpoint, takeCheckpoint, type Checkpoint } from '../lib/checkpoint'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from '../lib/terminal-profile'
-import { fullState, stateDiff, type Term } from '../lib/terminal-state'
+import { compareSteps, drain, fullState, stateDiff, type Term } from '../lib/terminal-state'
+import { generate } from './helpers/terminal-fuzz'
 
 const enc = (text: string) => new TextEncoder().encode(text)
 const cat = (...parts: Uint8Array[]) => { const all = new Uint8Array(parts.reduce((n, part) => n + part.length, 0)); let at = 0; for (const part of parts) { all.set(part, at); at += part.length } return all }
@@ -195,5 +196,48 @@ describe('checkpoint: acceptance', () => {
     await write(term, 'x'.repeat(25) + '\r\n\x1b[41m\x1b[3X\x1b[0m\x1b[5Ckept\r\n' + Array.from({ length: 30 }, (_, i) => `line ${i}`).join('\r\n'))
     const result = takeCheckpoint(term)
     expect('checkpoint' in result).toBe(true)
+  })
+})
+
+describe('compareSteps (the verifier a checkpoint uses)', () => {
+  it('gives fullState’s verdict: equal pairs, and pairs one byte apart, across generated streams', async () => {
+    let equal = 0
+    let different = 0
+    for (let seed = 1; seed <= 40; seed++) {
+      const { bytes } = generate(seed, 30, 8, 80)
+      // The same stream, and the same stream plus one more byte, at every cut a few times over.
+      for (const cut of [Math.floor(bytes.length / 3), Math.floor(bytes.length / 2), bytes.length]) {
+        const a = terminal(30, 8)
+        const b = terminal(30, 8)
+        const c = terminal(30, 8)
+        await write(a, bytes.subarray(0, cut))
+        await write(b, bytes.subarray(0, cut))
+        await write(c, cat(bytes.subarray(0, cut), enc(seed % 2 ? 'z' : '\x1b[7m\x1b]8;;https://e.invalid\x1b\\é́')))
+        for (const [x, y] of [[a, b], [a, c]] as const) {
+          const strict = stateDiff(fullState(x), fullState(y)) === null
+          expect(drain(compareSteps(x, y)) === null).toBe(strict)
+          if (strict) equal++; else different++
+        }
+        a.dispose(); b.dispose(); c.dispose()
+      }
+    }
+    // Both verdicts were exercised.
+    expect(equal).toBeGreaterThan(50)
+    expect(different).toBeGreaterThan(50)
+  })
+  it('sees a difference only the side maps hold: a link, a combined character, an underline colour', async () => {
+    for (const [x, y] of [
+      ['\x1b]8;;https://a.invalid\x1b\\link\x1b]8;;\x1b\\', '\x1b]8;;https://b.invalid\x1b\\link\x1b]8;;\x1b\\'],
+      ['é', 'è'],
+      ['\x1b[4;58;5;1mu', '\x1b[4;58;5;2mu'],
+    ]) {
+      const a = terminal(10, 2)
+      const b = terminal(10, 2)
+      await write(a, x!)
+      await write(b, y!)
+      expect(stateDiff(fullState(a), fullState(b))).not.toBeNull()
+      expect(drain(compareSteps(a, b))).not.toBeNull()
+      a.dispose(); b.dispose()
+    }
   })
 })

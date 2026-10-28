@@ -17,8 +17,8 @@ import headless from '@xterm/headless'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
 import { altEnteredCols, setAltEnteredCols } from './xterm-fixes'
 import {
-  cellKey, charsetName, fullState, HAS_EXTENDED, internals, nullCell, rawUnderlineStyle, savedKey, stateDiff, tabStops, UNDERLINE,
-  type Buffer, type Extended, type Term,
+  BLANK_CONTENT, cellKey, charsetName, compareSteps, drain, HAS_EXTENDED, internals, IS_COMBINED, lineWords, nullCell, rawUnderlineStyle,
+  savedKey, tabStops, UNDERLINE, type Buffer, type Extended, type Term,
 } from './terminal-state'
 
 /** Bumped whenever the bytes or fields change meaning. */
@@ -94,8 +94,7 @@ const osc8 = (uri: string, id = '') => `\x1b]8;${id ? 'id=' + id : ''};${uri}\x1
  * each segment reopens it under one id. A link the program gave no id gets
  * one with this checkpoint's nonce, so it cannot merge with a program's id.
  */
-let nonce = ''
-function linkParams(terminal: Term, urlId: number): { uri: string; id: string } {
+function linkParams(terminal: Term, urlId: number, nonce: string): { uri: string; id: string } {
   const data = internals(terminal)._oscLinkService.getLinkData(urlId)
   return { uri: data?.uri ?? '(dangling)', id: data?.id ?? `bakin.${nonce}.${urlId}` }
 }
@@ -107,9 +106,10 @@ const protection = (on: boolean) => on ? '\x1b[1"q' : '\x1b[0"q'
  * Lines [from, end) of `buffer`, printed from the cursor; wrapped lines wrap
  * naturally. Empty cells stay empty: default ones are skipped with CUF,
  * coloured ones (erased with a background) are made with ECH. The DECSC slot
- * (an absolute row) is saved while its row is the cursor row.
+ * (an absolute row) is saved while its row is the cursor row. One step per
+ * line; cells are compared by their words where the words decide.
  */
-function printLines(terminal: Term, buffer: Buffer, from: number, slotLine = -1): string {
+function* printLines(terminal: Term, text: Text, buffer: Buffer, nonce: string, from: number, slotLine = -1): Generator<void> {
   const cell = nullCell(terminal)
   let out = ''
   let link = ''
@@ -117,13 +117,20 @@ function printLines(terminal: Term, buffer: Buffer, from: number, slotLine = -1)
   const protect = (on: boolean) => { if (on !== protectedNow) { out += protection(on); protectedNow = on } }
   for (let y = from; y < buffer.lines.length; y++) {
     const line = buffer.lines.get(y)!
+    const words = lineWords(line)
+    const blank = (x: number) => (words[x * 3] === BLANK_CONTENT && words[x * 3 + 1] === 0 && words[x * 3 + 2] === 0)
+      || cellKey(terminal, line.loadCell(x, cell)) === defaultBlank
     let slotDue = y === slotLine
     if (slotDue && !line.isWrapped) { out += savedSlot(terminal, buffer) + '\r'; slotDue = false }
     const next = y + 1 < buffer.lines.length ? buffer.lines.get(y + 1)! : null
     const full = Boolean(next?.isWrapped)
-    let end = 0
-    for (let x = 0; x < terminal.cols; x++) if (cellKey(terminal, line.loadCell(x, cell)) !== defaultBlank) end = x + 1
+    let end = terminal.cols
+    while (end > 0 && blank(end - 1)) end--
     let pen = ''
+    // The last printed cell's attributes and their SGR (cells without extended attributes reuse it).
+    let lastFg = -1
+    let lastBg = -1
+    let lastSgr = ''
     let x = 0
     while (x < end) {
       line.loadCell(x, cell)
@@ -132,7 +139,7 @@ function printLines(terminal: Term, buffer: Buffer, from: number, slotLine = -1)
         // A run of empty cells with the same attributes.
         const key = cellKey(terminal, cell)
         let run = 1
-        while (x + run < end && cellKey(terminal, line.loadCell(x + run, cell)) === key) run++
+        while (x + run < end && (sameCell(words, x, x + run) || cellKey(terminal, line.loadCell(x + run, cell)) === key)) run++
         line.loadCell(x, cell)
         if (link) { out += osc8(''); link = '' }
         if (key !== defaultBlank) {
@@ -151,10 +158,16 @@ function printLines(terminal: Term, buffer: Buffer, from: number, slotLine = -1)
         continue
       }
       const extended = cell.bg & HAS_EXTENDED ? cell.extended : null
-      const params = extended && extended.urlId ? linkParams(terminal, extended.urlId) : null
+      const params = extended && extended.urlId ? linkParams(terminal, extended.urlId, nonce) : null
       const key = params ? `${params.id}\u0000${params.uri}` : ''
       if (key !== link) { out += params ? osc8(params.uri, params.id) : osc8(''); link = key }
-      const attributes = sgr(cell.fg, cell.bg & ~HAS_EXTENDED, extended)
+      let attributes = lastSgr
+      if (extended || cell.fg !== lastFg || (cell.bg & ~HAS_EXTENDED) !== lastBg) {
+        attributes = sgr(cell.fg, cell.bg & ~HAS_EXTENDED, extended)
+        lastFg = extended ? -1 : cell.fg
+        lastBg = extended ? -1 : cell.bg & ~HAS_EXTENDED
+        lastSgr = attributes
+      }
       if (attributes !== pen) { out += attributes; pen = attributes; protectedNow = false }
       protect((cell.bg & PROTECTED) !== 0)
       out += cell.getChars()
@@ -172,10 +185,42 @@ function printLines(terminal: Term, buffer: Buffer, from: number, slotLine = -1)
       if (pen && pen !== '\x1b[0m') { out += '\x1b[0m'; protectedNow = false }
       if (next) out += '\r\n'
     }
+    text.add(out)
+    out = ''
+    yield
   }
   if (link) out += osc8('')
   protect(false)
-  return out + '\x1b[0m'
+  text.add(out + '\x1b[0m')
+}
+
+/**
+ * Text built in pieces and joined a few hundred at a time: one long string
+ * built by appending is flattened all at once when it is first read, which
+ * would be one long step.
+ */
+class Text {
+  private pieces: string[] = []
+  private chunks: string[] = []
+  add(piece: string): void {
+    this.pieces.push(piece)
+    if (this.pieces.length < 256) return
+    this.chunks.push(this.pieces.join(''))
+    this.pieces = []
+  }
+  done(): string {
+    this.chunks.push(this.pieces.join(''))
+    this.pieces = []
+    return this.chunks.join('')
+  }
+}
+
+/** Cells `x` and `y` of one line certainly share a key: equal words, no side-map data. */
+function sameCell(words: Uint32Array, x: number, y: number): boolean {
+  const i = x * 3
+  const j = y * 3
+  return words[i] === words[j] && words[i + 1] === words[j + 1] && words[i + 2] === words[j + 2]
+    && !(words[i + 2]! & HAS_EXTENDED) && !(words[i]! & IS_COMBINED)
 }
 
 const DESIGNATORS = ['(', ')', '*', '+']
@@ -203,9 +248,11 @@ function charsetTail(terminal: Term): string {
 }
 
 /** Serialize `terminal` (no check: see `takeCheckpoint`). */
-export function serialize(terminal: Term): string {
+export const serialize = (terminal: Term): string => drain(serializeSteps(terminal))
+/** `serialize`, one step per line; `terminal` must not change in between. */
+export function* serializeSteps(terminal: Term): Generator<void, string> {
   learn()
-  nonce = Math.random().toString(36).slice(2, 10)
+  const nonce = Math.random().toString(36).slice(2, 10)
   const core = internals(terminal)
   const normal = core.buffers.normal
   const alt = core.buffers.alt
@@ -214,14 +261,19 @@ export function serialize(terminal: Term): string {
   let out = '\x1bc'
   // A first line that wraps from a line already scrolled away: a filler it wraps from.
   if (normal.lines.get(0)?.isWrapped) out += '\x1b[0m' + 'x'.repeat(terminal.cols)
-  out += printLines(terminal, normal, 0, savedKey(normal) === defaultSlot ? -1 : normal.savedY)
+  const text = new Text()
+  text.add(out)
+  out = ''
+  yield* printLines(terminal, text, normal, nonce, 0, savedKey(normal) === defaultSlot ? -1 : normal.savedY)
   // The inactive alternate buffer's DECSC slot: 47h (switch without saving or clearing), the slot, 47l.
   if (!alternate && (alt.lines.length === 0 || savedKey(alt) !== defaultSlot)) out += '\x1b[?47h' + savedSlot(terminal, alt, alt.savedY) + '\x1b[?47l'
   if (alternate) {
     // The normal buffer's slot is in place; enter the alternate screen without saving (47h, not 1049h).
     // The normal buffer keeps the cursor it had at the switch (the region's DECSTBM above homed it).
     out += bufferTail(terminal, normal, false) + `\x1b[${normal.y + 1};${Math.min(normal.x, terminal.cols - 1) + 1}H` + '\x1b(B\x0f\x1b[?47h\x1b[0m\x1b[H'
-    out += printLines(terminal, alt, 0)
+    text.add(out)
+    out = ''
+    yield* printLines(terminal, text, alt, nonce, 0)
   }
   out += bufferTail(terminal, active, alternate)
   out += charsetTail(terminal)
@@ -236,7 +288,7 @@ export function serialize(terminal: Term): string {
     line.loadCell(x, cell)
     const extended = cell.bg & HAS_EXTENDED ? cell.extended : null
     // The same link as the rest of its cells: reopened under its id.
-    const link = extended && extended.urlId ? linkParams(terminal, extended.urlId) : null
+    const link = extended && extended.urlId ? linkParams(terminal, extended.urlId, nonce) : null
     out += `\x1b[${active.y + 1};${x + 1}H` + (link ? osc8(link.uri, link.id) : '') + sgr(cell.fg, cell.bg & ~HAS_EXTENDED, extended) + (cell.getChars() || ' ') + (link ? osc8('') : '')
   } else out += `\x1b[${active.y + 1};${active.x + 1}H`
   const pen = core._inputHandler._curAttrData
@@ -271,10 +323,11 @@ export function serialize(terminal: Term): string {
   // An open hyperlink in the pen (also with its HAS_EXTENDED bit clear: it
   // survives SGR 0 and the next print uses it), under the id its cells carry.
   if (pen.extended.urlId) {
-    const link = linkParams(terminal, pen.extended.urlId)
+    const link = linkParams(terminal, pen.extended.urlId, nonce)
     out += osc8(link.uri, link.id)
   }
-  return out
+  text.add(out)
+  return text.done()
 }
 
 /**
@@ -310,24 +363,47 @@ export function restoreCheckpoint(terminal: Term, checkpoint: Checkpoint): Promi
   }))
 }
 
+/** Characters of a checkpoint restored per step (about a millisecond of parsing). */
+export const RESTORE_STEP_CHARS = 16 * 1024
+export type CheckpointResult = { checkpoint: Checkpoint } | { rejected: string }
+
 /**
  * A checkpoint of `terminal` now, or why there is none: the parser is
  * mid-sequence, or restoring the bytes into a scratch terminal does not
  * reproduce the full state.
  */
-export function takeCheckpoint(terminal: Term): { checkpoint: Checkpoint } | { rejected: string } {
+export const takeCheckpoint = (terminal: Term): CheckpointResult => drain(checkpointSteps(terminal))
+
+/**
+ * `takeCheckpoint` in steps of about a millisecond or less, for a caller
+ * that yields to the event loop between them; `terminal` must not change in
+ * between. An abandoned run (`return()`) disposes its scratch terminal.
+ */
+export function* checkpointSteps(terminal: Term): Generator<void, CheckpointResult> {
   if (!quiescent(terminal)) return { rejected: 'parser not quiescent' }
+  const handler = internals(terminal)._inputHandler
   const scrollback = internals(terminal).optionsService.rawOptions.scrollback
   const checkpoint: Checkpoint = {
     format: CHECKPOINT_FORMAT, cols: terminal.cols, rows: terminal.rows, scrollback,
-    data: serialize(terminal), joinState: internals(terminal)._inputHandler._parser.precedingJoinState,
-    penHasExtended: (internals(terminal)._inputHandler._curAttrData.bg & HAS_EXTENDED) !== 0,
+    data: yield* serializeSteps(terminal), joinState: handler._parser.precedingJoinState,
+    penHasExtended: (handler._curAttrData.bg & HAS_EXTENDED) !== 0,
     altEnteredCols: terminal.buffer.active.type === 'alternate' ? altEnteredCols(terminal) ?? null : null,
   }
   const restored = scratch(terminal.cols, terminal.rows, scrollback)
   try {
-    restoreCheckpointSync(restored, checkpoint)
-    const difference = stateDiff(fullState(terminal), fullState(restored))
+    // In pieces: the parser carries state across writes (a piece never splits a surrogate pair).
+    const { data } = checkpoint
+    const writer = internals(restored)._writeBuffer
+    for (let at = 0; at < data.length;) {
+      let end = Math.min(at + RESTORE_STEP_CHARS, data.length)
+      const last = data.charCodeAt(end - 1)
+      if (end < data.length && last >= 0xd800 && last <= 0xdbff) end--
+      writer.writeSync(data.slice(at, end))
+      at = end
+      yield
+    }
+    finish(restored, checkpoint)
+    const difference = yield* compareSteps(terminal, restored)
     return difference ? { rejected: difference } : { checkpoint }
   } finally {
     restored.dispose()

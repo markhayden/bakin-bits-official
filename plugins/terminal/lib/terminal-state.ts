@@ -17,6 +17,23 @@ export type Term = InstanceType<typeof headless.Terminal>
 export interface Extended { _ext: number; underlineColor: number; urlId: number }
 export interface Cell { getChars(): string; getWidth(): number; fg: number; bg: number; extended: Extended }
 export interface Line { isWrapped: boolean; loadCell(x: number, cell: Cell): Cell }
+/** A line's raw cells in the pinned version: three words per cell (content, fg, bg). */
+export const lineWords = (line: Line): Uint32Array => (line as unknown as { _data: Uint32Array })._data
+/** Content.IS_COMBINED_MASK in the pinned version (the characters live in a side map). */
+export const IS_COMBINED = 0x200000
+/** A fresh line's cell: no character, width 1, default attributes. */
+export const BLANK_CONTENT = 1 << 22
+/**
+ * True when cell `x` of two lines has the same key for certain: equal words,
+ * with no extended attributes or combined characters (which live in side
+ * maps). False means unknown: compare the keys.
+ */
+export function sameWords(a: Uint32Array, b: Uint32Array, x: number): boolean {
+  const i = x * 3
+  const content = a[i]!
+  const bg = a[i + 2]!
+  return content === b[i] && a[i + 1] === b[i + 1] && bg === b[i + 2] && !(bg & HAS_EXTENDED) && !(content & IS_COMBINED)
+}
 export interface Buffer {
   lines: { length: number; maxLength: number; get(y: number): Line | undefined }
   x: number; y: number; ybase: number; scrollTop: number; scrollBottom: number
@@ -116,7 +133,7 @@ export const savedKey = (buffer: Buffer) => `${buffer.savedX},${buffer.savedY},$
 export const tabStops = (tabs: Record<number, boolean | undefined>) => Object.keys(tabs).map(Number).filter((column) => tabs[column])
 const stops = (tabs: Record<number, boolean | undefined>) => tabStops(tabs).join(',')
 
-function bufferState(terminal: Term, buffer: Buffer, links: LinkNames) {
+function rowsState(terminal: Term, buffer: Buffer, links: LinkNames): string[] {
   const rows: string[] = []
   const cell = nullCell(terminal)
   for (let y = 0; y < buffer.lines.length; y++) {
@@ -125,23 +142,37 @@ function bufferState(terminal: Term, buffer: Buffer, links: LinkNames) {
     for (let x = 0; x < terminal.cols; x++) cells.push(cellKey(terminal, line.loadCell(x, cell), links))
     rows.push((line.isWrapped ? 'W ' : '  ') + cells.join(CELLS))
   }
-  return { rows, x: buffer.x, y: buffer.y, ybase: buffer.ybase, scroll: `${buffer.scrollTop}-${buffer.scrollBottom}`, saved: savedKey(buffer), tabs: stops(buffer.tabs) }
+  return rows
 }
+const bufferFields = (buffer: Buffer) => ({ x: buffer.x, y: buffer.y, ybase: buffer.ybase, scroll: `${buffer.scrollTop}-${buffer.scrollBottom}`, saved: savedKey(buffer), tabs: stops(buffer.tabs) })
 
 export function fullState(terminal: Term) {
+  const core = internals(terminal)
+  const alternate = terminal.buffer.active.type === 'alternate'
+  // Links are named in this order: normal rows, alternate rows, then the pen.
+  const links: LinkNames = new Map()
+  const normalRows = rowsState(terminal, core.buffers.normal, links)
+  const altRows = alternate ? rowsState(terminal, core.buffers.alt, links) : null
+  const fields = stateFields(terminal, links)
+  return {
+    ...fields,
+    normal: { rows: normalRows, ...fields.normal },
+    alt: altRows && fields.alt ? { rows: altRows, ...fields.alt } : null,
+  }
+}
+
+/** Everything in the full state but the rows; `links` holds the names the rows gave. */
+function stateFields(terminal: Term, links: LinkNames) {
   const core = internals(terminal)
   const handler = core._inputHandler
   const parser = handler._parser
   const charsets = core._charsetService
   const pen = handler._curAttrData
   const alternate = terminal.buffer.active.type === 'alternate'
-  const links: LinkNames = new Map()
-  const normal = bufferState(terminal, core.buffers.normal, links)
-  const alt = alternate ? bufferState(terminal, core.buffers.alt, links) : null
   const overrides = core.coreService.decPrivateModes
   return {
     type: terminal.buffer.active.type, cols: terminal.cols, rows: terminal.rows,
-    normal, alt,
+    normal: bufferFields(core.buffers.normal), alt: alternate ? bufferFields(core.buffers.alt) : null,
     modes: JSON.stringify(terminal.modes), cursorHidden: core.coreService.isCursorHidden,
     // DECSCUSR's override (unset after RIS or CSI 0 SP q), and blinking, which a program sets with DECSET 12;
     // the configured style is configuration, not state.
@@ -175,8 +206,8 @@ export type TerminalState = ReturnType<typeof fullState>
 const payloads = (handlers: { _data?: string; _hitLimit?: boolean }[] | undefined) => JSON.stringify((handlers ?? []).map((handler) => [handler._data ?? '', Boolean(handler._hitLimit)]))
 
 /** The first difference between two states, named by field (null when equal). */
-export function stateDiff(a: TerminalState, b: TerminalState): string | null {
-  for (const key of Object.keys(a) as (keyof TerminalState)[]) {
+export function stateDiff<State extends object>(a: State, b: State): string | null {
+  for (const key of Object.keys(a) as (keyof State & string)[]) {
     const x = a[key] as unknown
     const y = b[key] as unknown
     if (x && typeof x === 'object' && y && typeof y === 'object') {
@@ -198,4 +229,58 @@ export function stateDiff(a: TerminalState, b: TerminalState): string | null {
     } else if (String(x) !== String(y)) return `${key} ${x} vs ${y}`
   }
   return null
+}
+
+/**
+ * Rows of two buffers, one row per step: the first difference (null when
+ * equal). Keys are built only where words cannot decide; links are named in
+ * the same order as `fullState`'s.
+ */
+function* rowsDiff(a: Term, b: Term, name: string, x: Buffer, y: Buffer, linksA: LinkNames, linksB: LinkNames): Generator<void, string | null> {
+  if (x.lines.length !== y.lines.length) return `${name}.rows length ${x.lines.length} vs ${y.lines.length}`
+  const cellA = nullCell(a)
+  const cellB = nullCell(b)
+  for (let row = 0; row < x.lines.length; row++) {
+    const lineA = x.lines.get(row)!
+    const lineB = y.lines.get(row)!
+    const wordsA = lineWords(lineA)
+    const wordsB = lineWords(lineB)
+    for (let column = 0; column < a.cols; column++) {
+      if (sameWords(wordsA, wordsB, column)) continue
+      const keyA = cellKey(a, lineA.loadCell(column, cellA), linksA)
+      const keyB = cellKey(b, lineB.loadCell(column, cellB), linksB)
+      if (keyA !== keyB) return `${name} row ${row}/${x.lines.length}${lineA.isWrapped !== lineB.isWrapped ? ' wrap-flag' : ''} col ${column}: ${keyA} vs ${keyB}`
+    }
+    if (lineA.isWrapped !== lineB.isWrapped) return `${name} row ${row}/${x.lines.length} wrap-flag`
+    yield
+  }
+  return null
+}
+
+/**
+ * `stateDiff(fullState(a), fullState(b))`'s verdict, one row per step and
+ * without building either state: what a checkpoint is verified with.
+ */
+export function* compareSteps(a: Term, b: Term): Generator<void, string | null> {
+  if (a.buffer.active.type !== b.buffer.active.type) return `type ${a.buffer.active.type} vs ${b.buffer.active.type}`
+  if (a.cols !== b.cols || a.rows !== b.rows) return `size ${a.cols}x${a.rows} vs ${b.cols}x${b.rows}`
+  const linksA: LinkNames = new Map()
+  const linksB: LinkNames = new Map()
+  const coreA = internals(a)
+  const coreB = internals(b)
+  const normal = yield* rowsDiff(a, b, 'normal', coreA.buffers.normal, coreB.buffers.normal, linksA, linksB)
+  if (normal) return normal
+  if (a.buffer.active.type === 'alternate') {
+    const alt = yield* rowsDiff(a, b, 'alt', coreA.buffers.alt, coreB.buffers.alt, linksA, linksB)
+    if (alt) return alt
+  }
+  return stateDiff(stateFields(a, linksA), stateFields(b, linksB))
+}
+
+/** Run steps to the end, synchronously. */
+export function drain<T>(steps: Generator<void, T>): T {
+  for (;;) {
+    const next = steps.next()
+    if (next.done) return next.value
+  }
 }
