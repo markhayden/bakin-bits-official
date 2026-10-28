@@ -185,6 +185,8 @@ export class RawPicture {
   private cancel(): void {
     // Written but not yet called back, and not yet written: all of it is the old picture's.
     for (const op of [...this.inflight, ...this.queue]) if (!op.done) { op.done = true; this.retire(op.bytes) }
+    // A geometry still receiving its bytes: its header is in no op yet.
+    if (this.geometry) this.retire(this.geometry.header)
     this.inflight.clear()
     this.queue = []
     this.dropGeometries()

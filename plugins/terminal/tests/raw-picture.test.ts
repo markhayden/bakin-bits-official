@@ -181,6 +181,20 @@ describe('RawPicture', () => {
     expect(h.retired.at(-1)).toBe(retired)
     expect(h.log.filter((line) => line.startsWith('install'))).toEqual([])
   })
+  it('a geometry cancelled before all its bytes arrived retires its header too, exactly once', () => {
+    const h = harness()
+    const join = header('join', 1, '')
+    h.send(join as never)
+    const geometry = { type: 'geometry', seq: 2, cols: 60, rows: 24, generation: 1, bytes: 4 }
+    h.send(geometry)
+    h.picture.binary(encode('ha'))
+    const rebase = header('rebase', 2, '')
+    h.send(rebase as never)
+    const total = JSON.stringify(join).length + JSON.stringify(geometry).length + 2 + JSON.stringify(rebase).length
+    expect(h.retired.at(-1)).toBe(total)
+    h.flush()
+    expect(h.retired.at(-1)).toBe(total)
+  })
   it('a geometry the viewer cannot install loses the picture: it asks for a fresh one', () => {
     const h = harness()
     h.send(header('join', 1, '') as never)
