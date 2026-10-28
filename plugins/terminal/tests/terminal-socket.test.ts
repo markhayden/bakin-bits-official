@@ -325,6 +325,19 @@ describe('TerminalSocketClient on the raw path', () => {
     socket().server(join)
     expect(socket().of('retired').at(-1)).toEqual({ type: 'retired', bytes: new TextEncoder().encode(JSON.stringify(join)).length })
   })
+  it('a rebuilding notice before the first join is retired with the rest', () => {
+    const { client, socket, flush } = raw()
+    client.connect()
+    socket().open()
+    const notice = { type: 'rebuilding', cause: 'overload', fidelity: { rebuilds: { overload: 1 } } }
+    socket().server(notice)
+    const join = { type: 'join', epoch: 1, session, checkpoint, bytes: 0, baseSeq: 1, throughSeq: 1 }
+    socket().server(join)
+    socket().server({ type: 'barrier', epoch: 1, throughSeq: 1 })
+    flush()
+    const sizes = [notice, join, { type: 'barrier', epoch: 1, throughSeq: 1 }].reduce((n, frame) => n + new TextEncoder().encode(JSON.stringify(frame)).length, 0)
+    return until(() => socket().of('retired').at(-1)?.bytes === sizes, 'all retired')
+  })
   it('the bridge path is unchanged: a sync and its output, no picture', () => {
     const { client, socket, events, pictures } = raw()
     client.connect()

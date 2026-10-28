@@ -54,6 +54,7 @@ type Op =
   | { kind: 'finish'; side: CheckpointSideState; done: boolean; bytes: 0 }
   | { kind: 'layout'; cols: number; rows: number; bytes: number; done: boolean }
   | { kind: 'barrier'; epoch: number; bytes: number; done: boolean }
+  | { kind: 'notice'; detail: Record<string, unknown>; bytes: number; done: boolean }
 
 const utf8Length = (text: string) => new TextEncoder().encode(text).length
 
@@ -95,10 +96,8 @@ export class RawPicture {
       }
       case 'layout': this.push({ kind: 'layout', cols: Number(message.cols), rows: Number(message.rows), bytes, done: false }); return
       case 'barrier': this.push({ kind: 'barrier', epoch: Number(message.epoch), bytes, done: false }); return
-      case 'rebuilding':
-        this.retire(bytes)
-        this.setState('rebuilding', { cause: message.cause, fidelity: message.fidelity })
-        return
+      // In order with the picture it is about: a barrier still waiting for its writes goes first.
+      case 'rebuilding': this.push({ kind: 'notice', detail: { cause: message.cause, fidelity: message.fidelity }, bytes, done: false }); return
     }
   }
 
@@ -167,6 +166,8 @@ export class RawPicture {
       if (this.inflight.size > 0) return
       this.queue.shift()
       op.done = true
+      // A notice needs no terminal (it can come before the first picture).
+      if (op.kind === 'notice') { this.retire(op.bytes); this.setState('rebuilding', op.detail); continue }
       const target = this.target!
       if (op.kind === 'finish') target.finish(op.side)
       else if (op.kind === 'layout') { target.resize(op.cols, op.rows); this.retire(op.bytes) }

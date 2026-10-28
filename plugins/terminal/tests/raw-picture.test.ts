@@ -107,6 +107,24 @@ describe('RawPicture', () => {
     h.send(header('rebase', 3, '') as never)
     expect(h.picture.ready).toBe(true)
   })
+  it('a rebuilding notice waits for a barrier before it: the display ends stale, input still latches', () => {
+    const h = harness()
+    h.send(header('join', 1, 'abc') as never)
+    h.picture.binary(encode('abc'))
+    h.send({ type: 'barrier', epoch: 1, throughSeq: 1 })
+    h.send({ type: 'rebuilding', cause: 'overload', fidelity: { rebuilds: { overload: 1 } } })
+    h.flush()
+    expect(h.states).toEqual(['replaying', 'live', 'rebuilding'])
+    expect(h.picture.ready).toBe(true)
+    expect(h.applied).toEqual([1])
+  })
+  it('a rebuilding notice before any picture is counted and shown', () => {
+    const h = harness()
+    const notice = { type: 'rebuilding', cause: 'overload', fidelity: { rebuilds: { overload: 1 } } }
+    h.send(notice)
+    expect(h.retired).toEqual([JSON.stringify(notice).length])
+    expect(h.states).toEqual(['rebuilding'])
+  })
   it('binary frames with no picture yet are retired, not written', () => {
     const h = harness()
     h.picture.binary(encode('stray'))

@@ -191,8 +191,11 @@ export class TerminalSocketClient {
         return
       case 'layout':
       case 'barrier':
-      case 'rebuilding':
         this.raw?.message(message, text)
+        return
+      // A rebuild can be told before the first picture (the join waits for the seed): still counted.
+      case 'rebuilding':
+        this.picture()?.message(message, text)
         return
       case 'sync':
         this.synced = true
