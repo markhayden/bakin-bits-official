@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Button } from '@makinbakin/sdk/ui'
 import { ArrowDown, Keyboard, ZoomOut } from 'lucide-react'
 import type { Session } from '../lib/contracts'
@@ -14,6 +15,23 @@ import { pasteBytes, type ModifierState, type TerminalInputHandle } from './term
 import { ModifierInput } from './modifier-input'
 import { BASE_FONT, clampFont, fitWidthFont, minFont, pinchFont, resizePlan, reveal, revealClearOf, screenDevice, storedFont, storeFont } from './terminal-view'
 import '@xterm/xterm/css/xterm.css'
+
+const isAllowedLink = (uri: string): boolean => /^(?:https?|mailto):/i.test(uri)
+/**
+ * Links in the output — OSC 8 hyperlinks, and plain-text URLs through the
+ * web-links addon (spec D9 item 4) — open as xterm's own handler does:
+ * confirmed, in a new window with no opener; http, https and mailto only.
+ */
+const LINK_HANDLER = {
+  allowNonHttpProtocols: true,
+  activate(_event: MouseEvent, uri: string) {
+    if (!isAllowedLink(uri) || !window.confirm(`Do you want to navigate to ${uri}?\n\nWARNING: This link could potentially be dangerous`)) return
+    const opened = window.open()
+    if (!opened) return
+    opened.opener = null
+    opened.location.href = uri
+  },
+}
 
 /** What the page asks of the canvas: "Fit to this device" claims the size; refit applies a new smallest-text choice. */
 export interface TerminalViewHandle { fitToDevice(): boolean; refit(): void }
@@ -172,11 +190,12 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     const clearOnce = () => modifiers.clearOnce()
     callbacks.current.onModifiersChange(modifiers.modifiers)
     const background = getComputedStyle(pane.current!).backgroundColor
-    const term = new Terminal({ cols: session.cols, rows: session.rows, scrollback: 2000, fontSize: callbacks.current.zoom ?? BASE_FONT, screenReaderMode: true, convertEol: false, theme: { background } })
+    const term = new Terminal({ cols: session.cols, rows: session.rows, scrollback: 2000, fontSize: callbacks.current.zoom ?? BASE_FONT, screenReaderMode: true, convertEol: false, theme: { background }, linkHandler: LINK_HANDLER })
     terminal.current = term
     pane.current!.setAttribute('data-font-size', String(term.options.fontSize))
     fit.current = new FitAddon()
     term.loadAddon(fit.current)
+    term.loadAddon(new WebLinksAddon((event, uri) => LINK_HANDLER.activate(event, uri)))
     term.open(element.current!)
     // Show/hide cursor as the output sets it; a sync's snapshot ends with it too.
     cursorVisibility.current = trackCursorVisibility(term)
