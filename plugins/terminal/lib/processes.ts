@@ -1,6 +1,7 @@
 import type { Session } from './contracts'
 import { TerminalError } from './contracts'
 import { ControlClient } from './control'
+import { OutputLog, parseLayoutChange } from './output-log'
 import { TerminalService, terminalEnvironment } from './service'
 
 /** A tmux client on a session that is not Bakin's own bridge or control client: a terminal app (Ghostty and friends) or anything else that attached. */
@@ -46,13 +47,16 @@ export const ATTACH_HINT = 'Detach: Ctrl-b d · Scrollback: Ctrl-b [ · Closing 
 
 /**
  * The hybrid bridge per session: a PTY `attach-session` client whose redraw
- * stream is the output (and the reattach-recovery path), plus a control-mode
- * client for input, resizes and queries. Both attach `ignore-size`: only
+ * stream is the output viewers render today (and the reattach-recovery
+ * path), plus a control-mode client for input, resizes and queries, whose
+ * `%output` and layout changes also feed the session's ordered event log
+ * (spec D13; consumed by the replica). Both attach `ignore-size`: only
  * Bakin's explicit `resize-window` sizes a session (window-size manual).
  */
 export class TmuxProcesses implements ProcessDriver {
   private bridges = new Map<string, ReturnType<typeof Bun.spawn>>()
   private controls = new Map<string, ControlClient>()
+  private logs = new Map<string, OutputLog>()
   constructor(private service: TerminalService) {}
   async create(session: Session): Promise<void> {
     if (!await this.service.ready()) throw new TerminalError('Terminal service needs setup', 503)
@@ -79,13 +83,26 @@ export class TmuxProcesses implements ProcessDriver {
     // A client attaching to this session, any client leaving, or the
     // client-resized hook (tmux.conf sets @bakin_client, which this
     // subscription watches) means the set of terminal apps may have changed.
-    const control = ControlClient.attach(this.service.tmux!, this.service.socket, session.id, terminalEnvironment(), (line) => {
-      const [kind, , , name] = line.split(' ')
-      if ((kind === '%client-session-changed' && name === session.id) || kind === '%client-detached' || line.startsWith('%subscription-changed bakin-client ')) clientsChanged()
+    // A fresh connection starts a fresh log: what came before cannot be joined to it.
+    this.logs.get(session.id)?.invalidate('reattached')
+    const log = new OutputLog()
+    const control = ControlClient.attach(this.service.tmux!, this.service.socket, session.id, terminalEnvironment(), {
+      notification: (line) => {
+        const [kind, , , name] = line.split(' ')
+        if ((kind === '%client-session-changed' && name === session.id) || kind === '%client-detached' || line.startsWith('%subscription-changed bakin-client ')) clientsChanged()
+        const layout = parseLayoutChange(line)
+        if (layout) log.layout(layout.cols, layout.rows)
+      },
+      // A Bakin session has one pane.
+      output: (_pane, bytes) => log.output(bytes),
+      closed: (reason) => log.invalidate(reason),
     })
     this.controls.set(session.id, control)
+    this.logs.set(session.id, log)
     void control.ready.then(() => control.command(['refresh-client', '-B', 'bakin-client::#{@bakin_client}'])).catch(() => undefined)
   }
+  /** The session's ordered event log, while its control connection is attached. */
+  outputLog(id: string): OutputLog | undefined { return this.logs.get(id) }
   private control(id: string): ControlClient {
     const control = this.controls.get(id)
     if (!control || control.isClosed) throw new TerminalError('Terminal attachment is disconnected', 503)
@@ -166,7 +183,10 @@ export class TmuxProcesses implements ProcessDriver {
   async detach(id?: string): Promise<void> {
     const controls = id ? [this.controls.get(id)].filter((control) => control !== undefined) : [...this.controls.values()]
     if (id) this.controls.delete(id); else this.controls.clear()
-    for (const control of controls) control.close()
+    const logs = id ? [this.logs.get(id)].filter((log) => log !== undefined) : [...this.logs.values()]
+    if (id) this.logs.delete(id); else this.logs.clear()
+    for (const control of controls) control.close('detached')
+    for (const log of logs) log.invalidate('detached')
     const clients = id ? [this.bridges.get(id)].filter((client) => client !== undefined) : [...this.bridges.values()]
     if (id) this.bridges.delete(id); else this.bridges.clear()
     for (const client of clients) { client.kill(); client.terminal?.close() }

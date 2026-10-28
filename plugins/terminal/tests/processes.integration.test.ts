@@ -107,7 +107,7 @@ processTest('control client: command round trip, quoting, subscriptions and exit
     for (let attempt = 0; attempt < 100 && !await service.ready(); attempt++) await Bun.sleep(50)
     await service.command(['new-session', '-d', '-s', 'control-probe', '-x', '80', '-y', '24', 'cat'])
     const notifications: string[] = []
-    client = ControlClient.attach(service.tmux!, service.socket, 'control-probe', terminalEnvironment(), (line) => notifications.push(line))
+    client = ControlClient.attach(service.tmux!, service.socket, 'control-probe', terminalEnvironment(), { notification: (line) => notifications.push(line) })
     await client.ready
     // Quoting survives tmux's parser: quotes, $ and backslashes stay literal.
     await client.command(['set-option', '-p', '-t', 'control-probe', '@bakin_title', 'Say "hi" $HOME \\ ok'])

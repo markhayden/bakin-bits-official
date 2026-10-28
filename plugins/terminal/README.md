@@ -158,7 +158,12 @@ cursor, and an explicit truncation flag.
   sessions are removed on completion. Bakin shutdown detaches only its clients.
 - Bakin holds two tmux clients per live session:
   - an attached client whose redraw stream is the output, and from which a reconnect recovers;
-  - a control-mode client (`tmux -C`) that carries input, resizes and queries.
+  - a control-mode client (`tmux -C`) that carries input, resizes and queries,
+    and the program's own output (`%output`, read as bytes): it feeds the
+    session's ordered event log (output and layout changes, batched, bounded
+    at 8 MiB queued; a lost connection or a stalled reader invalidates it).
+    The log is the source of the server replica (in progress; viewers still
+    render the attached client's redraws).
 
   Neither one sizes the window (`window-size manual`): only Bakin's explicit
   resize does, so an extra client, such as a terminal app, never reshapes a
