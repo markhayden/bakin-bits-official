@@ -456,6 +456,47 @@ describe('Replica history after an overload', () => {
     expect(r.ended).toBeUndefined()
     r.close()
   })
+  it('a restore given up at its turn asks for the capture a rebuild meanwhile was waiting for', async () => {
+    const s = stream()
+    const captures: string[] = []
+    let widthDuringRestore = true
+    const r: Replica = new Replica({
+      idleMs: 1e9, historyQuietMs: 30,
+      reseed: async (reason, turn, scope) => {
+        if (reason === 'history' && widthDuringRestore) {
+          widthDuringRestore = false
+          // A width change arrives while the restore waits for its turn: the rebuild finds the slot taken.
+          await r.event(s.layout(60, 10))
+        }
+        await turn(async () => { captures.push(`${reason} ${scope}`) })
+      },
+    })
+    await r.event(s.seed('\x1bc', 40, 10))
+    r.pressure(MAX_BACKLOG_BYTES)
+    await until(() => captures.length === 1, 'the overload capture')
+    await r.event(s.seed('\x1bc', 40, 10, false))
+    // The restore is given up (a rebuild began), and the rebuild's capture follows.
+    await until(() => captures.includes('width screen'), 'the stranded rebuild captured')
+    expect(r.rebuildCause).toBe('width')
+    r.close()
+  })
+  it('a restore waits while an event is still being applied (its write not yet called back)', async () => {
+    const s = stream()
+    const order: string[] = []
+    const r = new Replica({ idleMs: 1e9, historyQuietMs: 20, reseed: (reason, turn) => turn(async () => { order.push(reason) }) })
+    await r.event(s.seed('\x1bc', 40, 10))
+    r.pressure(MAX_BACKLOG_BYTES)
+    await until(() => order.length === 1, 'the overload capture')
+    await r.event(s.seed('\x1bc', 40, 10, false))
+    // The replica's writes call back late (a slow parse): the quiet runs out while the event is applied.
+    const term = r.terminal!
+    const write = term.write.bind(term)
+    term.write = ((data: string | Uint8Array, done?: () => void) => write(data, () => setTimeout(() => done?.(), 80))) as typeof term.write
+    await r.event(s.output('late')).then(() => order.push('parsed'))
+    await until(() => order.length === 3, 'the restore once caught up')
+    expect(order).toEqual(['overload', 'parsed', 'history'])
+    r.close()
+  })
   it('while history is owed, a width rebuild seeds the screen alone too', async () => {
     const s = stream()
     const { r, reseeds, scopes } = replica({ idleMs: 1e9, historyQuietMs: 5_000 })

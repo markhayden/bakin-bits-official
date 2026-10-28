@@ -218,6 +218,10 @@ export class Replica implements LogConsumer {
   private historyPending = false
   private historyTimer: ReturnType<typeof setTimeout> | undefined
   private lastIngressAt = -Infinity
+  /** Events the log has taken (told through `pressure`), handed over, and not yet applied: a restore waits for all of them. */
+  private ingressEvents = 0
+  private handedEvents = 0
+  private applyingEvents = 0
   /** Whether the base carries the pane's history (a screen-only seed, and checkpoints of it, do not). */
   private baseHistory = true
   private parser: { readonly failed: boolean } | undefined
@@ -310,14 +314,17 @@ export class Replica implements LogConsumer {
   }
 
   event(event: LogEvent): Promise<void> {
+    this.handedEvents++
+    this.applyingEvents++
     return this.serial(async () => {
-      try { await this.apply(event) } finally { this.settledAt = this.now() }
+      try { await this.apply(event) } finally { this.settledAt = this.now(); this.applyingEvents-- }
     })
   }
 
   pressure(queuedOutputBytes: number): void {
     // Told on every event the log takes: that is ingress (quiet for a history restore counts from it).
     this.lastIngressAt = this.now()
+    this.ingressEvents++
     this.armHistory()
     if (queuedOutputBytes < MAX_BACKLOG_BYTES || !this.term || this.failure) return
     // A seed being applied is let finish (its picture is what viewers wait for under a
@@ -528,12 +535,18 @@ export class Replica implements LogConsumer {
     })
     void this.options.reseed('history', checked, 'full')
       .catch((error) => { if (error instanceof SeedDeferred) this.armHistory() })
-      .finally(() => { this.capturing = false })
+      .finally(() => {
+        this.capturing = false
+        // A rebuild that began while this capture held the slot asked for none: ask now.
+        if (this.rebuilding) this.scheduleCapture()
+      })
   }
 
   private restorable(): boolean {
     const quiet = this.now() - this.lastIngressAt >= (this.options.historyQuietMs ?? HISTORY_QUIET_MS)
-    return quiet && !this.failure && !this.rebuilding && !this.seeding && Boolean(this.base)
+    // Caught up: nothing waits in the log or is being applied (a slow parse can outlast the quiet).
+    const drained = this.handedEvents >= this.ingressEvents && this.applyingEvents === 0
+    return quiet && drained && !this.failure && !this.rebuilding && !this.seeding && Boolean(this.base)
   }
 
   private armIdle(): void {
