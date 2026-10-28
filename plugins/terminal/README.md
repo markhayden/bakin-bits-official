@@ -217,7 +217,12 @@ cursor, and an explicit truncation flag.
   output pages are also bounded. Completed output expires after 30 days or can
   be deleted manually. SQLite page/WAL overhead is outside the payload budget;
   session metadata remains for ownership and retained-work review.
-- Health reports unavailable service, maintenance failure, and retained work.
+- Health reports unavailable service, maintenance failure, retained work,
+  and live sessions holding more than 640 MB of Bakin's memory (estimated
+  each minute from the emulators' structure; a session of 10,000 rows of
+  ordinary output is about 23 MB, more with an emoji or link in every cell).
+- A cell keeps at most 32 bytes of text, as tmux does; titles past 4 KiB
+  are ignored.
   Removal requires active preflight, no unfinished sessions or retained
   worktrees, and successful service shutdown. Linked plugins must use
   `bakin plugins remove terminal`, not bypass preflight through unlink.
