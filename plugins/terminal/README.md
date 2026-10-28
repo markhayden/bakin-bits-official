@@ -162,8 +162,10 @@ cursor, and an explicit truncation flag.
 
   Neither one sizes the window (`window-size manual`): only Bakin's explicit
   resize does, so an extra client, such as a terminal app, never reshapes a
-  session. Input is delivered byte-exact with `send-keys -H` and never passes
-  through tmux key bindings. A pane left in copy mode is returned to its
+  session. Typed input is delivered byte-exact with `send-keys -H` and never
+  passes through tmux key bindings; a paste is handed to tmux as a paste
+  (`paste-buffer -p`, byte-exact), so tmux brackets it only when the program
+  asked for bracketed paste. A pane left in copy mode is returned to its
   program first.
 - **Each browser holds one WebSocket to the session** (`/api/plugins/terminal/socket`).
   - The connection opens with a sync: a snapshot of the screen, the cursor it
