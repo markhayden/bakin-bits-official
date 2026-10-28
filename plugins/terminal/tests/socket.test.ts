@@ -405,6 +405,27 @@ describe('TerminalViewer on the raw path', () => {
     peer.client({ type: 'retired', bytes: retired(peer) })
     replica.close()
   })
+  it('a stalled viewer is held to its window while a healthy one gets every byte', async () => {
+    const replica = await seeded()
+    const { manager } = fakeManager(session(), { replica })
+    const stalled = fakeSocket()
+    const healthy = fakeSocket()
+    new TerminalViewer(manager, stalled.socket, 's1', { ...options, pauseEvictMs: 60_000 })
+    new TerminalViewer(manager, healthy.socket, 's1', { ...options, pauseEvictMs: 60_000 })
+    stalled.client({ type: 'hello', clientId: 'stalled-raw-0123456789' })
+    healthy.client({ type: 'hello', clientId: 'healthy-raw-0123456789' })
+    await until(() => stalled.of('barrier').length === 1 && healthy.of('barrier').length === 1, 'both joined')
+    const start = healthy.bytes()
+    const chunk = new Uint8Array(64 * 1024).fill(0x61)
+    for (let seq = 2; seq < 2 + 64; seq++) {
+      await replica.event({ seq, kind: 'output', offset: 0, bytes: chunk })
+      healthy.client({ type: 'retired', bytes: retired(healthy) })
+    }
+    // The healthy one has all 4 MiB; the stalled one no more than a window and a frame.
+    expect(healthy.bytes() - start).toBe(64 * 64 * 1024)
+    expect(stalled.bytes()).toBeLessThanOrEqual(256 * 1024 + 64 * 1024)
+    replica.close()
+  })
   it('keeps input through a rebase (decision 3) and sends the rebase in order', async () => {
     const replica = await seeded()
     const { manager, writes } = fakeManager(session(), { replica })

@@ -6,7 +6,7 @@ import type { NativeClient, ProcessDriver } from '../lib/processes'
 
 const managers: Sessions[] = []
 afterEach(async () => { for (const manager of managers.splice(0)) await manager.shutdown() })
-function fixture() {
+function fixture(options: { raw?: boolean } = {}) {
   let now = 1000
   let enabled = [{ id: 'patch' }, { id: 'chef' }]
   const writes: string[] = []
@@ -14,6 +14,8 @@ function fixture() {
   const attached = new Set<string>()
   const terminated: string[] = []
   const forgotten: string[] = []
+  /** Sessions whose bridge PTY is gone while the control client stays. */
+  const bridgeLost = new Set<string>()
   let releasable = false
   let writeFailure: Error | undefined
   let resizeFailure: Error | undefined
@@ -26,7 +28,7 @@ function fixture() {
   const vanishing = new Set<number>()
   const detachedClients: string[] = []
   const driver: ProcessDriver = {
-    create: async (s) => { live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, output, changed) { attached.add(s.id); outputs.set(s.id, output); clientsChanged.set(s.id, changed) }, connected: (id) => attached.has(id),
+    create: async (s) => { live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, output, changed) { attached.add(s.id); outputs.set(s.id, output); clientsChanged.set(s.id, changed) }, connected: (id) => attached.has(id) && !bridgeLost.has(id), controlConnected: (id) => attached.has(id),
     write: async (_id, data) => { if (writeFailure) throw writeFailure; writes.push(data) },
     resize: async (id, cols, rows) => { if (resizeFailure) { tmuxSizes.set(id, { cols: 77, rows: 22 }); throw resizeFailure } tmuxSizes.set(id, { cols, rows }) },
     windowSize: async (id) => { if (readBackFailure) throw readBackFailure; return tmuxSizes.get(id)! },
@@ -55,10 +57,11 @@ function fixture() {
     settings: () => ({ enabledAgents: enabled }), now: () => now,
     prepare: async () => ({ ok: false }),
     release: async (input) => { releases.push(input); return releasable ? { ok: true } : { ok: false, error: 'Unmerged work' } },
+    rawPath: () => options.raw ?? false,
   })
   managers.push(manager)
   return {
-    manager, writes, live, attached, terminated, forgotten, releases, outputs, natives, detachedClients, vanishing,
+    manager, writes, live, attached, terminated, forgotten, bridgeLost, releases, outputs, natives, detachedClients, vanishing,
     /** A terminal app attaches (or resizes) in tmux; the control client notices. */
     nativeAttach: async (id: string, client: NativeClient) => {
       natives.set(id, [...(natives.get(id) ?? []).filter((entry) => entry.pid !== client.pid), client])
@@ -675,4 +678,20 @@ test('one fresh client leaving before it can type does not revoke another', asyn
   await b
   expect(manager.nativeClients(session.id).map((client) => client.pid)).toEqual([1002])
   expect(natives.get(session.id)?.[0]?.readonly).toBe(false)
+})
+
+test('raw-path input needs only the control client; the bridge path needs its bridge too', async () => {
+  for (const raw of [true, false]) {
+    const { manager, bridgeLost, writes } = fixture({ raw })
+    const session = await manager.create({ title: 'Typing', cwd: '/tmp' }, agent)
+    bridgeLost.add(session.id)
+    const typed = manager.write(session.id, agent, session.generation, 1, 'ls\r')
+    if (raw) {
+      await typed
+      expect(writes).toEqual(['ls\r'])
+    } else {
+      await expect(typed).rejects.toThrow('reconnect required')
+      expect(writes).toEqual([])
+    }
+  }
 })

@@ -349,7 +349,9 @@ export class Sessions {
     // The Return of a Paste + Enter counts too.
     if (Buffer.byteLength(data) + (options.paste && options.enter ? 1 : 0) > 65536) throw new TerminalError('Input exceeds 64 KiB', 413)
     // No attachment (a resize could not be reconciled): refuse before consuming, so nothing is uncertain.
-    if (!this.driver.connected(id)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
+    // The raw path's input health is the control client's alone (spec D13 "Two paths").
+    const healthy = this.options.rawPath?.(session) ? this.driver.controlConnected?.(id) ?? false : this.driver.connected(id)
+    if (!healthy) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
     // Consume the sequence before delivery. A transport failure is never auto-retried.
     session.inputSequence = sequence
     session.lastActivityAt = this.now()

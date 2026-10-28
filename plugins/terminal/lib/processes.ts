@@ -27,7 +27,10 @@ export interface ProcessDriver {
   create(session: Session): Promise<void>
   /** `clientsChanged` fires when a tmux client attaches to, resizes on, or detaches from the session. */
   attach(session: Session, output: (data: Uint8Array) => void, clientsChanged: () => void): void
+  /** The bridge path's health: the bridge PTY and the control client. */
   connected(id: string): boolean
+  /** The raw path's health (spec D13): the control client alone (input and output both go through it). */
+  controlConnected?(id: string): boolean
   /**
    * Resolves once tmux has accepted the bytes for the pane (not that the
    * program read them). A `paste` is delivered as tmux pastes (bracketed
@@ -241,6 +244,7 @@ export class TmuxProcesses implements ProcessDriver {
     return await this.deletePasteBuffers(() => true) && clean
   }
   connected(id: string): boolean { return this.bridges.has(id) && !this.controls.get(id)?.isClosed }
+  controlConnected(id: string): boolean { const control = this.controls.get(id); return Boolean(control && !control.isClosed) }
   async resize(id: string, cols: number, rows: number): Promise<void> {
     const control = this.control(id)
     await control.ready
