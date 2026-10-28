@@ -10,12 +10,19 @@ const settles = (terminal: Term, data: string) => Promise.race([write(terminal, 
 const rows = (terminal: Term) => Array.from({ length: terminal.buffer.active.length }, (_, y) => terminal.buffer.active.getLine(y)!.translateToString(true))
 
 describe('erase above (ED 1) with the cursor in the last column', () => {
-  it('stock xterm 6.0.0 throws on it (this test fails once upstream fixes it: drop the patch then)', async () => {
-    const stock = new headless.Terminal({ cols: 10, rows: 3, allowProposedApi: true })
-    await write(stock, 'A\x1b[3;10H')
-    // xterm runs this from its write queue, where the throw wedges the queue for good.
-    const handler = (stock as unknown as { _core: { _inputHandler: { eraseInDisplay(params: { params: number[] }): boolean } } })._core._inputHandler
-    expect(() => handler.eraseInDisplay({ params: [1] })).toThrow()
+  it('stock xterm 6.0.0 still has both halves of the bug (remove the patch only when this fails)', async () => {
+    type Handler = { eraseInDisplay(params: { params: number[] }): boolean }
+    const handlerOf = (terminal: Term) => (terminal as unknown as { _core: { _inputHandler: Handler } })._core._inputHandler
+    // 1. On the bottom row with no line below: the wrong index finds nothing and throws.
+    const crash = new headless.Terminal({ cols: 10, rows: 3, allowProposedApi: true })
+    await write(crash, 'A\x1b[3;10H')
+    expect(() => handlerOf(crash).eraseInDisplay({ params: [1] })).toThrow(/isWrapped/)
+    // 2. With scrollback: the wrong index clears a history line's wrap flag instead of the line below.
+    const wrong = new headless.Terminal({ cols: 10, rows: 3, scrollback: 10, allowProposedApi: true })
+    await write(wrong, 'x'.repeat(25) + '\r\n1\r\n' + 'y'.repeat(15) + '\x1b[2;10H')
+    expect(wrong.buffer.active.getLine(2)!.isWrapped).toBe(true)
+    handlerOf(wrong).eraseInDisplay({ params: [1] })
+    expect(wrong.buffer.active.getLine(2)!.isWrapped).toBe(false)
   })
   it('patched: erases above and the whole cursor row, and the terminal keeps working', async () => {
     const terminal = new headless.Terminal({ cols: 10, rows: 3, allowProposedApi: true })
@@ -57,6 +64,17 @@ describe('erase above (ED 1) with the cursor in the last column', () => {
     await screen.write(new TextEncoder().encode('A\x1b[3;10H\x1b[1J'))
     await screen.write(new TextEncoder().encode('\x1b[1;1Hstill here'))
     expect(screen.text()).toContain('still here')
+    screen.close()
+  })
+  it('a parser exception fails the Screen instead of wedging it: writes and captures reject, drain settles', async () => {
+    const screen = new Screen(10, 3)
+    const terminal = (screen as unknown as { terminal: Term }).terminal
+    terminal.parser.registerCsiHandler({ final: 'z' }, () => { throw new Error('boom') })
+    await expect(screen.write(new TextEncoder().encode('\x1b[z'))).rejects.toThrow('reconnect required')
+    expect(screen.failed).toBe(true)
+    await expect(screen.write(new TextEncoder().encode('more'))).rejects.toThrow()
+    await expect(screen.snapshot()).rejects.toThrow()
+    await screen.drain()
     screen.close()
   })
 })
