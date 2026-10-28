@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import headless from '@xterm/headless'
-import { patchEraseAbove } from '../lib/xterm-fixes'
+import { patchEraseAbove, WRITE_PIECE } from '../lib/xterm-fixes'
 import { Screen } from '../lib/screen'
 import { applyTerminalProfile } from '../lib/terminal-profile'
 import { loadGraphemeProvider } from '../lib/unicode-widths'
@@ -148,6 +148,18 @@ describe('UTF-8 chunk boundaries', () => {
     applyTerminalProfile(string)
     await new Promise<void>(resolve => string.write(text, resolve))
     expect(string.buffer.active.cursorX).toBe(whole.buffer.active.cursorX)
+  })
+  it('a four-byte character cut at every offset across a piece boundary is kept whole', async () => {
+    for (let lead = 0; lead < 4; lead++) {
+      const text = 'a'.repeat(WRITE_PIECE - 1 - lead) + '🀄X'
+      const terminal = new headless.Terminal({ cols: 80, rows: 2, scrollback: 0, allowProposedApi: true })
+      applyTerminalProfile(terminal)
+      await writeBytes(terminal, Buffer.from(text))
+      const buffer = terminal.buffer.active
+      // The text wraps: its end is on the cursor's row (🀄 may have wrapped onto it).
+      const end = buffer.getLine(buffer.baseY + buffer.cursorY - 1)!.translateToString(true) + buffer.getLine(buffer.baseY + buffer.cursorY)!.translateToString(true)
+      expect(end, `lead at ${lead}`).toEndWith('🀄X')
+    }
   })
   it('invalid input (a run of continuation bytes past a piece boundary) is still written, and settles', async () => {
     const terminal = new headless.Terminal({ cols: 20, rows: 2, scrollback: 0, allowProposedApi: true })
