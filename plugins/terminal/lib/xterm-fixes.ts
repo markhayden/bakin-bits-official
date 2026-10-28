@@ -211,6 +211,14 @@ export function incompleteUtf8Tail(data: Uint8Array): number {
   return 0
 }
 
+const carried = new WeakMap<object, () => number>()
+/**
+ * Bytes of an incomplete UTF-8 sequence held back from `terminal`'s parser
+ * (patchUtf8Boundaries): parser state outside xterm, so a checkpoint waits
+ * for it to complete.
+ */
+export function carriedUtf8(terminal: object): number { return carried.get(terminal)?.() ?? 0 }
+
 /** Largest piece handed to xterm: below its own 128 KiB parse split, so it never cuts a codepoint itself. */
 export const WRITE_PIECE = 64 * 1024
 
@@ -228,6 +236,7 @@ export function patchUtf8Boundaries(terminal: { write(data: string | Uint8Array,
   const write = terminal.write.bind(terminal)
   const reset = terminal.reset.bind(terminal)
   let carry: Uint8Array | undefined
+  carried.set(terminal, () => carry?.length ?? 0)
   // Pieces in order; the caller's callback rides the last, so it fires after all of them are parsed.
   const pieces = (data: string | Uint8Array, boundary: (end: number) => number, callback?: () => void) => {
     if (data.length === 0) { write(data, callback); return }

@@ -166,7 +166,10 @@ cursor, and an explicit truncation flag.
     render the attached client's redraws). A replica is rebuilt from tmux by
     one grouped command (history, screen and modes in one capture); the seed
     lands in the log at that command's reply, so no output is lost or
-    repeated around it.
+    repeated around it. A replica's checkpoint is Bakin's own serializer
+    (every cell, both buffers, saved cursors, charsets, modes, links, the
+    grapheme join state); it is accepted only when restoring it into a
+    fresh terminal reproduces the full state.
 
   Neither one sizes the window (`window-size manual`): only Bakin's explicit
   resize does, so an extra client, such as a terminal app, never reshapes a
