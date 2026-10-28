@@ -172,8 +172,8 @@
 [data-bakin-plugin="terminal"] .terminal-keycap-face { font-family: var(--bakin-typography-family-mono, ui-monospace, monospace); font-size: 15px; min-width: 26px; text-align: left; }
 [data-bakin-plugin="terminal"] .terminal-keycap-label { font-size: 15px; font-weight: 400; color: var(--bakin-color-text-muted); }
 [data-bakin-plugin="terminal"] .terminal-keycap[data-state="locked"] .terminal-keycap-label { color: inherit; }
-/* The narrowest phones (320 px): smaller caps, the same 44 px hit areas. */
-@media (max-width: 369px) {
+/* Narrow phones (the full row needs 375 px; 320 px included): smaller caps, the same 44 px hit areas. */
+@media (max-width: 379px) {
   /* 40 px caps in 4 px gaps: hit areas reach 2 px a side, 44 px wide, never overlapping. */
   [data-bakin-plugin="terminal"] .terminal-key-accessory { --terminal-keycap-size: 40px; }
   [data-bakin-plugin="terminal"] .terminal-key-bar { gap: 4px; padding: 0 2px; }

@@ -10,7 +10,7 @@ import { attachCommand, shortId, type Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
 import { api } from './api'
 import { KeyBar } from './key-bar'
-import { useCoarsePointer, useEditingSession, useEnterHidesKeyboard } from './editing-session'
+import { lineTail, useCoarsePointer, useEditingSession, useEnterHidesKeyboard } from './editing-session'
 import { NO_MODIFIERS, type ModifierState, type TerminalInputHandle } from './terminal-input'
 import { TerminalCanvas, type TerminalViewHandle } from './terminal-canvas'
 import { SizeControl } from './size-control'
@@ -183,7 +183,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   }
   function input(data: string) {
     if (!session || !inputEnabled) return
-    lastSent.current = data
+    lastSent.current = lineTail(lastSent.current, data)
     markActivity()
     // The viewer socket sequences and coalesces; a refused envelope comes back as a result.
     if (!inputHandle.current?.send(session.generation, data)) setError('Input not sent: the terminal is reconnecting.')

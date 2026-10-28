@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { enterHidesKeyboard, nextSession, type SessionEvent } from '../components/editing-session'
+import { enterHidesKeyboard, lineTail, nextSession, type SessionEvent } from '../components/editing-session'
 
 const run = (events: SessionEvent[]) => events.reduce(nextSession, 'idle' as const as ReturnType<typeof nextSession>)
 
@@ -50,5 +50,18 @@ describe('Enter puts the on-screen keyboard away', () => {
     expect(enterHidesKeyboard(enter, 300, { continued: true, modified: false })).toBe(false)
     expect(enterHidesKeyboard(enter, 300, { continued: false, modified: true })).toBe(false)
     expect(enterHidesKeyboard({ ...enter, keyCode: 229 }, 300, send)).toBe(false)
+  })
+})
+
+describe('the line tail (for `\\` + Return continuation)', () => {
+  it('is the last character typed or pasted, ignoring paste markers and replies', () => {
+    expect(lineTail('', 'echo a\\')).toBe('\\')
+    expect(lineTail('a', '\x1b[200~line\\\x1b[201~')).toBe('\\')
+    // A cursor-position reply or an arrow key leaves it as it was.
+    expect(lineTail('\\', '\x1b[12;3R')).toBe('\\')
+    expect(lineTail('\\', '\x1b[A')).toBe('\\')
+    // A deletion makes it unknown; Return moves on.
+    expect(lineTail('\\', '\x7f')).toBe('')
+    expect(lineTail('\\', '\r')).toBe('\r')
   })
 })

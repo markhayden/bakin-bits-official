@@ -51,6 +51,21 @@ export function enterHidesKeyboard(event: Pick<KeyboardEvent, 'key' | 'code' | '
   return event.code === '' || (covered !== undefined && covered > SOFT_KEYBOARD_PX)
 }
 
+/**
+ * The last character of what the operator has typed on the current line, as
+ * far as it can be told from what was sent: bracketed-paste markers are
+ * stripped, terminal replies and other escape sequences leave it as it was,
+ * and a deletion makes it unknown. Feeds the `\` + Return continuation check.
+ */
+export function lineTail(previous: string, sent: string): string {
+  const open = '\x1b[200~', close = '\x1b[201~'
+  const paste = sent.startsWith(open) && sent.endsWith(close)
+  const text = paste ? sent.slice(open.length, -close.length) : sent
+  if (!paste && text.startsWith('\x1b')) return previous
+  if (text.includes('\x7f') || text.includes('\b')) return ''
+  return text ? text.at(-1)! : previous
+}
+
 /** How much of the layout viewport the visual viewport leaves covered at the bottom (an on-screen keyboard). */
 export function coveredByKeyboard(): number | undefined {
   const viewport = typeof window === 'undefined' ? undefined : window.visualViewport
