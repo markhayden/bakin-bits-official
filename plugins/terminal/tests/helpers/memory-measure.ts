@@ -2,23 +2,31 @@
  * One memory measurement in a fresh process (tests/memory.test.ts), so no
  * earlier measurement's garbage is still being collected. Prints JSON in
  * bytes: `measured` (heap after GC, after minus before), `estimate` (what
- * lib/memory.ts says), and for a lifecycle phase `peak`: what was resident
- * before it plus how far resident memory rose while it ran.
+ * lib/memory.ts says), and for a lifecycle phase `peak` or `rss`
+ * (Measurement).
  * `heapStats().heapSize` already counts typed arrays and string buffers.
  */
+import { mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 import { heapStats } from 'bun:jsc'
 import headless from '@xterm/headless'
 import { checkpointSteps, type CheckpointResult } from '../../lib/checkpoint'
 import { terminalBytes } from '../../lib/memory'
 import { BATCH_BYTES, MAX_QUEUED_BYTES, type LogEvent } from '../../lib/output-log'
 import { CHECKPOINT_BYTES, MAX_TAIL_BYTES, Replica } from '../../lib/replica'
+import { seedCommands, seedFrom } from '../../lib/reseed'
 import { Screen } from '../../lib/screen'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from '../../lib/terminal-profile'
 import { drain, type Term } from '../../lib/terminal-state'
 
 export type Shape = 'coloured' | 'linked' | 'underlined' | 'graphemes' | 'long-links' | 'long-graphemes'
-  | 'replica' | 'grapheme-replica' | 'wide' | 'checkpoint-peak' | 'checkpoint-rss' | 'reseed-peak'
-export interface Measurement { measured: number; estimate: number; peak?: number }
+  | 'replica' | 'grapheme-replica' | 'wide' | 'sessions' | 'checkpoint-peak' | 'checkpoint-rss' | 'reseed-rss'
+/**
+ * `peak`: the live heap's high-water (heap after GC, sampled through the
+ * phase). `rss`: resident memory before the phase, its highest sample and
+ * the rise (garbage and allocator slack included), never mixed with heap figures.
+ */
+export interface Measurement { measured: number; estimate: number; peak?: number; rss?: { before: number; high: number; rise: number } }
 
 const coloured = (i: number) => `\x1b[3${i % 8}mline ${i} ${'lorem ipsum dolor sit amet '.repeat(3)}\x1b[0m\r\n`
 const graphemes = () => `${'👍🏽'.repeat(50)}\r\n`
@@ -64,17 +72,14 @@ async function seeded(text: string, cols = 120, rows = 40): Promise<Replica> {
   await r.idle()
   return r
 }
-/**
- * How far the process's resident memory rose while `run` ran, sampled every
- * millisecond (the heap size is only exact after a collection; resident
- * memory is what the machine pays, garbage and allocator slack included).
- */
-async function risen(run: () => Promise<void>): Promise<number> {
-  const start = rssNow()
-  let high = start
+/** Resident memory while `run` runs, sampled every millisecond (what the machine pays, garbage and allocator slack included). */
+async function resident(run: () => Promise<void>): Promise<{ before: number; high: number; rise: number }> {
+  const before = rssNow()
+  let high = before
   const timer = setInterval(() => { high = Math.max(high, rssNow()) }, 1)
   try { await run() } finally { clearInterval(timer) }
-  return Math.max(high, rssNow()) - start
+  high = Math.max(high, rssNow())
+  return { before, high, rise: high - before }
 }
 
 const keep: unknown[] = []
@@ -109,6 +114,22 @@ async function measure(shape: Shape): Promise<Measurement> {
     keep.push(r)
     return { measured: heap() - before, estimate: drain(r.retainedSteps()) }
   }
+  if (shape === 'sessions') {
+    // Three live sessions at once (replica and bridge Screen each): they add up.
+    const text = lines(coloured)
+    const bytes = encode(text)
+    const before = heap()
+    let estimate = 0
+    for (let n = 0; n < 3; n++) {
+      const r = await seeded(text)
+      const screen = new Screen(120, 40)
+      for (let at = 0; at < bytes.length; at += BATCH_BYTES) await screen.write(bytes.subarray(at, at + BATCH_BYTES))
+      keep.push(r, screen)
+      estimate += drain(r.retainedSteps()) + drain(screen.retainedSteps())
+    }
+    return { measured: heap() - before, estimate }
+  }
+  if (shape === 'reseed-rss') return reseedFromTmux()
   const text = lines(coloured)
   // Just past CHECKPOINT_BYTES of further output: one attempt.
   const more = encode(lines(coloured, 2000, 20_000)).subarray(0, CHECKPOINT_BYTES + BATCH_BYTES)
@@ -147,8 +168,7 @@ async function measure(shape: Shape): Promise<Measurement> {
     // (output past CHECKPOINT_BYTES): resident memory, garbage included.
     const events = outputEvents(more, 2)
     const joins: unknown[] = []
-    const resident = heap() - before
-    const rise = await risen(async () => {
+    const rss = await resident(async () => {
       for (const event of events) {
         await r.event(event)
         if (joins.length < 3) joins.push(r.joinPoint())
@@ -157,13 +177,42 @@ async function measure(shape: Shape): Promise<Measurement> {
     })
     if (r.stats.accepted !== 1) throw new Error(`expected one accepted checkpoint, got ${JSON.stringify(r.stats)}`)
     keep.push(joins)
-    return { measured: heap() - before, estimate: drain(r.retainedSteps()) + drain(screen.retainedSteps()) + MAX_QUEUED_BYTES, peak: resident + rise + MAX_TAIL_BYTES }
+    return { measured: heap() - before, estimate: drain(r.retainedSteps()) + drain(screen.retainedSteps()) + MAX_QUEUED_BYTES, rss }
   }
-  // reseed-peak: a rebuild's seed (capture reply bytes, decoded text, the replacement terminal) over the old replica.
-  const seed: LogEvent = { seq: 2, kind: 'seed', bytes: encode(text), cols: 120, rows: 40, reason: 'measure' }
-  const resident = heap() - before
-  const rise = await risen(async () => { await r.event(seed); await r.idle() })
-  return { measured: heap() - before, estimate: drain(r.retainedSteps()) + drain(screen.retainedSteps()) + MAX_QUEUED_BYTES, peak: resident + rise }
+  throw new Error(`unknown shape ${shape}`)
+}
+
+/**
+ * A rebuild's seed from a real tmux 3.7c (TERMINAL_TMUX): a session with
+ * full scrollback, its five capture replies as the control client delivers
+ * them (lines), `seedFrom` building the seed, and the replica applying it
+ * over the session's old replica, which a rebuild replaces.
+ */
+async function reseedFromTmux(): Promise<Measurement> {
+  const tmux = process.env.TERMINAL_TMUX
+  if (!tmux) throw new Error('reseed-rss needs TERMINAL_TMUX (the managed tmux)')
+  const root = mkdtempSync('/tmp/bakin-memory-')
+  const socket = join(root, 's')
+  const run = (...args: string[]) => Bun.spawnSync([tmux, '-S', socket, '-f', '/dev/null', ...args], { env: { PATH: '/usr/bin:/bin', TERM: 'xterm-256color', LANG: 'en_US.UTF-8' } })
+  try {
+    run('new-session', '-d', '-s', 'm', '-x', '120', '-y', '40', 'sh')
+    run('set', '-g', 'history-limit', String(TERMINAL_OPTIONS.scrollback))
+    run('new-window', '-d', '-t', 'm', "i=0; while [ $i -lt 10100 ]; do printf '\\033[3%dmline %d lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet\\033[0m\\n' $((i%8)) $i; i=$((i+1)); done; sleep 600")
+    for (let i = 0; i < 200 && Number(run('display', '-p', '-t', 'm:1', '#{history_size}').stdout.toString()) < TERMINAL_OPTIONS.scrollback; i++) await Bun.sleep(50)
+    const replies = seedCommands('m:1').map((command) => run(...command).stdout.toString().replace(/\n$/, '').split('\n'))
+    const old = await seeded(lines(coloured))
+    keep.push(old, replies)
+    const before = heap()
+    const rss = await resident(async () => {
+      const seed = seedFrom(replies)
+      await old.event({ seq: 2, kind: 'seed', bytes: seed.bytes, cols: seed.cols, rows: seed.rows, reason: 'measure' })
+      await old.idle()
+    })
+    return { measured: heap() - before, estimate: drain(old.retainedSteps()), rss }
+  } finally {
+    run('kill-server')
+    rmSync(root, { recursive: true, force: true })
+  }
 }
 
 console.log(JSON.stringify(await measure(process.argv[2] as Shape)))

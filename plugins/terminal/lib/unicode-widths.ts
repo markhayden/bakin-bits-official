@@ -83,10 +83,16 @@ export function profileWidths(): UnicodeProvider {
   return measuring
 }
 
-/** The grapheme provider with tmux's widths applied, active on `terminal`. */
-export function applyTmuxWidths(terminal: UnicodeHost, table: readonly (readonly [number, number, 0 | 1 | 2])[] = TMUX_WIDTHS): void {
-  terminal.unicode.register(tmuxWidthProvider(loadGraphemeProvider(terminal), table))
+/**
+ * The grapheme provider with tmux's widths applied, active on `terminal`,
+ * and tmux's cell limit: a cell keeps at most TMUX_CELL_BYTES of UTF-8, the
+ * combining marks or joined characters past it dropped, as tmux 3.7c does
+ * (a cell stays one tmux redraws alike, and none grows without bound).
+ */
+export function applyTmuxWidths(terminal: UnicodeHost & object, table: readonly (readonly [number, number, 0 | 1 | 2])[] = TMUX_WIDTHS): void {
+  terminal.unicode.register(cellLimited(tmuxWidthProvider(loadGraphemeProvider(terminal), table), terminal))
   terminal.unicode.activeVersion = TMUX_WIDTHS_VERSION
+  limitCellText(terminal)
 }
 
 /**
@@ -111,33 +117,65 @@ export function textWidth(text: string, provider: UnicodeProvider): number {
 export const TMUX_CELL_BYTES = 32
 
 const utf8Length = (codepoint: number): number => codepoint < 0x80 ? 1 : codepoint < 0x800 ? 2 : codepoint < 0x10000 ? 3 : 4
-function textBytes(text: string): number {
-  let bytes = 0
-  for (const char of text) bytes += utf8Length(char.codePointAt(0)!)
-  return bytes
-}
-interface CellLine { _data: Uint32Array; _combined: Record<number, string>; addCodepointToCell(index: number, codepoint: number, width: number): void }
-const limited = new WeakSet<object>()
+interface CellLine { _data: Uint32Array; _combined: Record<number, string>; getWidth(index: number): number; addCodepointToCell(index: number, codepoint: number, width: number): void }
+interface ActiveBuffer { x: number; y: number; ybase: number; lines: { get(index: number): CellLine | undefined } }
 const CONTENT_MASK = 0x1fffff
 const IS_COMBINED = 0x200000
+const WIDTH_SHIFT = 22
+const WIDTH_MASK = 0x3 << WIDTH_SHIFT
+
+function cellBytes(line: CellLine, index: number): number {
+  const content = line._data[index * 3]!
+  if (!(content & IS_COMBINED)) return content & CONTENT_MASK ? utf8Length(content & CONTENT_MASK) : 0
+  let bytes = 0
+  for (const char of line._combined[index] ?? '') bytes += utf8Length(char.codePointAt(0)!)
+  return bytes
+}
+/** The bytes of the cell a joining code point would join (xterm's print: the cell before the cursor, or before its continuation). */
+function joiningCellBytes(terminal: object): number | undefined {
+  const buffer = (terminal as { _core?: { buffers?: { active?: ActiveBuffer } } })._core?.buffers?.active
+  if (!buffer || buffer.x === 0) return undefined
+  const line = buffer.lines.get(buffer.ybase + buffer.y)
+  if (!line) return undefined
+  const index = line.getWidth(buffer.x - 1) ? buffer.x - 1 : buffer.x - 2
+  return index >= 0 ? cellBytes(line, index) : undefined
+}
 
 /**
- * A cell keeps at most TMUX_CELL_BYTES of UTF-8, as tmux 3.7c does: the
- * combining marks or joined characters past it are dropped (a cell stays a
- * cell tmux would redraw alike, and no one cell grows without bound).
- * xterm appends to a cell in `BufferLine.addCodepointToCell` alone; its
- * prototype is shared by every terminal of that xterm module, patched once.
+ * A code point that would join a cell already holding TMUX_CELL_BYTES (with
+ * it) is dropped by tmux 3.7c, so here it joins at the cluster's width
+ * (VS16 does not widen a full cell): xterm then lays out no wider cell, and
+ * the line prototype drops its text.
  */
-export function applyTmuxCellLimit(terminal: object): void {
+function cellLimited(provider: UnicodeProvider, terminal: object): UnicodeProvider {
+  return {
+    version: provider.version,
+    wcwidth: (codepoint) => provider.wcwidth(codepoint),
+    charProperties(codepoint, preceding) {
+      const properties = provider.charProperties(codepoint, preceding)
+      if (!(properties & 1)) return properties
+      const bytes = joiningCellBytes(terminal)
+      if (bytes === undefined || bytes + utf8Length(codepoint) <= TMUX_CELL_BYTES) return properties
+      return (properties & ~6) | (widthOf(preceding) << 1)
+    },
+  }
+}
+
+const limited = new WeakSet<object>()
+/**
+ * xterm appends to a cell in `BufferLine.addCodepointToCell` alone. Its
+ * prototype is shared by every terminal of that xterm module, patched once:
+ * past TMUX_CELL_BYTES the text is dropped, and only a width change xterm
+ * already laid out is kept (none, behind the provider above).
+ */
+function limitCellText(terminal: object): void {
   const line = (terminal as { _core?: { buffers?: { normal?: { lines?: { get(index: number): object | undefined } } } } })._core?.buffers?.normal?.lines?.get(0)
   const prototype = line && Object.getPrototypeOf(line) as CellLine | undefined
   if (!prototype || limited.has(prototype) || typeof prototype.addCodepointToCell !== 'function') return
   limited.add(prototype)
   const add = prototype.addCodepointToCell
   prototype.addCodepointToCell = function (this: CellLine, index, codepoint, width) {
-    const content = this._data[index * 3]!
-    const current = content & IS_COMBINED ? textBytes(this._combined[index] ?? '') : content & CONTENT_MASK ? utf8Length(content & CONTENT_MASK) : 0
-    if (current + utf8Length(codepoint) > TMUX_CELL_BYTES) return
-    add.call(this, index, codepoint, width)
+    if (cellBytes(this, index) + utf8Length(codepoint) <= TMUX_CELL_BYTES) { add.call(this, index, codepoint, width); return }
+    if (width) this._data[index * 3] = (this._data[index * 3]! & ~WIDTH_MASK) | (width << WIDTH_SHIFT)
   }
 }

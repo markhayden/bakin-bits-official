@@ -203,9 +203,9 @@ export class Replica implements LogConsumer {
     return (terminal ? yield* terminalSteps(terminal) : 0) + (base ? yield* textSteps(base.checkpoint.data) : 0) + fixed
   }
 
-  /** Sweep link orphans erased since the last sweep (lib/xterm-fixes.ts), between events: a walk must not race the parser. */
+  /** Sweep link orphans erased since the last sweep (lib/xterm-fixes.ts), sliced, between events: a walk must not race the parser. */
   maintain(): Promise<void> {
-    return this.serial(async () => { if (this.links && this.links.orphans() > 0) this.links.sweep() })
+    return this.serial(async () => { if (this.links && this.links.orphans() > 0) await runSliced(this.links.sweepSteps()) })
   }
   /** Why the replica is waiting for a seed, while it is. */
   get rebuildCause(): RebuildCause | undefined { return this.rebuilding }

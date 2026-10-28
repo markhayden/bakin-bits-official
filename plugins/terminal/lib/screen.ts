@@ -2,6 +2,7 @@ import headless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { cursorVisibilitySequence, trackCursorVisibility } from './cursor-visibility'
 import { terminalSteps } from './memory'
+import { runSliced } from './replica'
 import { screenView, type ScreenView } from './shadow'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
 import { guardParser } from './xterm-fixes'
@@ -121,9 +122,12 @@ export class Screen {
     const queued = this.queuedBytes
     return (yield* terminalSteps(this.terminal)) + queued
   }
-  /** Sweep link orphans erased since the last sweep (lib/xterm-fixes.ts), between parses. */
+  /** Sweep link orphans erased since the last sweep (lib/xterm-fixes.ts), sliced, between parses (writes after it wait). */
   maintain(): Promise<void> {
-    return this.capture(() => { if (this.links.orphans() > 0) this.links.sweep() }).catch(() => undefined)
+    this.open = undefined
+    const run = this.pending.then(async () => { if (!this.overflow && this.links.orphans() > 0) await runSliced(this.links.sweepSteps()) })
+    this.pending = run.then(() => {}, () => {})
+    return this.pending
   }
   text(): string {
     const buffer = this.terminal.buffer.active

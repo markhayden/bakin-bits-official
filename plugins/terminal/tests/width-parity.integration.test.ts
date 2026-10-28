@@ -99,7 +99,7 @@ async function lineText(sample: string): Promise<[string, string]> {
 
 describe('character widths: the profile against tmux 3.7c', () => {
   processTest('a cell keeps what tmux keeps of a long combining sequence (32 bytes of UTF-8), and a long joined emoji whole', async () => {
-    for (const sample of [`a${'\u0301'.repeat(60)}b`, `a${'\u20dd'.repeat(60)}b`, '\u{1f468}\u200d\u{1f469}\u200d\u{1f467}\u200d\u{1f466}Z']) {
+    for (const sample of [`a${'\u0301'.repeat(60)}b`, `a${'\u20dd'.repeat(60)}b`, `\u2764${'\u0301'.repeat(14)}\ufe0fX`, '\u{1f468}\u200d\u{1f469}\u200d\u{1f467}\u200d\u{1f466}Z']) {
       const [inTmux, inProfile] = await lineText(sample)
       expect(inProfile, JSON.stringify(sample)).toBe(inTmux)
     }

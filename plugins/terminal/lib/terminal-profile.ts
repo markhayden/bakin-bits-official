@@ -1,4 +1,4 @@
-import { applyTmuxCellLimit, applyTmuxWidths } from './unicode-widths'
+import { applyTmuxWidths } from './unicode-widths'
 import { patchAltBufferCapacity, patchChunkedPrintClear, patchEraseAbove, patchLinkLifetime, patchReflowStaleMaps, patchSharedTabStops, patchUtf8Decoder } from './xterm-fixes'
 
 /** The xterm surface the profile drives; both @xterm/xterm and @xterm/headless provide it. */
@@ -115,7 +115,6 @@ export function applyTerminalProfile(terminal: ProfileTerminal & object, effects
   terminal.onTitleChange((title) => { if (live) effects.title?.(title) })
   // Character widths as tmux 3.7c lays them out (lib/unicode-widths.ts).
   applyTmuxWidths(terminal)
-  applyTmuxCellLimit(terminal)
   patchEraseAbove(terminal)
   patchAltBufferCapacity(terminal)
   patchReflowStaleMaps(terminal)

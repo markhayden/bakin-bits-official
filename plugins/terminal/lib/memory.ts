@@ -69,16 +69,22 @@ export const terminalBytes = (terminal: Term): number => drain(terminalSteps(ter
 
 const TEXT_STEP = 65536
 const textCache = new WeakMap<readonly string[], number>()
-/** What retained text holds (stringBytes, a step per 64K characters; slices share their source). Cached: a checkpoint's data never changes. */
+/**
+ * What retained text holds: each string at a byte a character, or two for
+ * all of it once any character is past Latin-1 (stringBytes, scanned a step
+ * per 64K characters). Cached: a checkpoint's data never changes.
+ */
 export function* textSteps(chunks: readonly string[]): Generator<void, number> {
   const cached = textCache.get(chunks)
   if (cached !== undefined) return cached
   let bytes = 0
   for (const chunk of chunks) {
-    for (let at = 0; at < chunk.length; at += TEXT_STEP) {
-      bytes += stringBytes(chunk.slice(at, at + TEXT_STEP))
+    let wide = false
+    for (let at = 0; at < chunk.length && !wide; at += TEXT_STEP) {
+      wide = WIDE.test(chunk.slice(at, at + TEXT_STEP))
       yield
     }
+    bytes += chunk.length * (wide ? 2 : 1)
   }
   textCache.set(chunks, bytes)
   return bytes

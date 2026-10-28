@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { join } from 'node:path'
 import headless from '@xterm/headless'
-import { EVENT_OVERHEAD_BYTES, MemoryWarning, RETAINED_CLEAR_BYTES, RETAINED_WARNING_BYTES, terminalBytes } from '../lib/memory'
+import { EVENT_OVERHEAD_BYTES, MemoryWarning, RETAINED_CLEAR_BYTES, RETAINED_WARNING_BYTES, terminalBytes, textBytes } from '../lib/memory'
 import { MAX_TAIL_BYTES, MAX_TAIL_EVENTS } from '../lib/replica'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from '../lib/terminal-profile'
 import type { Term } from '../lib/terminal-state'
@@ -26,6 +26,15 @@ describe('MemoryWarning', () => {
   })
 })
 
+describe('textBytes', () => {
+  it('charges a whole string two bytes a character once any character is past Latin-1', () => {
+    const ascii = 'a'.repeat(200_000)
+    expect(textBytes([ascii])).toBe(200_000)
+    expect(textBytes([ascii + '\u0100'])).toBe(2 * 200_001)
+    expect(textBytes(['\u0100' + ascii, 'b'])).toBe(2 * 200_001 + 1)
+  })
+})
+
 describe('terminalBytes', () => {
   it('grows with the lines and side maps both buffers hold', async () => {
     const terminal = new headless.Terminal({ cols: 80, rows: 10, ...TERMINAL_OPTIONS })
@@ -45,24 +54,28 @@ describe('terminalBytes', () => {
 
 // A local measurement (spec D13 memory budget, plan T32d) on Bun 1.4.3, each
 // shape in a fresh process (tests/helpers/memory-measure.ts). Run with
-// TERMINAL_MEMORY_TEST=1; it prints what it measured.
+// TERMINAL_MEMORY_TEST=1 (and TERMINAL_TMUX=~/.bakin/bin/tmux for the
+// rebuild seed); it prints what it measured.
 const measurement = process.env.TERMINAL_MEMORY_TEST === '1' ? it : it.skip
+const tmux = process.env.TERMINAL_TMUX ?? Bun.which('tmux') ?? ''
 const MB = 1e6
 const mb = (bytes: number) => `${(bytes / MB).toFixed(1)} MB`
 async function measure(shape: Shape): Promise<Measurement> {
-  const child = Bun.spawn([process.execPath, join(import.meta.dir, 'helpers/memory-measure.ts'), shape], { stdout: 'pipe', stderr: 'inherit' })
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, 'helpers/memory-measure.ts'), shape], { stdout: 'pipe', stderr: 'inherit', env: { ...process.env, TERMINAL_TMUX: tmux } })
   const output = await new Response(child.stdout).text()
   expect(await child.exited).toBe(0)
   const result = JSON.parse(output) as Measurement
-  console.log(`${shape}: measured ${mb(result.measured)}, estimated ${mb(result.estimate)}${result.peak === undefined ? '' : `, peak ${mb(result.peak)}`}`)
+  const peak = result.peak === undefined ? '' : `, live peak ${mb(result.peak)}`
+  const rss = result.rss ? `, resident ${mb(result.rss.before)} → ${mb(result.rss.high)} (+${mb(result.rss.rise)})` : ''
+  console.log(`${shape}: measured ${mb(result.measured)}, estimated ${mb(result.estimate)}${peak}${rss}`)
   return result
 }
-/** Within 25%, or 1 MB for a small reading (the emulator's own baseline dominates it). */
-const close = ({ measured, estimate }: Measurement) => Math.abs(estimate - measured) <= Math.max(0.25 * measured, MB)
+/** Within 25%, or 2 MB for a small reading (the emulator's own baseline and parse buffers dominate it). */
+const close = ({ measured, estimate }: Measurement) => Math.abs(estimate - measured) <= Math.max(0.25 * measured, 2 * MB)
 
 describe('memory budget (measured)', () => {
   measurement('the estimate follows the heap for every content shape, long strings and wide sessions included', async () => {
-    for (const shape of ['coloured', 'linked', 'underlined', 'graphemes', 'long-links', 'long-graphemes', 'grapheme-replica', 'wide'] as const) {
+    for (const shape of ['coloured', 'linked', 'underlined', 'graphemes', 'long-links', 'long-graphemes', 'grapheme-replica', 'wide', 'sessions'] as const) {
       expect(close(await measure(shape)), shape).toBe(true)
     }
   }, 600000)
@@ -81,8 +94,9 @@ describe('memory budget (measured)', () => {
     expect(peak!).toBeLessThanOrEqual(96 * MB)
   }, 120000)
 
-  measurement('resident memory through a checkpoint attempt and a rebuild seed is recorded, not gated', async () => {
-    for (const shape of ['checkpoint-rss', 'reseed-peak'] as const) expect((await measure(shape)).peak!).toBeGreaterThan(0)
+  measurement('resident memory through a checkpoint attempt and a rebuild seed from tmux is recorded, not gated', async () => {
+    expect(tmux, 'set TERMINAL_TMUX to the managed tmux').not.toBe('')
+    for (const shape of ['checkpoint-rss', 'reseed-rss'] as const) expect((await measure(shape)).rss!.rise).toBeGreaterThan(0)
   }, 300000)
 })
 
