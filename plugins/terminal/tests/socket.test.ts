@@ -3,6 +3,8 @@ import type { PluginSocket } from '@makinbakin/sdk/types'
 import { DeliveryUncertainError, TerminalError, type Principal, type Session } from '../lib/contracts'
 import type { NativeClient } from '../lib/processes'
 import { SOCKET_CLOSE, TerminalViewer, type ViewerManager } from '../lib/socket'
+import type { RawSource } from '../lib/raw-display'
+import { Replica } from '../lib/replica'
 
 const CLIENT = 'browser-0123456789abcdef'
 
@@ -13,7 +15,7 @@ function session(overrides: Partial<Session> = {}): Session {
   }
 }
 
-function fakeManager(initial = session()) {
+function fakeManager(initial = session(), raw: { replica?: RawSource } | undefined = undefined) {
   let current = initial
   const chunks: Buffer[] = []
   let floor = 0
@@ -55,6 +57,9 @@ function fakeManager(initial = session()) {
     },
     claim: async () => current,
     resizeAs: async () => current,
+    rawPath: () => raw !== undefined,
+    replica: () => raw?.replica,
+    fidelity: () => ({ rebuilds: {} }),
   }
   return {
     manager, writes,
@@ -365,5 +370,86 @@ describe('TerminalViewer', () => {
     change({ sizeEpoch: 2, sizeAuthority: { viewer: CLIENT, kind: 'browser', device: 'desktop' } })
     await until(() => peer.of('presence').length === 1, 'thawed by the claim')
     expect(peer.of('presence')[0]).toEqual({ type: 'presence', sizeFrozen: false, nativeClients: 0 })
+  })
+})
+
+describe('TerminalViewer on the raw path', () => {
+  const seeded = async () => {
+    const replica = new Replica({ reseed: (_reason, turn) => turn(async () => undefined), idleMs: 1e9 })
+    await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bcready'), cols: 100, rows: 30, reason: 'test' })
+    return replica
+  }
+  /** Display bytes as the client retires them: binary frames and text display frames (not results, pings or presence). */
+  const retired = (peer: ReturnType<typeof fakeSocket>) => peer.bytes() + peer.text.filter((frame) => ['join', 'rebase', 'barrier', 'layout', 'rebuilding'].includes(String(frame.type))).reduce((n, frame) => n + Buffer.byteLength(JSON.stringify(frame)), 0)
+
+  it('joins from the replica, refuses input until the replay is applied, then accepts it', async () => {
+    const replica = await seeded()
+    const { manager, writes } = fakeManager(session(), { replica })
+    const peer = fakeSocket()
+    new TerminalViewer(manager, peer.socket, 's1', options)
+    peer.client({ type: 'hello', clientId: CLIENT })
+    await until(() => peer.of('barrier').length === 1, 'barrier')
+    expect(peer.of('sync')).toEqual([])
+    expect(peer.of('join')[0]).toMatchObject({ epoch: 1, bytes: 7, baseSeq: 1, throughSeq: 1, session: { id: 's1' }, sizeFrozen: false, fidelity: { rebuilds: {} } })
+    expect(Buffer.from(peer.binary[0]!).toString()).toBe('\x1bcready')
+    peer.client({ type: 'input', generation: 1, viewerSeq: 1, data: 'early' })
+    await until(() => peer.of('result').length === 1, 'refused')
+    expect(peer.of('result')[0]).toMatchObject({ status: 'rejected', error: expect.stringContaining('Joining') })
+    peer.client({ type: 'replay-applied', epoch: 1 })
+    peer.client({ type: 'input', generation: 1, viewerSeq: 1, data: 'ls\r' })
+    await until(() => peer.of('result').length === 2, 'accepted')
+    expect(writes.map((write) => write.data)).toEqual(['ls\r'])
+    // Live output follows the barrier; retiring it keeps the window open.
+    await replica.event({ seq: 2, kind: 'output', offset: 0, bytes: new TextEncoder().encode('live') })
+    expect(Buffer.from(peer.binary.at(-1)!).toString()).toBe('live')
+    peer.client({ type: 'retired', bytes: retired(peer) })
+    replica.close()
+  })
+  it('keeps input through a rebase (decision 3) and sends the rebase in order', async () => {
+    const replica = await seeded()
+    const { manager, writes } = fakeManager(session(), { replica })
+    const peer = fakeSocket()
+    new TerminalViewer(manager, peer.socket, 's1', options)
+    peer.client({ type: 'hello', clientId: CLIENT })
+    await until(() => peer.of('barrier').length === 1, 'barrier')
+    peer.client({ type: 'replay-applied', epoch: 1 })
+    replica.pressure(4 * 1024 * 1024)
+    await until(() => peer.of('rebuilding').length === 1, 'rebuilding notice')
+    peer.client({ type: 'input', generation: 1, viewerSeq: 1, data: '\x03' })
+    await until(() => peer.of('result').length === 1, 'Ctrl-C while rebuilding')
+    expect(peer.of('result')[0]!.status).toBe('accepted')
+    await replica.event({ seq: 2, kind: 'seed', bytes: new TextEncoder().encode('\x1bcafter'), cols: 100, rows: 30, reason: 'overload' })
+    await until(() => peer.of('rebase').length === 1, 'rebase', )
+    expect(peer.of('rebase')[0]).toMatchObject({ epoch: 2, baseSeq: 2 })
+    expect(writes.map((write) => write.data)).toEqual(['\x03'])
+    replica.close()
+  })
+  it('closes 4000 when the session stops running, and when no replica comes in time', async () => {
+    const replica = await seeded()
+    const { manager, change } = fakeManager(session(), { replica })
+    const peer = fakeSocket()
+    new TerminalViewer(manager, peer.socket, 's1', options)
+    peer.client({ type: 'hello', clientId: CLIENT })
+    await until(() => peer.of('barrier').length === 1, 'barrier')
+    change({ state: 'exited' })
+    expect(peer.state.closed?.code).toBe(SOCKET_CLOSE.resync)
+    replica.close()
+    const waiting = fakeManager(session(), {})
+    const late = fakeSocket()
+    new TerminalViewer(waiting.manager, late.socket, 's1', { ...options, replicaWaitMs: 150 })
+    late.client({ type: 'hello', clientId: CLIENT })
+    late.client({ type: 'input', generation: 1, viewerSeq: 1, data: 'x' })
+    await until(() => late.of('result').length === 1, 'refused while waiting')
+    expect(late.of('result')[0]!.status).toBe('rejected')
+    await until(() => late.state.closed !== null, 'no replica')
+    expect(late.state.closed?.code).toBe(SOCKET_CLOSE.resync)
+  })
+  it('an ended session takes the sync path even when the raw path is on', async () => {
+    const { manager } = fakeManager(session({ state: 'exited' }), {})
+    const peer = fakeSocket()
+    new TerminalViewer(manager, peer.socket, 's1', options)
+    peer.client({ type: 'hello', clientId: CLIENT })
+    await until(() => peer.of('sync').length === 1, 'sync for the ended session')
+    expect(peer.of('join')).toEqual([])
   })
 })

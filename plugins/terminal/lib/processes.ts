@@ -6,6 +6,7 @@ import { TerminalError } from './contracts'
 import { ControlClient } from './control'
 import { EVENT_OVERHEAD_BYTES } from './memory'
 import { OutputLog, parseLayoutChange } from './output-log'
+import type { Fidelity } from './raw-display'
 import { Replica } from './replica'
 import { reseed } from './reseed'
 import { stripPasteMarkers } from './paste'
@@ -45,8 +46,10 @@ export interface ProcessDriver {
   terminate(id: string): Promise<void>
   inUse(path: string): Promise<boolean>
   detach(id?: string): Promise<void>
-  /** The session's server replica (spec D13), while attached; shadow-only until the raw path (R2). */
+  /** The session's server replica (spec D13), while attached. */
   replica?(id: string): Replica | undefined
+  /** The rebuilds the session's output has been through (outlives replica replacement). */
+  fidelity?(id: string): Fidelity
   /** What the attached sessions' replicas and event logs hold (lib/memory.ts). Steps: run it sliced. */
   retainedSteps?(): Generator<void, number>
   /** Periodic upkeep of the attached sessions' replicas (link orphans). */
@@ -82,6 +85,7 @@ export class TmuxProcesses implements ProcessDriver {
   private controls = new Map<string, ControlClient>()
   private logs = new Map<string, OutputLog>()
   private replicas = new Map<string, Replica>()
+  private fidelities = new Map<string, Fidelity>()
   constructor(private service: TerminalService, private log?: { info(message: string, data?: Record<string, unknown>): void }) {}
   async create(session: Session): Promise<void> {
     if (!await this.service.ready()) throw new TerminalError('Terminal service needs setup', 503)
@@ -127,8 +131,14 @@ export class TmuxProcesses implements ProcessDriver {
     // The replica starts from a seed; a failed reseed invalidates the log, which ends it.
     const replica = new Replica({
       reseed: (reason, turn) => reseed(control, log, session.id, reason, { attempt: turn }),
-      // Shadow mode (R1): the replica's lifecycle is logged, never its contents.
-      diagnostic: (event) => this.log?.info(`Terminal replica ${event.kind}`, { sessionId: session.id, ...event }),
+      // The replica's lifecycle is logged, never its contents; rebuilds are the session's fidelity.
+      diagnostic: (event) => {
+        if (event.kind === 'rebuilding') {
+          const fidelity = this.fidelity(session.id)
+          this.fidelities.set(session.id, { rebuilds: { ...fidelity.rebuilds, [event.cause]: (fidelity.rebuilds[event.cause] ?? 0) + 1 }, lastCause: event.cause })
+        }
+        this.log?.info(`Terminal replica ${event.kind}`, { sessionId: session.id, ...event })
+      },
     })
     log.attach(replica)
     this.replicas.set(session.id, replica)
@@ -148,6 +158,7 @@ export class TmuxProcesses implements ProcessDriver {
   }
   /** The session's ordered event log, while its control connection is attached. */
   outputLog(id: string): OutputLog | undefined { return this.logs.get(id) }
+  fidelity(id: string): Fidelity { return this.fidelities.get(id) ?? { rebuilds: {} } }
   replica(id: string): Replica | undefined {
     const replica = this.replicas.get(id)
     return replica?.ended ? undefined : replica
@@ -255,6 +266,7 @@ export class TmuxProcesses implements ProcessDriver {
     return this.service.command(['capture-pane', '-p', '-t', id])
   }
   async terminate(id: string): Promise<void> {
+    this.fidelities.delete(id)
     const names = await this.service.command(['list-sessions', '-F', '#{session_name}'])
     if (names.split('\n').includes(id)) await this.service.command(['kill-session', '-t', id])
   }

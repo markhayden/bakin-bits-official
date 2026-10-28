@@ -17,6 +17,15 @@
  *   result { viewerSeq, status: accepted | rejected | uncertain, error? } ·
  *   ping · error { error }
  *
+ * The raw path (spec D13, plan T33; per session, `rawPath`) replaces `sync` and
+ * the stored-output pump with lib/raw-display.ts: `join` / `rebase` (the
+ * replica's checkpoint text, then its tail), `barrier`, `layout`,
+ * `rebuilding`, live output; the client answers `retired { bytes }` (every
+ * display byte applied or discarded, in all) and `replay-applied { epoch }`
+ * (input is refused until the first replay is applied; a rebase never takes
+ * that back). A raw session that stops running closes 4000: the reconnect
+ * gets the ended session's `sync`.
+ *
  * Flow control is application-level (the host has no send bound): output is
  * sent only while fewer than ACK_WINDOW bytes are unacknowledged (overshooting
  * by at most one stored chunk); a viewer
@@ -27,6 +36,7 @@
 import { z } from 'zod'
 import type { PluginSocket } from '@makinbakin/sdk/types'
 import type { NativeClient, WriteOptions } from './processes'
+import { type Fidelity, RawDisplay, type RawSource } from './raw-display'
 import { DeliveryUncertainError, screenDevice, TerminalError, type Principal, type Session, type SizeClaimant } from './contracts'
 
 export const ACK_WINDOW = 256 * 1024
@@ -56,6 +66,12 @@ export interface ViewerManager {
   writeNext(id: string, principal: Principal, generation: number, data: string, options?: WriteOptions): Promise<Session>
   claim(id: string, principal: Principal, cols: number, rows: number, claimant: SizeClaimant): Promise<Session>
   resizeAs(id: string, principal: Principal, epoch: number, cols: number, rows: number): Promise<Session>
+  /** Whether this session's viewers take the raw path (spec D13); false: the bridge path. */
+  rawPath(id: string): boolean
+  /** The session's replica, while attached (raw path). */
+  replica(id: string): RawSource | undefined
+  /** What the session's output has lost to overload rebuilds (sticky). */
+  fidelity(id: string): Fidelity
 }
 
 const message = z.discriminatedUnion('type', [
@@ -66,7 +82,12 @@ const message = z.discriminatedUnion('type', [
   z.object({ type: z.literal('claim'), cols: z.number().int().min(1).max(400), rows: z.number().int().min(1).max(150), device: screenDevice }),
   z.object({ type: z.literal('resize'), epoch: z.number().int().nonnegative(), cols: z.number().int().min(1).max(400), rows: z.number().int().min(1).max(150) }),
   z.object({ type: z.literal('pong') }),
+  z.object({ type: z.literal('retired'), bytes: z.number().int().nonnegative() }),
+  z.object({ type: z.literal('replay-applied'), epoch: z.number().int().positive() }),
 ])
+
+/** How long a raw join waits for the session's replica to be attached, from the hello. */
+export const REPLICA_WAIT_MS = 10_000
 
 /** Live viewers by `${sessionId} ${clientId}`: a reconnect supersedes the old socket. */
 const viewers = new Map<string, TerminalViewer>()
@@ -93,12 +114,16 @@ export class TerminalViewer {
   private unsubscribeNatives: (() => void) | undefined
   private readonly abort = new AbortController()
   private static epochs = 0
+  /** This connection takes the raw path (set before its replica is waited for). */
+  private rawPath = false
+  /** The raw path's picture, once its replica is there. */
+  private raw: RawDisplay | undefined
 
   constructor(
     private manager: ViewerManager,
     private socket: PluginSocket,
     private sessionId: string,
-    private options: { now?: () => number; ackWindow?: number; pauseEvictMs?: number; heartbeatMs?: number; silenceCloseMs?: number } = {},
+    private options: { now?: () => number; ackWindow?: number; pauseEvictMs?: number; heartbeatMs?: number; silenceCloseMs?: number; replicaWaitMs?: number } = {},
   ) {
     this.lastHeard = this.now()
     socket.onMessage((data) => { void this.receive(data) })
@@ -124,6 +149,7 @@ export class TerminalViewer {
     clearInterval(this.heartbeat)
     this.unsubscribe?.()
     this.unsubscribeNatives?.()
+    this.raw?.close()
     this.wake?.()
     if (this.principal) {
       const key = `${this.sessionId} ${this.principal.id}`
@@ -166,6 +192,8 @@ export class TerminalViewer {
         }
         return
       case 'pong': return
+      case 'retired': this.raw?.retire(parsed.bytes); return
+      case 'replay-applied': this.raw?.replayApplied(parsed.epoch); return
     }
   }
 
@@ -213,11 +241,52 @@ export class TerminalViewer {
     viewers.set(key, this)
     presenceChanged(this.sessionId, clientId)
     this.unsubscribe = this.manager.onSessionChange(this.sessionId, (session) => {
+      // A raw picture ends with the session: the reconnect gets the ended session's sync.
+      if (this.rawPath && session.state !== 'running') { this.close(SOCKET_CLOSE.resync, 'Session ended; reconnect'); return }
       this.send({ type: 'session', session })
       this.presence(session)
     })
     this.unsubscribeNatives = this.manager.onNatives(this.sessionId, () => this.refreshPresence())
+    let session: Session
+    try { session = this.manager.get(this.sessionId, principal) }
+    catch (error) { this.failed(error); return }
+    if (session.state === 'running' && this.manager.rawPath(this.sessionId)) { this.rawPath = true; await this.joinRaw(); return }
     if (await this.sync()) void this.pump()
+  }
+
+  /** The raw path: wait (bounded) for the replica, then its picture (lib/raw-display.ts). */
+  private async joinRaw(): Promise<void> {
+    const deadline = this.now() + (this.options.replicaWaitMs ?? REPLICA_WAIT_MS)
+    let source = this.manager.replica(this.sessionId)
+    while (!source && !this.closed) {
+      if (this.now() >= deadline) { this.close(SOCKET_CLOSE.resync, 'Terminal output not ready; reconnect'); return }
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      source = this.manager.replica(this.sessionId)
+    }
+    if (this.closed || !source) return
+    this.raw = new RawDisplay(source, {
+      text: (json) => this.socket.send(json),
+      binary: (bytes) => this.socket.send(bytes),
+    }, {
+      header: () => {
+        try {
+          const session = this.manager.get(this.sessionId, this.principal!)
+          const presence = this.presenceOf(session)
+          this.sentPresence = JSON.stringify(presence)
+          return { session, ...presence }
+        } catch (error) {
+          // Gone between frames: the close follows this header, which the client never acts on.
+          queueMicrotask(() => this.failed(error))
+          return {}
+        }
+      },
+      fidelity: () => this.manager.fidelity(this.sessionId),
+      resync: (reason) => this.close(SOCKET_CLOSE.resync, reason),
+      window: this.window(),
+      pauseEvictMs: this.options.pauseEvictMs ?? PAUSE_EVICT_MS,
+      now: this.options.now,
+    })
+    this.raw.start()
   }
 
   /** A failure the client recovers from by reconnecting (404 only when the session is gone). */
@@ -288,6 +357,11 @@ export class TerminalViewer {
   }
 
   private async input(generation: number, viewerSeq: number, data: string, options: WriteOptions): Promise<void> {
+    // The raw path: nothing is typed before the first replay is applied (a rebase never re-gates).
+    if (this.rawPath && !this.raw?.latched) {
+      this.send({ type: 'result', viewerSeq, status: 'rejected', error: 'Joining: input waits for the terminal to load' })
+      return
+    }
     if (viewerSeq !== this.lastViewerSeq + 1) {
       this.send({ type: 'result', viewerSeq, status: 'rejected', error: 'Input is out of order on this connection' })
       return

@@ -4,6 +4,7 @@ import { relative, isAbsolute } from 'node:path'
 import { authorize, createSchema, DAY, DeliveryUncertainError, TerminalError, type CreateInput, type Principal, type Session, type SizeClaimant, type TerminalSettings } from './contracts'
 import type { NativeClient, ProcessDriver, WriteOptions } from './processes'
 import { claimSize, clampSize, nextSize } from './sizing'
+import type { Fidelity, RawSource } from './raw-display'
 import { Screen } from './screen'
 import { screenView, shadowDiff } from './shadow'
 import { Store } from './store'
@@ -39,6 +40,8 @@ export interface SessionOptions {
   log?: { info(message: string, data?: Record<string, unknown>): void }
   /** Quiet time before the shadow replica is compared with the bridge (SHADOW_QUIET_MS). */
   shadowQuietMs?: number
+  /** Whether a session's viewers take the raw path (spec D13, T38a's setting); default the bridge path. */
+  rawPath?(session: Session): boolean
 }
 
 /** Bridge output quiet for this long is a point where the shadow replica and the bridge should agree. */
@@ -478,6 +481,15 @@ export class Sessions {
     })
     await admitted
   }
+  /** Whether this session's viewers take the raw path (lib/socket.ts). */
+  rawPath(id: string): boolean {
+    const session = this.store.sessions().find((entry) => entry.id === id)
+    return Boolean(session && this.options.rawPath?.(session))
+  }
+  /** The session's replica while attached (the raw path's source). */
+  replica(id: string): RawSource | undefined { return this.driver.replica?.(id) }
+  /** The rebuilds the session's output has been through. */
+  fidelity(id: string): Fidelity { return this.driver.fidelity?.(id) ?? { rebuilds: {} } }
   /** The terminal apps admitted to a session right now. */
   nativeClients(id: string): NativeClient[] { return [...this.natives.get(id)?.values() ?? []] }
   /** Hear when a terminal app is admitted, resizes, or leaves. */
