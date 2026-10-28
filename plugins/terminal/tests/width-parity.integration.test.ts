@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import headless from '@xterm/headless'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from '../lib/terminal-profile'
+import { renderTmuxWidthTable } from '../scripts/generate-tmux-widths'
 
 // Spec D13: the replica and every viewer must lay text out on tmux's grid.
 // Each sample is printed into a real tmux 3.7c pane and into a profiled
@@ -11,25 +12,29 @@ import { applyTerminalProfile, TERMINAL_OPTIONS } from '../lib/terminal-profile'
 // Run with the managed pin: TERMINAL_PROCESS_TEST=1 TERMINAL_TMUX=~/.bakin/bin/tmux.
 const processTest = process.env.TERMINAL_PROCESS_TEST === '1' ? test : test.skip
 
-/** Laid out alike by tmux and the profile (emoji sequences included). */
+/** Laid out alike by tmux and the profile (emoji sequences and the generated widths included). */
 const AGREE = [
-  'a', 'é', '😃', '中文', '한국어', 'ｱ', 'Ａ', 'ﾃｽﾄ', '𠮷', '…', '€', '⌘', '✔', '☺',
-  '👍🏽', '👨‍👩‍👧', '🧑‍💻', '🇺🇸', '❤️', '#️⃣', '✅ done', '⚠️ warn', '🚀🔥',
+  'a', 'e\u0301', '😃', '中文', '한국어', '각', 'ｱ', 'Ａ', 'ﾃｽﾄ', '𠮷', '…', '€', '⌘', '✔', '☺', '⌚', 'ไทย', '\u0915\u094d\u0937',
+  '👍🏽', '👨\u200d👩\u200d👧', '🧑\u200d💻', '🧑🏽\u200d💻', '🇺🇸', '🇺🇸🇬', '❤\ufe0f', '↔\ufe0f', '©\ufe0f', '#\ufe0f\u20e3', '✅ done', '⚠️ warn', '🚀🔥',
+  // From the generated table: format characters, tmux's force-wide bases, newer emoji, Unicode 16 widths.
+  'x\u200by', 'x\u200ey', 'x\u2060y', '☝', '✌', '🫠', '\u{1FA75}', '\u{1FAE8}', '☰',
+  // An escape between two regional indicators: tmux and the grapheme rules both pair them.
+  '🇺\x1b[0m🇸',
 ]
 /**
- * Where they still differ (sample → [tmux, profile] widths). Rare in agent
- * output; the digest safety net rebases a viewer that drifts. Each entry
- * fails once either side changes, so it is re-examined then.
+ * What tmux combines by context, which a width provider cannot mirror
+ * (sample → [tmux, profile] widths). Each fails once either side changes.
+ * Rare in agent output; T37 compares the replica's cursor with tmux's.
  */
 const DIVERGE: [string, number, number][] = [
-  // Default-ignorable format characters: tmux gives them no cell.
-  ['x​y', 2, 3], ['x‎y', 2, 3], ['x⁠y', 2, 3],
-  // Emoji newer than the addon's Unicode 15 table (Unicode 14+ additions it lacks, 15.1/16).
-  ['🫠', 2, 1], ['\u{1FA75}', 2, 1], ['\u{1FAE8}', 2, 1],
-  // tmux forces these emoji modifier bases wide.
-  ['☝', 2, 1], ['✌', 2, 1],
-  // Unicode 16 made the trigrams wide; the addon's table is Unicode 15.
-  ['☰', 2, 1],
+  // A skin tone after a letter: tmux gives it its own wide cell; the grapheme rules attach it.
+  ['a\u{1F3FD}', 3, 2],
+  // Thai SARA AM: tmux spaces it; the grapheme rules join it to its consonant.
+  ['\u0e01\u0e33', 2, 1],
+  // tmux discards the Hangul filler and a jungseong filler with nothing to compose with.
+  ['x\u3164y', 2, 4], ['a\u1160', 1, 2],
+  // tmux combines with the cell left of the cursor across escapes; xterm's join state resets.
+  ['👍\x1b[1m🏽', 2, 4],
 ]
 
 let tmux = ''
@@ -78,6 +83,9 @@ async function widths(sample: string): Promise<[number, number]> {
 }
 
 describe('character widths: the profile against tmux 3.7c', () => {
+  processTest('the generated width table is what this tmux measures (regenerate it when this fails)', () => {
+    expect(renderTmuxWidthTable(tmux)).toBe(readFileSync(join(import.meta.dir, '../lib/tmux-width-table.ts'), 'utf8'))
+  }, 60000)
   processTest('emoji, CJK and grapheme sequences take the cells tmux gives them', async () => {
     for (const sample of AGREE) {
       const [inTmux, inProfile] = await widths(sample)

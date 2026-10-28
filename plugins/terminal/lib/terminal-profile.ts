@@ -1,5 +1,5 @@
-import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes'
-import { patchAltBufferCapacity, patchEraseAbove, patchLinkLifetime, patchReflowStaleMaps } from './xterm-fixes'
+import { applyTmuxWidths } from './unicode-widths'
+import { patchAltBufferCapacity, patchEraseAbove, patchLinkLifetime, patchReflowStaleMaps, patchUtf8Boundaries } from './xterm-fixes'
 
 /** The xterm surface the profile drives; both @xterm/xterm and @xterm/headless provide it. */
 export interface ProfileTerminal {
@@ -12,7 +12,9 @@ export interface ProfileTerminal {
   onTitleChange(listener: (title: string) => void): { dispose(): void }
   onResize(listener: () => void): { dispose(): void }
   loadAddon(addon: { activate(terminal: never): void; dispose(): void }): void
-  unicode: { activeVersion: string }
+  unicode: { activeVersion: string; register(provider: { readonly version: string; wcwidth(codepoint: number): 0 | 1 | 2; charProperties(codepoint: number, preceding: number): number }): void }
+  write(data: string | Uint8Array, callback?: () => void): void
+  reset(): void
   resize(cols: number, rows: number): void
   buffer: { active: { type: string } }
 }
@@ -71,8 +73,8 @@ export function clipboardText(data: string): string | undefined {
  * - Palette and dynamic-colour changes and window operations are
  *   swallowed (every viewer keeps its theme); graphics never draw.
  * - Bells, titles and clipboard offers fire only while `live`.
- * - Unicode 15 character widths with grapheme clusters (emoji sequences,
- *   skin tones, flags, keycaps), as tmux 3.7c lays them out.
+ * - Character widths as tmux 3.7c lays them out: Unicode 15 grapheme
+ *   clusters corrected by a table generated from the managed tmux.
  * - xterm 6.0.0 workarounds (lib/xterm-fixes.ts).
  */
 export function applyTerminalProfile(terminal: ProfileTerminal & object, effects: TerminalEffects = {}): { setLive(live: boolean): void; links: ReturnType<typeof patchLinkLifetime> } {
@@ -104,13 +106,12 @@ export function applyTerminalProfile(terminal: ProfileTerminal & object, effects
   dropGeneratedInput(terminal)
   terminal.onBell(() => { if (live) effects.bell?.() })
   terminal.onTitleChange((title) => { if (live) effects.title?.(title) })
-  // tmux 3.7c clusters graphemes; Unicode 11 widths diverged on every
-  // emoji sequence. Residual differences are pinned in the width-parity test.
-  terminal.loadAddon(new UnicodeGraphemesAddon() as unknown as { activate(terminal: never): void; dispose(): void })
-  terminal.unicode.activeVersion = '15-graphemes'
+  // Character widths as tmux 3.7c lays them out (lib/unicode-widths.ts).
+  applyTmuxWidths(terminal)
   patchEraseAbove(terminal)
   patchAltBufferCapacity(terminal)
   patchReflowStaleMaps(terminal)
+  patchUtf8Boundaries(terminal)
   const links = patchLinkLifetime(terminal)
   return { setLive: (value) => { live = value }, links }
 }

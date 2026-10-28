@@ -199,3 +199,45 @@ export function guardParser(terminal: object, onFailure: (error: unknown) => voi
   }
   return { get failed() { return failed } }
 }
+
+/** How many bytes at the end of `data` begin a UTF-8 sequence that is not complete yet. */
+export function incompleteUtf8Tail(data: Uint8Array): number {
+  for (let back = 1; back <= Math.min(3, data.length); back++) {
+    const byte = data[data.length - back]!
+    if ((byte & 0xc0) === 0x80) continue
+    const length = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : byte >= 0xc0 ? 2 : 1
+    return length > back ? back : 0
+  }
+  return 0
+}
+
+/**
+ * xterm 6.0.0: a write that ends inside a UTF-8 sequence loses the grapheme
+ * join state when the sequence completes in the next write (a ZWJ split
+ * after `E2 80` turns 🧑‍💻 from 2 cells into 4). Byte writes are cut only at
+ * codepoint boundaries: an incomplete tail is carried into the next write,
+ * and a reset drops it.
+ */
+export function patchUtf8Boundaries(terminal: { write(data: string | Uint8Array, callback?: () => void): void; reset(): void }): void {
+  const write = terminal.write.bind(terminal)
+  const reset = terminal.reset.bind(terminal)
+  let carry: Uint8Array | undefined
+  terminal.write = (data, callback) => {
+    if (typeof data === 'string') {
+      // Text after an unfinished sequence: xterm resolves it as it would have.
+      if (carry) { write(carry); carry = undefined }
+      write(data, callback)
+      return
+    }
+    let bytes = data
+    if (carry) {
+      bytes = new Uint8Array(carry.length + data.length)
+      bytes.set(carry)
+      bytes.set(data, carry.length)
+    }
+    const tail = incompleteUtf8Tail(bytes)
+    carry = tail ? bytes.slice(bytes.length - tail) : undefined
+    write(tail ? bytes.subarray(0, bytes.length - tail) : bytes, callback)
+  }
+  terminal.reset = () => { carry = undefined; reset() }
+}

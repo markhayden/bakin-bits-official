@@ -2,6 +2,8 @@ import { describe, expect, it } from 'bun:test'
 import headless from '@xterm/headless'
 import { patchEraseAbove } from '../lib/xterm-fixes'
 import { Screen } from '../lib/screen'
+import { applyTerminalProfile } from '../lib/terminal-profile'
+import { loadGraphemeProvider } from '../lib/unicode-widths'
 
 type Term = InstanceType<typeof headless.Terminal>
 const write = (terminal: Term, data: string) => new Promise<void>(resolve => terminal.write(data, resolve))
@@ -108,5 +110,36 @@ describe('erase above (ED 1) with the cursor in the last column', () => {
     await expect(screen.snapshot()).rejects.toThrow()
     await expect(screen.snapshot()).rejects.toThrow()
     screen.close()
+  })
+})
+
+describe('UTF-8 chunk boundaries', () => {
+  const zwj = Buffer.from('🧑‍💻X')
+  // Split inside the ZWJ, after its first two bytes.
+  const splitAt = 6
+  const writeBytes = (terminal: Term, data: Uint8Array) => new Promise<void>(resolve => terminal.write(data, resolve))
+  it('stock xterm 6.0.0 loses the grapheme join across a split codepoint (fails once upstream fixes it)', async () => {
+    const stock = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
+    loadGraphemeProvider(stock as never)
+    await writeBytes(stock, zwj.subarray(0, splitAt))
+    await writeBytes(stock, zwj.subarray(splitAt))
+    expect(stock.buffer.active.cursorX).toBe(5)
+  })
+  it('patched, every split point lays out like the whole write', async () => {
+    for (let at = 1; at < zwj.length; at++) {
+      const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
+      applyTerminalProfile(terminal)
+      await writeBytes(terminal, zwj.subarray(0, at))
+      await writeBytes(terminal, zwj.subarray(at))
+      expect(terminal.buffer.active.cursorX, `split at ${at}`).toBe(3)
+    }
+  })
+  it('a write of only an incomplete sequence still settles; a reset drops the carried bytes', async () => {
+    const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
+    applyTerminalProfile(terminal)
+    await writeBytes(terminal, Uint8Array.from([0xe4, 0xb8]))
+    terminal.reset()
+    await writeBytes(terminal, Uint8Array.from([0xad, 0x41]))
+    expect(terminal.buffer.active.getLine(0)!.translateToString(true)).not.toContain('中')
   })
 })
