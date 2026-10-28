@@ -15,3 +15,16 @@ it('the browser xterm build exposes the same internals, and the patch keeps it w
   expect(terminal.buffer.active.getLine(2)!.translateToString(true)).toBe('')
   terminal.dispose()
 })
+
+it('the shared profile applies to the browser build: no replies to queries, refused links, workarounds active', async () => {
+  const { applyTerminalProfile } = await import('../lib/terminal-profile')
+  const terminal = new Terminal({ cols: 20, rows: 3, allowProposedApi: true })
+  const replies: string[] = []
+  terminal.onData(data => replies.push(data))
+  applyTerminalProfile(terminal)
+  const write = (data: string) => new Promise<void>(resolve => terminal.write(data, resolve))
+  await write('\x1b[c\x1b[6n\x1b]11;?\x07\x1b]8;;javascript:x\x1b\\LINK\x1b]8;;\x1b\\')
+  expect(replies).toEqual([])
+  expect(terminal.buffer.active.getLine(0)!.translateToString(true)).toBe('LINK')
+  terminal.dispose()
+})

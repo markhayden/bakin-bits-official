@@ -1,7 +1,7 @@
 import headless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { cursorVisibilitySequence, trackCursorVisibility } from './cursor-visibility'
-import { patchEraseAbove } from './xterm-fixes'
+import { applyTerminalProfile } from './terminal-profile'
 
 export class Screen {
   private terminal: InstanceType<typeof headless.Terminal>
@@ -17,7 +17,8 @@ export class Screen {
     this.terminal = new headless.Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true })
     this.terminal.loadAddon(this.serializer)
     this.cursor = trackCursorVisibility(this.terminal)
-    patchEraseAbove(this.terminal)
+    // The shared profile (spec D13): one parse for the server and every viewer.
+    applyTerminalProfile(this.terminal)
   }
   write(data: Uint8Array, parsed?: () => void): Promise<void> {
     if (this.overflow || this.queuedBytes + data.byteLength > 1024 * 1024) {

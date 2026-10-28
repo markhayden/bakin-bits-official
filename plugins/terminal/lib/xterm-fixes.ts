@@ -53,3 +53,101 @@ export function patchEraseAbove(terminal: ParserTerminal & object): void {
   terminal.parser.registerCsiHandler({ final: 'J' }, erase(false))
   terminal.parser.registerCsiHandler({ prefix: '?', final: 'J' }, erase(true))
 }
+
+type Internals = Record<string, unknown>
+const core = (terminal: object): Internals | undefined => (terminal as { _core?: Internals })._core
+
+interface BufferLineInternals { _extendedAttrs: Record<string, { urlId?: number } | undefined>; _combined: Record<string, unknown>; _data: Uint32Array }
+interface BufferInternals { lines: { length: number; maxLength: number; get(index: number): BufferLineInternals | undefined }; _rows: number; _getCorrectBufferLength(rows: number): number }
+const buffers = (terminal: object): { normal: BufferInternals; alt: BufferInternals } | undefined => {
+  const value = core(terminal)?.buffers as { normal?: BufferInternals; alt?: BufferInternals } | undefined
+  return value?.normal && value.alt ? { normal: value.normal, alt: value.alt } : undefined
+}
+
+/**
+ * xterm 6.0.0: the cleared alternate buffer keeps a line store sized for the
+ * rows when it was cleared; a resize while it is inactive does not update it,
+ * so the next activation can hold more lines than the screen has. Normalise
+ * it on every resize.
+ */
+export function patchAltBufferCapacity(terminal: { onResize(listener: () => void): { dispose(): void }; buffer: { active: { type: string } } } & object): void {
+  terminal.onResize(() => {
+    const all = buffers(terminal)
+    if (!all || terminal.buffer.active.type !== 'normal' || all.alt.lines.length !== 0 || typeof all.alt._getCorrectBufferLength !== 'function') return
+    all.alt.lines.maxLength = all.alt._getCorrectBufferLength(all.alt._rows)
+  })
+}
+
+// BufferLine cell layout (xterm 6.0.0): 3 words per cell; content word bit 21
+// marks combined (grapheme) content, bg word bit 28 marks extended attributes.
+const COMBINED = 0x200000
+const HAS_EXTENDED = 0x10000000
+
+/**
+ * xterm 6.0.0: a line's combined (grapheme) and extended-attribute maps keep
+ * entries for cells that are no longer combined or extended, and reflow on
+ * resize can pick those stale entries up. Purge them right before every
+ * resize, so reflow only sees live data.
+ */
+export function patchReflowStaleMaps(terminal: { resize(cols: number, rows: number): void } & object): void {
+  const resize = terminal.resize.bind(terminal)
+  terminal.resize = (cols: number, rows: number) => {
+    const all = buffers(terminal)
+    if (all) for (const buffer of [all.normal, all.alt]) {
+      for (let y = 0; y < buffer.lines.length; y++) {
+        const line = buffer.lines.get(y)
+        if (!line?._data) continue
+        for (const key of Object.keys(line._combined ?? {})) if (!(line._data[Number(key) * 3]! & COMBINED)) delete line._combined[key]
+        for (const key of Object.keys(line._extendedAttrs ?? {})) if (!(line._data[Number(key) * 3 + 2]! & HAS_EXTENDED)) delete line._extendedAttrs[key]
+      }
+    }
+    resize(cols, rows)
+  }
+}
+
+interface LinkEntry { id: number; key?: string; data: { id?: string }; lines: unknown[] }
+interface LinkService { _removeMarkerFromLink(entry: LinkEntry, marker: unknown): void; _dataByLinkId: Map<number, LinkEntry>; _entriesWithId: Map<string, LinkEntry> }
+
+/** Orphaned link entries kept before a reclamation sweep. */
+export const LINK_ORPHAN_LIMIT = 256
+
+/**
+ * xterm 6.0.0 keeps a link alive through markers on the lines it was printed
+ * on; scroll-region operations move content but not those markers, so a link
+ * can expire while its cells are still on screen. Losing the last marker now
+ * makes the entry an orphan instead of deleting it; past LINK_ORPHAN_LIMIT
+ * orphans, a sweep deletes every orphan no cell still references (bounded,
+ * reference-aware reclamation). A link re-opened with the same id revives
+ * its entry.
+ */
+export function patchLinkLifetime(terminal: object): { orphans(): number; sweep(): void } {
+  const service = core(terminal)?._oscLinkService as LinkService | undefined
+  const orphans = new Set<LinkEntry>()
+  const sweep = () => {
+    const all = buffers(terminal)
+    if (!service || !all) return
+    const referenced = new Set<number>()
+    for (const buffer of [all.normal, all.alt]) for (let y = 0; y < buffer.lines.length; y++) {
+      const attrs = buffer.lines.get(y)?._extendedAttrs
+      if (attrs) for (const value of Object.values(attrs)) if (value?.urlId) referenced.add(value.urlId)
+    }
+    for (const entry of orphans) {
+      if (entry.lines.length > 0) { orphans.delete(entry); continue }
+      if (referenced.has(entry.id)) continue
+      if (entry.key !== undefined) service._entriesWithId.delete(entry.key)
+      service._dataByLinkId.delete(entry.id)
+      orphans.delete(entry)
+    }
+  }
+  if (service && typeof service._removeMarkerFromLink === 'function' && service._dataByLinkId instanceof Map) {
+    service._removeMarkerFromLink = (entry, marker) => {
+      const index = entry.lines.indexOf(marker)
+      if (index === -1) return
+      entry.lines.splice(index, 1)
+      if (entry.lines.length > 0) return
+      orphans.add(entry)
+      if (orphans.size > LINK_ORPHAN_LIMIT) sweep()
+    }
+  }
+  return { orphans: () => [...orphans].filter(entry => entry.lines.length === 0).length, sweep }
+}
