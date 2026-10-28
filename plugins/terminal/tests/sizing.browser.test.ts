@@ -247,6 +247,13 @@ browserTest('a hidden cursor (Claude Code) never drags another screen sideways w
     await desk.keyboard.type('abc')
     await phone.waitForTimeout(400)
     expect(await scrollLeft()).toBe(0)
+    // After a reconnect (a fresh snapshot) the cursor is still known to be hidden.
+    await phone.reload()
+    await phone.locator('.xterm-helper-textarea').waitFor({ state: 'attached' })
+    await phone.waitForFunction(() => document.querySelector('.xterm-accessibility-tree')?.textContent?.includes('HIDDEN_READY'))
+    await desk.keyboard.type('def')
+    await phone.waitForTimeout(400)
+    expect(await scrollLeft()).toBe(0)
     // The cursor shown again (a shell or vim) is followed sideways as before.
     await desk.keyboard.press('Control+C')
     await desk.keyboard.type("printf '\\033[?25h%150s'; cat")

@@ -5,6 +5,7 @@ import { Button } from '@makinbakin/sdk/ui'
 import { ArrowDown, ZoomOut } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import { clampSize } from '../lib/sizing'
+import { trackCursorVisibility } from '../lib/cursor-visibility'
 import { clientId } from './api'
 import { enableWebgl } from './terminal-renderer'
 import { TerminalSocketClient, type InputResult } from './terminal-socket'
@@ -23,7 +24,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
   const element = useRef<HTMLDivElement>(null)
   const actions = useRef<HTMLDivElement>(null)
   // DECTCEM as the output last set it (xterm keeps this private).
-  const cursorHidden = useRef(false)
+  const cursorVisibility = useRef<ReturnType<typeof trackCursorVisibility> | null>(null)
   // This screen sizes the grid only while it holds the session's size claim;
   // every other screen renders the real grid at a font fitted to its width.
   const authority = session.state === 'running' && session.sizeAuthority?.viewer === clientId()
@@ -137,7 +138,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     // A hidden cursor (Claude Code draws its own caret and leaves the real
     // one wherever its last line ended) is followed down to the input rows,
     // never sideways: typing must not drag the view.
-    if (cursorHidden.current) next.left = el.scrollLeft
+    if (cursorVisibility.current?.hidden) next.left = el.scrollLeft
     if (next.left !== el.scrollLeft || next.top !== el.scrollTop) el.scrollTo(next.left, next.top)
   }
   function overflows(): boolean {
@@ -168,14 +169,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     fit.current = new FitAddon()
     term.loadAddon(fit.current)
     term.open(element.current!)
-    cursorHidden.current = false
-    // Track show/hide cursor (CSI ? 25 h/l) and let xterm handle it as well.
-    const cursorMode = (hidden: boolean) => (params: (number | number[])[]) => {
-      if (params.includes(25)) cursorHidden.current = hidden
-      return false
-    }
-    term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, cursorMode(false))
-    term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, cursorMode(true))
+    // Show/hide cursor as the output sets it; a sync's snapshot ends with it too.
+    cursorVisibility.current = trackCursorVisibility(term)
     const disposeRenderer = enableWebgl(term)
     inputHandle.current = {
       key(key) {
@@ -240,7 +235,6 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
       onSync: (sync) => {
         // A sync is a complete picture: the snapshot, then output after its cursor.
         term.reset()
-        cursorHidden.current = false
         if (sync.snapshot) term.write(Uint8Array.from(atob(sync.snapshot), (value) => value.charCodeAt(0)))
         callbacks.current.onSession(sync.session)
         ready.current = sync.session.state !== 'completed'
