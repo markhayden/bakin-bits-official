@@ -59,6 +59,7 @@ export type ReplicaDiagnostic =
   | { kind: 'rebuilding'; cause: RebuildCause; backlog: number; tailBytes: number }
   | { kind: 'rebuilt'; cause: RebuildCause; skippedBytes: number; fromSeq: number; toSeq: number; ms: number }
   | { kind: 'ended'; reason: string }
+  | { kind: 'listener failed'; error: string }
 
 /** Runs one capture in the heavy-work queue (lib/reseed.ts ReseedOptions.attempt). */
 export type CaptureTurn = <T>(capture: () => Promise<T>) => Promise<T>
@@ -88,8 +89,35 @@ export interface ReplicaStats {
   skippedBytes: number
 }
 
-/** A join's starting point: the base, and every event after it. */
-export interface JoinPoint { checkpoint: Checkpoint; seq: number; tail: readonly LogEvent[] }
+/**
+ * A join's starting point (spec D13, plan T33): the base checkpoint and its
+ * seq, and an immutable snapshot of every event committed after it, through
+ * `throughSeq` (the tail's last, or the base's own seq). A subscriber is
+ * told of events after `throughSeq` only.
+ */
+export interface Cut { checkpoint: Checkpoint; baseSeq: number; tail: readonly LogEvent[]; throughSeq: number }
+
+/** Where a replica is: joinable (its cut), waiting for its first seed or a rebuild's, or ended. */
+export type ReplicaState =
+  | { kind: 'live'; cut: Cut }
+  | { kind: 'seeding' }
+  | { kind: 'rebuilding'; cause: RebuildCause }
+  | { kind: 'ended'; reason: string }
+
+/**
+ * Told of a replica's changes after the state it subscribed at, in order.
+ * Called synchronously and never awaited: keep each call bounded; a throw is
+ * contained (logged as a diagnostic) and never reaches the replica.
+ */
+export interface ReplicaListener {
+  /** An event committed to the tail (an event a rebuild interrupted is never told). */
+  event(event: LogEvent): void
+  /** Base and tail are gone until a seed. */
+  rebuilding(cause: RebuildCause): void
+  /** A seed was applied whole: `state()` has the new cut. */
+  rebased(): void
+  ended(reason: string): void
+}
 
 /** A heavy job given up while it waited for its turn. */
 export class Cancelled extends Error {
@@ -161,6 +189,7 @@ interface Episode { cause: RebuildCause; since: number; fromSeq: number; skipped
 export class Replica implements LogConsumer {
   private term: Term | undefined
   private links: LinkLifetime | undefined
+  private listeners = new Set<ReplicaListener>()
   private parser: { readonly failed: boolean } | undefined
   private base: { checkpoint: Checkpoint; seq: number } | undefined
   private tail: LogEvent[] = []
@@ -214,9 +243,33 @@ export class Replica implements LogConsumer {
   /** Milliseconds since the last event finished (read it from `read`: no event is in flight there). */
   get quietMs(): number { return this.now() - this.settledAt }
 
-  /** Where a join starts, or undefined while there is none (no seed yet, or rebuilding). */
-  joinPoint(): JoinPoint | undefined {
-    return this.base && { ...this.base, tail: this.tail.slice() }
+  /** Where the replica is now; when live, its cut (an immutable snapshot of the tail). */
+  state(): ReplicaState {
+    if (this.failure) return { kind: 'ended', reason: this.failure }
+    if (this.rebuilding) return { kind: 'rebuilding', cause: this.rebuilding }
+    if (!this.base) return { kind: 'seeding' }
+    const tail = this.tail.slice()
+    return { kind: 'live', cut: { checkpoint: this.base.checkpoint, baseSeq: this.base.seq, tail, throughSeq: tail.at(-1)?.seq ?? this.base.seq } }
+  }
+
+  /** The live cut, or undefined while there is none (no seed yet, rebuilding, or ended). */
+  cut(): Cut | undefined {
+    const state = this.state()
+    return state.kind === 'live' ? state.cut : undefined
+  }
+
+  /** The state now and every change after it, with no gap between (both taken in this turn). */
+  subscribe(listener: ReplicaListener): { state: ReplicaState; unsubscribe(): void } {
+    this.listeners.add(listener)
+    return { state: this.state(), unsubscribe: () => { this.listeners.delete(listener) } }
+  }
+
+  private notify(call: (listener: ReplicaListener) => void): void {
+    for (const listener of [...this.listeners]) {
+      try { call(listener) } catch (error) {
+        this.options.diagnostic?.({ kind: 'listener failed', error: error instanceof Error ? error.message : String(error) })
+      }
+    }
   }
 
   /** Ask for the first seed (through the heavy-work queue, like every capture). */
@@ -297,6 +350,7 @@ export class Replica implements LogConsumer {
   private push(event: LogEvent, bytes: number): void {
     this.tail.push(event)
     this.tailBytes += bytes
+    this.notify((listener) => listener.event(event))
   }
 
   private async seed(event: Extract<LogEvent, { kind: 'seed' }>): Promise<void> {
@@ -332,6 +386,7 @@ export class Replica implements LogConsumer {
         altEnteredCols: terminal.buffer.active.type === 'alternate' ? altEnteredCols(terminal) ?? null : null,
       },
     }
+    this.notify((listener) => listener.rebased())
     const episode = this.episode
     this.episode = undefined
     if (episode) {
@@ -357,6 +412,7 @@ export class Replica implements LogConsumer {
     this.tailBytes = 0
     clearTimeout(this.idleTimer)
     this.interrupt?.()
+    this.notify((listener) => listener.rebuilding(cause))
     if (!this.episode) {
       this.episode = { cause, since: this.now(), fromSeq: this.appliedSeq + 1, skippedBytes: 0 }
       this.stats.rebuilds[cause] = (this.stats.rebuilds[cause] ?? 0) + 1
@@ -453,5 +509,7 @@ export class Replica implements LogConsumer {
     this.term?.dispose()
     this.term = undefined
     this.options.diagnostic?.({ kind: 'ended', reason })
+    this.notify((listener) => listener.ended(reason))
+    this.listeners.clear()
   }
 }

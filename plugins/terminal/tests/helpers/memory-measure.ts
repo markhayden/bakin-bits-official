@@ -154,7 +154,7 @@ async function measure(shape: Shape): Promise<Measurement> {
     // collection every 250 steps. The rest of a full tail is added (bounded).
     for (const event of outputEvents(more.subarray(0, CHECKPOINT_BYTES - BATCH_BYTES), 2)) await r.event(event)
     await r.idle()
-    keep.push([r.joinPoint(), r.joinPoint(), r.joinPoint()])
+    keep.push([r.cut(), r.cut(), r.cut()])
     const steps = checkpointSteps(r.terminal!)
     let high = heap()
     let result: CheckpointResult | undefined
@@ -176,7 +176,7 @@ async function measure(shape: Shape): Promise<Measurement> {
     const rss = await resident(async () => {
       for (const event of events) {
         await r.event(event)
-        if (joins.length < 3) joins.push(r.joinPoint())
+        if (joins.length < 3) joins.push(r.cut())
       }
       await r.idle()
     })

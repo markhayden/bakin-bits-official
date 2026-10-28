@@ -3,7 +3,7 @@ import { restoreCheckpoint } from '../lib/checkpoint'
 import { BATCH_BYTES, type LogEvent } from '../lib/output-log'
 import {
   CHECKPOINT_BYTES, heavyWorkRunning, MAX_BACKLOG_BYTES, MAX_TAIL_BYTES, MAX_TAIL_EVENTS, REBUILD_INTERVAL_MS, REBUILD_QUIET_MS, Replica,
-  type JoinPoint, type ReplicaDiagnostic, runSliced,
+  type Cut, type ReplicaDiagnostic, runSliced,
 } from '../lib/replica'
 import { EVENT_OVERHEAD_BYTES, terminalBytes } from '../lib/memory'
 import { drain, fullState, stateDiff, type Term } from '../lib/terminal-state'
@@ -37,7 +37,7 @@ function replica(options: Partial<ConstructorParameters<typeof Replica>[0]> = {}
 }
 
 /** A viewer's join: the base restored, then the tail. */
-async function join(point: JoinPoint): Promise<Term> {
+async function join(point: Cut): Promise<Term> {
   const { checkpoint } = point
   const viewer = emulator(checkpoint.cols, checkpoint.rows, checkpoint.scrollback)
   await restoreCheckpoint(viewer, checkpoint)
@@ -48,8 +48,8 @@ async function join(point: JoinPoint): Promise<Term> {
   await settled(viewer)
   return viewer
 }
-async function expectJoinable(r: Replica): Promise<JoinPoint> {
-  const point = r.joinPoint()
+async function expectJoinable(r: Replica): Promise<Cut> {
+  const point = r.cut()
   expect(point).toBeDefined()
   const viewer = await join(point!)
   expect(stateDiff(fullState(viewer), fullState(r.terminal!))).toBeNull()
@@ -74,11 +74,11 @@ describe('Replica', () => {
     const { r } = replica()
     await r.event(s.output('before the seed'))
     expect(r.terminal).toBeUndefined()
-    expect(r.joinPoint()).toBeUndefined()
+    expect(r.cut()).toBeUndefined()
     await r.event(s.seed('\x1bc\x1b[1mseeded\x1b[0m\r\n$ ', 40, 10))
     await r.event(s.output('typed'))
     const point = await expectJoinable(r)
-    expect(point.seq).toBe(2)
+    expect(point.baseSeq).toBe(2)
     expect(point.tail.map((event) => event.seq)).toEqual([3])
     expect(r.terminal!.buffer.active.getLine(1)!.translateToString(true)).toBe('$ typed')
     r.close()
@@ -103,7 +103,7 @@ describe('Replica', () => {
     const { r } = replica({ idleMs: 20 })
     await r.event(s.seed('\x1bc', 40, 10))
     await r.event(s.output('a little output'))
-    expect(r.joinPoint()!.tail.length).toBe(1)
+    expect(r.cut()!.tail.length).toBe(1)
     await Bun.sleep(60)
     await r.idle()
     expect(r.stats.accepted).toBe(1)
@@ -132,7 +132,7 @@ describe('Replica', () => {
     await r.event(s.output('\x1b]0;'))
     const payload = 'x'.repeat(65536)
     for (let sent = 0; sent <= MAX_TAIL_BYTES; sent += payload.length) await r.event(s.output(payload))
-    expect(r.joinPoint()).toBeUndefined()
+    expect(r.cut()).toBeUndefined()
     expect(reseeds).toEqual(['tail bound'])
     expect(r.tailSize).toBe(0)
     // Output while waiting is not kept; the next seed is the next base.
@@ -158,7 +158,7 @@ describe('Replica', () => {
     expect(reseeds).toEqual([])
     await r.event(s.layout(100, 30))
     expect(reseeds).toEqual(['width'])
-    expect(r.joinPoint()).toBeUndefined()
+    expect(r.cut()).toBeUndefined()
     r.close()
   })
 
@@ -180,7 +180,7 @@ describe('Replica', () => {
     // The capture takes its turn once the abandoned checkpoint gives the slot up (at its next slice).
     for (let tries = 0; tries < 200 && reseeds.length === 0; tries++) await Bun.sleep(1)
     expect(reseeds).toEqual(['overload'])
-    expect(r.joinPoint()).toBeUndefined()
+    expect(r.cut()).toBeUndefined()
     // Output while rebuilding is skipped, not parsed.
     const before = r.stats.skippedBytes
     const parsed = r.terminal!.buffer.normal.length
@@ -192,7 +192,7 @@ describe('Replica', () => {
     await r.event(s.output('\r\nnext'))
     expect(r.rebuildCause).toBeUndefined()
     const point = await expectJoinable(r)
-    expect(point.seq).toBe(seed.seq)
+    expect(point.baseSeq).toBe(seed.seq)
     expect(point.tail.map((event) => event.seq)).toEqual([seed.seq + 1])
     const rebuilt = diagnostics.find((event) => event.kind === 'rebuilt')
     expect(rebuilt).toMatchObject({ kind: 'rebuilt', cause: 'overload', toSeq: seed.seq })
@@ -273,7 +273,7 @@ describe('Replica', () => {
     await Bun.sleep(5)
     r.pressure(MAX_BACKLOG_BYTES)
     await pending
-    expect(r.joinPoint()).toBeUndefined()
+    expect(r.cut()).toBeUndefined()
     expect(r.rebuildCause).toBe('overload')
     expect(reseeds).toEqual(['overload'])
     r.close()
@@ -353,7 +353,7 @@ describe('Replica', () => {
     await Bun.sleep(60)
     await r.idle()
     expect(r.stats.accepted).toBe(1)
-    expect(r.joinPoint()!.tail).toEqual([])
+    expect(r.cut()!.tail).toEqual([])
     for (let i = 0; i <= MAX_TAIL_EVENTS; i++) await r.event(s.layout(80, 24 + (i % 2)))
     expect(reseeds).toEqual(['tail bound'])
     r.close()
@@ -385,12 +385,113 @@ describe('Replica', () => {
     await r.event(s.seed('\x1bc', 40, 10))
     r.invalid('overflow')
     expect(ended()).toEqual(['log invalid: overflow'])
-    expect(r.joinPoint()).toBeUndefined()
+    expect(r.cut()).toBeUndefined()
     expect(r.terminal).toBeUndefined()
     await r.event(s.output('ignored'))
     r.pressure(MAX_BACKLOG_BYTES)
     r.close()
     expect(ended()).toEqual(['log invalid: overflow'])
+  })
+})
+
+describe('Replica subscription', () => {
+  function listener() {
+    const told: string[] = []
+    const events: LogEvent[] = []
+    return {
+      told, events,
+      handle: { event: (e: LogEvent) => { events.push(e); told.push(`event ${e.seq}`) }, rebuilding: (cause: string) => told.push(`rebuilding ${cause}`), rebased: () => told.push('rebased'), ended: (reason: string) => told.push(`ended ${reason}`) },
+    }
+  }
+  it('starts seeding, is told of the seed, then of every committed event after its cut', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    const l = listener()
+    const { state } = r.subscribe(l.handle)
+    expect(state).toEqual({ kind: 'seeding' })
+    await r.event(s.seed('\x1bc', 40, 10))
+    expect(l.told).toEqual(['rebased'])
+    const cut = r.cut()!
+    expect(cut).toMatchObject({ baseSeq: 1, throughSeq: 1, tail: [] })
+    await r.event(s.output('one'))
+    await r.event(s.layout(40, 12))
+    expect(l.told).toEqual(['rebased', 'event 2', 'event 3'])
+    expect(r.cut()!.throughSeq).toBe(3)
+    r.close()
+  })
+  it('leaves no gap and no duplicate between the cut and the events after it, joined mid-apply', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 40, 10))
+    await r.event(s.output('before'))
+    // An event still being parsed is not committed: the cut leaves it out, the listener is told of it.
+    const inFlight = r.event(s.output('x'.repeat(50_000)))
+    const l = listener()
+    const { state } = r.subscribe(l.handle)
+    if (state.kind !== 'live') throw new Error('expected a live cut')
+    const after = [r.event(s.output('after')), inFlight]
+    await Promise.all(after)
+    const seqs = [...state.cut.tail.map((e) => e.seq), ...l.events.map((e) => e.seq)]
+    expect(seqs).toEqual([2, 3, 4])
+    expect(state.cut.throughSeq).toBe(2)
+    expect(l.events.every((e) => e.seq > state.cut.throughSeq)).toBe(true)
+    r.close()
+  })
+  it('a cut stays whole when a checkpoint replaces the tail', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 80, 24))
+    await r.event(s.output('kept in the cut'))
+    const cut = r.cut()!
+    await deliver(r, s, flood(CHECKPOINT_BYTES + BATCH_BYTES))
+    await r.idle()
+    expect(r.stats.accepted).toBe(1)
+    expect(r.cut()!.baseSeq).toBeGreaterThan(cut.baseSeq)
+    expect(cut.tail.map((e) => e.seq)).toEqual([2])
+    r.close()
+  })
+  it('never tells of an event a rebuild interrupted, and tells of the rebuild', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 40, 10))
+    const l = listener()
+    r.subscribe(l.handle)
+    const interrupted = r.event(s.output('y'.repeat(50_000)))
+    r.pressure(MAX_BACKLOG_BYTES)
+    await interrupted
+    expect(l.told).toEqual(['rebuilding overload'])
+    expect(r.state()).toEqual({ kind: 'rebuilding', cause: 'overload' })
+    await r.event(s.output('skipped'))
+    expect(l.events).toEqual([])
+    r.close()
+  })
+  it('contains a throwing listener: the replica and the other listeners carry on', async () => {
+    const s = stream()
+    const { r, diagnostics } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 40, 10))
+    r.subscribe({ event: () => { throw new Error('viewer broke') }, rebuilding: () => undefined, rebased: () => undefined, ended: () => undefined })
+    const l = listener()
+    r.subscribe(l.handle)
+    await r.event(s.output('still parsed'))
+    expect(l.told).toEqual(['event 2'])
+    expect(diagnostics).toContainEqual({ kind: 'listener failed', error: 'viewer broke' })
+    expect(r.cut()!.throughSeq).toBe(2)
+    r.close()
+  })
+  it('tells of its end once, then forgets its listeners; unsubscribing stops the calls', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 40, 10))
+    const kept = listener()
+    const gone = listener()
+    r.subscribe(kept.handle)
+    r.subscribe(gone.handle).unsubscribe()
+    await r.event(s.output('one'))
+    r.close()
+    r.close()
+    expect(kept.told).toEqual(['event 2', 'ended closed'])
+    expect(gone.told).toEqual([])
+    expect(r.state()).toEqual({ kind: 'ended', reason: 'closed' })
   })
 })
 

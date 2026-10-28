@@ -63,7 +63,7 @@ processTest('the shadow replica agrees with the bridge at quiet points', async (
   const h = await harness(root)
   try {
     await until(async () => (await h.manager.readScreen(h.session.id, human)).screen.trim().length > 0, 'prompt')
-    await until(() => Boolean(h.driver.replica(h.session.id)?.joinPoint()), 'seeded')
+    await until(() => Boolean(h.driver.replica(h.session.id)?.cut()), 'seeded')
     // Colours, a wide character, a cursor move, a region, and the alternate screen and back.
     await h.type(`printf '\\033[31mred\\033[0m wide:\\343\\201\\202 tab:\\there\\n\\033[5;10Hplaced\\n'; seq 1 60\r`)
     await until(() => (h.manager.shadow.get(h.session.id)?.compared ?? 0) > 0, 'first comparison')
@@ -84,7 +84,7 @@ processTest('a flood faster than the replica parses: it rebuilds from tmux inste
   const root = mkdtempSync(join(tmpdir(), 'bakin-replica-flood-'))
   const h = await harness(root)
   try {
-    await until(() => Boolean(h.driver.replica(h.session.id)?.joinPoint()), 'seeded')
+    await until(() => Boolean(h.driver.replica(h.session.id)?.cut()), 'seeded')
     const replica = h.driver.replica(h.session.id)!
     const log = h.driver.outputLog(h.session.id)!
     let worstBacklog = 0
@@ -110,7 +110,7 @@ processTest('a flood faster than the replica parses: it rebuilds from tmux inste
     await until(() => outputAt > 0 && performance.now() - outputAt > 500, 'flood stopped', 10_000)
     const stopped = outputAt - interrupted
     // Converged: a valid replica again, and the bridge agrees with it at the next quiet point.
-    await until(() => Boolean(replica.joinPoint()), 'converged', 10_000)
+    await until(() => Boolean(replica.cut()), 'converged', 10_000)
     const compared = h.manager.shadow.get(h.session.id)?.compared ?? 0
     const mismatched = h.manager.shadow.get(h.session.id)?.mismatched ?? 0
     await h.type('echo settled\r')
