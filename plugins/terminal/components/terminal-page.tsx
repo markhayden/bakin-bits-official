@@ -10,7 +10,7 @@ import { attachCommand, shortId, type Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
 import { api } from './api'
 import { KeyBar } from './key-bar'
-import { useCoarsePointer, useEditingSession } from './editing-session'
+import { useCoarsePointer, useEditingSession, useEnterHidesKeyboard } from './editing-session'
 import { NO_MODIFIERS, type ModifierState, type TerminalInputHandle } from './terminal-input'
 import { TerminalCanvas, type TerminalViewHandle } from './terminal-canvas'
 import { SizeControl } from './size-control'
@@ -146,6 +146,8 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const touch = useCoarsePointer()
   const keyed = Boolean(session && !ended && !session.historyDeleted && touch)
   const [editing, editingEvent] = useEditingSession(keyed)
+  // Return on the phone keyboard sends the line and puts the keyboard away, so the response has the screen.
+  useEnterHidesKeyboard(keyed && editing === 'typing', () => { editingEvent('hide'); inputHandle.current?.blur() })
   // Invalidate stale writes before newly enabled controls can accept input.
   useLayoutEffect(() => { epoch.current++ }, [sessionId, session?.generation, connected, serviceReady])
   const chipTone = session?.historyDeleted || ended ? 'neutral' : !connected ? 'attention' : writable ? 'success' : 'neutral'

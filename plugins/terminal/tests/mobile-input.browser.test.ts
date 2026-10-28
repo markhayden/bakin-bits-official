@@ -199,6 +199,53 @@ browserTest('the phone key bar follows the typing session and its keys send exac
   }
 }, 90000)
 
+browserTest('return on the on-screen keyboard sends the line and puts the keyboard away; a hardware Enter keeps it', async () => {
+  const browser = await launchChromium()
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+  page.setDefaultTimeout(10000)
+  const endpoint = new URL('/api/plugins/terminal/session', process.env.TERMINAL_PREVIEW_URL!).href
+  const headers = { 'X-Bakin-Terminal-Client': 'mobile-enter-hides-test' }
+  let id: string | undefined
+  const socket = await viewerSocket(page)
+  await fakeViewport(page, 390, 844)
+  const output = async (text: string) => page.waitForFunction(text => document.querySelector('.xterm-accessibility-tree')?.textContent?.replace(/\s+/g, ' ').includes(text), text)
+  try {
+    const created = await page.request.post(endpoint + 's', { headers, data: { title: 'Enter hides', cwd: '/tmp' } })
+    id = (await created.json()).id
+    await page.goto(new URL('/terminal/' + id, endpoint).href)
+    const input = page.locator('.xterm-helper-textarea')
+    await input.waitFor({ state: 'attached' })
+    const keys = page.getByRole('group', { name: 'Terminal keys', exact: true })
+    // A hardware keyboard (a physical key code, nothing covering the screen): Enter keeps typing.
+    await input.focus()
+    await keys.waitFor()
+    await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('.terminal-key-bar button')?.disabled === false)
+    await page.keyboard.type("printf 'HARD_%s\\n' ENTER")
+    await page.keyboard.press('Enter')
+    await output('HARD_ENTER')
+    await page.waitForTimeout(200)
+    expect(await keys.count()).toBe(1)
+    expect(await input.evaluate(el => el === document.activeElement)).toBe(true)
+    // The on-screen keyboard up (the screen covered): return sends, then the keyboard goes.
+    await keyboard(page, 500)
+    await page.keyboard.type("printf 'SOFT_%s\\n' ENTER")
+    await page.keyboard.press('Enter')
+    await socket.waitFor((frame) => frame.type === 'input' && String(frame.data).includes('\r') && socket.typed().includes('SOFT_'))
+    await output('SOFT_ENTER')
+    await keys.waitFor({ state: 'detached' })
+    expect(await input.evaluate(el => el === document.activeElement)).toBe(false)
+    await page.getByRole('button', { name: 'Show keyboard', exact: true }).waitFor()
+    // A keyboard reporting no physical key code is on-screen too.
+    await keyboard(page, 844)
+    await page.getByRole('button', { name: 'Show keyboard', exact: true }).tap()
+    await keys.waitFor()
+    await input.evaluate((el) => { el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: '', keyCode: 13, bubbles: true, cancelable: true })) })
+    await keys.waitFor({ state: 'detached' })
+  } finally {
+    try { await terminate(page, endpoint, headers, id) } finally { await browser.close() }
+  }
+}, 60000)
+
 browserTest('ownership changes and reconnects release the modifiers and disable the sending keys', async () => {
   const browser = await launchChromium()
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })

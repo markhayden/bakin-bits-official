@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { nextSession, type SessionEvent } from '../components/editing-session'
+import { enterHidesKeyboard, nextSession, type SessionEvent } from '../components/editing-session'
 
 const run = (events: SessionEvent[]) => events.reduce(nextSession, 'idle' as const as ReturnType<typeof nextSession>)
 
@@ -26,5 +26,23 @@ describe('the phone editing session', () => {
   it('ignores key focus and focus loss while idle', () => {
     expect(run(['focus-keys'])).toBe('idle')
     expect(run(['focus-lost'])).toBe('idle')
+  })
+})
+
+describe('Enter puts the on-screen keyboard away', () => {
+  const enter = { key: 'Enter', code: '', isComposing: false, shiftKey: false, altKey: false, ctrlKey: false, metaKey: false }
+  it('for an on-screen keyboard: no physical key code, or a visibly covered screen', () => {
+    expect(enterHidesKeyboard(enter, undefined)).toBe(true)
+    expect(enterHidesKeyboard({ ...enter, code: 'Enter' }, 300)).toBe(true)
+  })
+  it('not for a hardware keyboard (a physical key code and an uncovered screen)', () => {
+    expect(enterHidesKeyboard({ ...enter, code: 'Enter' }, 0)).toBe(false)
+    expect(enterHidesKeyboard({ ...enter, code: 'NumpadEnter' }, 55)).toBe(false)
+    expect(enterHidesKeyboard({ ...enter, code: 'Enter' }, undefined)).toBe(false)
+  })
+  it('not for other keys, an IME confirming its text, or a modified Enter', () => {
+    expect(enterHidesKeyboard({ ...enter, key: 'a' }, 300)).toBe(false)
+    expect(enterHidesKeyboard({ ...enter, isComposing: true }, 300)).toBe(false)
+    expect(enterHidesKeyboard({ ...enter, shiftKey: true }, 300)).toBe(false)
   })
 })

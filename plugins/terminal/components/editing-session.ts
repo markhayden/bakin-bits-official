@@ -33,6 +33,28 @@ export const isTerminalInput = (element: Element | null): boolean => element?.cl
 /** The bar, the sheet, and anything portalled from them. */
 export const isTerminalKeys = (element: Element | null): boolean => Boolean(element?.closest('[data-terminal-keys]'))
 
+/** Below the visual viewport, this much covered screen means an on-screen keyboard is up. */
+export const SOFT_KEYBOARD_PX = 150
+
+/**
+ * Whether Enter from the terminal's input should put the keyboard away
+ * (Mark, 2026-10-28: after sending, the response needs the screen). Only the
+ * on-screen keyboard: a hardware keyboard would lose focus for nothing.
+ * On-screen keyboards leave KeyboardEvent.code empty; failing that, a
+ * visibly covered screen says one is up.
+ */
+export function enterHidesKeyboard(event: Pick<KeyboardEvent, 'key' | 'code' | 'isComposing' | 'shiftKey' | 'altKey' | 'ctrlKey' | 'metaKey'>, covered: number | undefined): boolean {
+  if (event.key !== 'Enter' || event.isComposing || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return false
+  return event.code === '' || (covered !== undefined && covered > SOFT_KEYBOARD_PX)
+}
+
+/** How much of the layout viewport the visual viewport leaves covered at the bottom (an on-screen keyboard). */
+export function coveredByKeyboard(): number | undefined {
+  const viewport = typeof window === 'undefined' ? undefined : window.visualViewport
+  if (!viewport || Math.abs(viewport.scale - 1) > 0.01) return undefined
+  return Math.max(0, window.innerHeight - (viewport.offsetTop + viewport.height))
+}
+
 /** Track the session from focus; `enabled` is false off touch screens and without a live session. */
 export function useEditingSession(enabled: boolean): [EditingSession, (event: SessionEvent) => void] {
   const [session, setSession] = useState<EditingSession>('idle')
@@ -64,6 +86,25 @@ export function useEditingSession(enabled: boolean): [EditingSession, (event: Se
     }
   }, [enabled, dispatch])
   return [session, dispatch]
+}
+
+/** Enter on the on-screen keyboard sends the line, then `hide` puts the keyboard away. */
+export function useEnterHidesKeyboard(enabled: boolean, hide: () => void) {
+  const latest = useRef(hide)
+  latest.current = hide
+  useEffect(() => {
+    if (!enabled) return
+    let pending: ReturnType<typeof setTimeout> | undefined
+    const keydown = (event: KeyboardEvent) => {
+      if (!isTerminalInput(event.target instanceof Element ? event.target : null)) return
+      if (!enterHidesKeyboard(event, coveredByKeyboard())) return
+      // After xterm has sent the Enter in this same event.
+      clearTimeout(pending)
+      pending = setTimeout(() => latest.current(), 0)
+    }
+    document.addEventListener('keydown', keydown, true)
+    return () => { clearTimeout(pending); document.removeEventListener('keydown', keydown, true) }
+  }, [enabled])
 }
 
 /** A touch screen (the primary pointer is coarse): the only devices that get a key bar. */
