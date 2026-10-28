@@ -4,26 +4,39 @@ type Timer = ReturnType<typeof setTimeout>
 export interface Scheduler { set(fn: () => void, ms: number): Timer; clear(timer: Timer | undefined): void }
 const realTime: Scheduler = { set: (fn, ms) => setTimeout(fn, ms), clear: (timer) => clearTimeout(timer) }
 
-/** How long a finished IME composition waits for xterm to deliver its text. */
-export const COMPOSITION_COMMIT_MS = 200
+/**
+ * One key, as the terminal's input delivers it: a single character
+ * (typed, IME-committed, or a hardware control character), an ESC-prefixed
+ * single character (Meta/Alt), or a cursor/tilde key sequence, modified or not.
+ */
+export function isKey(data: string): boolean {
+  if ([...data].length === 1) return true
+  if (!data.startsWith('\x1b')) return false
+  const sequence = data.slice(1)
+  return [...sequence].length === 1 || /^(?:O|\[)[ABCDHF]$/.test(sequence) || /^\[1;\d+[ABCDHF]$/.test(sequence) || /^\[[356](?:;\d+)?~$/.test(sequence)
+}
 
 /**
  * The bar's modifiers between the key bar and the terminal (spec D9 item 9).
- * xterm's onData carries the operator's typing, but also xterm's own
- * replies (focus reports, cursor-position answers) and the encoded bytes of
- * bar keys. Only the operator's single keystrokes take a modifier and
- * consume a one-shot one: bar keys are already encoded, paste and IME
- * composition are sent as typed, and xterm's own replies are left alone.
+ *
+ * The contract is about what is sent, not which input path produced it:
+ * xterm delivers typing through keypress, IME commits (deferred or flushed
+ * by the next key), and Android's composition path alike, so the source
+ * cannot be told apart reliably. Instead:
+ * - one key takes the modifiers and consumes a one-shot one, however it
+ *   arrived (a locked Control makes every key Control+key);
+ * - other text (words, autocorrect, dictation, CJK commits) is sent as
+ *   typed and consumes a one-shot modifier;
+ * - paste is sent exactly as pasted;
+ * - ESC sequences that are not keys are xterm's own replies (focus reports,
+ *   cursor-position answers, mouse reports): untouched and never consuming;
+ * - bar keys arrive already encoded and pass through untouched.
  */
 export class ModifierInput {
   private state: ModifierState = NO_MODIFIERS
   private passthrough = false
-  private user = false
   private pasting = false
-  private userTimer: Timer | undefined
-  private composing = false
-  private committed = false
-  private commitTimer: Timer | undefined
+  private pasteTimer: Timer | undefined
 
   constructor(private readonly notify: (state: ModifierState) => void, private readonly time: Scheduler = realTime) {}
 
@@ -40,41 +53,12 @@ export class ModifierInput {
   clearOnce() { this.set(afterSend(this.state)) }
   toggle(modifier: Modifier, action: 'tap' | 'lock' = 'tap') { this.set(toggleModifier(this.state, modifier, action)) }
 
-  /**
-   * The operator acted on the terminal's input: data in this task is theirs.
-   * The canvas listens in capture on xterm's container, so this runs before
-   * xterm's own handlers.
-   */
-  userEvent() {
-    this.user = true
-    this.time.clear(this.userTimer)
-    this.userTimer = this.time.set(() => { this.user = false; this.pasting = false }, 0)
-  }
-  /** Paste is the operator's, and sent exactly as pasted: no modifier, lock or not. */
-  paste() { this.userEvent(); this.pasting = true; this.clearOnce() }
-  private endComposition() {
-    this.time.clear(this.commitTimer)
-    this.composing = false
-    this.committed = false
-  }
-  compositionStart() {
-    this.time.clear(this.commitTimer)
-    this.composing = true
-    this.committed = false
+  /** A paste event: xterm sends the clipboard text within it, exactly as pasted. */
+  paste() {
     this.clearOnce()
-  }
-  /**
-   * `committed` is the composition's final text (CompositionEvent.data).
-   * xterm delivers it after compositionend, from a deferred read or a flush
-   * on the next key, so the composition stays raw until that text arrives
-   * (capped). A composition that committed nothing ends at once: no text is
-   * coming, and the next keystroke takes the modifiers again.
-   */
-  compositionEnd(committed: string) {
-    if (!committed) { this.endComposition(); return }
-    this.committed = true
-    this.time.clear(this.commitTimer)
-    this.commitTimer = this.time.set(() => this.endComposition(), COMPOSITION_COMMIT_MS)
+    this.pasting = true
+    this.time.clear(this.pasteTimer)
+    this.pasteTimer = this.time.set(() => { this.pasting = false }, 0)
   }
 
   /** A bar key: encode it with the current modifiers, consume the one-shot ones, and let `deliver` send the bytes untouched. */
@@ -87,21 +71,15 @@ export class ModifierInput {
 
   /** What to send for one onData event. */
   data(data: string): string {
-    if (this.passthrough) return data
-    if (this.composing) {
-      if (this.committed) this.endComposition()
-      return data
+    if (this.passthrough || this.pasting) return data
+    if (isKey(data)) {
+      const sent = consumeModifiers(data, activeModifiers(this.state))
+      this.clearOnce()
+      return sent
     }
-    if (this.pasting) return data
-    // xterm's own replies (focus reports, terminal answers) are not keystrokes.
-    if (!this.user) return data
-    const sent = consumeModifiers(data, activeModifiers(this.state))
-    this.clearOnce()
-    return sent
+    if (!data.startsWith('\x1b')) this.clearOnce()
+    return data
   }
 
-  dispose() {
-    this.time.clear(this.userTimer)
-    this.time.clear(this.commitTimer)
-  }
+  dispose() { this.time.clear(this.pasteTimer) }
 }

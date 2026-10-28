@@ -149,28 +149,25 @@ browserTest('the phone key bar follows the typing session and its keys send exac
     mkdirSync(images, { recursive: true })
     await page.screenshot({ path: join(images, (process.env.TERMINAL_BROWSER ?? 'chromium') + '-keyboard-open.png') })
 
-    // Composition and paste never take a modifier: they clear the one-shot one.
-    await keys.getByRole('button', { name: 'Control', exact: true }).tap()
-    await input.dispatchEvent('compositionstart')
-    await keys.getByRole('button', { name: 'Control', exact: true }).waitFor()
-    await input.dispatchEvent('compositionend')
-
     // (Focus reports while the sheet opens are covered in modifier-input.test.ts:
     // tmux consumes ?1004h today, so the browser terminal never reports focus.)
 
-    // IME: a composed commit under a locked Control is sent as typed, never as a control key (Chromium drives a real composition).
+    // IME: a composed word under a locked Control is sent as typed, and the lock
+    // stays (Chromium drives a real composition). A single key takes the lock.
     if (process.env.TERMINAL_BROWSER !== 'webkit') {
       await keys.getByRole('button', { name: 'More keys', exact: true }).tap()
       await sheet.getByRole('button', { name: 'Control lock', exact: true }).tap()
       await keys.getByRole('button', { name: 'Back to keyboard', exact: true }).tap()
       const ime = await page.context().newCDPSession(page)
       const before = socket.typed().length
-      await ime.send('Input.imeSetComposition', { text: 'c', selectionStart: 1, selectionEnd: 1 })
-      await ime.send('Input.insertText', { text: 'c' })
-      await socket.waitFor((frame) => frame.type === 'input' && String(frame.data).includes('c'))
-      expect(socket.typed().slice(before)).not.toContain('\x03')
+      await ime.send('Input.imeSetComposition', { text: '你好', selectionStart: 2, selectionEnd: 2 })
+      await ime.send('Input.insertText', { text: '你好' })
+      await socket.waitFor(() => socket.typed().slice(before).includes('你好'))
+      expect(socket.typed().slice(before)).toBe('你好')
       await ime.detach()
+      expect(await keys.getByRole('button', { name: 'Control, locked', exact: true }).isVisible()).toBe(true)
       await keys.getByRole('button', { name: 'Control, locked', exact: true }).tap()
+      await page.keyboard.press('Backspace')
       await page.keyboard.press('Backspace')
     }
 

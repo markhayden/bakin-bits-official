@@ -205,19 +205,11 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     // Focusing the terminal to type goes back to the cursor (like ↓ Live).
     const typing = () => resumeFollow()
     textarea.addEventListener('focus', typing)
-    // What the operator did to the terminal's input, seen on the way down
-    // (capture on the container), so before any of xterm's own listeners on
-    // the input, capture-phase ones included.
+    // A paste is sent exactly as pasted. Seen on the way down (capture on
+    // xterm's container), so before xterm's own handlers send it.
     const host = element.current!
-    const operator = (event: Event) => {
-      if (event.target !== textarea) return
-      if (event.type === 'paste') modifiers.paste()
-      else if (event.type === 'compositionstart') modifiers.compositionStart()
-      else if (event.type === 'compositionend') modifiers.compositionEnd((event as CompositionEvent).data ?? '')
-      else modifiers.userEvent()
-    }
-    const OPERATOR_EVENTS = ['keydown', 'keypress', 'beforeinput', 'input', 'paste', 'compositionstart', 'compositionend'] as const
-    for (const type of OPERATOR_EVENTS) host.addEventListener(type, operator, true)
+    const paste = (event: Event) => { if (event.target === textarea) modifiers.paste() }
+    host.addEventListener('paste', paste, true)
     document.addEventListener('focusin', leave)
     document.addEventListener('pointerdown', leave)
     document.addEventListener('visibilitychange', hide)
@@ -287,7 +279,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       client.close(); socket.current = null; sentSize.current = ''
       textarea.removeEventListener('focus', typing)
       modifiers.dispose()
-      for (const type of OPERATOR_EVENTS) host.removeEventListener(type, operator, true)
+      host.removeEventListener('paste', paste, true)
       document.removeEventListener('focusin', leave)
       document.removeEventListener('pointerdown', leave)
       document.removeEventListener('visibilitychange', hide)
