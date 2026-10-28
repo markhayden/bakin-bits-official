@@ -162,9 +162,23 @@ describe('control-mode output into the event log (real tmux)', () => {
     const client = attach(log)
     await client.ready
     await client.sendKeys('w', new TextEncoder().encode('\r'))
+    const numbersInReplica = () => {
+      const buffer = replica.buffer.active
+      return Array.from({ length: buffer.length }, (_, y) => buffer.getLine(y)!.translateToString(true)).filter((row) => /^\d+$/.test(row)).map(Number)
+    }
     for (const at of [800, 1600, 2400]) {
       await until(() => seen >= at)
+      // A live boundary: the stream is still running when the seed lands, and keeps going after it.
+      expect(done).toBe(false)
       await reseed(client, log, 'w', `test at ${at}`)
+      const after = seen
+      await until(() => seen >= after + 200 || done)
+      expect(seen).toBeGreaterThan(after)
+      // Before the next seed replaces the evidence: exactly 1…k, past the seed point.
+      await Bun.sleep(50)
+      const numbers = numbersInReplica()
+      expect(numbers).toEqual(Array.from({ length: numbers.length }, (_, i) => i + 1))
+      expect(numbers.length).toBeGreaterThan(at)
     }
     await until(() => done)
     log.flush()

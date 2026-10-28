@@ -24,7 +24,7 @@ const lines = (terminal: InstanceType<typeof headless.Terminal>) => Array.from({
 
 describe('seedFrom', () => {
   it('rebuilds history, screen, cursor, tabs and modes', async () => {
-    const seed = seedFrom([[formats({ history_size: '2', cursor_x: '3', cursor_y: '1', bracket_paste_flag: '1', cursor_flag: '0' })], ['old 1', 'old 2'], ['\x1b[1mbold\x1b[0m', 'two', '', '', ''], ['']])
+    const seed = seedFrom([[formats({ history_size: '2', cursor_x: '3', cursor_y: '1', bracket_paste_flag: '1', cursor_flag: '0' })], ['old 1', 'old 2'], ['\x1b[1mbold\x1b[0m', 'two', '', '', ''], [''], []])
     expect([seed.cols, seed.rows]).toEqual([20, 5])
     const terminal = await render(seed.bytes)
     expect(lines(terminal).slice(0, 4)).toEqual(['old 1', 'old 2', 'bold', 'two'])
@@ -33,11 +33,11 @@ describe('seedFrom', () => {
     expect(terminal.buffer.active.getLine(terminal.buffer.active.baseY)!.getCell(0)!.isBold()).toBeTruthy()
   })
   it('ignores the clamped history block when tmux has no history', async () => {
-    const terminal = await render(seedFrom([[formats({})], ['row zero, clamped'], ['screen'], ['']]).bytes)
+    const terminal = await render(seedFrom([[formats({})], ['row zero, clamped'], ['screen'], [''], []]).bytes)
     expect(lines(terminal)[0]).toBe('screen')
   })
   it('on the alternate screen, the saved normal screen goes under the program\'s screen', async () => {
-    const seed = seedFrom([[formats({ alternate_on: '1', history_size: '1', alternate_saved_y: '1' })], ['history'], ['FULLSCREEN APP'], ['normal 1', 'normal 2']])
+    const seed = seedFrom([[formats({ alternate_on: '1', history_size: '1', alternate_saved_y: '1' })], ['history'], ['FULLSCREEN APP'], ['normal 1', 'normal 2'], []])
     const terminal = await render(seed.bytes)
     expect(terminal.buffer.active.type).toBe('alternate')
     expect(lines(terminal)[0]).toBe('FULLSCREEN APP')
@@ -45,13 +45,44 @@ describe('seedFrom', () => {
     await new Promise<void>((resolve) => terminal.write('', resolve))
     expect(lines(terminal).slice(0, 3)).toEqual(['history', 'normal 1', 'normal 2'])
   })
+  it('a pending wrap stays pending: the next character wraps instead of overwriting the last column', async () => {
+    const full = '12345678901234567890'
+    const seed = seedFrom([[formats({ cursor_x: '20', cursor_y: '0' })], [], [full], [''], [full]])
+    const terminal = await render(seed.bytes)
+    await new Promise<void>((resolve) => terminal.write('X', resolve))
+    expect(lines(terminal).slice(0, 2)).toEqual([full, 'X'])
+  })
+  it('attributes never leak from one block or row into the next', async () => {
+    // Red text ends history; the screen starts in the default colour.
+    const seed = seedFrom([[formats({ history_size: '1' })], ['\x1b[31mred'], ['plain', '', '', '', ''], [''], []])
+    const terminal = await render(seed.bytes)
+    const plain = terminal.buffer.active.getLine(1)!.getCell(0)!
+    expect(plain.getChars()).toBe('p')
+    expect(plain.isFgDefault()).toBe(true)
+  })
+  it('a row break while a background is active does not paint the next row (tmux carries attributes across rows)', async () => {
+    // Six rows into five: the last break scrolls. The red background runs into row 5 and stops after "ab".
+    const seed = seedFrom([[formats({ history_size: '1' })], ['history'], ['one', 'two', 'three', '\x1b[41mred row  ', 'ab\x1b[49m plain'], [''], []])
+    const terminal = await render(seed.bytes)
+    const buffer = terminal.buffer.active
+    const last = buffer.getLine(buffer.baseY + 4)!
+    expect(last.translateToString(true)).toBe('ab plain')
+    // Carried: "ab" is red; after the reset, the rest of the row is default.
+    expect(last.getCell(0)!.isBgDefault()).toBe(false)
+    expect(last.getCell(15)!.isBgDefault()).toBe(true)
+  })
+  it('tab stops are in place before captured rows with literal tabs are replayed', async () => {
+    const seed = seedFrom([[formats({ pane_tabs: '4' })], [], ['\tX', '', '', '', ''], [''], []])
+    const terminal = await render(seed.bytes)
+    expect(lines(terminal)[0]).toBe('    X')
+  })
   it('refuses incomplete replies', () => {
-    expect(() => seedFrom([['a\tb'], [], [], []])).toThrow('incomplete')
-    expect(() => seedFrom([[formats({})]])).toThrow('4 replies')
+    expect(() => seedFrom([['a\tb'], [], [], [], []])).toThrow('incomplete')
+    expect(() => seedFrom([[formats({})]])).toThrow('5 replies')
   })
   it('captures only the history the replica keeps, in one group', () => {
     const commands = seedCommands('s1')
-    expect(commands).toHaveLength(4)
+    expect(commands).toHaveLength(5)
     expect(commands[1]).toContain(String(-TERMINAL_OPTIONS.scrollback))
   })
 })
@@ -65,7 +96,7 @@ function fakeControl() {
   control.feed('%begin 1 1 0\n%end 1 1 0\n')
   return { control, log, written }
 }
-const seedReplies = (n: number, screen = 'seeded') => [1, 2, 3, 4].map((k) => `%begin 2 ${n + k} 1\n${k === 1 ? formats({}) : k === 3 ? screen : ''}\n%end 2 ${n + k} 1\n`).join('')
+const seedReplies = (n: number, screen = 'seeded') => [1, 2, 3, 4, 5].map((k) => `%begin 2 ${n + k} 1\n${k === 1 ? formats({}) : k === 3 ? screen : ''}\n%end 2 ${n + k} 1\n`).join('')
 const text = (event: LogEvent) => event.kind === 'layout' ? `<${event.cols}x${event.rows}>` : `${event.kind}:${new TextDecoder().decode(event.bytes).replaceAll('\x1b', '⎋').slice(0, 12)}`
 
 describe('reseed', () => {
@@ -115,12 +146,21 @@ describe('reseed', () => {
   })
   it('concurrent reseeds share the attempt in flight', async () => {
     const { control, log, written } = fakeControl()
+    log.attach({ event: () => {}, invalid: () => {} })
     const first = reseed(control, log, 's1', 'one')
     const second = reseed(control, log, 's1', 'two')
     expect(second).toBe(first)
     control.feed(seedReplies(20))
     await first
     expect(written).toHaveLength(1)
+  })
+  it('a seed the log does not keep (it overflowed meanwhile) is a failure, not a success', async () => {
+    const { control, log } = fakeControl()
+    log.attach({ event: () => {}, invalid: () => {} })
+    const done = reseed(control, log, 's1', 'test', async () => {})
+    log.invalidate('overflow')
+    control.feed(seedReplies(30))
+    await expect(done).rejects.toThrow()
   })
   it('a closed connection is not retried: recovery reattaches instead', async () => {
     const { control, log, written } = fakeControl()

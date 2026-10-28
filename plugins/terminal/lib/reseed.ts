@@ -22,10 +22,11 @@ export const SEED_FORMATS = [
 ] as const
 
 /**
- * The four commands of one seed: the formats, the newest history rows the
- * replica keeps, the screen, and (on the alternate screen) the saved normal
- * screen. Rows are captured with attributes (-e), wrapped lines joined (-J)
- * and trailing spaces kept (-N).
+ * The commands of one seed: the formats, the newest history rows the
+ * replica keeps, the screen, (on the alternate screen) the saved normal
+ * screen, and the screen again as visual rows (for a pending wrap). Rows
+ * are captured with attributes (-e), trailing spaces kept (-N) and, except
+ * the last, wrapped lines joined (-J).
  */
 export function seedCommands(target: string, history = TERMINAL_OPTIONS.scrollback): string[][] {
   return [
@@ -34,6 +35,7 @@ export function seedCommands(target: string, history = TERMINAL_OPTIONS.scrollba
     ['capture-pane', '-p', '-e', '-J', '-N', '-S', String(-history), '-E', '-1', '-t', target],
     ['capture-pane', '-p', '-e', '-J', '-N', '-S', '0', '-E', '-', '-t', target],
     ['capture-pane', '-p', '-e', '-J', '-N', '-a', '-q', '-t', target],
+    ['capture-pane', '-p', '-e', '-N', '-S', '0', '-E', '-', '-t', target],
   ]
 }
 
@@ -50,34 +52,108 @@ const number = (formats: Record<string, string>, name: string) => {
   return value
 }
 
+/**
+ * The rendition tmux's `capture-pane -e` leaves active: it emits only
+ * changes and carries them across lines. Tracked so every row break can be
+ * made with the default rendition (a scrolling line feed fills the new row
+ * with the current background) and the rendition restored after it.
+ */
+class Rendition {
+  private fg = ''
+  private bg = ''
+  private underlineColour = ''
+  private flags = new Map<string, string>()
+  /** Follow every SGR sequence in `text`. */
+  follow(text: string): void {
+    for (let at = text.indexOf('\x1b['); at !== -1; at = text.indexOf('\x1b[', at + 2)) {
+      let end = at + 2
+      while (end < text.length && /[0-9;:]/.test(text[end]!)) end++
+      if (text[end] === 'm') this.apply(text.slice(at + 2, end))
+    }
+  }
+  private apply(sequence: string): void {
+    const params = sequence === '' ? ['0'] : sequence.split(';')
+    for (let i = 0; i < params.length; i++) {
+      const param = params[i]!
+      const [code, sub] = param.split(':') as [string, string | undefined]
+      const n = Number(code)
+      if (n === 0) { this.fg = ''; this.bg = ''; this.underlineColour = ''; this.flags.clear() }
+      else if (n === 38 || n === 48 || n === 58) {
+        // Extended colour: 38;5;n / 38;2;r;g;b, or the colon form in one parameter.
+        let value = param
+        if (sub === undefined) {
+          const mode = params[i + 1]
+          const take = mode === '5' ? 2 : mode === '2' ? 4 : 0
+          value = params.slice(i, i + 1 + take).join(';')
+          i += take
+        }
+        if (n === 38) this.fg = value; else if (n === 48) this.bg = value; else this.underlineColour = value
+      } else if (n === 39) this.fg = ''
+      else if (n === 49) this.bg = ''
+      else if (n === 59) this.underlineColour = ''
+      else if ((n >= 30 && n <= 37) || (n >= 90 && n <= 97)) this.fg = param
+      else if ((n >= 40 && n <= 47) || (n >= 100 && n <= 107)) this.bg = param
+      else if (n === 22) { this.flags.delete('1'); this.flags.delete('2') }
+      else if (n === 23) this.flags.delete('3')
+      else if (n === 24) this.flags.delete('4')
+      else if (n === 25) { this.flags.delete('5'); this.flags.delete('6') }
+      else if (n >= 27 && n <= 29) this.flags.delete(String(n - 20))
+      else if (n === 55) this.flags.delete('53')
+      else if (n === 4 || n === 21) this.flags.set('4', n === 21 ? '4:2' : param)
+      else this.flags.set(String(n), param)
+    }
+  }
+  /** The tracked rendition as one SGR sequence ('' when default). */
+  sgr(): string {
+    const parts = [...this.flags.values(), this.fg, this.bg, this.underlineColour].filter(Boolean)
+    return parts.length ? `\x1b[${parts.join(';')}m` : ''
+  }
+}
+
+/**
+ * One capture's rows joined with the default rendition at every break, the
+ * carried rendition restored after it. Each capture starts from the default
+ * rendition, so separate captures are joined with `blocks`.
+ */
+function rows(lines: string[]): string {
+  const pen = new Rendition()
+  let out = ''
+  lines.forEach((line, i) => {
+    if (i > 0) out += '\x1b[0m\r\n' + pen.sgr()
+    out += line
+    pen.follow(line)
+  })
+  return out + '\x1b[0m'
+}
+const blocks = (...captures: string[][]) => captures.filter((capture) => capture.length).map(rows).join('\r\n')
+
 /** Turn the replies of `seedCommands` into seed bytes (pure). */
 export function seedFrom(replies: string[][]): Seed {
-  if (replies.length !== 4) throw new Error(`A seed needs 4 replies, got ${replies.length}`)
+  if (replies.length !== 5) throw new Error(`A seed needs 5 replies, got ${replies.length}`)
   const values = (replies[0]![0] ?? '').split('\t')
   if (values.length !== SEED_FORMATS.length) throw new Error('Seed formats are incomplete')
   const formats: Record<string, string> = Object.fromEntries(SEED_FORMATS.map((name, i) => [name, values[i]!]))
   const cols = number(formats, 'pane_width')
-  const rows = number(formats, 'pane_height')
+  const rows_ = number(formats, 'pane_height')
   const history = number(formats, 'history_size') > 0 ? replies[1]! : []
   const screen = replies[2]!
   const savedNormal = replies[3]!
+  const visual = replies[4]!
   const cursorX = number(formats, 'cursor_x')
   const cursorY = number(formats, 'cursor_y')
   const upper = number(formats, 'scroll_region_upper')
-  // RIS first: the seed describes a whole terminal.
-  let seed = '\x1bc'
+  // RIS first: the seed describes a whole terminal. Tab stops before any
+  // content: captured rows can hold literal tabs.
+  let seed = '\x1bc\x1b[3g' + formats.pane_tabs!.split(',').filter(Boolean).map((stop) => `\x1b[1;${Number(stop) + 1}H\x1bH`).join('') + '\x1b[H'
   if (formats.alternate_on === '1') {
     // History plus the saved normal screen form the normal buffer; the program's screen is the alternate one.
-    seed += [...history, ...savedNormal].join('\r\n')
-    seed += `\x1b[${number(formats, 'alternate_saved_y') + 1};${number(formats, 'alternate_saved_x') + 1}H\x1b[?1049h\x1b[H\x1b[2J` + screen.join('\r\n')
-  } else seed += [...history, ...screen].join('\r\n')
-  // Tab stops: clear all, then set tmux's.
-  seed += '\x1b[3g' + formats.pane_tabs!.split(',').filter(Boolean).map((stop) => `\x1b[1;${Number(stop) + 1}H\x1bH`).join('')
-  seed += `\x1b[${upper + 1};${number(formats, 'scroll_region_lower') + 1}r\x1b[0m\x1b[${cursorY + 1};${cursorX + 1}H`
+    // (A saved cursor in a pending wrap is placed on the last column.)
+    seed += blocks(history, savedNormal)
+    seed += `\x1b[${number(formats, 'alternate_saved_y') + 1};${Math.min(number(formats, 'alternate_saved_x'), cols - 1) + 1}H\x1b[?1049h\x1b[H\x1b[2J` + rows(screen)
+  } else seed += blocks(history, screen)
+  seed += `\x1b[${upper + 1};${number(formats, 'scroll_region_lower') + 1}r\x1b[0m`
   if (formats.keypad_cursor_flag === '1') seed += '\x1b[?1h'
   if (formats.keypad_flag === '1') seed += '\x1b='
-  if (formats.insert_flag === '1') seed += '\x1b[4h'
-  if (formats.wrap_flag === '0') seed += '\x1b[?7l'
   if (formats.bracket_paste_flag === '1') seed += '\x1b[?2004h'
   if (formats.focus_flag === '1') seed += '\x1b[?1004h'
   if (formats.mouse_any_flag === '1') seed += '\x1b[?1003h'
@@ -85,9 +161,21 @@ export function seedFrom(replies: string[][]): Seed {
   else if (formats.mouse_standard_flag === '1') seed += '\x1b[?1000h'
   if (formats.mouse_sgr_flag === '1') seed += '\x1b[?1006h'
   if (formats.cursor_flag === '0') seed += '\x1b[?25l'
-  // Origin mode positions relative to the region: set it, then place the cursor again.
-  if (formats.origin_flag === '1') seed += `\x1b[?6h\x1b[${cursorY - upper + 1};${cursorX + 1}H`
-  return { bytes: new TextEncoder().encode(seed), cols, rows }
+  const origin = formats.origin_flag === '1'
+  if (origin) seed += '\x1b[?6h'
+  const row = (origin ? cursorY - upper : cursorY) + 1
+  if (cursorX >= cols) {
+    // A pending wrap: the cursor sits past the last column. Print the
+    // cursor's visual row again, which leaves xterm in the same state.
+    const pen = new Rendition()
+    for (const line of visual.slice(0, cursorY)) pen.follow(line)
+    seed += `\x1b[${row};1H${pen.sgr()}${visual[cursorY] ?? ''}\x1b[0m`
+  } else seed += `\x1b[${row};${cursorX + 1}H`
+  // Last, as they change how the reprint above prints: insert mode would
+  // shift the row, and the pending wrap needs wraparound on.
+  if (formats.insert_flag === '1') seed += '\x1b[4h'
+  if (formats.wrap_flag === '0') seed += '\x1b[?7l'
+  return { bytes: new TextEncoder().encode(seed), cols, rows: rows_ }
 }
 
 export const RESEED_ATTEMPTS = 5
@@ -112,7 +200,8 @@ export function reseed(control: ControlClient, log: OutputLog, target: string, r
       try {
         await control.group(seedCommands(target), (replies) => {
           seed = seedFrom(replies)
-          log.seed(seed.bytes, seed.cols, seed.rows, reason)
+          // A seed the log did not keep (no consumer, or it overflowed) is a failure.
+          if (!log.seed(seed.bytes, seed.cols, seed.rows, reason)) throw new Error(`the log did not take the seed (${log.invalidReason ?? 'no consumer'})`)
         })
         return seed!
       } catch (error) {

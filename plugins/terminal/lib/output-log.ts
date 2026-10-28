@@ -89,12 +89,14 @@ export class OutputLog {
 
   /**
    * A reseed's boundary: everything already received is queued before it,
-   * everything after follows it. Its bytes count against the bound.
+   * everything after follows it. Its bytes count against the bound. False
+   * when the seed was not kept (no consumer, or the log is or became invalid).
    */
-  seed(bytes: Uint8Array, cols: number, rows: number, reason: string): void {
-    if (this.failure) return
+  seed(bytes: Uint8Array, cols: number, rows: number, reason: string): boolean {
+    if (this.failure || !this.attachment) return false
     this.flush()
     this.push({ seq: ++this.seq, kind: 'seed', bytes, cols, rows, reason })
+    return !this.failure
   }
 
   /** Emit the pending output batch now (a barrier: everything before it is in the log). */
