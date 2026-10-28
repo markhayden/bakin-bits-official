@@ -162,14 +162,21 @@ cursor, and an explicit truncation flag.
     and the program's own output (`%output`, read as bytes): it feeds the
     session's ordered event log (output and layout changes, batched, bounded
     at 8 MiB queued; a lost connection or a stalled reader invalidates it).
-    The log is the source of the server replica (in progress; viewers still
-    render the attached client's redraws). A replica is rebuilt from tmux by
-    one grouped command (history, screen and modes in one capture); the seed
-    lands in the log at that command's reply, so no output is lost or
-    repeated around it. A replica's checkpoint is Bakin's own serializer
-    (every cell, both buffers, saved cursors, charsets, modes, links, the
-    grapheme join state); it is accepted only when restoring it into a
-    fresh terminal reproduces the full state.
+    The log feeds the session's server replica, which runs in shadow mode
+    for now: viewers still render the attached client's redraws, and at
+    quiet points the replica's screen is compared with them in the server
+    log (kinds and rows, never contents). A replica starts from a seed:
+    one grouped command (history, screen and modes in one capture) whose
+    reply places it in the log, so no output is lost or repeated around
+    it. It keeps a checkpoint plus the output since (bounded at 4 MiB or
+    4096 events): Bakin's own serializer (every cell, both buffers, saved
+    cursors, charsets, modes, links, the grapheme join state), accepted
+    only when restoring it into a fresh terminal reproduces the full
+    state, and taken in slices of a few milliseconds that never hold up
+    input. tmux can deliver a flood (`yes`) about twice as fast as the
+    replica parses it; past 4 MiB behind, the replica skips the output and
+    rebuilds from tmux (at most once a second while the flood lasts), so
+    the log never overflows.
 
   Neither one sizes the window (`window-size manual`): only Bakin's explicit
   resize does, so an extra client, such as a terminal app, never reshapes a
