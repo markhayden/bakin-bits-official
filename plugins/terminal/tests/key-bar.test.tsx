@@ -13,9 +13,9 @@ function bar(options: { session?: 'typing' | 'sheet'; disabled?: boolean; modifi
   return { view, sent, row: within(view.getByRole('group', { name: 'Terminal keys' })) }
 }
 
-test('one row: esc, tab, the two modifiers, •••, and hide keyboard, each acting once', () => {
+test('one row: esc, tab, the two modifiers, the arrow joystick, •••, and hide keyboard, each acting once', () => {
   const { row, sent } = bar()
-  expect(row.getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual(['Esc', 'Tab', 'Control', 'Option', 'More keys', 'Hide keyboard'])
+  expect(row.getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual(['Esc', 'Tab', 'Control', 'Option', 'Arrow keys', 'More keys', 'Hide keyboard'])
   expect(row.getByRole('button', { name: 'Esc' }).textContent).toBe('esc')
   expect(row.getByRole('button', { name: 'Tab' }).textContent).toBe('⇥')
   const tab = row.getByRole('button', { name: 'Tab' })
@@ -95,4 +95,14 @@ test('Escape on the bar does nothing while typing (it belongs to the terminal th
   const { row, sent } = bar()
   fireEvent.keyDown(row.getByRole('button', { name: 'More keys' }), { key: 'Escape' })
   expect(sent).toEqual([])
+})
+
+test('the joystick sends arrows from the keyboard when focused, and a click alone sends nothing', () => {
+  const { row, sent } = bar()
+  const stick = row.getByRole('button', { name: 'Arrow keys' })
+  fireEvent.keyDown(stick, { key: 'ArrowLeft' })
+  fireEvent.keyDown(stick, { key: 'ArrowUp' })
+  fireEvent.keyDown(stick, { key: 'a' })
+  fireEvent.click(stick)
+  expect(sent).toEqual(['Left', 'Up'])
 })

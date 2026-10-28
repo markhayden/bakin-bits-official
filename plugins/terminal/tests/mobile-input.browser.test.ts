@@ -135,17 +135,21 @@ browserTest('the phone key bar follows the typing session and its keys send exac
       return { fits: row.scrollWidth <= row.clientWidth, narrowest: Math.min(...caps) }
     })).toEqual({ fits: true, narrowest: expect.any(Number) })
     expect(await page.evaluate(() => Math.min(...[...document.querySelectorAll('.terminal-key-bar button')].map(cap => cap.getBoundingClientRect().width)))).toBeGreaterThanOrEqual(40)
-    // Hit areas meet in the gaps but never overlap: 1.5 px either side of each
-    // gap's middle (hit testing rounds fractional points), the nearer key answers.
+    // Hit areas never overlap: just past each key's edge, its neighbour does not answer
+    // (and in a plain gap the nearer key answers, 1.5 px off the middle: hit testing rounds).
     expect(await page.evaluate(() => {
       const caps = [...document.querySelectorAll<HTMLButtonElement>('.terminal-key-bar button')]
       const wrong: string[] = []
       for (let i = 0; i + 1 < caps.length; i++) {
         const a = caps[i]!.getBoundingClientRect(), b = caps[i + 1]!.getBoundingClientRect()
-        if (b.left - a.right > 8) continue
-        const y = a.top + a.height / 2, middle = (a.right + b.left) / 2
-        if (document.elementFromPoint(middle - 1.5, y)?.closest('button') !== caps[i]) wrong.push(`${caps[i]!.ariaLabel} right`)
-        if (document.elementFromPoint(middle + 1.5, y)?.closest('button') !== caps[i + 1]) wrong.push(`${caps[i + 1]!.ariaLabel} left`)
+        const y = a.top + a.height / 2
+        if (document.elementFromPoint(a.right - 1, y)?.closest('button') !== caps[i]) wrong.push(`${caps[i]!.ariaLabel} edge`)
+        if (document.elementFromPoint(b.left + 1, y)?.closest('button') !== caps[i + 1]) wrong.push(`${caps[i + 1]!.ariaLabel} edge`)
+        if (b.left - a.right <= 4) {
+          const middle = (a.right + b.left) / 2
+          if (document.elementFromPoint(middle - 1.5, y)?.closest('button') !== caps[i]) wrong.push(`${caps[i]!.ariaLabel} right`)
+          if (document.elementFromPoint(middle + 1.5, y)?.closest('button') !== caps[i + 1]) wrong.push(`${caps[i + 1]!.ariaLabel} left`)
+        }
       }
       return wrong
     })).toEqual([])
@@ -190,6 +194,30 @@ browserTest('the phone key bar follows the typing session and its keys send exac
     expect(await keys.getByRole('button', { name: 'Control, locked', exact: true }).isVisible()).toBe(true)
     await keys.getByRole('button', { name: 'Control, locked', exact: true }).tap()
     await page.keyboard.press('Backspace')
+
+    // The arrow joystick: drag right sends Right once, holding repeats it, releasing stops.
+    const stick = keys.getByRole('button', { name: 'Arrow keys', exact: true })
+    const box = (await stick.boundingBox())!
+    const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+    // Normal or application cursor mode (the shell's line editor may set it): either form is Right.
+    const count = (suffix: string) => (socket.typed().match(new RegExp('\x1b[\\[O]' + suffix, 'g')) ?? []).length
+    const rights = () => count('C')
+    const rightsBefore = rights()
+    await page.mouse.move(centre.x, centre.y)
+    await page.mouse.down()
+    await page.mouse.move(centre.x + 30, centre.y, { steps: 3 })
+    await socket.waitFor(() => rights() === rightsBefore + 1)
+    await page.waitForTimeout(650)
+    await page.mouse.up()
+    const held = rights()
+    expect(held).toBeGreaterThanOrEqual(rightsBefore + 3)
+    await page.waitForTimeout(400)
+    expect(rights()).toBe(held)
+    expect(await input.evaluate(el => el === document.activeElement)).toBe(true)
+    // A tap on the left edge is one Left.
+    const lefts = count('D')
+    await page.mouse.click(box.x + 4, centre.y)
+    await socket.waitFor(() => count('D') === lefts + 1)
 
     // Hide keyboard ends the session: no bar, the corner button is back.
     await keys.getByRole('button', { name: 'Hide keyboard', exact: true }).tap()

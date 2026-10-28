@@ -139,7 +139,10 @@
   background: currentColor;
 }
 [data-bakin-plugin="terminal"] .terminal-keycap-hide { min-width: 52px; }
-[data-bakin-plugin="terminal"] .terminal-key-spacer { flex: 1; min-width: 0; }
+/* ••• (or abc) and Hide keyboard sit at the right end. */
+[data-bakin-plugin="terminal"] .terminal-key-push { margin-left: auto; }
+/* The joystick takes the drag itself (no page or strip scrolling under it). */
+[data-bakin-plugin="terminal"] .terminal-joystick { min-width: 48px; touch-action: none; }
 [data-bakin-plugin="terminal"] .terminal-key-divider {
   flex-shrink: 0;
   width: 1px;
@@ -173,10 +176,12 @@
 @media (max-width: 369px) {
   /* 40 px caps in 4 px gaps: hit areas reach 2 px a side, 44 px wide, never overlapping. */
   [data-bakin-plugin="terminal"] .terminal-key-accessory { --terminal-keycap-size: 40px; }
-  [data-bakin-plugin="terminal"] .terminal-key-bar { gap: 4px; padding: 0 4px; }
+  [data-bakin-plugin="terminal"] .terminal-key-bar { gap: 4px; padding: 0 2px; }
+  [data-bakin-plugin="terminal"] .terminal-joystick { min-width: 42px; }
+  [data-bakin-plugin="terminal"] .terminal-key-divider { display: none; }
   [data-bakin-plugin="terminal"] .terminal-key-bar .terminal-keycap { padding: 0 6px; }
   [data-bakin-plugin="terminal"] .terminal-key-bar .terminal-keycap::after { inset: -2px -2px; }
-  [data-bakin-plugin="terminal"] .terminal-keycap-hide { min-width: 44px; }
+  [data-bakin-plugin="terminal"] .terminal-keycap-hide { min-width: 40px; }
   [data-bakin-plugin="terminal"] .terminal-key-grid:not(.terminal-key-grid-labelled) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 

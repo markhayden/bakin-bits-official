@@ -1,5 +1,6 @@
-import { useRef } from 'react'
-import { CONTROL_LABELS, CONTROL_SHORTCUTS, keyFace, SHEET_KEYS, type Modifier, type ModifierState, type TerminalKey } from './terminal-input'
+import { useEffect, useRef } from 'react'
+import { Joystick } from './joystick'
+import { CONTROL_LABELS, CONTROL_SHORTCUTS, keyFace, SHEET_KEYS, type ArrowKey, type Modifier, type ModifierState, type TerminalKey } from './terminal-input'
 import type { EditingSession } from './editing-session'
 
 const MODIFIER_NAMES: Record<Modifier, string> = { ctrl: 'Control', alt: 'Option' }
@@ -20,6 +21,52 @@ function Keycap({ label, face, tone, state, disabled, className, onPress, onKeyD
   return <button type="button" className={`terminal-keycap${className ? ' ' + className : ''}`} data-tone={tone} data-state={state}
     aria-label={label} aria-pressed={state === undefined ? undefined : state !== 'off'} disabled={disabled}
     onMouseDown={keepFocus} onClick={onPress} onKeyDown={onKeyDown}>{face}</button>
+}
+
+const ARROWS_ICON = <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5l3.2 4.2H8.8z" /><path d="M12 21.5l-3.2-4.2h6.4z" /><path d="M2.5 12l4.2-3.2v6.4z" /><path d="M21.5 12l-4.2 3.2V8.8z" /><circle cx="12" cy="12" r="2" /></svg>
+const ARROW_KEYS: Record<string, ArrowKey> = { ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right' }
+
+/**
+ * The arrow joystick: press and drag to send arrows (repeating while held),
+ * or tap an edge for one step. With keyboard focus, the arrow keys send
+ * arrows. The sheet keeps the four ordinary arrow buttons (VoiceOver).
+ */
+function ArrowJoystick({ disabled, onArrow }: { disabled: boolean; onArrow(key: ArrowKey): void }) {
+  const send = useRef(onArrow)
+  send.current = onArrow
+  const stick = useRef<Joystick | null>(null)
+  stick.current ??= new Joystick((key) => send.current(key))
+  const pointer = useRef<number | undefined>(undefined)
+  // Disabled or gone: stop any repeat at once.
+  useEffect(() => { if (disabled) stick.current?.cancel() }, [disabled])
+  useEffect(() => () => stick.current?.cancel(), [])
+  const mine = (event: React.PointerEvent) => event.pointerId === pointer.current
+  return <button type="button" className="terminal-keycap terminal-joystick" aria-label="Arrow keys" disabled={disabled}
+    onMouseDown={keepFocus}
+    onPointerDown={(event) => {
+      if (disabled || event.button !== 0 || pointer.current !== undefined) return
+      pointer.current = event.pointerId
+      event.currentTarget.setPointerCapture?.(event.pointerId)
+      stick.current!.start(event.clientX, event.clientY)
+    }}
+    onPointerMove={(event) => { if (mine(event)) stick.current!.move(event.clientX, event.clientY) }}
+    onPointerUp={(event) => {
+      if (!mine(event)) return
+      pointer.current = undefined
+      const box = event.currentTarget.getBoundingClientRect()
+      stick.current!.end(event.clientX - box.left, event.clientY - box.top, box.width, box.height)
+    }}
+    onPointerCancel={(event) => { if (mine(event)) { pointer.current = undefined; stick.current!.cancel() } }}
+    onLostPointerCapture={(event) => { if (mine(event)) { pointer.current = undefined; stick.current!.cancel() } }}
+    // Pointer presses are handled above; the click that follows them sends nothing.
+    onClick={(event) => event.preventDefault()}
+    onKeyDown={(event) => {
+      const key = ARROW_KEYS[event.key]
+      if (!key || disabled) return
+      event.preventDefault()
+      event.stopPropagation()
+      send.current(key)
+    }}>{ARROWS_ICON}</button>
 }
 
 const HIDE_ICON = <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="11" rx="2" /><path d="M6 7.5h.01M9.5 7.5h.01M13 7.5h.01M16.5 7.5h.01M7 11.5h10" /><path d="M9 18.5l3 2.5 3-2.5" /></svg>
@@ -62,10 +109,10 @@ export function KeyBar({ session, disabled, modifiers, onKey, onModifier, onShee
       {sendKey('Tab')}
       {modifierKey('ctrl')}
       {modifierKey('alt')}
-      <span className="terminal-key-spacer" />
+      <ArrowJoystick disabled={disabled} onArrow={onKey} />
       {session === 'sheet'
-        ? <Keycap label="Back to keyboard" face="abc" tone="function" onPress={onKeyboard} />
-        : <Keycap label="More keys" face={MORE_ICON} tone="function" onPress={openSheet} />}
+        ? <Keycap label="Back to keyboard" face="abc" tone="function" className="terminal-key-push" onPress={onKeyboard} />
+        : <Keycap label="More keys" face={MORE_ICON} tone="function" className="terminal-key-push" onPress={openSheet} />}
       <span aria-hidden="true" className="terminal-key-divider" />
       <Keycap label="Hide keyboard" face={HIDE_ICON} tone="function" className="terminal-keycap-hide" onPress={onHide} />
     </div>
