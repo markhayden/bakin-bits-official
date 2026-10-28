@@ -364,8 +364,17 @@ export function quiescent(terminal: Term): boolean {
     && handler._stringDecoder._interim === 0
 }
 
-/** Set what the bytes cannot carry, once they are parsed. */
-function finish(terminal: Term, checkpoint: Checkpoint): void {
+/** What a restore sets once the checkpoint's text is parsed (the bytes cannot carry it). */
+export type CheckpointSideState = Pick<Checkpoint, 'joinState' | 'penHasExtended' | 'altEnteredCols'>
+
+/**
+ * Set what the bytes cannot carry, once they are parsed: the last step of
+ * every restore. A streamed restore (the raw path's join, components/) writes
+ * the checkpoint's UTF-8 in any pieces — split inside a character too,
+ * xterm's decoder carries it — and calls this from the last write's callback,
+ * before anything else is written.
+ */
+export function restoreSideState(terminal: Term, checkpoint: CheckpointSideState): void {
   const handler = internals(terminal)._inputHandler
   handler._parser.precedingJoinState = checkpoint.joinState
   if (checkpoint.penHasExtended) handler._curAttrData.bg |= HAS_EXTENDED
@@ -376,7 +385,7 @@ function finish(terminal: Term, checkpoint: Checkpoint): void {
 export function restoreCheckpointSync(terminal: Term, checkpoint: Checkpoint): void {
   const writer = internals(terminal)._writeBuffer
   for (const piece of pieces(checkpoint.data)) writer.writeSync(piece)
-  finish(terminal, checkpoint)
+  restoreSideState(terminal, checkpoint)
 }
 /** xterm discards writes past 50M pending characters: the restore keeps at most this many queued. */
 const RESTORE_PENDING_CHARS = 1024 * 1024
@@ -394,7 +403,7 @@ export async function restoreCheckpoint(terminal: Term, checkpoint: Checkpoint):
     if (pending >= RESTORE_PENDING_CHARS) { await drained(); pending = 0 }
   }
   await drained()
-  finish(terminal, checkpoint)
+  restoreSideState(terminal, checkpoint)
 }
 
 export type CheckpointResult = { checkpoint: Checkpoint } | { rejected: string }
@@ -431,7 +440,7 @@ export function* checkpointSteps(terminal: Term): Generator<void, CheckpointResu
       writer.writeSync(piece)
       yield
     }
-    finish(restored, checkpoint)
+    restoreSideState(restored, checkpoint)
     const difference = yield* compareSteps(terminal, restored)
     return difference ? { rejected: difference } : { checkpoint }
   } finally {

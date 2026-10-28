@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'bun:test'
 import headless from '@xterm/headless'
-import { CHECKPOINT_FORMAT, restoreCheckpoint, takeCheckpoint, type Checkpoint } from '../lib/checkpoint'
+import { CHECKPOINT_FORMAT, restoreCheckpoint, restoreSideState, takeCheckpoint, type Checkpoint } from '../lib/checkpoint'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from '../lib/terminal-profile'
 import { compareSteps, drain, fullState, stateDiff, type Term } from '../lib/terminal-state'
-import { generate } from './helpers/terminal-fuzz'
+import { apply, emulator, generate, settled } from './helpers/terminal-fuzz'
 
 const enc = (text: string) => new TextEncoder().encode(text)
 const cat = (...parts: Uint8Array[]) => { const all = new Uint8Array(parts.reduce((n, part) => n + part.length, 0)); let at = 0; for (const part of parts) { all.set(part, at); at += part.length } return all }
@@ -256,4 +256,46 @@ describe('restoreCheckpoint', () => {
     expect(viewer.buffer.active.getLine(viewer.buffer.active.baseY)!.translateToString(true)).toBe('x'.repeat(78))
     viewer.dispose()
   }, 60_000)
+})
+
+describe('streamed restore (the raw path)', () => {
+  // The checkpoint's UTF-8 written in pieces of any size (inside a character
+  // too), then the side state from the last write's callback: the same full
+  // state as restoreCheckpoint, over fuzz-generated states.
+  it('equals restoreCheckpoint at every piece size, splits inside characters included', async () => {
+    const SIZES = [1, 2, 3, 7, 64, 4096]
+    let compared = 0
+    let multibyte = 0
+    for (let seed = 1; seed <= 30; seed++) {
+      const source = emulator(40, 10, 200)
+      const { events } = generate(seed, 40, 10, 80)
+      for (const event of events) apply(source, event)
+      await settled(source)
+      const result = takeCheckpoint(source)
+      if ('rejected' in result) continue
+      const { checkpoint } = result
+      const whole = emulator(40, 10, 200)
+      await restoreCheckpoint(whole, checkpoint)
+      const bytes = new TextEncoder().encode(checkpoint.data.join(''))
+      compared++
+      if (bytes.length > checkpoint.data.join('').length) multibyte++
+      for (const size of SIZES) {
+        const streamed = emulator(40, 10, 200)
+        await new Promise<void>((resolve) => {
+          for (let at = 0; at < bytes.length; at += size) {
+            const last = at + size >= bytes.length
+            streamed.write(bytes.subarray(at, at + size), last ? () => { restoreSideState(streamed, checkpoint); resolve() } : undefined)
+          }
+          if (!bytes.length) streamed.write('', () => { restoreSideState(streamed, checkpoint); resolve() })
+        })
+        expect(stateDiff(fullState(streamed), fullState(whole)), `seed ${seed} size ${size}`).toBeNull()
+        streamed.dispose()
+      }
+      whole.dispose()
+      source.dispose()
+    }
+    // Not vacuous: most seeds checkpoint, and their text has characters of several bytes to split.
+    expect(compared).toBeGreaterThanOrEqual(10)
+    expect(multibyte).toBeGreaterThanOrEqual(4)
+  }, 120000)
 })
