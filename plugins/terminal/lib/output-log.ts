@@ -60,6 +60,9 @@ export class OutputLog {
     return () => {
       if (this.attachment !== attachment) return
       attachment.live = false
+      // A stalled delivery may keep the attachment reachable: release its queue now.
+      attachment.queue = []
+      attachment.queuedBytes = 0
       this.attachment = undefined
       // Output not yet delivered belonged to this consumer's stream only.
       this.dropBatch()

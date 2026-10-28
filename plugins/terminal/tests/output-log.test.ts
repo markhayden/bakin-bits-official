@@ -134,6 +134,17 @@ describe('OutputLog consumers', () => {
     await Bun.sleep(0)
     expect(next.events.map(text)).toEqual(['x'])
   })
+  it('a detach releases the queue held behind a stalled delivery', async () => {
+    const log = new OutputLog()
+    const detach = log.attach({ event: () => new Promise(() => {}), invalid: () => {} })
+    const held = (log as unknown as { attachment: { queue: unknown[]; queuedBytes: number } }).attachment
+    for (let i = 0; i < 50; i++) { log.output(new Uint8Array(BATCH_BYTES)); log.flush() }
+    await Bun.sleep(0)
+    expect(held.queue.length).toBeGreaterThan(0)
+    detach()
+    expect(held.queue).toEqual([])
+    expect(held.queuedBytes).toBe(0)
+  })
   it('a detached consumer that fails later does not invalidate its replacement\'s log', async () => {
     const log = new OutputLog()
     let fail!: (error: Error) => void
