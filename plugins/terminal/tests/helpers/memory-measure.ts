@@ -6,7 +6,7 @@
  * (Measurement).
  * `heapStats().heapSize` already counts typed arrays and string buffers.
  */
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { heapStats } from 'bun:jsc'
 import headless from '@xterm/headless'
@@ -41,6 +41,11 @@ const heapNow = () => heapStats().heapSize
 const rssNow = () => process.memoryUsage.rss()
 function heap(): number {
   Bun.gc(true)
+  return heapNow()
+}
+/** The heap once what was just done has settled: a few turns, each with a full collection. */
+async function settled(): Promise<number> {
+  for (let i = 0; i < 3; i++) { await Bun.sleep(10); Bun.gc(true) }
   return heapNow()
 }
 function profiled(cols: number, rows: number): Term {
@@ -94,7 +99,7 @@ async function measure(shape: Shape): Promise<Measurement> {
       ? Array.from({ length: 100 }, (_, i) => `\x1b]8;;https://example.com/${i}/${'p'.repeat(100_000)}\x07x\x1b]8;;\x07\r\n`).join('')
       : Array.from({ length: 100 }, () => `a${'\u0301'.repeat(100_000)}\r\n`).join(''))
     keep.push(terminal)
-    return { measured: heap() - before, estimate: terminalBytes(terminal) }
+    return { measured: await settled() - before, estimate: terminalBytes(terminal) }
   }
   if (shape in TERMINALS) {
     // Built before the baseline: the text is not what is measured.
@@ -193,12 +198,28 @@ async function reseedFromTmux(): Promise<Measurement> {
   if (!tmux) throw new Error('reseed-rss needs TERMINAL_TMUX (the managed tmux)')
   const root = mkdtempSync('/tmp/bakin-memory-')
   const socket = join(root, 's')
-  const run = (...args: string[]) => Bun.spawnSync([tmux, '-S', socket, '-f', '/dev/null', ...args], { env: { PATH: '/usr/bin:/bin', TERM: 'xterm-256color', LANG: 'en_US.UTF-8' } })
+  const run = (...args: string[]) => {
+    const result = Bun.spawnSync([tmux, '-S', socket, '-f', '/dev/null', ...args], { env: { PATH: '/usr/bin:/bin', TERM: 'xterm-256color', LANG: 'en_US.UTF-8' } })
+    if (result.exitCode !== 0 && args[0] !== 'kill-server') throw new Error(`tmux ${args[0]} failed: ${result.stderr.toString()}`)
+    return result
+  }
   try {
     run('new-session', '-d', '-s', 'm', '-x', '120', '-y', '40', 'sh')
     run('set', '-g', 'history-limit', String(TERMINAL_OPTIONS.scrollback))
-    run('new-window', '-d', '-t', 'm', "i=0; while [ $i -lt 10100 ]; do printf '\\033[3%dmline %d lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet\\033[0m\\n' $((i%8)) $i; i=$((i+1)); done; sleep 600")
-    for (let i = 0; i < 200 && Number(run('display', '-p', '-t', 'm:1', '#{history_size}').stdout.toString()) < TERMINAL_OPTIONS.scrollback; i++) await Bun.sleep(50)
+    // The reference workload with full scrollback, printed at once (a shell loop is too slow).
+    writeFileSync(join(root, 'output'), lines(coloured).replaceAll('\r\n', '\n'))
+    run('new-window', '-d', '-t', 'm', `cat ${join(root, 'output')}; sleep 600`)
+    const history = () => Number(run('display', '-p', '-t', 'm:1', '#{history_size}').stdout.toString())
+    // tmux drops a tenth of its history limit whenever history fills, so full is 9,000–10,000 rows: wait until it stops moving.
+    const full = TERMINAL_OPTIONS.scrollback * 0.9
+    let last = -1
+    for (let i = 0; i < 400; i++) {
+      const now = history()
+      if (now >= full && now === last) break
+      last = now
+      await Bun.sleep(50)
+    }
+    if (history() < full || history() !== last) throw new Error(`the fixture reached ${history()} history rows, not a settled ${full} or more`)
     const replies = seedCommands('m:1').map((command) => run(...command).stdout.toString().replace(/\n$/, '').split('\n'))
     const old = await seeded(lines(coloured))
     keep.push(old, replies)

@@ -143,17 +143,29 @@ function joiningCellBytes(terminal: object): number | undefined {
 
 /**
  * A code point that would join a cell already holding TMUX_CELL_BYTES (with
- * it) is dropped by tmux 3.7c, so here it joins at the cluster's width
- * (VS16 does not widen a full cell): xterm then lays out no wider cell, and
- * the line prototype drops its text.
+ * it) is dropped by tmux 3.7c, so while the terminal prints it joins at the
+ * cluster's width (VS16 does not widen a full cell): xterm then lays out no
+ * wider cell, and the line prototype drops its text. Measuring text outside
+ * print (xterm's getStringCellWidth, the WebGL atlas) never looks at the
+ * cursor's cell.
  */
 function cellLimited(provider: UnicodeProvider, terminal: object): UnicodeProvider {
+  let printing = false
+  const handler = (terminal as { _core?: { _inputHandler?: { print?(data: Uint32Array, start: number, end: number): void } } })._core?._inputHandler
+  const print = handler?.print
+  // The parser calls `this.print`, so an own property takes every print.
+  if (handler && print) {
+    handler.print = function (data, start, end) {
+      printing = true
+      try { print.call(this, data, start, end) } finally { printing = false }
+    }
+  }
   return {
     version: provider.version,
     wcwidth: (codepoint) => provider.wcwidth(codepoint),
     charProperties(codepoint, preceding) {
       const properties = provider.charProperties(codepoint, preceding)
-      if (!(properties & 1)) return properties
+      if (!printing || !(properties & 1)) return properties
       const bytes = joiningCellBytes(terminal)
       if (bytes === undefined || bytes + utf8Length(codepoint) <= TMUX_CELL_BYTES) return properties
       return (properties & ~6) | (widthOf(preceding) << 1)

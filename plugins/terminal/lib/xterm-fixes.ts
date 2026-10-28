@@ -133,11 +133,17 @@ export function patchLinkLifetime(terminal: object): { orphans(): number; sweeps
   let threshold = LINK_ORPHAN_LIMIT
   let sweeps = 0
   const pen = () => (core(terminal)?._inputHandler as { _curAttrData?: { extended?: { urlId?: number } } } | undefined)?._curAttrData?.extended?.urlId
-  // A step per line. Only a revived entry (it has lines again) or the pen
-  // can reference an orphan, and both are checked once the walk is done.
+  // A resize reflows lines under a walk in progress.
+  let layout = 0
+  ;(terminal as { onResize?(listener: () => void): unknown }).onResize?.(() => { layout++ })
+  // A step per line; the owner serializes writes with it. Only a revived
+  // entry (it has lines again) or the pen can reference an orphan, and both
+  // are checked once the walk is done. A resize during the walk can move a
+  // line behind it: nothing is deleted then, and the next sweep starts over.
   function* sweepSteps(): Generator<void, void> {
     const all = buffers(terminal)
     if (!service || !all) return
+    const started = layout
     sweeps++
     const referenced = new Set<number>()
     for (const buffer of [all.normal, all.alt]) for (let y = 0; y < buffer.lines.length; y++) {
@@ -148,6 +154,7 @@ export function patchLinkLifetime(terminal: object): { orphans(): number; sweeps
       }
       yield
     }
+    if (layout !== started) return
     const current = pen()
     if (current) referenced.add(current)
     for (const entry of orphans) {

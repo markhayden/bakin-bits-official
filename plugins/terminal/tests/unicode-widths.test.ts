@@ -85,6 +85,15 @@ describe('the tmux cell limit', () => {
       terminal.dispose()
     }
   })
+  it('measuring text outside print (the WebGL atlas) never looks at the cursor cell', async () => {
+    const terminal = new headless.Terminal({ cols: 40, rows: 3, ...TERMINAL_OPTIONS })
+    applyTerminalProfile(terminal)
+    const service = (terminal as unknown as { _core: { unicodeService: { getStringCellWidth(text: string): number } } })._core.unicodeService
+    expect(service.getStringCellWidth('\u2764\ufe0f')).toBe(2)
+    await write(terminal, '\u2764' + '\u0301'.repeat(14))
+    expect(service.getStringCellWidth('\u2764\ufe0f')).toBe(2)
+    terminal.dispose()
+  })
   it('keeps a joined emoji within the limit whole', async () => {
     const family = '\u{1f468}\u200d\u{1f469}\u200d\u{1f467}\u200d\u{1f466}'
     expect((await cell(family))[0]).toBe(family)
