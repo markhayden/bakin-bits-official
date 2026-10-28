@@ -13,6 +13,7 @@ function fixture() {
   const live = new Set<string>()
   const attached = new Set<string>()
   const terminated: string[] = []
+  const forgotten: string[] = []
   let releasable = false
   let writeFailure: Error | undefined
   let resizeFailure: Error | undefined
@@ -47,6 +48,7 @@ function fixture() {
       natives.set(id, (natives.get(id) ?? []).map((client) => client.name === target.name ? { ...client, readonly } : client))
     },
     attachArgs: (id) => ['-S', '/tmp/t.sock', 'attach-session', '-t', id],
+    forget: (id) => { forgotten.push(id) },
   }
   const releases: Array<{ sessionId: string; worktreePath: string; teardown?: boolean }> = []
   const manager = new Sessions(new Store(':memory:'), driver, {
@@ -56,7 +58,7 @@ function fixture() {
   })
   managers.push(manager)
   return {
-    manager, writes, live, attached, terminated, releases, outputs, natives, detachedClients, vanishing,
+    manager, writes, live, attached, terminated, forgotten, releases, outputs, natives, detachedClients, vanishing,
     /** A terminal app attaches (or resizes) in tmux; the control client notices. */
     nativeAttach: async (id: string, client: NativeClient) => {
       natives.set(id, [...(natives.get(id) ?? []).filter((entry) => entry.pid !== client.pid), client])
@@ -143,7 +145,7 @@ test('disconnected output fails honestly and a snapshot restores the attachment'
   expect(attached.has(session.id)).toBe(true)
 })
 test('delete always removes the session — a retained worktree tears down, never blocks', async () => {
-  const { manager, live, releases } = fixture()
+  const { manager, live, releases, forgotten } = fixture()
   const session = await manager.create({ title: 'Done', cwd: '/tmp' }, agent)
   await expect(manager.deleteSession(session.id, human)).rejects.toThrow('End the session')
   session.worktreePath = '/tmp/retained'
@@ -154,7 +156,10 @@ test('delete always removes the session — a retained worktree tears down, neve
   await expect(manager.deleteSession(session.id, agent)).rejects.toThrow('human')
   // The fixture release fails ("Unmerged work"), yet the session is gone: the
   // worktree teardown is best-effort and never blocks removing the record.
+  // Ending it kept what the driver holds for it (its fidelity); deleting it forgets that.
+  expect(forgotten).toEqual([])
   await manager.deleteSession(session.id, human)
+  expect(forgotten).toEqual([session.id])
   // The safe clean at finish ran without teardown; the delete forces it.
   expect(releases.at(-1)).toEqual({ sessionId: session.id, worktreePath: '/tmp/retained', teardown: true })
   expect(releases.some((r) => !r.teardown)).toBe(true)

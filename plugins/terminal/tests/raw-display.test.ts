@@ -125,14 +125,17 @@ describe('RawDisplay credit', () => {
     h.src.tell().rebased()
     expect(h.kinds().slice(5)).toEqual(['rebuilding', 'rebase', 'bytes 16384'])
   })
-  it('arms the stall eviction while the window is full; progress that stays above the window does not clear it', async () => {
-    const h = harness({ kind: 'live', cut: cut(['x'.repeat(40_000)], 1) }, { window: 20_000, pauseEvictMs: 30 })
+  it('arms the stall eviction while the window is full; progress that stays above the window keeps its original deadline', async () => {
+    const h = harness({ kind: 'live', cut: cut(['x'.repeat(40_000)], 1) }, { window: 20_000, pauseEvictMs: 80 })
+    const started = Date.now()
     h.display.start()
-    h.display.retire(0)
-    // Some progress, still at least a window outstanding: the stall's age is kept.
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    // Some progress halfway, still at least a window outstanding: the deadline is not restarted.
     h.display.retire(100)
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    for (let i = 0; i < 100 && !h.resyncs.length; i++) await new Promise((resolve) => setTimeout(resolve, 5))
     expect(h.resyncs).toEqual(['Viewer fell behind; resync'])
+    // A restarted timer would have fired at about 120 ms.
+    expect(Date.now() - started).toBeLessThan(110)
   })
   it('progress below the window clears the eviction; a later fill arms it again; a rebase keeps its age', async () => {
     const h = harness({ kind: 'live', cut: cut(['x'.repeat(40_000)], 1) }, { window: 20_000, pauseEvictMs: 40 })
@@ -153,16 +156,23 @@ describe('RawDisplay credit', () => {
     await new Promise((resolve) => setTimeout(resolve, 30))
     expect(h.resyncs).toEqual(['Viewer fell behind; resync'])
   })
-  it('retirement is monotonic and never beyond what was sent', () => {
-    const h = harness({ kind: 'live', cut: cut(['x'.repeat(40_000)], 1) }, { window: 20_000 })
+  it('retirement is capped at what was sent and never goes back', () => {
+    const h = harness({ kind: 'live', cut: cut([''], 1) }, { window: 10_000 })
     h.display.start()
-    const sent = h.total()
-    h.display.retire(10 * sent)
-    // Capped at what was sent: the window opened once, by what was really outstanding.
-    const after = h.total()
-    expect(after).toBeGreaterThan(sent)
+    const chunk = new Uint8Array(4_000)
+    let seq = 2
+    // Over-retire: credit is still what was really outstanding, so only a window more goes.
+    h.display.retire(10 * h.total())
+    const capped = h.total()
+    for (let i = 0; i < 10; i++) h.src.tell().event(output(seq++, chunk))
+    expect(h.total() - capped).toBeLessThanOrEqual(10_000 + 4_000)
+    expect(h.total() - capped).toBeGreaterThanOrEqual(10_000)
+    // A smaller total later changes nothing: sending neither stops nor restarts the count.
+    const before = h.total()
     h.display.retire(5)
-    expect(h.total()).toBe(after)
+    expect(h.total()).toBe(before)
+    h.display.retire(h.total())
+    expect(h.total()).toBeGreaterThan(before)
   })
   it('counts a JSON frame by its UTF-8 bytes', () => {
     const h = harness({ kind: 'live', cut: cut(['x'.repeat(40_000)], 1) }, { window: 20_000, header: () => ({ session: { title: 'é'.repeat(3000) } }) })
@@ -213,13 +223,19 @@ describe('RawDisplay replacement', () => {
     h.src.set({ kind: 'live', cut: cut(['newest'], 70) })
     h.src.tell().rebased()
     h.advance(RESYNC_INTERVAL_MS)
-    // The first replay runs to its barrier while ACKs continue.
+    // The first replay runs to its barrier while ACKs continue: every byte of its text, then its barrier.
     for (let i = 0; i < 20 && !h.kinds().includes('barrier'); i++) h.display.retire(h.total())
-    expect(h.kinds().filter((kind) => kind === 'barrier')).toHaveLength(1)
+    const barrier = h.kinds().indexOf('barrier')
+    const text = h.sent.slice(1, barrier).reduce((n, frame) => n + ('bytes' in frame ? frame.bytes.length : 0), 0)
+    expect(text).toBe(100_000)
+    expect(h.sent[barrier]).toEqual({ json: { type: 'barrier', epoch: 1, throughSeq: 1 } })
+    h.display.replayApplied(1)
+    expect(h.display.latched).toBe(true)
     await tick()
     h.display.retire(h.total())
     const headers = h.sent.flatMap((frame) => 'json' in frame && (frame.json.type === 'join' || frame.json.type === 'rebase') ? [frame.json] : [])
-    expect(headers.map((json) => [json.type, json.baseSeq])).toEqual([['join', 1], ['rebase', 70]])
+    expect(headers.map((json) => [json.type, json.epoch, json.baseSeq])).toEqual([['join', 1, 1], ['rebase', 2, 70]])
+    expect(h.sent.filter((frame) => 'json' in frame && frame.json.type === 'barrier').map((frame) => 'json' in frame && frame.json.epoch)).toEqual([1, 2])
   })
   it('a rebuilding notice goes out with the picture it is about, never after its replacement', () => {
     const h = harness({ kind: 'live', cut: cut(['x'.repeat(40_000)], 1) }, { window: 20_000 })
@@ -241,18 +257,31 @@ describe('RawDisplay replacement', () => {
     h.display.start()
     expect(h.sent).toEqual([])
   })
-  it('a stale barrier callback starts no replacement nobody owes', async () => {
-    const h = harness({ kind: 'live', cut: cut(['a'], 1) })
+  it('a stale barrier callback starts no replacement nobody owes, even past the throttle', async () => {
+    const h = harness({ kind: 'live', cut: cut(['x'.repeat(40_000)], 1) }, { window: 20_000 })
     h.display.start()
     h.advance(RESYNC_INTERVAL_MS)
-    // A replacement owed and taken in this same turn, before the first barrier's callback runs.
+    // A replacement owed during replay 1.
     h.src.set({ kind: 'live', cut: cut(['b'], 4) })
     h.src.tell().rebuilding('overload')
     h.src.tell().rebased()
+    // In one turn: replay 1 finishes (its barrier queues a callback), a later seed starts
+    // replay 2 at once and it finishes too, all before replay 1's callback runs.
+    h.display.retire(h.total())
+    h.display.retire(h.total())
+    h.src.set({ kind: 'live', cut: cut(['c'], 6) })
+    h.src.tell().rebuilding('overload')
+    h.advance(RESYNC_INTERVAL_MS)
+    h.src.tell().rebased()
+    h.display.retire(h.total())
+    h.display.retire(h.total())
+    // Past the throttle: a stale callback would start another rebase at once.
+    h.advance(RESYNC_INTERVAL_MS)
     await tick()
     await tick()
-    const headers = h.kinds().filter((kind) => kind === 'join' || kind === 'rebase')
-    expect(headers).toEqual(['join', 'rebase'])
+    h.display.retire(h.total())
+    const headers = h.sent.flatMap((frame) => 'json' in frame && (frame.json.type === 'join' || frame.json.type === 'rebase') ? [[frame.json.type, frame.json.baseSeq]] : [])
+    expect(headers).toEqual([['join', 1], ['rebase', 6]])
   })
   it('a partly sent live event stops at a replacement; nothing of it follows the new header', () => {
     const h = harness({ kind: 'live', cut: cut(['a'], 1) }, { window: 70 * 1024 })
@@ -290,13 +319,21 @@ describe('RawDisplay replacement', () => {
     h.src.tell().event(output(2, 'x'.repeat(1000)))
     expect(displayBytes(h.display)).toBeGreaterThanOrEqual(1000 + h.total())
   })
-  it('counts a pinned cut while its barrier waits for credit, once the replica moved on', () => {
+  it('counts a pinned cut whose barrier went out while its generator waits for credit, once the replica moved on', () => {
     const megabyte = 'x'.repeat(1024 * 1024)
-    const h = harness({ kind: 'live', cut: cut([megabyte], 1) }, { window: 1024 * 1024 })
+    // How many bytes the replay is, through its barrier.
+    const dry = harness({ kind: 'live', cut: cut([megabyte], 1) }, { window: 1e9 })
+    dry.display.start()
+    const through = dry.total()
+    // The window fills exactly with the barrier: the generator stays suspended after it.
+    const h = harness({ kind: 'live', cut: cut([megabyte], 1) }, { window: through - 1 })
     h.display.start()
-    // The text is out; the barrier waits for credit. The replica's base is now another checkpoint.
-    expect(h.kinds().at(-1)).not.toBe('barrier')
+    expect(h.kinds().at(-1)).toBe('barrier')
     h.src.set({ kind: 'live', cut: cut(['other'], 5) })
-    expect(displayBytes(h.display)).toBeGreaterThan(1024 * 1024)
+    // The checkpoint text is held apart from what is in flight (nothing is retired yet: all of it is outstanding).
+    expect(displayBytes(h.display) - h.total()).toBeGreaterThanOrEqual(1024 * 1024)
+    // Once the generator finishes, the cut is let go.
+    h.display.retire(h.total())
+    expect(displayBytes(h.display)).toBeLessThan(1024)
   })
 })

@@ -449,15 +449,32 @@ describe('TerminalViewer on the raw path', () => {
     const raw: { replica?: RawSource } = {}
     const { manager } = fakeManager(session(), raw)
     const peer = fakeSocket()
-    const started = Date.now()
-    new TerminalViewer(manager, peer.socket, 's1', { ...options, replicaWaitMs: 400 })
+    let now = 0
+    new TerminalViewer(manager, peer.socket, 's1', { ...options, replicaWaitMs: 10_000, now: () => now })
     peer.client({ type: 'hello', clientId: CLIENT })
-    // The replica comes late and never seeds: the close still comes at the first deadline.
-    setTimeout(() => { raw.replica = seeding }, 250)
+    // The replica arrives (seeding forever) at 9.9 s of the 10 s: what is left is 100 ms, not a fresh 10 s.
+    now = 9_900
+    raw.replica = seeding
+    const found = Date.now()
     await until(() => peer.state.closed !== null, 'deadline')
-    expect(Date.now() - started).toBeLessThan(800)
+    expect(Date.now() - found).toBeLessThan(400)
     expect(peer.state.closed?.code).toBe(SOCKET_CLOSE.resync)
     seeding.close()
+  })
+  it('a replica found only after the deadline closes at once', async () => {
+    const seeded = new Replica({ reseed: (_reason, turn) => turn(async () => undefined), idleMs: 1e9 })
+    await seeded.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 100, rows: 30, reason: 'test' })
+    const raw: { replica?: RawSource } = {}
+    const { manager } = fakeManager(session(), raw)
+    const peer = fakeSocket()
+    let now = 0
+    new TerminalViewer(manager, peer.socket, 's1', { ...options, replicaWaitMs: 10_000, now: () => now })
+    peer.client({ type: 'hello', clientId: CLIENT })
+    now = 10_001
+    raw.replica = seeded
+    await until(() => peer.state.closed !== null, 'closed')
+    expect(peer.of('join')).toEqual([])
+    seeded.close()
   })
   it('an ended session takes the sync path even when the raw path is on', async () => {
     const { manager } = fakeManager(session({ state: 'exited' }), {})
