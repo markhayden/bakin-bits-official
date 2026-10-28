@@ -444,6 +444,21 @@ describe('TerminalViewer on the raw path', () => {
     await until(() => late.state.closed !== null, 'no replica')
     expect(late.state.closed?.code).toBe(SOCKET_CLOSE.resync)
   })
+  it('one deadline from the hello covers the replica arriving and its seed', async () => {
+    const seeding = new Replica({ reseed: (_reason, turn) => turn(async () => undefined), idleMs: 1e9 })
+    const raw: { replica?: RawSource } = {}
+    const { manager } = fakeManager(session(), raw)
+    const peer = fakeSocket()
+    const started = Date.now()
+    new TerminalViewer(manager, peer.socket, 's1', { ...options, replicaWaitMs: 400 })
+    peer.client({ type: 'hello', clientId: CLIENT })
+    // The replica comes late and never seeds: the close still comes at the first deadline.
+    setTimeout(() => { raw.replica = seeding }, 250)
+    await until(() => peer.state.closed !== null, 'deadline')
+    expect(Date.now() - started).toBeLessThan(800)
+    expect(peer.state.closed?.code).toBe(SOCKET_CLOSE.resync)
+    seeding.close()
+  })
   it('an ended session takes the sync path even when the raw path is on', async () => {
     const { manager } = fakeManager(session({ state: 'exited' }), {})
     const peer = fakeSocket()

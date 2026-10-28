@@ -709,6 +709,7 @@ export class Sessions {
       }
       await this.stopScreen(id)
       this.forgetNatives(id)
+      this.driver.forget?.(id)
       this.store.deleteSession(id)
     })
   }

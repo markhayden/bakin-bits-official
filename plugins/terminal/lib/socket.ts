@@ -36,7 +36,7 @@
 import { z } from 'zod'
 import type { PluginSocket } from '@makinbakin/sdk/types'
 import type { NativeClient, WriteOptions } from './processes'
-import { type Fidelity, RawDisplay, type RawSource } from './raw-display'
+import { type Fidelity, JOIN_WAIT_MS, RawDisplay, type RawSource } from './raw-display'
 import { DeliveryUncertainError, screenDevice, TerminalError, type Principal, type Session, type SizeClaimant } from './contracts'
 
 export const ACK_WINDOW = 256 * 1024
@@ -86,11 +86,18 @@ const message = z.discriminatedUnion('type', [
   z.object({ type: z.literal('replay-applied'), epoch: z.number().int().positive() }),
 ])
 
-/** How long a raw join waits for the session's replica to be attached, from the hello. */
-export const REPLICA_WAIT_MS = 10_000
+/** How long a raw join waits for the session's replica and its seed, from the hello (lib/raw-display.ts JOIN_WAIT_MS). */
+export const REPLICA_WAIT_MS = JOIN_WAIT_MS
 
 /** Live viewers by `${sessionId} ${clientId}`: a reconnect supersedes the old socket. */
 const viewers = new Map<string, TerminalViewer>()
+
+/** What every raw viewer holds beyond the replicas (lib/memory.ts), for the memory reading. Steps: run it sliced. */
+export function* viewersRetainedSteps(): Generator<void, number> {
+  let total = 0
+  for (const viewer of [...viewers.values()]) total += yield* viewer.retainedSteps()
+  return total
+}
 
 /** The sizing screen joined or left: every other viewer's header changes (frozen or live). */
 function presenceChanged(sessionId: string, clientId: string): void {
@@ -135,6 +142,7 @@ export class TerminalViewer {
   }
 
   private now(): number { return this.options.now?.() ?? Date.now() }
+  *retainedSteps(): Generator<void, number> { return this.raw ? yield* this.raw.retainedSteps() : 0 }
   private send(payload: unknown): void { this.socket.send(JSON.stringify(payload)) }
   private close(code: number, reason: string): void {
     if (this.closed) return
@@ -256,14 +264,15 @@ export class TerminalViewer {
 
   /** The raw path: wait (bounded) for the replica, then its picture (lib/raw-display.ts). */
   private async joinRaw(): Promise<void> {
+    // One deadline from the hello for the replica and its seed together.
     const deadline = this.now() + (this.options.replicaWaitMs ?? REPLICA_WAIT_MS)
     let source = this.manager.replica(this.sessionId)
-    while (!source && !this.closed) {
-      if (this.now() >= deadline) { this.close(SOCKET_CLOSE.resync, 'Terminal output not ready; reconnect'); return }
+    while (!source && !this.closed && this.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 100))
       source = this.manager.replica(this.sessionId)
     }
-    if (this.closed || !source) return
+    if (this.closed) return
+    if (!source || this.now() >= deadline) { this.close(SOCKET_CLOSE.resync, 'Terminal output not ready; reconnect'); return }
     this.raw = new RawDisplay(source, {
       text: (json) => this.socket.send(json),
       binary: (bytes) => this.socket.send(bytes),
@@ -275,13 +284,14 @@ export class TerminalViewer {
           this.sentPresence = JSON.stringify(presence)
           return { session, ...presence }
         } catch (error) {
-          // Gone between frames: the close follows this header, which the client never acts on.
-          queueMicrotask(() => this.failed(error))
-          return {}
+          // Gone: close now, before anything of the picture is sent.
+          this.failed(error)
+          return undefined
         }
       },
       fidelity: () => this.manager.fidelity(this.sessionId),
       resync: (reason) => this.close(SOCKET_CLOSE.resync, reason),
+      deadline,
       window: this.window(),
       pauseEvictMs: this.options.pauseEvictMs ?? PAUSE_EVICT_MS,
       now: this.options.now,

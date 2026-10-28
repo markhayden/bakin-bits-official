@@ -31,7 +31,7 @@ function fakeSource(initial: ReplicaState) {
 }
 
 type Sent = { json: Record<string, unknown> } | { bytes: Uint8Array }
-function harness(initial: ReplicaState, options: { window?: number; pauseEvictMs?: number } = {}) {
+function harness(initial: ReplicaState, options: { window?: number; pauseEvictMs?: number; header?: () => Record<string, unknown> | undefined } = {}) {
   let now = 0
   const sent: Sent[] = []
   const resyncs: string[] = []
@@ -41,9 +41,10 @@ function harness(initial: ReplicaState, options: { window?: number; pauseEvictMs
     text: (json) => { if (open) sent.push({ json: JSON.parse(json) }); return open },
     binary: (bytes) => { if (open) sent.push({ bytes }); return open },
   }, {
-    header: () => ({ session: { id: 's1' } }),
+    header: options.header ?? (() => ({ session: { id: 's1' } })),
     fidelity: () => ({ rebuilds: {} }),
     resync: (reason) => { resyncs.push(reason); open = false },
+    deadline: JOIN_WAIT_MS,
     window: options.window ?? 1024 * 1024,
     pauseEvictMs: options.pauseEvictMs ?? 10_000,
     now: () => now,
@@ -90,6 +91,7 @@ describe('RawDisplay join', () => {
     h.src.tell().rebased()
     expect(h.kinds()).toEqual(['join', 'bytes 4', 'barrier'])
     const late = harness({ kind: 'rebuilding', cause: 'overload' })
+    late.advance(0)
     const realTimeout = globalThis.setTimeout
     let fired: (() => void) | undefined
     globalThis.setTimeout = ((fn: () => void, ms: number) => { if (ms === JOIN_WAIT_MS) fired = fn; return realTimeout(() => undefined, 0) }) as typeof setTimeout
@@ -123,13 +125,51 @@ describe('RawDisplay credit', () => {
     h.src.tell().rebased()
     expect(h.kinds().slice(5)).toEqual(['rebuilding', 'rebase', 'bytes 16384'])
   })
-  it('arms the stall eviction while the window is full, and only progress below the window clears it', async () => {
-    const h = harness({ kind: 'live', cut: cut(['x'.repeat(40_000)], 1) }, { window: 20_000, pauseEvictMs: 20 })
+  it('arms the stall eviction while the window is full; progress that stays above the window does not clear it', async () => {
+    const h = harness({ kind: 'live', cut: cut(['x'.repeat(40_000)], 1) }, { window: 20_000, pauseEvictMs: 30 })
     h.display.start()
-    // No progress: the same total retired again does not clear it.
     h.display.retire(0)
-    await new Promise((resolve) => setTimeout(resolve, 40))
+    // Some progress, still at least a window outstanding: the stall's age is kept.
+    h.display.retire(100)
+    await new Promise((resolve) => setTimeout(resolve, 50))
     expect(h.resyncs).toEqual(['Viewer fell behind; resync'])
+  })
+  it('progress below the window clears the eviction; a later fill arms it again; a rebase keeps its age', async () => {
+    const h = harness({ kind: 'live', cut: cut(['x'.repeat(40_000)], 1) }, { window: 20_000, pauseEvictMs: 40 })
+    h.display.start()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    h.display.retire(h.total())
+    // Cleared: past the first deadline, no eviction.
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(h.resyncs).toEqual([])
+    // Full again (the rest of the text, then live output), then a rebase while full: the deadline is not reset.
+    const chunk = new Uint8Array(64 * 1024)
+    h.src.tell().event(output(2, chunk))
+    h.src.set({ kind: 'live', cut: cut(['y'], 3) })
+    h.advance(RESYNC_INTERVAL_MS)
+    h.src.tell().rebuilding('overload')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    h.src.tell().rebased()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(h.resyncs).toEqual(['Viewer fell behind; resync'])
+  })
+  it('retirement is monotonic and never beyond what was sent', () => {
+    const h = harness({ kind: 'live', cut: cut(['x'.repeat(40_000)], 1) }, { window: 20_000 })
+    h.display.start()
+    const sent = h.total()
+    h.display.retire(10 * sent)
+    // Capped at what was sent: the window opened once, by what was really outstanding.
+    const after = h.total()
+    expect(after).toBeGreaterThan(sent)
+    h.display.retire(5)
+    expect(h.total()).toBe(after)
+  })
+  it('counts a JSON frame by its UTF-8 bytes', () => {
+    const h = harness({ kind: 'live', cut: cut(['x'.repeat(40_000)], 1) }, { window: 20_000, header: () => ({ session: { title: 'é'.repeat(3000) } }) })
+    h.display.start()
+    // The header alone is over 6,000 bytes (3,000 characters): one text frame more fills the window.
+    expect(Buffer.byteLength(JSON.stringify(h.sent[0]!.json))).toBeGreaterThan(6000)
+    expect(h.kinds()).toEqual(['join', 'bytes 16384'])
   })
   it('counts layout frames too: a stream of zero-output layouts is bounded by the window', () => {
     const h = harness({ kind: 'live', cut: cut([''], 1) }, { window: 300 })
@@ -181,6 +221,55 @@ describe('RawDisplay replacement', () => {
     const headers = h.sent.flatMap((frame) => 'json' in frame && (frame.json.type === 'join' || frame.json.type === 'rebase') ? [frame.json] : [])
     expect(headers.map((json) => [json.type, json.baseSeq])).toEqual([['join', 1], ['rebase', 70]])
   })
+  it('a rebuilding notice goes out with the picture it is about, never after its replacement', () => {
+    const h = harness({ kind: 'live', cut: cut(['x'.repeat(40_000)], 1) }, { window: 20_000 })
+    h.display.start()
+    h.src.tell().rebuilding('overload')
+    h.src.set({ kind: 'live', cut: cut(['new'], 9) })
+    h.src.tell().rebased()
+    h.advance(RESYNC_INTERVAL_MS)
+    for (let i = 0; i < 10; i++) h.display.retire(h.total())
+    return new Promise<void>((resolve) => setTimeout(() => {
+      for (let i = 0; i < 10; i++) h.display.retire(h.total())
+      // The notice follows the first picture's barrier; the rebase follows it, and nothing stale after that.
+      expect(h.kinds().filter((kind) => !kind.startsWith('bytes'))).toEqual(['join', 'barrier', 'rebuilding', 'rebase', 'barrier'])
+      resolve()
+    }, 5))
+  })
+  it('a picture whose header cannot be made sends nothing', () => {
+    const h = harness({ kind: 'live', cut: cut(['secret'], 1) }, { header: () => undefined })
+    h.display.start()
+    expect(h.sent).toEqual([])
+  })
+  it('a stale barrier callback starts no replacement nobody owes', async () => {
+    const h = harness({ kind: 'live', cut: cut(['a'], 1) })
+    h.display.start()
+    h.advance(RESYNC_INTERVAL_MS)
+    // A replacement owed and taken in this same turn, before the first barrier's callback runs.
+    h.src.set({ kind: 'live', cut: cut(['b'], 4) })
+    h.src.tell().rebuilding('overload')
+    h.src.tell().rebased()
+    await tick()
+    await tick()
+    const headers = h.kinds().filter((kind) => kind === 'join' || kind === 'rebase')
+    expect(headers).toEqual(['join', 'rebase'])
+  })
+  it('a partly sent live event stops at a replacement; nothing of it follows the new header', () => {
+    const h = harness({ kind: 'live', cut: cut(['a'], 1) }, { window: 70 * 1024 })
+    h.display.start()
+    h.display.retire(h.total())
+    h.src.tell().event(output(2, new Uint8Array(200 * 1024)))
+    // One or two of its frames are out; then a replacement.
+    h.src.set({ kind: 'live', cut: cut(['b'], 3) })
+    h.advance(RESYNC_INTERVAL_MS)
+    h.src.tell().rebuilding('overload')
+    h.src.tell().rebased()
+    for (let i = 0; i < 10; i++) h.display.retire(h.total())
+    const kinds = h.kinds()
+    const rebase = kinds.indexOf('rebase')
+    expect(rebase).toBeGreaterThan(0)
+    expect(kinds.slice(rebase)).toEqual(['rebase', 'bytes 1', 'barrier'])
+  })
   it('lets the viewer type once any replay it was sent is applied, an applied one crossing a replacement included', () => {
     const h = harness({ kind: 'live', cut: cut(['a'], 1) })
     h.display.start()
@@ -200,5 +289,14 @@ describe('RawDisplay replacement', () => {
     h.display.start()
     h.src.tell().event(output(2, 'x'.repeat(1000)))
     expect(displayBytes(h.display)).toBeGreaterThanOrEqual(1000 + h.total())
+  })
+  it('counts a pinned cut while its barrier waits for credit, once the replica moved on', () => {
+    const megabyte = 'x'.repeat(1024 * 1024)
+    const h = harness({ kind: 'live', cut: cut([megabyte], 1) }, { window: 1024 * 1024 })
+    h.display.start()
+    // The text is out; the barrier waits for credit. The replica's base is now another checkpoint.
+    expect(h.kinds().at(-1)).not.toBe('barrier')
+    h.src.set({ kind: 'live', cut: cut(['other'], 5) })
+    expect(displayBytes(h.display)).toBeGreaterThan(1024 * 1024)
   })
 })

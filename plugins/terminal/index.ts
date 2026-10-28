@@ -12,7 +12,7 @@ import { runSliced } from './lib/replica'
 import { TerminalError, terminalSettings, type Principal } from './lib/contracts'
 import { agentCommand, command, creatingScreen, failure, human } from './lib/http'
 import { sessionOptions } from './lib/session-options'
-import { TerminalViewer } from './lib/socket'
+import { TerminalViewer, viewersRetainedSteps } from './lib/socket'
 import { attachBody, confirmBody, createAndLaunch, launch, newBody, operator, resolveRef, sessionTable } from './lib/cli'
 
 let manager: Sessions | undefined
@@ -141,7 +141,7 @@ export default definePlugin({
       try {
         const current = manager
         await current?.maintainEmulators()
-        const retained = current ? await runSliced(current.retainedSteps()) ?? 0 : 0
+        const retained = current ? await runSliced((function* () { return (yield* current.retainedSteps()) + (yield* viewersRetainedSteps()) })()) ?? 0 : 0
         memory.observe(retained)
         return retained
       } finally { reading = undefined }

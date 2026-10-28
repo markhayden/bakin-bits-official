@@ -48,8 +48,10 @@ export interface ProcessDriver {
   detach(id?: string): Promise<void>
   /** The session's server replica (spec D13), while attached. */
   replica?(id: string): Replica | undefined
-  /** The rebuilds the session's output has been through (outlives replica replacement). */
+  /** The rebuilds the session's output has been through (outlives replica replacement, kept until `forget`). */
   fidelity?(id: string): Fidelity
+  /** The session record is gone: drop what the driver kept for it. */
+  forget?(id: string): void
   /** What the attached sessions' replicas and event logs hold (lib/memory.ts). Steps: run it sliced. */
   retainedSteps?(): Generator<void, number>
   /** Periodic upkeep of the attached sessions' replicas (link orphans). */
@@ -159,6 +161,7 @@ export class TmuxProcesses implements ProcessDriver {
   /** The session's ordered event log, while its control connection is attached. */
   outputLog(id: string): OutputLog | undefined { return this.logs.get(id) }
   fidelity(id: string): Fidelity { return this.fidelities.get(id) ?? { rebuilds: {} } }
+  forget(id: string): void { this.fidelities.delete(id) }
   replica(id: string): Replica | undefined {
     const replica = this.replicas.get(id)
     return replica?.ended ? undefined : replica
@@ -266,7 +269,6 @@ export class TmuxProcesses implements ProcessDriver {
     return this.service.command(['capture-pane', '-p', '-t', id])
   }
   async terminate(id: string): Promise<void> {
-    this.fidelities.delete(id)
     const names = await this.service.command(['list-sessions', '-F', '#{session_name}'])
     if (names.split('\n').includes(id)) await this.service.command(['kill-session', '-t', id])
   }

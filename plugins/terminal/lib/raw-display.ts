@@ -35,8 +35,10 @@ export const VIEWER_QUEUE_BYTES = 2 * 1024 * 1024
 export const VIEWER_QUEUE_EVENTS = 4096
 /** At most one picture replacement a second for a viewer. */
 export const RESYNC_INTERVAL_MS = 1000
-/** How long a join waits for the replica's first (or a rebuild's) seed, from the hello. */
+/** How long a join waits for its replica and the replica's first (or a rebuild's) seed, from the hello. */
 export const JOIN_WAIT_MS = 10_000
+/** The encoder's scratch while a checkpoint chunk is sent (at most three bytes a code unit). */
+const ENCODER_SCRATCH_BYTES = 3 * 16 * 1024
 /** Checkpoint text per binary frame, in UTF-16 code units (a surrogate pair is never split). */
 const TEXT_CHUNK = 16 * 1024
 const FRAME_BYTES = 64 * 1024
@@ -56,11 +58,13 @@ export interface DisplaySink {
 }
 
 export interface RawDisplayOptions {
-  /** The rest of a header: the session and presence as the viewer sends them. */
-  header(): Record<string, unknown>
+  /** The rest of a header: the session and presence as the viewer sends them; undefined when that failed (the viewer has closed). */
+  header(): Record<string, unknown> | undefined
   fidelity(): Fidelity
   /** The viewer must reconnect (it closes the socket with 4000). */
   resync(reason: string): void
+  /** When a join that has no picture yet gives up (absolute, from the hello: Date.now() or `now`). */
+  deadline: number
   window: number
   pauseEvictMs: number
   now?(): number
@@ -120,6 +124,10 @@ export class RawDisplay implements ReplicaListener {
   /** The rest of the live event being sent (an output event larger than a frame). */
   private live: Generator<Frame> | undefined
   private replaying: Cut | undefined
+  /** The cut a replay generator holds until it is done (its barrier may wait for credit). */
+  private pinned: Cut | undefined
+  /** The live event being sent, while its frames are. */
+  private sending: LogEvent | undefined
   /** Live events after the current picture's cut, not yet sent. */
   private backlog: LogEvent[] = []
   private backlogBytes = 0
@@ -149,8 +157,8 @@ export class RawDisplay implements ReplicaListener {
     const { state, unsubscribe } = this.source.subscribe(this)
     this.unsubscribe = unsubscribe
     if (state.kind === 'ended') { this.options.resync('Terminal output unavailable; reconnect'); return }
-    // The wait for a seed is absolute from the join: a rebuild notice does not extend it.
-    this.joinDeadline = setTimeout(() => { if (!this.latch && !this.replaying && this.epoch === 0) this.options.resync('Terminal output not ready; reconnect') }, JOIN_WAIT_MS)
+    // The wait for a seed is absolute from the hello: neither the replica arriving nor a rebuild notice extends it.
+    this.joinDeadline = setTimeout(() => { if (this.epoch === 0) this.options.resync('Terminal output not ready; reconnect') }, Math.max(0, this.options.deadline - this.now()))
     if (state.kind === 'live') this.begin(state.cut, 'join')
     else this.waitingForSeed = true
   }
@@ -164,6 +172,10 @@ export class RawDisplay implements ReplicaListener {
     clearTimeout(this.evict)
     this.replay = undefined
     this.replaying = undefined
+    this.pinned = undefined
+    this.live = undefined
+    this.sending = undefined
+    this.control = []
     this.backlog = []
     this.backlogBytes = 0
   }
@@ -231,8 +243,8 @@ export class RawDisplay implements ReplicaListener {
 
   /** Replace the picture with the replica's latest cut, at most once per RESYNC_INTERVAL_MS. */
   private replaceSoon(): void {
-    // A replay in progress finishes first: its barrier asks again.
-    if (this.closed || this.replacementTimer || this.waitingForSeed || this.replaying) return
+    // Only while a replacement is still owed; a replay in progress finishes first (its barrier asks again).
+    if (this.closed || !this.replacement || this.replacementTimer || this.waitingForSeed || this.replaying) return
     const wait = this.lastReplacementAt + RESYNC_INTERVAL_MS - this.now()
     if (wait > 0) { this.replacementTimer = setTimeout(() => { this.replacementTimer = undefined; this.replaceSoon() }, wait); return }
     const state = this.source.state()
@@ -244,16 +256,22 @@ export class RawDisplay implements ReplicaListener {
     this.epoch++
     this.replacement = false
     this.lastReplacementAt = this.now()
-    // The cut includes every event committed so far: anything queued is in it.
+    // The cut includes every event committed so far: anything queued is in it, and older notices are superseded.
     this.dropBacklog()
     this.live = undefined
+    this.sending = undefined
+    this.control = []
     this.replaying = cut
+    this.pinned = cut
     this.replay = this.frames(cut, kind, this.epoch)
     this.pump()
   }
 
   private *frames(cut: Cut, kind: 'join' | 'rebase', epoch: number): Generator<Frame> {
-    yield { json: { type: kind, epoch, ...this.options.header(), fidelity: this.options.fidelity(), checkpoint: sideState(cut.checkpoint), bytes: checkpointBytes(cut.checkpoint.data), baseSeq: cut.baseSeq, throughSeq: cut.throughSeq } }
+    const header = this.options.header()
+    // The viewer could not describe the session (it is gone): nothing of this picture is sent.
+    if (!header) { this.close(); return }
+    yield { json: { type: kind, epoch, ...header, fidelity: this.options.fidelity(), checkpoint: sideState(cut.checkpoint), bytes: checkpointBytes(cut.checkpoint.data), baseSeq: cut.baseSeq, throughSeq: cut.throughSeq } }
     for (const bytes of checkpointText(cut.checkpoint.data)) yield { bytes }
     for (const event of cut.tail) yield* eventFrames(event)
     yield { json: { type: 'barrier', epoch, throughSeq: cut.throughSeq } }
@@ -273,12 +291,12 @@ export class RawDisplay implements ReplicaListener {
         let frame: Frame | undefined
         if (this.replay) {
           const next = this.replay.next()
-          if (next.done) { this.replay = undefined; continue }
+          if (next.done) { this.replay = undefined; this.pinned = undefined; continue }
           frame = next.value
           if ('json' in frame && frame.json.type === 'barrier') {
             this.barriers.add(this.epoch)
             this.replaying = undefined
-            if (this.replacement) queueMicrotask(() => this.replaceSoon())
+            queueMicrotask(() => this.replaceSoon())
           }
         } else if (this.control.length) {
           frame = { json: this.control.shift()! }
@@ -288,9 +306,10 @@ export class RawDisplay implements ReplicaListener {
             if (!event) return
             if (event.kind === 'output') this.backlogBytes -= event.bytes.length
             this.live = eventFrames(event)
+            this.sending = event
           }
           const next = this.live.next()
-          if (next.done) { this.live = undefined; continue }
+          if (next.done) { this.live = undefined; this.sending = undefined; continue }
           frame = next.value
         }
         if (!this.send(frame)) { this.close(); return }
@@ -310,11 +329,18 @@ export class RawDisplay implements ReplicaListener {
     return this.sink.binary(frame.bytes)
   }
 
-  /** What this viewer holds beyond the replica (lib/memory.ts): a replay's cut no longer the replica's, the backlog, bytes in flight. */
+  /**
+   * What this viewer holds beyond the replica (lib/memory.ts): a replay's
+   * cut while its generator is unfinished (its checkpoint text when no longer
+   * the replica's base, and its tail), the backlog and the event being sent,
+   * the encoder's scratch, bytes in flight.
+   */
   *retainedSteps(): Generator<void, number> {
     let bytes = this.backlogBytes + this.backlog.length * EVENT_OVERHEAD_BYTES + (this.sent - this.retired)
-    const cut = this.replaying
+    if (this.sending?.kind === 'output') bytes += this.sending.bytes.length + EVENT_OVERHEAD_BYTES
+    const cut = this.pinned
     if (cut) {
+      bytes += ENCODER_SCRATCH_BYTES
       const current = this.source.state()
       if (current.kind !== 'live' || current.cut.checkpoint !== cut.checkpoint) bytes += yield* textSteps(cut.checkpoint.data)
       for (const event of cut.tail) bytes += (event.kind === 'output' ? event.bytes.length : 0) + EVENT_OVERHEAD_BYTES
