@@ -56,6 +56,14 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const [attempt, setAttempt] = useState(0)
   const [streamStatus, setStreamStatus] = useState('Connecting')
   useEffect(() => { setCaptureTab(true); setAttempt(0); setStreamStatus('Connecting') }, [sessionId])
+  // A failed renderer is rebuilt once; failing again within a minute it
+  // stays stopped ("Renderer failed") until the operator reconnects.
+  const lastRendererRebuild = useRef(0)
+  const rendererFailed = useCallback(() => {
+    if (Date.now() - lastRendererRebuild.current < 60_000) return
+    lastRendererRebuild.current = Date.now()
+    setAttempt((value) => value + 1)
+  }, [])
   const [agents, setAgents] = useState<SessionOptionsData['agents']>([])
   const [agentsError, setAgentsError] = useState('')
   const agentChoices = useTerminalAgents(agents)
@@ -400,7 +408,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
           {session.cleanupReason && <Alert tone="attention"><AlertDescription>{session.cleanupReason}</AlertDescription></Alert>}
           </Stack>}
           <Separator />
-          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} offerKeyboard={keyed && editing === 'idle' && Boolean(inputEnabled)} inputEnabled={Boolean(inputEnabled)} inputHandle={inputHandle} viewHandle={viewHandle} onModifiersChange={setModifiers} captureTab={captureTab} attempt={attempt} onStatus={setStreamStatus} onInput={input} onClaim={handleClaim} onSession={update} onPresence={setPresence} onResult={handleResult} />}
+          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} offerKeyboard={keyed && editing === 'idle' && Boolean(inputEnabled)} inputEnabled={Boolean(inputEnabled)} inputHandle={inputHandle} viewHandle={viewHandle} onModifiersChange={setModifiers} captureTab={captureTab} attempt={attempt} onStatus={setStreamStatus} onInput={input} onClaim={handleClaim} onSession={update} onPresence={setPresence} onResult={handleResult} onRendererFailed={rendererFailed} />}
         </>)}
       </Stack>
     </WorkspacePageBody>
