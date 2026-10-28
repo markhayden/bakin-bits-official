@@ -9,7 +9,15 @@ export class Store {
       CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS cursors (session TEXT PRIMARY KEY, value INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS output (id INTEGER PRIMARY KEY AUTOINCREMENT, session TEXT NOT NULL, cursor INTEGER NOT NULL, data BLOB NOT NULL);
-      CREATE INDEX IF NOT EXISTS output_session ON output(session, cursor);`)
+      CREATE INDEX IF NOT EXISTS output_session ON output(session, cursor);
+      CREATE TABLE IF NOT EXISTS sizes (session TEXT PRIMARY KEY, bytes INTEGER NOT NULL);`)
+    // Retained bytes are kept as running totals (summing the output on every
+    // append made a busy session at its limit scan everything it retained);
+    // they are rebuilt from the output once per open.
+    this.db.transaction(() => {
+      this.db.exec('DELETE FROM sizes')
+      this.db.exec('INSERT INTO sizes SELECT session, SUM(length(data)) FROM output GROUP BY session')
+    })()
   }
   sessions(): Session[] {
     // Rows written before explicit sizing carry no epoch or revision yet.
@@ -24,10 +32,31 @@ export class Store {
     this.db.transaction(() => {
       this.db.query('INSERT INTO cursors VALUES (?, 1) ON CONFLICT(session) DO UPDATE SET value=value+1').run(session)
       const cursor = (this.db.query('SELECT value FROM cursors WHERE session=?').get(session) as { value: number }).value
-      this.db.query('INSERT INTO output(session,cursor,data) VALUES (?,?,?)').run(session, cursor, data.slice(-this.sessionLimit))
-      while (this.bytes(session) > this.sessionLimit) this.db.query('DELETE FROM output WHERE id=(SELECT MIN(id) FROM output WHERE session=?)').run(session)
-      while (this.bytes() > this.globalLimit) this.db.exec('DELETE FROM output WHERE id=(SELECT MIN(id) FROM output)')
+      const kept = data.slice(-this.sessionLimit)
+      this.db.query('INSERT INTO output(session,cursor,data) VALUES (?,?,?)').run(session, cursor, kept)
+      this.db.query('INSERT INTO sizes VALUES (?, ?) ON CONFLICT(session) DO UPDATE SET bytes=bytes+excluded.bytes').run(session, kept.length)
+      this.trim(this.bytes(session) - this.sessionLimit, session)
+      this.trim(this.bytes() - this.globalLimit)
     })()
+  }
+  /** Delete the oldest output rows (of `session`, or of any session) until at least `excess` bytes are gone. */
+  private trim(excess: number, session?: string): void {
+    while (excess > 0) {
+      const rows = (session
+        ? this.db.query('SELECT id, session, length(data) AS size FROM output WHERE session=? ORDER BY cursor LIMIT 256').all(session)
+        : this.db.query('SELECT id, session, length(data) AS size FROM output ORDER BY id LIMIT 256').all()) as { id: number; session: string; size: number }[]
+      if (!rows.length) return
+      const freed = new Map<string, number>()
+      const gone: number[] = []
+      for (const row of rows) {
+        if (excess <= 0) break
+        gone.push(row.id)
+        freed.set(row.session, (freed.get(row.session) ?? 0) + row.size)
+        excess -= row.size
+      }
+      this.db.query(`DELETE FROM output WHERE id IN (${gone.map(() => '?').join(',')})`).run(...gone)
+      for (const [owner, size] of freed) this.db.query('UPDATE sizes SET bytes=bytes-? WHERE session=?').run(size, owner)
+    }
   }
   output(session: string, cursor = 0, limit = 256 * 1024): { cursor: number; data: Buffer; truncated: boolean } {
     const rows = this.db.query('SELECT cursor, data FROM output WHERE session=? AND cursor>? ORDER BY cursor LIMIT 256').all(session, cursor) as { cursor: number; data: Uint8Array }[]
@@ -47,14 +76,20 @@ export class Store {
   }
   bytes(session?: string): number {
     const row = (session
-      ? this.db.query('SELECT COALESCE(SUM(length(data)),0) AS size FROM output WHERE session=?').get(session)
-      : this.db.query('SELECT COALESCE(SUM(length(data)),0) AS size FROM output').get()) as { size: number }
+      ? this.db.query('SELECT COALESCE(SUM(bytes),0) AS size FROM sizes WHERE session=?').get(session)
+      : this.db.query('SELECT COALESCE(SUM(bytes),0) AS size FROM sizes').get()) as { size: number }
     return row.size
   }
-  deleteOutput(session: string): void { this.db.query('DELETE FROM output WHERE session=?').run(session) }
+  deleteOutput(session: string): void {
+    this.db.transaction(() => {
+      this.db.query('DELETE FROM output WHERE session=?').run(session)
+      this.db.query('DELETE FROM sizes WHERE session=?').run(session)
+    })()
+  }
   deleteSession(session: string): void {
     this.db.transaction(() => {
       this.db.query('DELETE FROM output WHERE session=?').run(session)
+      this.db.query('DELETE FROM sizes WHERE session=?').run(session)
       this.db.query('DELETE FROM cursors WHERE session=?').run(session)
       this.db.query('DELETE FROM sessions WHERE id=?').run(session)
     })()
