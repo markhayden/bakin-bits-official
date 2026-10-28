@@ -94,11 +94,16 @@
   padding: 0 6px;
   box-sizing: border-box;
 }
+/* The keys are kit Buttons (focus ring, disabled state); this draws them as keycaps. */
 [data-bakin-plugin="terminal"] .terminal-keycap {
   position: relative;
   flex-shrink: 0;
+  width: auto;
   min-width: var(--terminal-keycap-size);
   height: 40px;
+  min-height: 0;
+  /* A long label wraps inside its key on a narrow phone. */
+  white-space: normal;
   padding: 0 10px;
   box-sizing: border-box;
   display: inline-flex;
@@ -120,8 +125,10 @@
 [data-bakin-plugin="terminal"] .terminal-keycap::after { content: ""; position: absolute; inset: -2px -3px; }
 [data-bakin-plugin="terminal"] .terminal-keycap[data-tone="function"] { background: var(--terminal-keycap-function); }
 [data-bakin-plugin="terminal"] .terminal-keycap:active:not(:disabled) { background: var(--terminal-keycap-pressed); }
-[data-bakin-plugin="terminal"] .terminal-keycap:focus-visible { outline: 2px solid var(--bakin-color-focus-ring); outline-offset: 1px; }
-[data-bakin-plugin="terminal"] .terminal-keycap:disabled { opacity: 0.4; cursor: default; }
+[data-bakin-plugin="terminal"] .terminal-keycap:disabled { cursor: default; }
+/* Glyphs keep their drawn sizes (the kit sizes unclassed icons for text buttons). */
+[data-bakin-plugin="terminal"] .terminal-key-accessory .terminal-keycap svg { width: 22px; height: 22px; }
+[data-bakin-plugin="terminal"] .terminal-key-accessory .terminal-keycap-hide svg { width: 24px; height: 24px; }
 /* A modifier on for the next key is inverted; locked adds a bar under its glyph. */
 [data-bakin-plugin="terminal"] .terminal-keycap[data-state="once"],
 [data-bakin-plugin="terminal"] .terminal-keycap[data-state="locked"] {

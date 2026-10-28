@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { Button } from '@makinbakin/sdk/ui'
 import { Joystick } from './joystick'
 import { CONTROL_LABELS, CONTROL_SHORTCUTS, keyFace, SHEET_KEYS, type ArrowKey, type Modifier, type ModifierState, type TerminalKey } from './terminal-input'
 import type { EditingSession } from './editing-session'
@@ -18,9 +19,10 @@ function Keycap({ label, face, tone, state, disabled, className, onPress, onKeyD
   label: string; face: React.ReactNode; tone?: 'function'; state?: ModifierState[Modifier]
   disabled?: boolean; className?: string; onPress(event: React.MouseEvent): void; onKeyDown?(event: React.KeyboardEvent): void
 }) {
-  return <button type="button" className={`terminal-keycap${className ? ' ' + className : ''}`} data-tone={tone} data-state={state}
+  // The kit Button (focus ring, disabled state, activation), drawn as a keycap by the plugin's scoped CSS.
+  return <Button variant="ghost" size="icon-lg" className={`terminal-keycap${className ? ' ' + className : ''}`} data-tone={tone} data-state={state}
     aria-label={label} aria-pressed={state === undefined ? undefined : state !== 'off'} disabled={disabled}
-    onMouseDown={keepFocus} onClick={onPress} onKeyDown={onKeyDown}>{face}</button>
+    onMouseDown={keepFocus} onClick={onPress} onKeyDown={onKeyDown}>{face}</Button>
 }
 
 const ARROWS_ICON = <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5l3.2 4.2H8.8z" /><path d="M12 21.5l-3.2-4.2h6.4z" /><path d="M2.5 12l4.2-3.2v6.4z" /><path d="M21.5 12l-4.2 3.2V8.8z" /><circle cx="12" cy="12" r="2" /></svg>
@@ -41,32 +43,32 @@ function ArrowJoystick({ disabled, onArrow }: { disabled: boolean; onArrow(key: 
   useEffect(() => { if (disabled) stick.current?.cancel() }, [disabled])
   useEffect(() => () => stick.current?.cancel(), [])
   const mine = (event: React.PointerEvent) => event.pointerId === pointer.current
-  return <button type="button" className="terminal-keycap terminal-joystick" aria-label="Arrow keys" disabled={disabled}
+  return <Button variant="ghost" size="icon-lg" className="terminal-keycap terminal-joystick" aria-label="Arrow keys" disabled={disabled}
     onMouseDown={keepFocus}
-    onPointerDown={(event) => {
+    onPointerDown={(event: React.PointerEvent<HTMLButtonElement>) => {
       if (disabled || event.button !== 0 || pointer.current !== undefined) return
       pointer.current = event.pointerId
       event.currentTarget.setPointerCapture?.(event.pointerId)
       stick.current!.start(event.clientX, event.clientY)
     }}
-    onPointerMove={(event) => { if (mine(event)) stick.current!.move(event.clientX, event.clientY) }}
-    onPointerUp={(event) => {
+    onPointerMove={(event: React.PointerEvent<HTMLButtonElement>) => { if (mine(event)) stick.current!.move(event.clientX, event.clientY) }}
+    onPointerUp={(event: React.PointerEvent<HTMLButtonElement>) => {
       if (!mine(event)) return
       pointer.current = undefined
       const box = event.currentTarget.getBoundingClientRect()
       stick.current!.end(event.clientX - box.left, event.clientY - box.top, box.width, box.height)
     }}
-    onPointerCancel={(event) => { if (mine(event)) { pointer.current = undefined; stick.current!.cancel() } }}
-    onLostPointerCapture={(event) => { if (mine(event)) { pointer.current = undefined; stick.current!.cancel() } }}
+    onPointerCancel={(event: React.PointerEvent<HTMLButtonElement>) => { if (mine(event)) { pointer.current = undefined; stick.current!.cancel() } }}
+    onLostPointerCapture={(event: React.PointerEvent<HTMLButtonElement>) => { if (mine(event)) { pointer.current = undefined; stick.current!.cancel() } }}
     // Pointer presses are handled above; the click that follows them sends nothing.
-    onClick={(event) => event.preventDefault()}
-    onKeyDown={(event) => {
+    onClick={(event: React.MouseEvent) => event.preventDefault()}
+    onKeyDown={(event: React.KeyboardEvent) => {
       const key = ARROW_KEYS[event.key]
       if (!key || disabled) return
       event.preventDefault()
       event.stopPropagation()
       send.current(key)
-    }}>{ARROWS_ICON}</button>
+    }}>{ARROWS_ICON}</Button>
 }
 
 const HIDE_ICON = <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="11" rx="2" /><path d="M6 7.5h.01M9.5 7.5h.01M13 7.5h.01M16.5 7.5h.01M7 11.5h10" /><path d="M9 18.5l3 2.5 3-2.5" /></svg>
