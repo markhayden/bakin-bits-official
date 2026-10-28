@@ -175,6 +175,8 @@ export class Sessions {
         void screen.write(chunk, () => {
           this.store.append(session.id, chunk)
           for (const listener of this.outputListeners.get(session.id) ?? []) listener()
+          // A chunk parsed after its screen was stopped (or replaced) is not this attachment's.
+          if (this.closed || this.screens.get(session.id) !== screen) return
           this.bridgeChunks.set(session.id, (this.bridgeChunks.get(session.id) ?? 0) + 1)
           this.shadowSoon(session.id)
         }).catch(() => undefined)
@@ -183,7 +185,7 @@ export class Sessions {
   }
   /** Compare the shadow replica with the bridge once the bridge has been quiet (spec D13, R1). */
   private shadowSoon(id: string): void {
-    if (!this.driver.replica) return
+    if (!this.driver.replica || this.closed) return
     clearTimeout(this.shadowTimers.get(id))
     this.shadowTimers.set(id, setTimeout(() => {
       this.shadowTimers.delete(id)
@@ -195,17 +197,19 @@ export class Sessions {
     const screen = this.screens.get(id)
     if (this.closed || !replica || !screen || screen.failed) return
     const chunks = this.bridgeChunks.get(id)
-    const activity = replica.activity
-    // Each side read between its own writes; undefined while the replica waits for a seed (or ended).
-    const raw = await replica.read(screenView)
+    // Read between the replica's events; undefined while it waits for a seed (or ended).
+    const raw = await replica.read((terminal) => ({ view: screenView(terminal), activity: replica.activity, quietMs: replica.quietMs }))
+    if (!raw || this.closed) return
+    const quiet = this.options.shadowQuietMs ?? SHADOW_QUIET_MS
+    // The replica moved recently: the bridge's redraw of it may not have arrived yet.
+    if (raw.quietMs < quiet) { this.shadowSoon(id); return }
     const bridge = await screen.capture(() => screen.view())
-    if (!raw) return
     // Either side moved while they were read, or the attachment changed: not a quiet point.
-    if (this.bridgeChunks.get(id) !== chunks || replica.activity !== activity || this.screens.get(id) !== screen || this.driver.replica?.(id) !== replica) {
+    if (this.closed || this.bridgeChunks.get(id) !== chunks || replica.activity !== raw.activity || this.screens.get(id) !== screen || this.driver.replica?.(id) !== replica) {
       this.shadowSoon(id)
       return
     }
-    const mismatch = shadowDiff(bridge, raw)
+    const mismatch = shadowDiff(bridge, raw.view)
     const stats = this.shadow.get(id) ?? { compared: 0, mismatched: 0 }
     this.shadow.set(id, stats)
     stats.compared++
@@ -221,14 +225,17 @@ export class Sessions {
     })
   }
   private async stopScreen(id: string): Promise<void> {
-    clearTimeout(this.shadowTimers.get(id))
-    this.shadowTimers.delete(id)
-    this.shadow.delete(id)
-    this.bridgeChunks.delete(id)
     const screen = this.screens.get(id)
     this.screens.delete(id)
     await this.driver.detach(id)
     if (screen) { await screen.drain(); screen.close() }
+    // After the drain: a chunk still being parsed finds no screen and records nothing.
+    // A new attachment made meanwhile keeps its own.
+    if (this.screens.has(id)) return
+    clearTimeout(this.shadowTimers.get(id))
+    this.shadowTimers.delete(id)
+    this.shadow.delete(id)
+    this.bridgeChunks.delete(id)
   }
   private ensureScreen(id: string, principal: Principal): Promise<Screen> {
     return this.run(async () => {

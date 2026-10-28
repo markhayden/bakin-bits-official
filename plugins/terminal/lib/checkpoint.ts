@@ -220,7 +220,11 @@ class Text {
 
 /** Characters of a checkpoint restored per step (about a millisecond of parsing). */
 export const RESTORE_STEP_CHARS = 16 * 1024
-/** `data` in pieces of at most RESTORE_STEP_CHARS, never splitting a surrogate pair. */
+/**
+ * `data` in pieces of at most RESTORE_STEP_CHARS, never splitting a
+ * surrogate pair inside a chunk (a pair across two chunks is carried by
+ * xterm's string decoder).
+ */
 export function* pieces(data: readonly string[]): Generator<string> {
   for (const chunk of data) {
     for (let at = 0; at < chunk.length;) {
@@ -374,13 +378,23 @@ export function restoreCheckpointSync(terminal: Term, checkpoint: Checkpoint): v
   for (const piece of pieces(checkpoint.data)) writer.writeSync(piece)
   finish(terminal, checkpoint)
 }
-/** Rebuild `terminal` from `checkpoint` through its write queue: bytes written after it parse after its side state is set. */
-export function restoreCheckpoint(terminal: Term, checkpoint: Checkpoint): Promise<void> {
-  for (const piece of pieces(checkpoint.data)) terminal.write(piece)
-  return new Promise<void>((resolve) => terminal.write('', () => {
-    finish(terminal, checkpoint)
-    resolve()
-  }))
+/** xterm discards writes past 50M pending characters: the restore keeps at most this many queued. */
+const RESTORE_PENDING_CHARS = 1024 * 1024
+/**
+ * Rebuild `terminal` (fresh: same size and scrollback) from `checkpoint`
+ * through its write queue, with flow control; write nothing else to it
+ * until this settles (its side state is set last).
+ */
+export async function restoreCheckpoint(terminal: Term, checkpoint: Checkpoint): Promise<void> {
+  const drained = () => new Promise<void>((resolve) => terminal.write('', resolve))
+  let pending = 0
+  for (const piece of pieces(checkpoint.data)) {
+    terminal.write(piece)
+    pending += piece.length
+    if (pending >= RESTORE_PENDING_CHARS) { await drained(); pending = 0 }
+  }
+  await drained()
+  finish(terminal, checkpoint)
 }
 
 export type CheckpointResult = { checkpoint: Checkpoint } | { rejected: string }

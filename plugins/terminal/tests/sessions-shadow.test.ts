@@ -10,7 +10,7 @@ const managers: Sessions[] = []
 afterEach(async () => { for (const manager of managers.splice(0)) await manager.shutdown() })
 
 /** A driver whose bridge output and replica events the test sends by hand. */
-function fixture() {
+function fixture(quietMs = 10) {
   let now = 1000
   let bridge: ((data: Uint8Array) => void) | undefined
   const replica = new Replica({ reseed: async () => {} })
@@ -25,7 +25,7 @@ function fixture() {
   }
   const manager = new Sessions(new Store(':memory:'), driver, {
     settings: () => ({}), now: () => now, prepare: async () => undefined, release: async () => undefined,
-    log: { info: (message, data) => logs.push({ message, data }) }, shadowQuietMs: 10,
+    log: { info: (message, data) => logs.push({ message, data }) }, shadowQuietMs: quietMs,
   })
   managers.push(manager)
   return {
@@ -77,4 +77,34 @@ test('nothing is compared while the replica waits for a seed', async () => {
   await Bun.sleep(60)
   expect(f.manager.shadow.get(session.id)).toBeUndefined()
   expect(f.logs).toEqual([])
+})
+
+test('a replica that moved just before the quiet point is not compared until the bridge has caught up', async () => {
+  const f = fixture(100)
+  const session = await f.manager.create({ title: 'Delayed', cwd: '/tmp', program: 'shell' }, human, { cols: 20, rows: 4, kind: 'browser', device: 'desktop' })
+  await f.seed()
+  await f.raw('A')
+  f.bridge('A')
+  await compared(f.manager, session.id, 1)
+  // The bridge's quiet point is near (a chunk that changes nothing on screen); the program prints, and the bridge's redraw comes later.
+  f.bridge('\x1b[0m')
+  await Bun.sleep(80)
+  await f.raw('B')
+  await Bun.sleep(40)
+  f.bridge('B')
+  await compared(f.manager, session.id, 2)
+  expect(f.manager.shadow.get(session.id)).toMatchObject({ compared: 2, mismatched: 0 })
+})
+
+test('bridge output parsed after shutdown leaves no shadow bookkeeping behind', async () => {
+  const f = fixture()
+  const session = await f.manager.create({ title: 'Teardown', cwd: '/tmp', program: 'shell' }, human, { cols: 20, rows: 4, kind: 'browser', device: 'desktop' })
+  await f.seed()
+  f.bridge('pending at shutdown')
+  await f.manager.shutdown()
+  const internals = f.manager as unknown as { bridgeChunks: Map<string, number>; shadowTimers: Map<string, unknown> }
+  expect(internals.bridgeChunks.size).toBe(0)
+  expect(internals.shadowTimers.size).toBe(0)
+  await Bun.sleep(30)
+  expect(f.manager.shadow.get(session.id)).toBeUndefined()
 })

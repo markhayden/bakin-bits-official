@@ -241,3 +241,19 @@ describe('compareSteps (the verifier a checkpoint uses)', () => {
     }
   })
 })
+
+describe('restoreCheckpoint', () => {
+  it('restores a checkpoint larger than xterm takes queued at once (flow control)', async () => {
+    // 52M characters: past the 50M xterm discards when queued in one go.
+    const line = 'x'.repeat(78) + '\r\n'
+    const chunk = line.repeat(Math.ceil(16 * 1024 / line.length))
+    const data = Array.from({ length: Math.ceil(52_000_000 / chunk.length) }, () => chunk)
+    const viewer = terminal(80, 24, 10)
+    const checkpoint: Checkpoint = { format: CHECKPOINT_FORMAT, cols: 80, rows: 24, scrollback: 10, data, joinState: 0, penHasExtended: true, altEnteredCols: null }
+    await restoreCheckpoint(viewer, checkpoint)
+    // The side state is set once every piece is parsed.
+    expect(((viewer as unknown as { _core: { _inputHandler: { _curAttrData: { bg: number } } } })._core._inputHandler._curAttrData.bg & 0x10000000) !== 0).toBe(true)
+    expect(viewer.buffer.active.getLine(viewer.buffer.active.baseY)!.translateToString(true)).toBe('x'.repeat(78))
+    viewer.dispose()
+  }, 60_000)
+})

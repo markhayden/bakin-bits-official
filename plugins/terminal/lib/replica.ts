@@ -165,6 +165,8 @@ export class Replica implements LogConsumer {
   private appliedSeq = 0
   /** Counts every event taken, applied or skipped (a reader can tell the replica moved). */
   private taken = 0
+  /** When the last event finished (applied or skipped). */
+  private settledAt = -Infinity
   private idleTimer: ReturnType<typeof setTimeout> | undefined
   private work: Promise<unknown> = Promise.resolve()
   private failure: string | undefined
@@ -188,6 +190,8 @@ export class Replica implements LogConsumer {
   get rebuildCause(): RebuildCause | undefined { return this.rebuilding }
   /** Changes whenever the replica takes an event. */
   get activity(): number { return this.taken }
+  /** Milliseconds since the last event finished (read it from `read`: no event is in flight there). */
+  get quietMs(): number { return this.now() - this.settledAt }
 
   /** Where a join starts, or undefined while there is none (no seed yet, or rebuilding). */
   joinPoint(): JoinPoint | undefined {
@@ -202,7 +206,9 @@ export class Replica implements LogConsumer {
   }
 
   event(event: LogEvent): Promise<void> {
-    return this.serial(() => this.apply(event))
+    return this.serial(async () => {
+      try { await this.apply(event) } finally { this.settledAt = this.now() }
+    })
   }
 
   pressure(queuedOutputBytes: number): void {
