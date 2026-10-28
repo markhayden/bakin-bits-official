@@ -1,6 +1,7 @@
 import headless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { cursorVisibilitySequence, trackCursorVisibility } from './cursor-visibility'
+import { terminalBytes } from './memory'
 import { screenView, type ScreenView } from './shadow'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
 import { guardParser } from './xterm-fixes'
@@ -114,6 +115,8 @@ export class Screen {
   }
   serialize(): string { return this.serializer.serialize() + cursorVisibilitySequence(this.cursor.hidden) }
   view(): ScreenView { return screenView(this.terminal) }
+  /** What this screen holds (lib/memory.ts): its emulator and the output waiting for the parser. */
+  retainedBytes(): number { return terminalBytes(this.terminal) + this.queuedBytes }
   text(): string {
     const buffer = this.terminal.buffer.active
     return Array.from({ length: this.terminal.rows }, (_, index) => buffer.getLine(buffer.baseY + index)?.translateToString(true) ?? '').join('\n')

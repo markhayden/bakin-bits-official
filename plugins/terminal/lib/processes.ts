@@ -46,6 +46,8 @@ export interface ProcessDriver {
   detach(id?: string): Promise<void>
   /** The session's server replica (spec D13), while attached; shadow-only until the raw path (R2). */
   replica?(id: string): Replica | undefined
+  /** What the attached sessions' replicas and event logs hold (lib/memory.ts). */
+  retainedBytes?(): number
   /** The terminal apps attached to a session. */
   clients(id: string): Promise<NativeClient[]>
   detachClient(name: string): Promise<void>
@@ -131,6 +133,12 @@ export class TmuxProcesses implements ProcessDriver {
       await control.command(['refresh-client', '-B', 'bakin-client::#{@bakin_client}'])
       replica.start()
     }).catch(() => undefined)
+  }
+  retainedBytes(): number {
+    let total = 0
+    for (const replica of this.replicas.values()) if (!replica.ended) total += replica.retainedBytes()
+    for (const log of this.logs.values()) total += log.pendingBytes
+    return total
   }
   /** The session's ordered event log, while its control connection is attached. */
   outputLog(id: string): OutputLog | undefined { return this.logs.get(id) }

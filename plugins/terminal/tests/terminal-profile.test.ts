@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import headless from '@xterm/headless'
-import { applyTerminalProfile, clipboardText, CLIPBOARD_OFFER_LIMIT } from '../lib/terminal-profile'
+import { applyTerminalProfile, clipboardText, CLIPBOARD_OFFER_LIMIT, TITLE_LIMIT } from '../lib/terminal-profile'
 import { LINK_ORPHAN_LIMIT } from '../lib/xterm-fixes'
 
 type Term = InstanceType<typeof headless.Terminal>
@@ -115,6 +115,24 @@ describe('terminal profile: side effects only live', () => {
     await write(terminal, '\x07\x1b]0;third\x07')
     expect(seen.bells).toBe(1)
     expect(seen.titles).toEqual(['third'])
+  })
+})
+
+describe('terminal profile: bounded titles', () => {
+  it('ignores a title or icon name past TITLE_LIMIT UTF-8 bytes, keeping the one before', async () => {
+    const { terminal, seen } = profiled(40, 3)
+    const core = (terminal as unknown as { _core: { _inputHandler: { _windowTitle: string; _iconName: string } } })._core._inputHandler
+    await write(terminal, `\x1b]0;${'a'.repeat(TITLE_LIMIT)}\x07`)
+    expect(seen.titles).toEqual(['a'.repeat(TITLE_LIMIT)])
+    // One byte over, in characters or in UTF-8 bytes (é is two): ignored, OSC 0, 1 and 2 alike.
+    for (const long of ['b'.repeat(TITLE_LIMIT + 1), 'é'.repeat(TITLE_LIMIT / 2) + 'c']) {
+      for (const ident of [0, 1, 2]) await write(terminal, `\x1b]${ident};${long}\x07`)
+    }
+    expect(seen.titles).toHaveLength(1)
+    expect(core._windowTitle).toBe('a'.repeat(TITLE_LIMIT))
+    expect(core._iconName).toBe('a'.repeat(TITLE_LIMIT))
+    await write(terminal, '\x1b]2;short\x07')
+    expect(seen.titles.at(-1)).toBe('short')
   })
 })
 

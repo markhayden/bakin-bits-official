@@ -72,6 +72,43 @@ test('an available service update is ONE observation with the Apply update repai
   }
 })
 
+test('live sessions past the memory warning are ONE Health observation, and it clears below the clear line', async () => {
+  const { Sessions } = await import('../lib/sessions')
+  const { RETAINED_CLEAR_BYTES, RETAINED_WARNING_BYTES } = await import('../lib/memory')
+  let retained = RETAINED_WARNING_BYTES + 50e6
+  const reading = spyOn(Sessions.prototype, 'retainedBytes').mockImplementation(() => retained)
+  const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-memory-'))
+  const checks: HealthCheckRegistrationInput[] = []
+  const warnings: unknown[] = []
+  const context = {
+    storage: { localRoot: root }, getSettings: () => ({ enabledAgents: [] }),
+    hooks: { register: () => () => {}, invoke: async () => undefined },
+    tasks: { get: async () => undefined }, log: { error: () => {}, warn: (...args: unknown[]) => { warnings.push(args) } },
+    registerExecTool: () => {}, registerHealthRepairAction: () => 'setup-service',
+    registerHealthCheck: (check: HealthCheckRegistrationInput) => { checks.push(check); return check.id },
+  } as unknown as PluginContext
+  const memory = async () => {
+    const health = await checks[0]!.run()
+    if (health.outcome !== 'observed') throw new Error('expected observations')
+    return health.observations.filter((observation) => observation.key === 'memory')
+  }
+  try {
+    await plugin.activate(context)
+    expect(checks[0]!.incidents).toContainEqual({ id: 'memory', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' })
+    const [over] = await memory()
+    expect(over).toMatchObject({ status: 'warning', summary: 'Terminal sessions hold about 690 MB', incident: { declarationId: 'memory', class: 'usage_anomaly', disposition: 'watch' } })
+    expect(warnings).toHaveLength(1)
+    // Still over the clear line: still shown, not logged again.
+    retained = RETAINED_CLEAR_BYTES + 1
+    expect(await memory()).toHaveLength(1)
+    expect(warnings).toHaveLength(1)
+    retained = RETAINED_CLEAR_BYTES - 1
+    expect(await memory()).toEqual([])
+  } finally {
+    await plugin.onShutdown?.(); reading.mockRestore(); rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('agents cannot resize, screen reads carry the grid, and the operator can save a size as the default', async () => {
   const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-size-'))
   const tools: ExecToolDefinition[] = []

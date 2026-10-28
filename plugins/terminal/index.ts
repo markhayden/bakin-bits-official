@@ -7,6 +7,7 @@ import { Store } from './lib/store'
 import { TerminalService } from './lib/service'
 import { TmuxProcesses } from './lib/processes'
 import { Sessions } from './lib/sessions'
+import { MemoryWarning, RETAINED_WARNING_BYTES } from './lib/memory'
 import { TerminalError, terminalSettings, type Principal } from './lib/contracts'
 import { agentCommand, command, creatingScreen, failure, human } from './lib/http'
 import { sessionOptions } from './lib/session-options'
@@ -17,6 +18,7 @@ let manager: Sessions | undefined
 let service: TerminalService | undefined
 let maintenance: ReturnType<typeof setInterval> | undefined
 let maintenanceFailed = false
+let memoryWatch: ReturnType<typeof setInterval> | undefined
 let context: PluginContext | undefined
 function sessions(): Sessions {
   if (!manager) throw new TerminalError('Terminal is unavailable', 503)
@@ -130,6 +132,14 @@ export default definePlugin({
     }
     await maintenancePass()
     maintenance = setInterval(() => { void maintenancePass() }, 60 * 60 * 1000)
+    // The memory budget (spec D13): read every minute and on every Health run.
+    const memory = new MemoryWarning(ctx.log)
+    const watchMemory = (): number => {
+      const retained = manager?.retainedBytes() ?? 0
+      memory.observe(retained)
+      return retained
+    }
+    memoryWatch = setInterval(watchMemory, 60 * 1000)
     // Three outcomes (Bakin self-healing PR 1): every family is declared up front and every
     // instance names its subject — the Terminal page is the operator's control for all three.
     const TERMINAL_SUBJECT = { kind: 'plugin', id: 'terminal', label: 'Terminal' } as const
@@ -171,12 +181,14 @@ export default definePlugin({
         { id: 'service-update', subjectKind: 'plugin', resolution: { type: 'repair', actionId: 'setup-service' }, required: 'never' },
         { id: 'maintenance', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
         { id: 'retention', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
+        { id: 'memory', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
       ],
       run: async () => {
         const ready = await service?.ready()
         const updateRequired = Boolean(ready && await service?.updateRequired())
         const retained = sessions().list({ kind: 'human', id: 'health' }).filter((session) => session.cleanupReason)
         const observations: HealthObservationInput[] = []
+        const retainedBytes = watchMemory()
         for (const [key, summary, problem] of [
           ['service', 'Persistent terminal service unavailable', !ready],
           ['maintenance', 'Terminal maintenance failed', maintenanceFailed],
@@ -186,6 +198,15 @@ export default definePlugin({
             key, declarationId: key, subject: TERMINAL_SUBJECT, title: summary,
             impact: key === 'retention' ? 'Unfinished work is retained and may block new worktrees.' : 'Terminal operations or cleanup may be unavailable.',
             class: key === 'retention' ? 'cleanup_backlog' : 'service_failure', disposition: 'watch',
+            resolution: { key: 'review', type: 'human', needs: 'decision', label: 'Open Terminal', href: '/terminal' },
+          } })
+        }
+        if (memory.active) {
+          const summary = `Terminal sessions hold about ${Math.round(retainedBytes / 1e6)} MB`
+          observations.push({ key: 'memory', status: 'warning', summary, incident: {
+            key: 'memory', declarationId: 'memory', subject: TERMINAL_SUBJECT, title: summary,
+            impact: `Live terminal sessions keep their screens and scrollback in Bakin's memory; past ${RETAINED_WARNING_BYTES / 1e6} MB, ending sessions you no longer need frees it.`,
+            class: 'usage_anomaly', disposition: 'watch',
             resolution: { key: 'review', type: 'human', needs: 'decision', label: 'Open Terminal', href: '/terminal' },
           } })
         }
@@ -244,5 +265,5 @@ export default definePlugin({
     })
   },
   async beforeUninstall() { await sessions().beforeUninstall(() => service!.uninstall()) },
-  async onShutdown() { clearInterval(maintenance); await manager?.shutdown(); manager = undefined; service = undefined; context = undefined },
+  async onShutdown() { clearInterval(maintenance); clearInterval(memoryWatch); await manager?.shutdown(); manager = undefined; service = undefined; context = undefined },
 })

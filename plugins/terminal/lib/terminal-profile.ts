@@ -38,6 +38,9 @@ export interface TerminalEffects {
 
 /** Clipboard offers longer than this (decoded bytes) are dropped. */
 export const CLIPBOARD_OFFER_LIMIT = 256 * 1024
+/** The longest title or icon name kept (OSC 0, 1 and 2; UTF-8 bytes): a longer one is ignored. */
+export const TITLE_LIMIT = 4096
+const titleFits = (title: string): boolean => title.length <= TITLE_LIMIT && new TextEncoder().encode(title).byteLength <= TITLE_LIMIT
 const LINK_SCHEMES = /^(?:https?|mailto):/i
 /** Whether an OSC 8 link may be kept and opened: http, https and mailto. */
 export const isAllowedLink = (uri: string): boolean => LINK_SCHEMES.test(uri)
@@ -72,6 +75,7 @@ export function clipboardText(data: string): string | undefined {
  *   pointer input leaves it (focus reports included).
  * - Palette and dynamic-colour changes and window operations are
  *   swallowed (every viewer keeps its theme); graphics never draw.
+ * - Titles and icon names longer than TITLE_LIMIT are ignored.
  * - Bells, titles and clipboard offers fire only while `live`.
  * - Character widths as tmux 3.7c lays them out: Unicode 15 grapheme
  *   clusters corrected by a table generated from the managed tmux.
@@ -89,6 +93,8 @@ export function applyTerminalProfile(terminal: ProfileTerminal & object, effects
   ]) parser.registerCsiHandler(id, swallow)
   for (const id of [{ intermediates: '$', final: 'q' }, { intermediates: '+', final: 'q' }, { final: 'q' }]) parser.registerDcsHandler(id, swallow)
   for (const ident of [4, 5, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 104, 105, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119]) parser.registerOscHandler(ident, swallow)
+  // xterm keeps a title, an icon name and ten of each stacked: each is bounded.
+  for (const ident of [0, 1, 2]) parser.registerOscHandler(ident, (data) => !titleFits(data))
   parser.registerOscHandler(52, (data) => {
     if (!live) return true
     const text = clipboardText(data)

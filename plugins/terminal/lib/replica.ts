@@ -30,6 +30,7 @@
  */
 import headless from '@xterm/headless'
 import { checkpointSteps, type Checkpoint, CHECKPOINT_FORMAT, type CheckpointResult, pieces } from './checkpoint'
+import { EVENT_OVERHEAD_BYTES, terminalBytes, textBytes } from './memory'
 import type { LogConsumer, LogEvent } from './output-log'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
 import { internals, HAS_EXTENDED, type Term } from './terminal-state'
@@ -186,6 +187,14 @@ export class Replica implements LogConsumer {
   get terminal(): Term | undefined { return this.term }
   get ended(): string | undefined { return this.failure }
   get tailSize(): number { return this.tailBytes }
+  /**
+   * What the replica holds (lib/memory.ts): its emulator, the base
+   * checkpoint's text and the tail. Read at any turn: an estimate, not a
+   * view of the screen.
+   */
+  retainedBytes(): number {
+    return (this.term ? terminalBytes(this.term) : 0) + (this.base ? textBytes(this.base.checkpoint.data) : 0) + this.tailBytes + this.tail.length * EVENT_OVERHEAD_BYTES
+  }
   /** Why the replica is waiting for a seed, while it is. */
   get rebuildCause(): RebuildCause | undefined { return this.rebuilding }
   /** Changes whenever the replica takes an event. */

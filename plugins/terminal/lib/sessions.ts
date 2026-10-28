@@ -88,6 +88,12 @@ export class Sessions {
     this.pending = next.catch(() => {})
     return next
   }
+  /** What live sessions hold in this process (lib/memory.ts): bridge screens, replicas and their logs. */
+  retainedBytes(): number {
+    let total = this.driver.retainedBytes?.() ?? 0
+    for (const screen of this.screens.values()) total += screen.retainedBytes()
+    return total
+  }
   list(principal: Principal): Session[] {
     if (principal.kind === 'agent' && !this.enabled().includes(principal.id)) throw new TerminalError('Terminal is disabled for this agent', 403)
     return this.store.sessions().filter((session) => principal.kind === 'human' || session.agentId === principal.id)
