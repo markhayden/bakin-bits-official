@@ -167,12 +167,12 @@ describe('RawDisplay credit', () => {
     for (let i = 0; i < 10; i++) h.src.tell().event(output(seq++, chunk))
     expect(h.total() - capped).toBeLessThanOrEqual(10_000 + 4_000)
     expect(h.total() - capped).toBeGreaterThanOrEqual(10_000)
-    // A smaller total later changes nothing: sending neither stops nor restarts the count.
-    const before = h.total()
+    // Everything sent and retired, then a smaller total: credit stays (a total never goes back), so the next event goes at once.
+    for (let last = -1; last !== h.total();) { last = h.total(); h.display.retire(last) }
+    const settled = h.total()
     h.display.retire(5)
-    expect(h.total()).toBe(before)
-    h.display.retire(h.total())
-    expect(h.total()).toBeGreaterThan(before)
+    h.src.tell().event(output(seq++, chunk))
+    expect(h.total() - settled).toBe(4_000)
   })
   it('counts a JSON frame by its UTF-8 bytes', () => {
     const h = harness({ kind: 'live', cut: cut(['x'.repeat(40_000)], 1) }, { window: 20_000, header: () => ({ session: { title: 'é'.repeat(3000) } }) })

@@ -44,3 +44,13 @@ test('write queries copy mode, cancels it with its own awaited command, then sen
   ])
 })
 
+
+test('a session keeps its fidelity through a terminate that fails, and loses it only when forgotten', async () => {
+  const service = { tmux: '/bin/tmux', socket: '/tmp/fake.sock', ready: async () => true, command: async () => { throw new Error('tmux refused') } } as unknown as TerminalService
+  const processes = new TmuxProcesses(service)
+  ;(processes as unknown as { fidelities: Map<string, unknown> }).fidelities.set('s1', { rebuilds: { overload: 2 }, lastCause: 'overload' })
+  await expect(processes.terminate('s1')).rejects.toThrow('tmux refused')
+  expect(processes.fidelity('s1')).toEqual({ rebuilds: { overload: 2 }, lastCause: 'overload' })
+  processes.forget('s1')
+  expect(processes.fidelity('s1')).toEqual({ rebuilds: {} })
+})

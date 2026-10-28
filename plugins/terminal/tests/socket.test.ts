@@ -444,6 +444,23 @@ describe('TerminalViewer on the raw path', () => {
     await until(() => late.state.closed !== null, 'no replica')
     expect(late.state.closed?.code).toBe(SOCKET_CLOSE.resync)
   })
+  it('a session gone when the picture is described closes 4004 with nothing of the picture sent', async () => {
+    const replica = await seeded()
+    const { manager } = fakeManager(session(), { replica })
+    let gone = false
+    const get = manager.get
+    manager.get = (id, principal) => { if (gone) throw new TerminalError('Session not found', 404); return get(id, principal) }
+    // The replica is found, and the session goes before its header is made.
+    manager.replica = () => { gone = true; return replica }
+    const peer = fakeSocket()
+    new TerminalViewer(manager, peer.socket, 's1', options)
+    peer.client({ type: 'hello', clientId: CLIENT })
+    await until(() => peer.state.closed !== null, 'closed')
+    expect(peer.state.closed?.code).toBe(SOCKET_CLOSE.notFound)
+    expect(peer.text.filter((frame) => ['join', 'barrier'].includes(String(frame.type)))).toEqual([])
+    expect(peer.binary).toEqual([])
+    replica.close()
+  })
   it('one deadline from the hello covers the replica arriving and its seed', async () => {
     const seeding = new Replica({ reseed: (_reason, turn) => turn(async () => undefined), idleMs: 1e9 })
     const raw: { replica?: RawSource } = {}
