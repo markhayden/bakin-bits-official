@@ -1,5 +1,6 @@
 import headless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
+import { cursorVisibilitySequence, trackCursorVisibility } from './cursor-visibility'
 
 export class Screen {
   private terminal: InstanceType<typeof headless.Terminal>
@@ -8,9 +9,13 @@ export class Screen {
   private queuedBytes = 0
   private overflow = false
   get failed(): boolean { return this.overflow }
+  // SerializeAddon leaves DECTCEM out: a joining screen must know whether the
+  // program hid its cursor (Claude Code does; the viewer then never follows it sideways).
+  private cursor: ReturnType<typeof trackCursorVisibility>
   constructor(cols: number, rows: number) {
     this.terminal = new headless.Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true })
     this.terminal.loadAddon(this.serializer)
+    this.cursor = trackCursorVisibility(this.terminal)
   }
   write(data: Uint8Array, parsed?: () => void): Promise<void> {
     if (this.overflow || this.queuedBytes + data.byteLength > 1024 * 1024) {
@@ -25,7 +30,7 @@ export class Screen {
     })))
     return this.pending
   }
-  snapshot(): Promise<string> { return this.capture(() => this.serializer.serialize()) }
+  snapshot(): Promise<string> { return this.capture(() => this.serialize()) }
   capture<T>(read: () => T): Promise<T> {
     const result = this.pending.then(() => {
       if (this.overflow) throw new Error('Terminal renderer output limit exceeded; reconnect required')
@@ -34,7 +39,7 @@ export class Screen {
     this.pending = result.then(() => {}, () => {})
     return result
   }
-  serialize(): string { return this.serializer.serialize() }
+  serialize(): string { return this.serializer.serialize() + cursorVisibilitySequence(this.cursor.hidden) }
   text(): string {
     const buffer = this.terminal.buffer.active
     return Array.from({ length: this.terminal.rows }, (_, index) => buffer.getLine(buffer.baseY + index)?.translateToString(true) ?? '').join('\n')
