@@ -53,17 +53,17 @@ export interface ProcessDriver {
 /** Shown inside the terminal app as it attaches (tmux status line, five seconds). */
 export const ATTACH_HINT = 'Detach: Ctrl-b d · Scrollback: Ctrl-b [ · Closing the window also detaches'
 
+export interface WriteOptions { paste?: boolean; enter?: boolean }
+
+/** The tmux buffers Bakin's pastes use (lib/paste.ts). */
+const PASTE_BUFFER_PREFIX = 'bakin-paste-'
+
 /**
  * The hybrid bridge per session: a PTY `attach-session` client whose redraw
  * stream is the output (and the reattach-recovery path), plus a control-mode
  * client for input, resizes and queries. Both attach `ignore-size`: only
  * Bakin's explicit `resize-window` sizes a session (window-size manual).
  */
-export interface WriteOptions { paste?: boolean; enter?: boolean }
-
-/** The tmux buffers Bakin's pastes use (lib/paste.ts). */
-const PASTE_BUFFER_PREFIX = 'bakin-paste-'
-
 export class TmuxProcesses implements ProcessDriver {
   private bridges = new Map<string, ReturnType<typeof Bun.spawn>>()
   private pastesSwept = false
