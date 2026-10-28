@@ -194,6 +194,9 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     }
     const hide = () => { if (document.hidden) reset() }
     const textarea = term.textarea!
+    // Focusing the terminal to type goes back to the cursor (like ↓ Live).
+    const typing = () => resumeFollow()
+    textarea.addEventListener('focus', typing)
     textarea.addEventListener('paste', reset, true)
     textarea.addEventListener('compositionstart', reset, true)
     document.addEventListener('focusin', leave)
@@ -265,6 +268,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
       window.removeEventListener('online', online)
       window.removeEventListener('focus', resume)
       client.close(); socket.current = null; sentSize.current = ''
+      textarea.removeEventListener('focus', typing)
       textarea.removeEventListener('paste', reset, true)
       textarea.removeEventListener('compositionstart', reset, true)
       document.removeEventListener('focusin', leave)
@@ -374,6 +378,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     // drag) by 100 ms. Other screens refit their font after 100 ms.
     const schedule = () => {
       if (disposed) return
+      // The pane changed size (a keyboard opening, a rotation): keep the cursor in view.
+      requestAnimationFrame(followCursor)
       clearTimeout(timer)
       const term = terminal.current
       const proposed = callbacks.current.authority ? proposedSize() : undefined
@@ -395,7 +401,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
   function resumeFollow() {
     callbacks.current.paused = false
     setPaused(false)
-    followCursor()
+    // After the browser has applied any layout change (the keyboard opening).
+    requestAnimationFrame(followCursor)
   }
   return <div className="terminal-view relative flex min-h-0 flex-1 flex-col">
     <div ref={pane} role="region" aria-label="Terminal output" tabIndex={0} data-fit={authority ? 'pane' : 'width'} className="terminal-pane min-h-0 flex-1 bg-bakin-canvas-default p-bakin-4">

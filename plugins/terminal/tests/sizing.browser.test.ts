@@ -128,10 +128,31 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     // Follow cursor brings the cursor back into view.
     await phone.getByRole('button', { name: 'Follow cursor', exact: true }).tap()
     await phone.getByRole('button', { name: 'Follow cursor', exact: true }).waitFor({ state: 'detached' })
-    const followed = await pane(phone)
     // The least scroll that shows the prompt's cursor: back left and down to the last line.
+    await phone.waitForFunction((top) => document.querySelector('.terminal-pane')!.scrollTop === top, start.scrollTop)
+    const followed = await pane(phone)
     expect(followed.scrollLeft).toBeLessThan(panned.scrollLeft)
-    expect(followed.scrollTop).toBe(start.scrollTop)
+
+    // Panned away again, focusing the terminal to type goes back to the cursor too.
+    await touch.pan(centre, -200, 200)
+    await phone.getByRole('button', { name: 'Follow cursor', exact: true }).waitFor()
+    await phone.locator('.xterm-helper-textarea').focus()
+    await phone.getByRole('button', { name: 'Follow cursor', exact: true }).waitFor({ state: 'detached' })
+    // The cursor (on the last line, at the prompt on the left) is back in view.
+    await phone.waitForFunction((left) => {
+      const el = document.querySelector('.terminal-pane')!
+      return el.scrollHeight - el.clientHeight - el.scrollTop < 24 && el.scrollLeft <= left + 16
+    }, followed.scrollLeft)
+    // The keyboard opening (a shorter pane) keeps the cursor, on the last line, in view.
+    await phone.setViewportSize({ width: 390, height: 380 })
+    await phone.waitForFunction(() => {
+      const el = document.querySelector('.terminal-pane')!
+      return el.scrollHeight - el.clientHeight - el.scrollTop < 24
+    })
+    await phone.setViewportSize({ width: 390, height: 664 })
+    await phone.locator('.xterm-helper-textarea').blur()
+    // Panning stops at the grid's edges: no rubber-band, no chaining to the page.
+    expect(await phone.evaluate(() => getComputedStyle(document.querySelector('.terminal-pane')!).overscrollBehaviorX)).toBe('none')
 
     // Pinch sets this device's font, remembered across reloads; Reset view returns to the fit.
     await touch.pinch(centre, 2)
