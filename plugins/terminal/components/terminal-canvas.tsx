@@ -6,6 +6,7 @@ import { ArrowDown, Keyboard, ZoomOut } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import { clampSize } from '../lib/sizing'
 import { trackCursorVisibility } from '../lib/cursor-visibility'
+import { patchEraseAbove } from '../lib/xterm-fixes'
 import { clientId } from './api'
 import { enableWebgl } from './terminal-renderer'
 import { TerminalSocketClient, type InputResult, type Presence } from './terminal-socket'
@@ -177,6 +178,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     term.open(element.current!)
     // Show/hide cursor as the output sets it; a sync's snapshot ends with it too.
     cursorVisibility.current = trackCursorVisibility(term)
+    // xterm 6.0.0 wedges on ED 1 in the last column; see lib/xterm-fixes.ts.
+    patchEraseAbove(term)
     const disposeRenderer = enableWebgl(term)
     inputHandle.current = {
       focus: () => term.focus(),
