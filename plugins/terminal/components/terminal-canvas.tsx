@@ -7,6 +7,7 @@ import type { Session } from '../lib/contracts'
 import { clampSize } from '../lib/sizing'
 import { trackCursorVisibility } from '../lib/cursor-visibility'
 import { applyTerminalProfile, isAllowedLink, TERMINAL_OPTIONS } from '../lib/terminal-profile'
+import { guardParser } from '../lib/xterm-fixes'
 import { clientId } from './api'
 import { enableWebgl } from './terminal-renderer'
 import { TerminalSocketClient, type InputResult, type Presence } from './terminal-socket'
@@ -34,11 +35,13 @@ const LINK_HANDLER = {
   },
 }
 
-export function TerminalCanvas({ session, writable, captureTab, attempt, offerKeyboard = false, inputEnabled, inputHandle, viewHandle, onModifiersChange, onStatus, onInput, onClaim, onSession, onPresence, onResult }: {
+export function TerminalCanvas({ session, writable, captureTab, attempt, offerKeyboard = false, inputEnabled, inputHandle, viewHandle, onModifiersChange, onStatus, onInput, onClaim, onSession, onPresence, onResult, onRendererFailed }: {
   /** Show the corner keyboard button (a touch screen with the keyboard down). */
   offerKeyboard?: boolean
   inputEnabled: boolean; inputHandle: RefObject<TerminalInputHandle | null>; viewHandle: RefObject<TerminalViewHandle | null>; onModifiersChange(state: ModifierState): void;
   session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string): void; onClaim(data: string): void; onSession(session: Session): void; onPresence(presence: Presence): void; onResult(result: InputResult): void
+  /** The renderer hit a parser exception: this screen has stopped and must be rebuilt. */
+  onRendererFailed(): void
 }) {
   const pane = useRef<HTMLDivElement>(null)
   const element = useRef<HTMLDivElement>(null)
@@ -52,8 +55,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   const [zoom, setZoom] = useState(() => storedFont())
   // Manual pans, selections (and History) stop the view chasing the cursor.
   const [paused, setPaused] = useState(false)
-  const callbacks = useRef({ onInput, onClaim, onSession, onPresence, onResult, writable, authority, inputEnabled, onModifiersChange, captureTab: false, sizeEpoch: session.sizeEpoch, zoom, paused })
-  callbacks.current = { onInput, onClaim, onSession, onPresence, onResult, writable, authority, inputEnabled, onModifiersChange, captureTab, sizeEpoch: session.sizeEpoch, zoom, paused }
+  const callbacks = useRef({ onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, writable, authority, inputEnabled, onModifiersChange, captureTab: false, sizeEpoch: session.sizeEpoch, zoom, paused })
+  callbacks.current = { onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, writable, authority, inputEnabled, onModifiersChange, captureTab, sizeEpoch: session.sizeEpoch, zoom, paused }
   const [status, setStatus] = useState('Connecting')
   useEffect(() => { onStatus(status) }, [status, onStatus])
   const terminal = useRef<Terminal | null>(null)
@@ -198,6 +201,17 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     // replies would be typed into the pane), links and clipboard are policed,
     // and the xterm 6.0.0 workarounds apply.
     applyTerminalProfile(term)
+    // A parser exception would wedge every later write: the screen is
+    // rebuilt (a fresh connection and sync) instead.
+    // Failed, it stops: no input, and its socket closes (a failed screen
+    // never reconnects itself; only a rebuild does).
+    const parser = guardParser(term, () => {
+      ready.current = false
+      reset()
+      socket.current?.close()
+      setStatus('Renderer failed')
+      callbacks.current.onRendererFailed()
+    })
     const disposeRenderer = enableWebgl(term)
     inputHandle.current = {
       focus: () => term.focus(),
@@ -272,7 +286,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
         sentSize.current = ''
         requestAnimationFrame(applyView)
       },
-      onOutput: (bytes, done) => term.write(bytes, done),
+      // A failed screen stops acknowledging: its output is discarded, not shown.
+      onOutput: (bytes, done) => term.write(bytes, () => { if (!parser.failed) done() }),
       onSession: (next) => callbacks.current.onSession(next),
       onPresence: (presence) => callbacks.current.onPresence(presence),
       onResult: (result) => callbacks.current.onResult(result),
