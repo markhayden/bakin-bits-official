@@ -108,28 +108,40 @@ export function patchReflowStaleMaps(terminal: { resize(cols: number, rows: numb
 interface LinkEntry { id: number; key?: string; data: { id?: string }; lines: unknown[] }
 interface LinkService { _removeMarkerFromLink(entry: LinkEntry, marker: unknown): void; _dataByLinkId: Map<number, LinkEntry>; _entriesWithId: Map<string, LinkEntry> }
 
-/** Orphaned link entries kept before a reclamation sweep. */
+/** Orphaned link entries a sweep waits for (beyond the ones still referenced at the last sweep). */
 export const LINK_ORPHAN_LIMIT = 256
 
 /**
  * xterm 6.0.0 keeps a link alive through markers on the lines it was printed
  * on; scroll-region operations move content but not those markers, so a link
  * can expire while its cells are still on screen. Losing the last marker now
- * makes the entry an orphan instead of deleting it; past LINK_ORPHAN_LIMIT
- * orphans, a sweep deletes every orphan no cell still references (bounded,
- * reference-aware reclamation). A link re-opened with the same id revives
- * its entry.
+ * makes the entry an orphan instead of deleting it. Once LINK_ORPHAN_LIMIT
+ * new orphans have accumulated since the last sweep, a sweep deletes every
+ * orphan nothing references: no extended cell in either buffer (a line's
+ * attribute map keeps stale entries, so the cell's own bit decides) and not
+ * the current pen (an open link prints its next character with it). A link
+ * re-opened with the same id revives its entry.
  */
-export function patchLinkLifetime(terminal: object): { orphans(): number; sweep(): void } {
+export function patchLinkLifetime(terminal: object): { orphans(): number; sweeps(): number; sweep(): void } {
   const service = core(terminal)?._oscLinkService as LinkService | undefined
   const orphans = new Set<LinkEntry>()
+  // Sweep again only after new orphans accumulate, so links that stay
+  // referenced never make every later expiry rescan the buffers.
+  let threshold = LINK_ORPHAN_LIMIT
+  let sweeps = 0
   const sweep = () => {
     const all = buffers(terminal)
     if (!service || !all) return
+    sweeps++
     const referenced = new Set<number>()
+    const pen = (core(terminal)?._inputHandler as { _curAttrData?: { extended?: { urlId?: number } } } | undefined)?._curAttrData?.extended?.urlId
+    if (pen) referenced.add(pen)
     for (const buffer of [all.normal, all.alt]) for (let y = 0; y < buffer.lines.length; y++) {
-      const attrs = buffer.lines.get(y)?._extendedAttrs
-      if (attrs) for (const value of Object.values(attrs)) if (value?.urlId) referenced.add(value.urlId)
+      const line = buffer.lines.get(y)
+      if (!line?._data) continue
+      for (const [key, value] of Object.entries(line._extendedAttrs ?? {})) {
+        if (value?.urlId && line._data[Number(key) * 3 + 2]! & HAS_EXTENDED) referenced.add(value.urlId)
+      }
     }
     for (const entry of orphans) {
       if (entry.lines.length > 0) { orphans.delete(entry); continue }
@@ -138,6 +150,7 @@ export function patchLinkLifetime(terminal: object): { orphans(): number; sweep(
       service._dataByLinkId.delete(entry.id)
       orphans.delete(entry)
     }
+    threshold = orphans.size + LINK_ORPHAN_LIMIT
   }
   if (service && typeof service._removeMarkerFromLink === 'function' && service._dataByLinkId instanceof Map) {
     service._removeMarkerFromLink = (entry, marker) => {
@@ -146,8 +159,8 @@ export function patchLinkLifetime(terminal: object): { orphans(): number; sweep(
       entry.lines.splice(index, 1)
       if (entry.lines.length > 0) return
       orphans.add(entry)
-      if (orphans.size > LINK_ORPHAN_LIMIT) sweep()
+      if (orphans.size > threshold) sweep()
     }
   }
-  return { orphans: () => [...orphans].filter(entry => entry.lines.length === 0).length, sweep }
+  return { orphans: () => [...orphans].filter(entry => entry.lines.length === 0).length, sweeps: () => sweeps, sweep }
 }

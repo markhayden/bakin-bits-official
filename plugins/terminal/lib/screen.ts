@@ -1,7 +1,7 @@
 import headless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { cursorVisibilitySequence, trackCursorVisibility } from './cursor-visibility'
-import { applyTerminalProfile } from './terminal-profile'
+import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
 
 export class Screen {
   private terminal: InstanceType<typeof headless.Terminal>
@@ -14,7 +14,7 @@ export class Screen {
   // program hid its cursor (Claude Code does; the viewer then never follows it sideways).
   private cursor: ReturnType<typeof trackCursorVisibility>
   constructor(cols: number, rows: number) {
-    this.terminal = new headless.Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true })
+    this.terminal = new headless.Terminal({ cols, rows, ...TERMINAL_OPTIONS })
     this.terminal.loadAddon(this.serializer)
     this.cursor = trackCursorVisibility(this.terminal)
     // The shared profile (spec D13): one parse for the server and every viewer.

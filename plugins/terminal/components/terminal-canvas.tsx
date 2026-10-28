@@ -6,7 +6,7 @@ import { ArrowDown, Keyboard, ZoomOut } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import { clampSize } from '../lib/sizing'
 import { trackCursorVisibility } from '../lib/cursor-visibility'
-import { applyTerminalProfile } from '../lib/terminal-profile'
+import { applyTerminalProfile, isAllowedLink, TERMINAL_OPTIONS } from '../lib/terminal-profile'
 import { clientId } from './api'
 import { enableWebgl } from './terminal-renderer'
 import { TerminalSocketClient, type InputResult, type Presence } from './terminal-socket'
@@ -17,6 +17,22 @@ import '@xterm/xterm/css/xterm.css'
 
 /** What the page asks of the canvas: "Fit to this device" claims the size; refit applies a new smallest-text choice. */
 export interface TerminalViewHandle { fitToDevice(): boolean; refit(): void }
+
+/**
+ * Links the profile keeps (http, https, mailto) open as xterm's own default
+ * does: confirmed, in a new window with no opener. xterm's default handler
+ * offers only http(s), so mailto needs this one.
+ */
+const LINK_HANDLER = {
+  allowNonHttpProtocols: true,
+  activate(_event: MouseEvent, uri: string) {
+    if (!isAllowedLink(uri) || !window.confirm(`Do you want to navigate to ${uri}?\n\nWARNING: This link could potentially be dangerous`)) return
+    const opened = window.open()
+    if (!opened) return
+    opened.opener = null
+    opened.location.href = uri
+  },
+}
 
 export function TerminalCanvas({ session, writable, captureTab, attempt, offerKeyboard = false, inputEnabled, inputHandle, viewHandle, onModifiersChange, onStatus, onInput, onClaim, onSession, onPresence, onResult }: {
   /** Show the corner keyboard button (a touch screen with the keyboard down). */
@@ -170,7 +186,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     const clearOnce = () => modifiers.clearOnce()
     callbacks.current.onModifiersChange(modifiers.modifiers)
     const background = getComputedStyle(pane.current!).backgroundColor
-    const term = new Terminal({ cols: session.cols, rows: session.rows, scrollback: 2000, fontSize: callbacks.current.zoom ?? BASE_FONT, screenReaderMode: true, convertEol: false, theme: { background } })
+    const term = new Terminal({ cols: session.cols, rows: session.rows, ...TERMINAL_OPTIONS, fontSize: callbacks.current.zoom ?? BASE_FONT, screenReaderMode: true, convertEol: false, theme: { background }, linkHandler: LINK_HANDLER })
     terminal.current = term
     pane.current!.setAttribute('data-font-size', String(term.options.fontSize))
     fit.current = new FitAddon()

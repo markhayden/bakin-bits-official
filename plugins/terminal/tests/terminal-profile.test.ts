@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import headless from '@xterm/headless'
-import { applyTerminalProfile, CLIPBOARD_OFFER_LIMIT } from '../lib/terminal-profile'
+import { applyTerminalProfile, clipboardText, CLIPBOARD_OFFER_LIMIT } from '../lib/terminal-profile'
 import { LINK_ORPHAN_LIMIT } from '../lib/xterm-fixes'
 
 type Term = InstanceType<typeof headless.Terminal>
@@ -34,6 +34,15 @@ describe('terminal profile: queries and reports', () => {
     await write(stock, '\x1b[c\x1b[6n')
     expect(replies.length).toBeGreaterThan(0)
   })
+  it('emulator-generated input (focus reports, any reply) never leaves; typed input does', async () => {
+    const { terminal, seen } = profiled(40, 3)
+    const service = (terminal as unknown as { _core: { coreService: { triggerDataEvent(data: string, user?: boolean): void } } })._core.coreService
+    await write(terminal, '\x1b[?1004h')
+    service.triggerDataEvent('\x1b[I')
+    service.triggerDataEvent('\x1b[O', false)
+    terminal.input('typed', true)
+    expect(seen.replies).toEqual(['typed'])
+  })
 })
 
 describe('terminal profile: links', () => {
@@ -61,12 +70,23 @@ describe('terminal profile: links', () => {
 })
 
 describe('terminal profile: clipboard, colours, windows, graphics', () => {
-  it('OSC 52 is an offer, never a write or an answer; oversized offers are dropped', async () => {
+  it('OSC 52 is an offer of the decoded text, never a write or an answer', async () => {
     const { terminal, seen } = profiled(40, 3)
-    await write(terminal, '\x1b]52;c;aGVsbG8=\x07\x1b]52;p;?\x07\x1b]52;c;' + 'A'.repeat(CLIPBOARD_OFFER_LIMIT + 1) + '\x07after')
-    expect(seen.offers).toEqual(['aGVsbG8='])
+    await write(terminal, '\x1b]52;c;aGVsbG8=\x07\x1b]52;p;?\x07\x1b]52;c;\x07\x1b]52;;8J+Ygw==\x07after')
+    expect(seen.offers).toEqual(['hello', '😃'])
     expect(seen.replies).toEqual([])
     expect(row(terminal)).toBe('after')
+  })
+  it('OSC 52: malformed, non-UTF-8 and oversized offers are dropped; the limit is decoded bytes', () => {
+    const encode = (text: string) => Buffer.from(text).toString('base64')
+    expect(clipboardText('c')).toBeUndefined()
+    expect(clipboardText('c;?')).toBeUndefined()
+    expect(clipboardText('c;not base64!')).toBeUndefined()
+    expect(clipboardText('c;A')).toBeUndefined()
+    expect(clipboardText('c;/w==')).toBeUndefined()
+    expect(clipboardText('c;aGk')).toBe('hi')
+    expect(clipboardText('c;' + encode('a'.repeat(CLIPBOARD_OFFER_LIMIT)))).toHaveLength(CLIPBOARD_OFFER_LIMIT)
+    expect(clipboardText('c;' + encode('a'.repeat(CLIPBOARD_OFFER_LIMIT + 1)))).toBeUndefined()
   })
   it('palette and dynamic-colour changes and window operations do nothing', async () => {
     const { terminal, seen } = profiled(10, 2)
@@ -112,6 +132,13 @@ describe('xterm 6.0.0 workarounds', () => {
     await write(terminal, '\x1b[?1049h1\r\n2\r\n3\r\n4\r\n5\r\n6')
     expect(terminal.buffer.active.length).toBe(2)
   })
+  it('stale map entries: stock keeps entries for overwritten cells (fails once upstream fixes it)', async () => {
+    const stock = new headless.Terminal({ cols: 10, rows: 3, allowProposedApi: true })
+    await write(stock, 'e\u0301\x1b[4:3mx\x1b[0m\rab')
+    const line = (stock as unknown as { _core: { buffers: { normal: { lines: { get(y: number): { _combined: Record<string, unknown>; _extendedAttrs: Record<string, unknown> } } } } } })._core.buffers.normal.lines.get(0)
+    expect(Object.keys(line._combined)).toEqual(['0'])
+    expect(Object.keys(line._extendedAttrs)).toEqual(['1'])
+  })
   it('stale combined/extended map entries are purged before reflow', async () => {
     const { terminal } = profiled(10, 3)
     await write(terminal, 'e\u0301\x1b[4:3mx\x1b[0m\r' + 'ab')
@@ -119,6 +146,47 @@ describe('xterm 6.0.0 workarounds', () => {
     terminal.resize(8, 3)
     expect(Object.keys(line._combined)).toEqual([])
     expect(Object.keys(line._extendedAttrs)).toEqual([])
+  })
+  // A link printed in a scroll region, moved down by RI (content moves, its
+  // marker does not), then the marker's row scrolled off: the cells still show it.
+  const regionExpiry = '\x1b[2;4r\x1b[2;1H\x1b]8;;https://kept.example\x1b\\KEPT\x1b]8;;\x1b\\\x1b[2;1H\x1bM\x1b[r\x1b[5;1H\n\n'
+  it('links: stock expires a link whose cells are still shown (fails once upstream fixes it)', async () => {
+    const stock = new headless.Terminal({ cols: 20, rows: 5, scrollback: 0, allowProposedApi: true })
+    await write(stock, regionExpiry)
+    expect(row(stock)).toBe('KEPT')
+    expect(linkAt(stock, 0)).toBe('')
+  })
+  it('links: patched, a link moved by a scroll region stays alive while shown', async () => {
+    const { terminal } = profiled(20, 5, 0)
+    await write(terminal, regionExpiry)
+    expect(linkAt(terminal, 0)).toBe('https://kept.example')
+  })
+  it('links: a sweep keeps the link the pen is still printing', async () => {
+    const { terminal, profile } = profiled(20, 3, 0)
+    for (let i = 0; i < LINK_ORPHAN_LIMIT; i++) await write(terminal, `\x1b]8;;https://x.example/${i}\x1b\\L\x1b]8;;\x1b\\\x1b[2J`)
+    // Open a link, erase everything (its marker goes, a sweep runs), keep printing it.
+    await write(terminal, '\x1b[H\x1b]8;;https://open.example\x1b\\O\x1b[2J\x1b[HX')
+    profile.links.sweep()
+    expect(linkAt(terminal, 0)).toBe('https://open.example')
+  })
+  it('links: entries only stale map data still names are reclaimed', async () => {
+    const { terminal, profile } = profiled(40, 3, 0)
+    for (let i = 0; i < 300; i++) await write(terminal, `\x1b[H\x1b]8;;https://x.example/${i}\x1b\\L${i}\x1b]8;;\x1b\\`)
+    // Selective erase clears the cells but leaves their attribute-map entries.
+    await write(terminal, '\x1b[?2J')
+    profile.links.sweep()
+    expect(profile.links.orphans()).toBe(0)
+  })
+  it('links: links that stay referenced do not make every later expiry rescan', async () => {
+    const { terminal, profile } = profiled(30, 12, 0)
+    // 300 protected (DECSCA) links: a selective erase drops their markers but keeps their cells.
+    let links = '\x1b[1"q'
+    for (let i = 0; i < 300; i++) links += `\x1b]8;;https://x.example/${i}\x1b\\L\x1b]8;;\x1b\\`
+    await write(terminal, links + '\x1b[0"q\x1b[?2J')
+    // Each further expiry must not rescan the buffers again (stock-sweep count: one per expiry).
+    for (let k = 0; k < 40; k++) await write(terminal, `\x1b[12;1H\x1b]8;;https://y.example/${k}\x1b\\Y\x1b]8;;\x1b\\\x1b[?2J`)
+    expect(profile.links.sweeps()).toBeLessThanOrEqual(2)
+    expect(linkAt(terminal, 0)).toBe('https://x.example/0')
   })
   it('links stay alive while shown, and orphaned entries are reclaimed within a bound', async () => {
     const { terminal, profile } = profiled(20, 2, 0)
