@@ -225,7 +225,8 @@ export function seedFrom(replies: string[][]): Seed {
 }
 
 export const RESEED_ATTEMPTS = 5
-export const RESEED_BACKOFF_MS = [100, 250, 500, 1000, 2000] as const
+/** The waits between attempts (one fewer than the attempts). */
+export const RESEED_BACKOFF_MS = [100, 250, 500, 1000] as const
 
 /**
  * Reseed `log` from tmux. The seed lands in the log at the group's final
@@ -240,7 +241,7 @@ export function reseed(control: ControlClient, log: OutputLog, target: string, r
   const attempt = (async () => {
     let lastError: unknown
     for (let tried = 0; tried < RESEED_ATTEMPTS; tried++) {
-      if (tried > 0) await sleep(RESEED_BACKOFF_MS[Math.min(tried - 1, RESEED_BACKOFF_MS.length - 1)]!)
+      if (tried > 0) await sleep(RESEED_BACKOFF_MS[tried - 1]!)
       if (log.invalidReason) throw new Error(`Reseed abandoned: the log is invalid (${log.invalidReason})`)
       let seed: Seed | undefined
       try {

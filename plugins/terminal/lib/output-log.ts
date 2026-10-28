@@ -27,6 +27,12 @@ export type LogEvent =
 
 export interface LogConsumer {
   event(event: LogEvent): void | Promise<void>
+  /**
+   * Bytes waiting for the consumer, after every event the log takes in,
+   * synchronously: a consumer that falls behind learns it at ingress, not
+   * only when its next event arrives.
+   */
+  pressure?(queuedBytes: number): void
   /** The log failed: no further events, and the consumer's state cannot be trusted. */
   invalid(reason: string): void
 }
@@ -142,6 +148,7 @@ export class OutputLog {
     attachment.queue.push(event)
     if (event.kind !== 'layout') attachment.queuedBytes += event.bytes.length
     if (attachment.queuedBytes > MAX_QUEUED_BYTES || attachment.queue.length > MAX_QUEUED_EVENTS) { this.invalidate('overflow'); return }
+    attachment.consumer.pressure?.(attachment.queuedBytes)
     void this.deliver(attachment)
   }
 

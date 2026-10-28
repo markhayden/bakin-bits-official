@@ -170,6 +170,20 @@ describe('OutputLog consumers', () => {
 })
 
 describe('parseLayoutChange', () => {
+  it('tells the consumer its backlog at ingress, before delivery, after every event it takes in', async () => {
+    const log = new OutputLog()
+    const told: number[] = []
+    let release = () => {}
+    const stalled = new Promise<void>((resolve) => { release = resolve })
+    log.attach({ event: () => stalled, invalid: () => {}, pressure: (bytes) => told.push(bytes) })
+    log.output(new Uint8Array(BATCH_BYTES))
+    log.output(new Uint8Array(BATCH_BYTES))
+    log.layout(80, 24)
+    // Told synchronously, while the first event is still being delivered.
+    expect(told).toEqual([BATCH_BYTES, 2 * BATCH_BYTES, 2 * BATCH_BYTES])
+    release()
+    await Bun.sleep(0)
+  })
   it('reads the window size from a %layout-change line', () => {
     expect(parseLayoutChange('%layout-change @1 b25e,120x40,0,0,0 b25e,120x40,0,0,0 *')).toEqual({ window: '@1', cols: 120, rows: 40 })
     expect(parseLayoutChange('%layout-change @12 a1b2,80x24,0,0{40x24,0,0,1,39x24,41,0,2} a1b2,80x24,0,0 *')).toEqual({ window: '@12', cols: 80, rows: 24 })
