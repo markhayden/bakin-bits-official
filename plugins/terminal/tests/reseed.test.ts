@@ -143,7 +143,7 @@ describe('reseed', () => {
     const delays: number[] = []
     let n = 10
     const sleep = async (ms: number) => { delays.push(ms) }
-    const failing = reseed(control, log, 's1', 'test', sleep)
+    const failing = reseed(control, log, 's1', 'test', { sleep })
     for (let i = 0; i < RESEED_ATTEMPTS; i++) {
       await Bun.sleep(0)
       control.feed(`%begin 3 ${n} 1\ncan't find pane\n%error 3 ${n} 1\n`)
@@ -159,7 +159,7 @@ describe('reseed', () => {
     const { control, log } = fakeControl()
     const events: LogEvent[] = []
     log.attach({ event: (event) => { events.push(event) }, invalid: () => {} })
-    const done = reseed(control, log, 's1', 'test', async () => {})
+    const done = reseed(control, log, 's1', 'test', { sleep: async () => {} })
     control.feed("%begin 3 1 1\nbusy\n%error 3 1 1\n")
     await Bun.sleep(0)
     control.feed(seedReplies(10))
@@ -181,14 +181,14 @@ describe('reseed', () => {
   it('a seed the log does not keep (it overflowed meanwhile) is a failure, not a success', async () => {
     const { control, log } = fakeControl()
     log.attach({ event: () => {}, invalid: () => {} })
-    const done = reseed(control, log, 's1', 'test', async () => {})
+    const done = reseed(control, log, 's1', 'test', { sleep: async () => {} })
     log.invalidate('overflow')
     control.feed(seedReplies(30))
     await expect(done).rejects.toThrow()
   })
   it('a closed connection is not retried: recovery reattaches instead', async () => {
     const { control, log, written } = fakeControl()
-    const done = reseed(control, log, 's1', 'test', async () => {})
+    const done = reseed(control, log, 's1', 'test', { sleep: async () => {} })
     control.close('test')
     await expect(done).rejects.toThrow('closed')
     expect(written).toHaveLength(1)

@@ -228,6 +228,15 @@ export const RESEED_ATTEMPTS = 5
 /** The waits between attempts (one fewer than the attempts). */
 export const RESEED_BACKOFF_MS = [100, 250, 500, 1000] as const
 
+export interface ReseedOptions {
+  sleep?(ms: number): Promise<void>
+  /**
+   * Runs each capture (the scheduler's turn: one heavy job at a time in the
+   * process); the waits between attempts are outside it.
+   */
+  attempt?<T>(capture: () => Promise<T>): Promise<T>
+}
+
 /**
  * Reseed `log` from tmux. The seed lands in the log at the group's final
  * reply, synchronously, before any later output is fed. Failures retry with
@@ -235,7 +244,9 @@ export const RESEED_BACKOFF_MS = [100, 250, 500, 1000] as const
  * retries); after RESEED_ATTEMPTS the log is invalidated. Concurrent calls
  * for one log share the attempt in flight.
  */
-export function reseed(control: ControlClient, log: OutputLog, target: string, reason: string, sleep = (ms: number) => Bun.sleep(ms)): Promise<Seed> {
+export function reseed(control: ControlClient, log: OutputLog, target: string, reason: string, options: ReseedOptions = {}): Promise<Seed> {
+  const sleep = options.sleep ?? ((ms: number) => Bun.sleep(ms))
+  const turn = options.attempt ?? (<T>(capture: () => Promise<T>) => capture())
   const running = inFlight.get(log)
   if (running) return running
   const attempt = (async () => {
@@ -245,11 +256,11 @@ export function reseed(control: ControlClient, log: OutputLog, target: string, r
       if (log.invalidReason) throw new Error(`Reseed abandoned: the log is invalid (${log.invalidReason})`)
       let seed: Seed | undefined
       try {
-        await control.group(seedCommands(target), (replies) => {
+        await turn(() => control.group(seedCommands(target), (replies) => {
           seed = seedFrom(replies)
           // A seed the log did not keep (no consumer, or it overflowed) is a failure.
           if (!log.seed(seed.bytes, seed.cols, seed.rows, reason)) throw new Error(`the log did not take the seed (${log.invalidReason ?? 'no consumer'})`)
-        })
+        }))
         return seed!
       } catch (error) {
         lastError = error

@@ -2,7 +2,8 @@ import { afterAll, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { heavyWorkRunning, MAX_BACKLOG_BYTES } from '../lib/replica'
+import { CHECKPOINT_BYTES, heavyWorkRunning, MAX_BACKLOG_BYTES, Replica } from '../lib/replica'
+import { BATCH_BYTES } from '../lib/output-log'
 import { Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
 import { TerminalService, terminalEnvironment } from '../lib/service'
@@ -143,3 +144,37 @@ processTest('a flood faster than the replica parses: it rebuilds from tmux inste
     rmSync(root, { recursive: true, force: true })
   }
 }, 60_000)
+
+// The absolute gate, here because it is a wall-clock measurement (the unit suite asserts the yielding).
+processTest('a checkpoint over full scrollback never holds the event loop for 8 ms', async () => {
+  let seq = 0
+  const replica = new Replica({ reseed: async () => {} })
+  await replica.event({ seq: ++seq, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 120, rows: 40, reason: 'test' })
+  const deliver = async (text: string) => {
+    const bytes = new TextEncoder().encode(text)
+    for (let at = 0; at < bytes.length; at += BATCH_BYTES) await replica.event({ seq: ++seq, kind: 'output', offset: at, bytes: bytes.subarray(at, at + BATCH_BYTES) })
+  }
+  const flood = (size: number) => {
+    let text = ''
+    for (let i = 0; text.length < size; i++) text += `\x1b[3${i % 8}mline ${i} ${'lorem ipsum dolor sit amet '.repeat(3)}\x1b[0m\r\n`
+    return text
+  }
+  await deliver(flood(4 * 1024 * 1024))
+  const next = flood(CHECKPOINT_BYTES)
+  let worst = 0
+  let last = performance.now()
+  let probing = true
+  const probe = () => {
+    const now = performance.now()
+    if (heavyWorkRunning()) worst = Math.max(worst, now - last)
+    last = now
+    if (probing) setImmediate(probe)
+  }
+  const accepted = replica.stats.accepted
+  setImmediate(probe)
+  await deliver(next)
+  probing = false
+  expect(replica.stats.accepted).toBe(accepted + 1)
+  expect(worst).toBeLessThan(8)
+  replica.close()
+}, 30_000)

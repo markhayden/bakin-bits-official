@@ -106,7 +106,7 @@ export class TmuxProcesses implements ProcessDriver {
     this.logs.set(session.id, log)
     // The replica starts from a seed; a failed reseed invalidates the log, which ends it.
     const replica = new Replica({
-      reseed: (reason) => reseed(control, log, session.id, reason),
+      reseed: (reason, turn) => reseed(control, log, session.id, reason, { attempt: turn }),
       // Shadow mode (R1): the replica's lifecycle is logged, never its contents.
       diagnostic: (event) => this.log?.info(`Terminal replica ${event.kind}`, { sessionId: session.id, ...event }),
     })
@@ -114,7 +114,7 @@ export class TmuxProcesses implements ProcessDriver {
     this.replicas.set(session.id, replica)
     void control.ready.then(async () => {
       await control.command(['refresh-client', '-B', 'bakin-client::#{@bakin_client}'])
-      await reseed(control, log, session.id, 'attach')
+      replica.start()
     }).catch(() => undefined)
   }
   /** The session's ordered event log, while its control connection is attached. */

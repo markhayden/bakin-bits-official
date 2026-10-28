@@ -29,7 +29,7 @@
  *   stays the last safeguard (recovery, T35).
  */
 import headless from '@xterm/headless'
-import { checkpointSteps, type Checkpoint, CHECKPOINT_FORMAT, type CheckpointResult, RESTORE_STEP_CHARS } from './checkpoint'
+import { checkpointSteps, type Checkpoint, CHECKPOINT_FORMAT, type CheckpointResult, pieces } from './checkpoint'
 import type { LogConsumer, LogEvent } from './output-log'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
 import { internals, HAS_EXTENDED, type Term } from './terminal-state'
@@ -38,6 +38,8 @@ import { altEnteredCols, guardParser } from './xterm-fixes'
 export const CHECKPOINT_BYTES = 1024 * 1024
 export const CHECKPOINT_IDLE_MS = 2000
 export const MAX_TAIL_BYTES = 4 * 1024 * 1024
+/** Events in the tail (layout changes carry no bytes) before the same rebuild. */
+export const MAX_TAIL_EVENTS = 4096
 /** Work per slice before yielding; one step is at most about 2 ms, so a slice stays under 8 ms. */
 export const CHECKPOINT_SLICE_MS = 3
 /** Backlog in the log that makes the replica rebuild from tmux (half the log's bound). */
@@ -55,9 +57,16 @@ export type ReplicaDiagnostic =
   | { kind: 'rebuilt'; cause: RebuildCause; skippedBytes: number; fromSeq: number; toSeq: number; ms: number }
   | { kind: 'ended'; reason: string }
 
+/** Runs one capture in the heavy-work queue (lib/reseed.ts ReseedOptions.attempt). */
+export type CaptureTurn = <T>(capture: () => Promise<T>) => Promise<T>
+
 export interface ReplicaOptions {
-  /** Ask tmux for a seed (lib/reseed.ts): settles once the seed is queued in the log (or the capture failed). */
-  reseed(reason: string): Promise<unknown>
+  /**
+   * Ask tmux for a seed (lib/reseed.ts), each capture attempt through
+   * `turn`: settles once the seed is queued in the log (or the capture
+   * failed, which invalidates the log).
+   */
+  reseed(reason: string, turn: CaptureTurn): Promise<unknown>
   diagnostic?(event: ReplicaDiagnostic): void
   /** Quiet time before a checkpoint is tried (CHECKPOINT_IDLE_MS). */
   idleMs?: number
@@ -79,17 +88,36 @@ export interface ReplicaStats {
 /** A join's starting point: the base, and every event after it. */
 export interface JoinPoint { checkpoint: Checkpoint; seq: number; tail: readonly LogEvent[] }
 
-/** Heavy replica work, one at a time in the process: a checkpoint, or a capture from tmux. */
-let slot: Promise<unknown> = Promise.resolve()
+/** A heavy job given up while it waited for its turn. */
+export class Cancelled extends Error {
+  constructor() { super('cancelled before its turn') }
+}
+/**
+ * Heavy replica work, one job at a time in the process, in order: a
+ * checkpoint, or a capture from tmux. A job whose owner gave up while it
+ * waited is skipped when its turn comes (it rejects with Cancelled).
+ */
+const jobs: (() => Promise<void>)[] = []
+let pumping = false
 let running = 0
-function exclusive<T>(run: () => Promise<T>): Promise<T> {
-  const counted = async () => {
-    running++
-    try { return await run() } finally { running-- }
+function heavy<T>(run: () => Promise<T>, cancelled: () => boolean): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    jobs.push(async () => {
+      if (cancelled()) { reject(new Cancelled()); return }
+      running++
+      try { resolve(await run()) } catch (error) { reject(error) } finally { running-- }
+    })
+    void pump()
+  })
+}
+async function pump(): Promise<void> {
+  if (pumping) return
+  pumping = true
+  try {
+    while (jobs.length) await jobs.shift()!()
+  } finally {
+    pumping = false
   }
-  const result = slot.then(counted, counted)
-  slot = result.catch(() => undefined)
-  return result
 }
 /** Heavy replica work running now in this process (never more than one). */
 export const heavyWorkRunning = (): number => running
@@ -135,12 +163,16 @@ export class Replica implements LogConsumer {
   private sinceAttempt = 0
   /** The last event applied to the emulator (ignored events do not count). */
   private appliedSeq = 0
+  /** Counts every event taken, applied or skipped (a reader can tell the replica moved). */
+  private taken = 0
   private idleTimer: ReturnType<typeof setTimeout> | undefined
-  private work: Promise<void> = Promise.resolve()
+  private work: Promise<unknown> = Promise.resolve()
   private failure: string | undefined
   /** Waiting for a seed. */
   private rebuilding: RebuildCause | undefined
   private episode: Episode | undefined
+  /** Stops a checkpoint waiting for its turn: rebuilding or ending must not wait behind other sessions' work. */
+  private interrupt: (() => void) | undefined
   private capturing = false
   private lastCaptureAt = -Infinity
   private captureTimer: ReturnType<typeof setTimeout> | undefined
@@ -148,24 +180,33 @@ export class Replica implements LogConsumer {
 
   constructor(private options: ReplicaOptions) {}
 
-  /** The emulator, once a seed arrived (read it between events only). */
+  /** The emulator, once a seed arrived (read it between events only: see `read`). */
   get terminal(): Term | undefined { return this.term }
   get ended(): string | undefined { return this.failure }
   get tailSize(): number { return this.tailBytes }
   /** Why the replica is waiting for a seed, while it is. */
   get rebuildCause(): RebuildCause | undefined { return this.rebuilding }
+  /** Changes whenever the replica takes an event. */
+  get activity(): number { return this.taken }
 
   /** Where a join starts, or undefined while there is none (no seed yet, or rebuilding). */
   joinPoint(): JoinPoint | undefined {
     return this.base && { ...this.base, tail: this.tail.slice() }
   }
 
+  /** Ask for the first seed (through the heavy-work queue, like every capture). */
+  start(): void {
+    if (this.term || this.capturing || this.failure) return
+    this.capturing = true
+    void this.options.reseed('attach', this.turn()).catch(() => undefined).finally(() => { this.capturing = false })
+  }
+
   event(event: LogEvent): Promise<void> {
     return this.serial(() => this.apply(event))
   }
 
-  pressure(queuedBytes: number): void {
-    if (queuedBytes >= MAX_BACKLOG_BYTES && this.term && !this.failure) this.rebuild('overload', queuedBytes)
+  pressure(queuedOutputBytes: number): void {
+    if (queuedOutputBytes >= MAX_BACKLOG_BYTES && this.term && !this.failure) this.rebuild('overload', queuedOutputBytes)
   }
 
   invalid(reason: string): void { this.end(`log invalid: ${reason}`) }
@@ -175,16 +216,30 @@ export class Replica implements LogConsumer {
   /** Settles once every event delivered so far is applied (and any checkpoint it started ran). */
   idle(): Promise<void> { return this.serial(async () => undefined) }
 
+  /** Read the emulator between events (undefined while there is none). */
+  read<T>(view: (terminal: Term) => T): Promise<T | undefined> {
+    return this.serial(async () => this.term && this.base ? view(this.term) : undefined)
+  }
+
   private now(): number { return this.options.now?.() ?? performance.now() }
 
-  private serial(run: () => Promise<void>): Promise<void> {
+  private serial<T>(run: () => Promise<T>): Promise<T> {
     const result = this.work.then(run)
     this.work = result.catch(() => undefined)
     return result
   }
 
+  /** One capture in the heavy-work queue; the interval counts from when it starts. */
+  private turn(): CaptureTurn {
+    return (capture) => heavy(() => {
+      this.lastCaptureAt = this.now()
+      return capture()
+    }, () => this.failure !== undefined)
+  }
+
   private async apply(event: LogEvent): Promise<void> {
     if (this.failure) return
+    this.taken++
     if (event.kind === 'seed') { await this.seed(event); return }
     // Before the first seed, or while rebuilding, output is not this replica's stream.
     if (this.rebuilding) {
@@ -198,6 +253,8 @@ export class Replica implements LogConsumer {
       this.term.resize(event.cols, event.rows)
       this.push(event, 0)
       if (width) this.rebuild('width', 0)
+      else if (this.tail.length > MAX_TAIL_EVENTS) this.rebuild('tail bound', 0)
+      else this.armIdle()
       return
     }
     await this.write(event.bytes)
@@ -205,7 +262,7 @@ export class Replica implements LogConsumer {
     if (this.failure || !this.base || this.rebuilding) return
     this.push(event, event.bytes.length)
     this.sinceAttempt += event.bytes.length
-    if (this.tailBytes > MAX_TAIL_BYTES) { this.rebuild('tail bound', 0); return }
+    if (this.tailBytes > MAX_TAIL_BYTES || this.tail.length > MAX_TAIL_EVENTS) { this.rebuild('tail bound', 0); return }
     if (this.sinceAttempt >= CHECKPOINT_BYTES) await this.checkpoint()
     this.armIdle()
   }
@@ -229,13 +286,10 @@ export class Replica implements LogConsumer {
     clearTimeout(this.captureTimer)
     this.stats.seeds[event.reason] = (this.stats.seeds[event.reason] ?? 0) + 1
     // The text, as a restore will parse it, in pieces (a seed can be megabytes).
-    const data = new TextDecoder().decode(event.bytes)
-    for (let at = 0; at < data.length && !this.failure && this.term === terminal && !this.rebuilding;) {
-      let end = Math.min(at + RESTORE_STEP_CHARS, data.length)
-      const last = data.charCodeAt(end - 1)
-      if (end < data.length && last >= 0xd800 && last <= 0xdbff) end--
-      await this.write(data.slice(at, end))
-      at = end
+    const data = [new TextDecoder().decode(event.bytes)]
+    for (const piece of pieces(data)) {
+      if (this.failure || this.term !== terminal || this.rebuilding) break
+      await this.write(piece)
     }
     // Overtaken while it was parsed: the episode stays open, and the next seed ends it.
     if (this.failure || this.term !== terminal || this.rebuilding) return
@@ -274,6 +328,7 @@ export class Replica implements LogConsumer {
     this.tail = []
     this.tailBytes = 0
     clearTimeout(this.idleTimer)
+    this.interrupt?.()
     if (!this.episode) {
       this.episode = { cause, since: this.now(), fromSeq: this.appliedSeq + 1, skippedBytes: 0 }
       this.stats.rebuilds[cause] = (this.stats.rebuilds[cause] ?? 0) + 1
@@ -307,17 +362,16 @@ export class Replica implements LogConsumer {
     const cause = this.rebuilding
     if (!cause || this.capturing || this.failure) return
     this.capturing = true
-    this.lastCaptureAt = this.now()
     // Settled, the seed is queued in the log and on its way (it ends the rebuild when it is applied);
     // a failed capture invalidates the log (lib/reseed.ts), which ends the replica.
-    void exclusive(() => this.options.reseed(cause)).catch(() => undefined).finally(() => { this.capturing = false })
+    void this.options.reseed(cause, this.turn()).catch(() => undefined).finally(() => { this.capturing = false })
   }
 
   private armIdle(): void {
     clearTimeout(this.idleTimer)
     this.idleTimer = setTimeout(() => {
       this.idleTimer = undefined
-      if (this.tailBytes > 0) void this.serial(() => this.checkpoint()).catch(() => undefined)
+      if (this.tail.length > 0) void this.serial(() => this.checkpoint()).catch(() => undefined)
     }, this.options.idleMs ?? CHECKPOINT_IDLE_MS)
   }
 
@@ -325,9 +379,20 @@ export class Replica implements LogConsumer {
     const terminal = this.term
     if (this.failure || !terminal || !this.base || this.rebuilding) return
     const seq = this.appliedSeq
-    // Overload is told at ingress: a checkpoint running, or still waiting for its turn, is abandoned.
+    // Overload is told at ingress: a checkpoint running is abandoned at its next slice, one still
+    // waiting for its turn stops waiting at once (and is skipped when its turn comes).
     const stale = () => this.failure !== undefined || this.term !== terminal || this.rebuilding !== undefined
-    const result: CheckpointResult | undefined = await exclusive(() => runSliced(checkpointSteps(terminal), stale))
+    const interrupted = new Promise<undefined>((resolve) => { this.interrupt = () => resolve(undefined) })
+    const job = heavy(() => runSliced(checkpointSteps(terminal), stale), stale)
+    job.catch(() => undefined)
+    let result: CheckpointResult | undefined
+    try {
+      result = await Promise.race([job, interrupted])
+    } catch (error) {
+      if (!(error instanceof Cancelled)) throw error
+    } finally {
+      this.interrupt = undefined
+    }
     if (stale() || !this.base || !result) {
       if (!this.failure) this.stats.abandoned++
       return
@@ -351,6 +416,7 @@ export class Replica implements LogConsumer {
     this.failure = reason
     clearTimeout(this.idleTimer)
     clearTimeout(this.captureTimer)
+    this.interrupt?.()
     this.rebuilding = undefined
     this.episode = undefined
     this.base = undefined

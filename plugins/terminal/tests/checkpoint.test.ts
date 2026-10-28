@@ -186,7 +186,7 @@ describe('checkpoint: acceptance', () => {
     const term = terminal(20, 3)
     await write(term, '\x1b[4:3m\x1b]8;;https://a.example\x1b\\curly link\x1b]8;;\x1b\\\x1b[0m')
     const result = takeCheckpoint(term)
-    expect('checkpoint' in result && result.checkpoint.data).toContain('4:3')
+    expect('checkpoint' in result && result.checkpoint.data.join('')).toContain('4:3')
     const viewer = terminal(20, 3)
     if ('checkpoint' in result) await restoreCheckpoint(viewer, result.checkpoint)
     expect(stateDiff(fullState(term), fullState(viewer))).toBeNull()

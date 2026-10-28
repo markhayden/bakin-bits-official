@@ -6,10 +6,11 @@
  * boundaries; the consumer's parser carries state across them.
  *
  * The consumer is fed one event at a time, waiting for the promise it may
- * return. What waits for it is bounded (MAX_QUEUED_BYTES of output): past
- * that, or when the source fails (`%exit`, EOF, a protocol fault), the log
- * is invalid — the consumer learns why once, and nothing is delivered
- * after. With no consumer attached, events are not kept.
+ * return. What waits for it (events not yet handed over, a seed included)
+ * is bounded (MAX_QUEUED_BYTES): past that, or when the source fails
+ * (`%exit`, EOF, a protocol fault), the log is invalid — the consumer
+ * learns why once, and nothing is delivered after. With no consumer
+ * attached, events are not kept.
  */
 
 export const BATCH_BYTES = 64 * 1024
@@ -28,11 +29,12 @@ export type LogEvent =
 export interface LogConsumer {
   event(event: LogEvent): void | Promise<void>
   /**
-   * Bytes waiting for the consumer, after every event the log takes in,
-   * synchronously: a consumer that falls behind learns it at ingress, not
-   * only when its next event arrives.
+   * Output bytes waiting for the consumer (seeds not counted), after every
+   * event the log takes in, synchronously: a consumer that falls behind
+   * learns it at ingress, not only when its next event arrives. A throw
+   * fails the log like a failed event.
    */
-  pressure?(queuedBytes: number): void
+  pressure?(queuedOutputBytes: number): void
   /** The log failed: no further events, and the consumer's state cannot be trusted. */
   invalid(reason: string): void
 }
@@ -44,7 +46,7 @@ export function parseLayoutChange(line: string): { window: string; cols: number;
 }
 
 /** One consumer's attachment: its own queue and delivery, so a detached one can never touch its successor. */
-interface Attachment { consumer: LogConsumer; queue: LogEvent[]; queuedBytes: number; delivering: boolean; live: boolean }
+interface Attachment { consumer: LogConsumer; queue: LogEvent[]; queuedBytes: number; queuedOutputBytes: number; delivering: boolean; live: boolean }
 
 export class OutputLog {
   private seq = 0
@@ -62,7 +64,7 @@ export class OutputLog {
   /** The one consumer. Nothing from before it attached reaches it: it starts from a known state (D13 reseed). */
   attach(consumer: LogConsumer): () => void {
     if (this.attachment) throw new Error('The output log already has a consumer')
-    const attachment: Attachment = { consumer, queue: [], queuedBytes: 0, delivering: false, live: true }
+    const attachment: Attachment = { consumer, queue: [], queuedBytes: 0, queuedOutputBytes: 0, delivering: false, live: true }
     this.attachment = attachment
     if (this.failure) consumer.invalid(this.failure)
     return () => {
@@ -71,6 +73,7 @@ export class OutputLog {
       // A stalled delivery may keep the attachment reachable: release its queue now.
       attachment.queue = []
       attachment.queuedBytes = 0
+      attachment.queuedOutputBytes = 0
       this.attachment = undefined
       // Output not yet delivered belonged to this consumer's stream only.
       this.dropBatch()
@@ -132,6 +135,7 @@ export class OutputLog {
     if (!attachment) return
     attachment.queue = []
     attachment.queuedBytes = 0
+    attachment.queuedOutputBytes = 0
     attachment.consumer.invalid(reason)
   }
 
@@ -147,8 +151,14 @@ export class OutputLog {
     if (!attachment || this.failure) return
     attachment.queue.push(event)
     if (event.kind !== 'layout') attachment.queuedBytes += event.bytes.length
+    if (event.kind === 'output') attachment.queuedOutputBytes += event.bytes.length
     if (attachment.queuedBytes > MAX_QUEUED_BYTES || attachment.queue.length > MAX_QUEUED_EVENTS) { this.invalidate('overflow'); return }
-    attachment.consumer.pressure?.(attachment.queuedBytes)
+    try {
+      attachment.consumer.pressure?.(attachment.queuedOutputBytes)
+    } catch (error) {
+      this.invalidate(`consumer failed: ${error instanceof Error ? error.message : String(error)}`)
+      return
+    }
     void this.deliver(attachment)
   }
 
@@ -158,6 +168,9 @@ export class OutputLog {
     try {
       while (attachment.live && !this.failure && attachment.queue.length) {
         const event = attachment.queue.shift()!
+        // Handed over: it no longer waits.
+        if (event.kind !== 'layout') attachment.queuedBytes -= event.bytes.length
+        if (event.kind === 'output') attachment.queuedOutputBytes -= event.bytes.length
         try {
           await attachment.consumer.event(event)
         } catch (error) {
@@ -165,7 +178,6 @@ export class OutputLog {
           if (attachment.live) this.invalidate(`consumer failed: ${error instanceof Error ? error.message : String(error)}`)
           return
         }
-        if (event.kind !== 'layout' && attachment.live && !this.failure) attachment.queuedBytes -= event.bytes.length
       }
     } finally {
       attachment.delivering = false

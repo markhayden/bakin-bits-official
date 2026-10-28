@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import { restoreCheckpoint } from '../lib/checkpoint'
 import { BATCH_BYTES, type LogEvent } from '../lib/output-log'
 import {
-  CHECKPOINT_BYTES, heavyWorkRunning, MAX_BACKLOG_BYTES, MAX_TAIL_BYTES, REBUILD_INTERVAL_MS, REBUILD_QUIET_MS, Replica,
+  CHECKPOINT_BYTES, heavyWorkRunning, MAX_BACKLOG_BYTES, MAX_TAIL_BYTES, MAX_TAIL_EVENTS, REBUILD_INTERVAL_MS, REBUILD_QUIET_MS, Replica,
   type JoinPoint, type ReplicaDiagnostic, runSliced,
 } from '../lib/replica'
 import { fullState, stateDiff, type Term } from '../lib/terminal-state'
@@ -29,7 +29,8 @@ function stream() {
 function replica(options: Partial<ConstructorParameters<typeof Replica>[0]> = {}) {
   const reseeds: string[] = []
   const diagnostics: ReplicaDiagnostic[] = []
-  const r = new Replica({ reseed: async (reason) => { reseeds.push(reason) }, diagnostic: (event) => diagnostics.push(event), ...options })
+  // Captures take their turn in the heavy-work queue, as lib/reseed.ts does.
+  const r = new Replica({ reseed: (reason, turn) => turn(async () => { reseeds.push(reason) }), diagnostic: (event) => diagnostics.push(event), ...options })
   const ended = () => diagnostics.flatMap((event) => event.kind === 'ended' ? [event.reason] : [])
   return { r, reseeds, diagnostics, ended }
 }
@@ -175,6 +176,8 @@ describe('Replica', () => {
     await pending
     expect(r.stats.abandoned).toBe(abandoned + 1)
     expect(r.rebuildCause).toBe('overload')
+    // The capture takes its turn once the abandoned checkpoint gives the slot up (at its next slice).
+    for (let tries = 0; tries < 200 && reseeds.length === 0; tries++) await Bun.sleep(1)
     expect(reseeds).toEqual(['overload'])
     expect(r.joinPoint()).toBeUndefined()
     // Output while rebuilding is skipped, not parsed.
@@ -202,7 +205,7 @@ describe('Replica', () => {
     const s2 = stream()
     // A capture holds the one slot until the test lets it go.
     let release = () => {}
-    const holder = replica({ reseed: () => new Promise<void>((resolve) => { release = resolve }) })
+    const holder = replica({ reseed: (_reason, turn) => turn(() => new Promise<void>((resolve) => { release = resolve })) })
     const b = replica()
     await holder.r.event(s1.seed('\x1bc', 40, 10))
     await b.r.event(s2.seed('\x1bc', 120, 40))
@@ -214,8 +217,13 @@ describe('Replica', () => {
     for (let tries = 0; tries < 2000 && b.r.tailSize < CHECKPOINT_BYTES; tries++) await Bun.sleep(1)
     expect(b.r.tailSize).toBe(CHECKPOINT_BYTES)
     b.r.pressure(MAX_BACKLOG_BYTES)
-    release()
+    // Its delivery is released at once, though the slot is still held: the log drains.
     await pending
+    expect(heavyWorkRunning()).toBe(1)
+    await b.r.event(s2.output('skipped'))
+    expect(b.r.stats.skippedBytes).toBe('skipped'.length)
+    release()
+    await Bun.sleep(0)
     expect(b.r.stats.accepted).toBe(0)
     expect(b.r.stats.abandoned).toBe(1)
     await Bun.sleep(0)
@@ -270,34 +278,85 @@ describe('Replica', () => {
     r.close()
   })
 
-  it('a checkpoint over full scrollback runs in slices: the event loop never waits 8 ms', async () => {
+  it('a checkpoint over full scrollback yields to the event loop between slices', async () => {
     const s = stream()
     const { r } = replica()
     await r.event(s.seed('\x1bc', 120, 40))
-    // Fill the scrollback without checkpoints in the way, then one more MiB triggers one.
-    const before = r.stats.accepted
     await deliver(r, s, flood(4 * 1024 * 1024))
     expect(r.terminal!.buffer.normal.length).toBe(10_000 + 40)
-    let worst = 0
-    let last = performance.now()
+    // Turns the event loop takes while the checkpoint runs (the absolute gate is local: replica.integration.test.ts).
+    let turns = 0
+    const probe = () => { if (heavyWorkRunning()) turns++; if (probing) setImmediate(probe) }
     let probing = true
-    const probe = () => {
-      const now = performance.now()
-      worst = Math.max(worst, now - last)
-      last = now
-      if (probing) setImmediate(probe)
-    }
-    const accepted = r.stats.accepted
-    last = performance.now()
     setImmediate(probe)
+    const accepted = r.stats.accepted
     await deliver(r, s, flood(CHECKPOINT_BYTES))
     probing = false
     expect(r.stats.accepted).toBe(accepted + 1)
-    expect(accepted).toBeGreaterThan(before)
-    // Each event's parse is its own turn (at most BATCH_BYTES); the checkpoint's slices are the rest.
-    expect(worst).toBeLessThan(8)
+    expect(turns).toBeGreaterThan(5)
     r.close()
   }, 30_000)
+
+  it('the interval counts from when a capture starts, not from when it was asked for', async () => {
+    let now = 0
+    let release = () => {}
+    const holder = replica({ reseed: (_reason, turn) => turn(() => new Promise<void>((resolve) => { release = resolve })) })
+    const s1 = stream()
+    const s2 = stream()
+    const { r, reseeds } = replica({ now: () => now })
+    await holder.r.event(s1.seed('\x1bc', 40, 10))
+    await r.event(s2.seed('\x1bc', 40, 10))
+    holder.r.pressure(MAX_BACKLOG_BYTES)
+    await Bun.sleep(0)
+    r.pressure(MAX_BACKLOG_BYTES)
+    // Asked for at 0, waiting behind the held slot; it starts at 5000.
+    now = 5000
+    release()
+    await Bun.sleep(0)
+    expect(reseeds).toEqual(['overload'])
+    await r.event(s2.seed('\x1bc', 40, 10))
+    now = 5010
+    r.pressure(MAX_BACKLOG_BYTES)
+    await r.event(s2.output('x'))
+    await Bun.sleep(0)
+    // Inside the interval from the real start: no second capture yet.
+    expect(reseeds).toEqual(['overload'])
+    holder.r.close()
+    r.close()
+  })
+
+  it('the first seed is asked for through the heavy-work queue', async () => {
+    let release = () => {}
+    const holder = replica({ reseed: (_reason, turn) => turn(() => new Promise<void>((resolve) => { release = resolve })) })
+    const s1 = stream()
+    await holder.r.event(s1.seed('\x1bc', 40, 10))
+    holder.r.pressure(MAX_BACKLOG_BYTES)
+    await Bun.sleep(0)
+    const { r, reseeds } = replica()
+    r.start()
+    await Bun.sleep(5)
+    expect(reseeds).toEqual([])
+    release()
+    await Bun.sleep(0)
+    expect(reseeds).toEqual(['attach'])
+    holder.r.close()
+    r.close()
+  })
+
+  it('bounds a tail of layout changes by count, and checkpoints one when idle', async () => {
+    const s = stream()
+    const { r, reseeds } = replica({ idleMs: 20 })
+    await r.event(s.seed('\x1bc', 80, 24))
+    await r.event(s.layout(80, 30))
+    await r.event(s.layout(80, 31))
+    await Bun.sleep(60)
+    await r.idle()
+    expect(r.stats.accepted).toBe(1)
+    expect(r.joinPoint()!.tail).toEqual([])
+    for (let i = 0; i <= MAX_TAIL_EVENTS; i++) await r.event(s.layout(80, 24 + (i % 2)))
+    expect(reseeds).toEqual(['tail bound'])
+    r.close()
+  })
 
   it('runs one checkpoint at a time in the process', async () => {
     const s1 = stream()

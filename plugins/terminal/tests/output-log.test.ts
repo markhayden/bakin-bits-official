@@ -170,19 +170,33 @@ describe('OutputLog consumers', () => {
 })
 
 describe('parseLayoutChange', () => {
-  it('tells the consumer its backlog at ingress, before delivery, after every event it takes in', async () => {
+  it('tells the consumer the output waiting for it at ingress, after every event it takes in; seeds are not output', async () => {
     const log = new OutputLog()
     const told: number[] = []
     let release = () => {}
     const stalled = new Promise<void>((resolve) => { release = resolve })
     log.attach({ event: () => stalled, invalid: () => {}, pressure: (bytes) => told.push(bytes) })
+    // The first event is handed over at once (and stalls); what follows waits.
+    log.output(new Uint8Array(BATCH_BYTES))
     log.output(new Uint8Array(BATCH_BYTES))
     log.output(new Uint8Array(BATCH_BYTES))
     log.layout(80, 24)
+    expect(log.seed(new Uint8Array(3 * BATCH_BYTES), 80, 24, 'test')).toBe(true)
     // Told synchronously, while the first event is still being delivered.
-    expect(told).toEqual([BATCH_BYTES, 2 * BATCH_BYTES, 2 * BATCH_BYTES])
+    expect(told).toEqual([BATCH_BYTES, BATCH_BYTES, 2 * BATCH_BYTES, 2 * BATCH_BYTES, 2 * BATCH_BYTES])
+    // The bound counts the seed waiting too.
+    expect(log.pendingBytes).toBe(5 * BATCH_BYTES)
     release()
     await Bun.sleep(0)
+    expect(log.pendingBytes).toBe(0)
+  })
+  it('a pressure handler that throws fails the log like a failed event', () => {
+    const log = new OutputLog()
+    const invalid: string[] = []
+    log.attach({ event: () => {}, invalid: (reason) => invalid.push(reason), pressure: () => { throw new Error('boom') } })
+    log.output(new Uint8Array(BATCH_BYTES))
+    expect(invalid).toEqual(['consumer failed: boom'])
+    expect(log.invalidReason).toBe('consumer failed: boom')
   })
   it('reads the window size from a %layout-change line', () => {
     expect(parseLayoutChange('%layout-change @1 b25e,120x40,0,0,0 b25e,120x40,0,0,0 *')).toEqual({ window: '@1', cols: 120, rows: 40 })

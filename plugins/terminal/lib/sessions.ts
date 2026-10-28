@@ -60,6 +60,8 @@ export class Sessions {
   private reconciling = new Set<string>()
   private timers = new Set<ReturnType<typeof setTimeout>>()
   private shadowTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** Bridge chunks parsed per session: a comparison spanning a new one is not a quiet point. */
+  private bridgeChunks = new Map<string, number>()
   readonly shadow = new Map<string, ShadowStats>()
   private closed = false
   constructor(readonly store: Store, private driver: ProcessDriver, private options: SessionOptions) {}
@@ -173,6 +175,7 @@ export class Sessions {
         void screen.write(chunk, () => {
           this.store.append(session.id, chunk)
           for (const listener of this.outputListeners.get(session.id) ?? []) listener()
+          this.bridgeChunks.set(session.id, (this.bridgeChunks.get(session.id) ?? 0) + 1)
           this.shadowSoon(session.id)
         }).catch(() => undefined)
       }
@@ -191,10 +194,18 @@ export class Sessions {
     const replica = this.driver.replica?.(id)
     const screen = this.screens.get(id)
     if (this.closed || !replica || !screen || screen.failed) return
-    await replica.idle()
-    // Waiting for a seed (or ended): nothing to compare yet.
-    if (!replica.joinPoint() || !replica.terminal) return
-    const mismatch = shadowDiff(await screen.capture(() => screen.view()), screenView(replica.terminal))
+    const chunks = this.bridgeChunks.get(id)
+    const activity = replica.activity
+    // Each side read between its own writes; undefined while the replica waits for a seed (or ended).
+    const raw = await replica.read(screenView)
+    const bridge = await screen.capture(() => screen.view())
+    if (!raw) return
+    // Either side moved while they were read, or the attachment changed: not a quiet point.
+    if (this.bridgeChunks.get(id) !== chunks || replica.activity !== activity || this.screens.get(id) !== screen || this.driver.replica?.(id) !== replica) {
+      this.shadowSoon(id)
+      return
+    }
+    const mismatch = shadowDiff(bridge, raw)
     const stats = this.shadow.get(id) ?? { compared: 0, mismatched: 0 }
     this.shadow.set(id, stats)
     stats.compared++
@@ -213,6 +224,7 @@ export class Sessions {
     clearTimeout(this.shadowTimers.get(id))
     this.shadowTimers.delete(id)
     this.shadow.delete(id)
+    this.bridgeChunks.delete(id)
     const screen = this.screens.get(id)
     this.screens.delete(id)
     await this.driver.detach(id)

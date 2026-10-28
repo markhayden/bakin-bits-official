@@ -29,8 +29,8 @@ export interface Checkpoint {
   cols: number
   rows: number
   scrollback: number
-  /** The serialized terminal. */
-  data: string
+  /** The serialized terminal, in pieces written in order (each one cheap to restore: see `pieces`). */
+  data: readonly string[]
   /** The parser's grapheme join state after `data` (xterm's packed character properties; 0 for none). */
   joinState: number
   /** The pen's HAS_EXTENDED bit: a link it holds with the bit clear is latent. */
@@ -195,23 +195,41 @@ function* printLines(terminal: Term, text: Text, buffer: Buffer, nonce: string, 
 }
 
 /**
- * Text built in pieces and joined a few hundred at a time: one long string
- * built by appending is flattened all at once when it is first read, which
- * would be one long step.
+ * Text kept as chunks of about RESTORE_STEP_CHARS: one long string built by
+ * appending is flattened all at once when it is first read, which would be
+ * one long step, and the restore writes it piece by piece anyway.
  */
 class Text {
-  private pieces: string[] = []
+  private parts: string[] = []
+  private length = 0
   private chunks: string[] = []
-  add(piece: string): void {
-    this.pieces.push(piece)
-    if (this.pieces.length < 256) return
-    this.chunks.push(this.pieces.join(''))
-    this.pieces = []
+  add(part: string): void {
+    this.parts.push(part)
+    this.length += part.length
+    if (this.length < RESTORE_STEP_CHARS) return
+    this.chunks.push(this.parts.join(''))
+    this.parts = []
+    this.length = 0
   }
-  done(): string {
-    this.chunks.push(this.pieces.join(''))
-    this.pieces = []
-    return this.chunks.join('')
+  done(): string[] {
+    if (this.parts.length) this.chunks.push(this.parts.join(''))
+    this.parts = []
+    return this.chunks
+  }
+}
+
+/** Characters of a checkpoint restored per step (about a millisecond of parsing). */
+export const RESTORE_STEP_CHARS = 16 * 1024
+/** `data` in pieces of at most RESTORE_STEP_CHARS, never splitting a surrogate pair. */
+export function* pieces(data: readonly string[]): Generator<string> {
+  for (const chunk of data) {
+    for (let at = 0; at < chunk.length;) {
+      let end = Math.min(at + RESTORE_STEP_CHARS, chunk.length)
+      const last = chunk.charCodeAt(end - 1)
+      if (end < chunk.length && last >= 0xd800 && last <= 0xdbff) end--
+      yield chunk.slice(at, end)
+      at = end
+    }
   }
 }
 
@@ -248,9 +266,9 @@ function charsetTail(terminal: Term): string {
 }
 
 /** Serialize `terminal` (no check: see `takeCheckpoint`). */
-export const serialize = (terminal: Term): string => drain(serializeSteps(terminal))
-/** `serialize`, one step per line; `terminal` must not change in between. */
-export function* serializeSteps(terminal: Term): Generator<void, string> {
+export const serialize = (terminal: Term): string => drain(serializeSteps(terminal)).join('')
+/** `serialize` as chunks, one step per line; `terminal` must not change in between. */
+export function* serializeSteps(terminal: Term): Generator<void, string[]> {
   learn()
   const nonce = Math.random().toString(36).slice(2, 10)
   const core = internals(terminal)
@@ -352,19 +370,19 @@ function finish(terminal: Term, checkpoint: Checkpoint): void {
 }
 /** Rebuild `terminal` (fresh: same size and scrollback) from `checkpoint`, synchronously. */
 export function restoreCheckpointSync(terminal: Term, checkpoint: Checkpoint): void {
-  internals(terminal)._writeBuffer.writeSync(checkpoint.data)
+  const writer = internals(terminal)._writeBuffer
+  for (const piece of pieces(checkpoint.data)) writer.writeSync(piece)
   finish(terminal, checkpoint)
 }
 /** Rebuild `terminal` from `checkpoint` through its write queue: bytes written after it parse after its side state is set. */
 export function restoreCheckpoint(terminal: Term, checkpoint: Checkpoint): Promise<void> {
-  return new Promise<void>((resolve) => terminal.write(checkpoint.data, () => {
+  for (const piece of pieces(checkpoint.data)) terminal.write(piece)
+  return new Promise<void>((resolve) => terminal.write('', () => {
     finish(terminal, checkpoint)
     resolve()
   }))
 }
 
-/** Characters of a checkpoint restored per step (about a millisecond of parsing). */
-export const RESTORE_STEP_CHARS = 16 * 1024
 export type CheckpointResult = { checkpoint: Checkpoint } | { rejected: string }
 
 /**
@@ -389,17 +407,14 @@ export function* checkpointSteps(terminal: Term): Generator<void, CheckpointResu
     penHasExtended: (handler._curAttrData.bg & HAS_EXTENDED) !== 0,
     altEnteredCols: terminal.buffer.active.type === 'alternate' ? altEnteredCols(terminal) ?? null : null,
   }
+  yield
   const restored = scratch(terminal.cols, terminal.rows, scrollback)
   try {
-    // In pieces: the parser carries state across writes (a piece never splits a surrogate pair).
-    const { data } = checkpoint
+    yield
+    // In pieces, one per step: the parser carries state across writes.
     const writer = internals(restored)._writeBuffer
-    for (let at = 0; at < data.length;) {
-      let end = Math.min(at + RESTORE_STEP_CHARS, data.length)
-      const last = data.charCodeAt(end - 1)
-      if (end < data.length && last >= 0xd800 && last <= 0xdbff) end--
-      writer.writeSync(data.slice(at, end))
-      at = end
+    for (const piece of pieces(checkpoint.data)) {
+      writer.writeSync(piece)
       yield
     }
     finish(restored, checkpoint)
