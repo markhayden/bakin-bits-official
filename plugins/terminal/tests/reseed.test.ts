@@ -24,7 +24,7 @@ const lines = (terminal: InstanceType<typeof headless.Terminal>) => Array.from({
 
 describe('seedFrom', () => {
   it('rebuilds history, screen, cursor, tabs and modes', async () => {
-    const seed = seedFrom([[formats({ history_size: '2', cursor_x: '3', cursor_y: '1', bracket_paste_flag: '1', cursor_flag: '0' })], ['old 1', 'old 2'], ['\x1b[1mbold\x1b[0m', 'two', '', '', ''], [''], []])
+    const seed = seedFrom([[formats({ history_size: '2', cursor_x: '3', cursor_y: '1', bracket_paste_flag: '1', cursor_flag: '0' })], ['old 1', 'old 2'], ['\x1b[1mbold\x1b[0m', 'two', '', '', ''], [''], [], ['', '']])
     expect([seed.cols, seed.rows]).toEqual([20, 5])
     const terminal = await render(seed.bytes)
     expect(lines(terminal).slice(0, 4)).toEqual(['old 1', 'old 2', 'bold', 'two'])
@@ -35,7 +35,7 @@ describe('seedFrom', () => {
   it('a screen seed carries no history: no history capture asked for, the rest in order', async () => {
     const full = seedCommands('%1')
     const screen = seedCommands('%1', 'screen')
-    expect(full).toHaveLength(5)
+    expect(full).toHaveLength(6)
     expect(screen).toEqual([full[0], full[2], full[3], full[4]])
     // tmux has history, the seed still has none: the screen is the first block.
     const terminal = await render(seedFrom([[formats({ history_size: '500' })], ['on screen'], [''], []], 'screen').bytes)
@@ -44,11 +44,11 @@ describe('seedFrom', () => {
     expect(() => seedFrom([[formats({})], [], [''], [], []], 'screen')).toThrow('needs 4 replies')
   })
   it('ignores the clamped history block when tmux has no history', async () => {
-    const terminal = await render(seedFrom([[formats({})], ['row zero, clamped'], ['screen'], [''], []]).bytes)
+    const terminal = await render(seedFrom([[formats({})], ['row zero, clamped'], ['screen'], [''], [], ['', '']]).bytes)
     expect(lines(terminal)[0]).toBe('screen')
   })
   it('on the alternate screen, the saved normal screen goes under the program\'s screen', async () => {
-    const seed = seedFrom([[formats({ alternate_on: '1', history_size: '1', alternate_saved_y: '1' })], ['history'], ['FULLSCREEN APP'], ['normal 1', 'normal 2'], []])
+    const seed = seedFrom([[formats({ alternate_on: '1', history_size: '1', alternate_saved_y: '1' })], ['history'], ['FULLSCREEN APP'], ['normal 1', 'normal 2'], [], ['', '']])
     const terminal = await render(seed.bytes)
     expect(terminal.buffer.active.type).toBe('alternate')
     expect(lines(terminal)[0]).toBe('FULLSCREEN APP')
@@ -58,14 +58,14 @@ describe('seedFrom', () => {
   })
   it('a pending wrap stays pending: the next character wraps instead of overwriting the last column', async () => {
     const full = '12345678901234567890'
-    const seed = seedFrom([[formats({ cursor_x: '20', cursor_y: '0' })], [], [full], [''], [full]])
+    const seed = seedFrom([[formats({ cursor_x: '20', cursor_y: '0' })], [], [full], [''], [full], ['', '']])
     const terminal = await render(seed.bytes)
     await new Promise<void>((resolve) => terminal.write('X', resolve))
     expect(lines(terminal).slice(0, 2)).toEqual([full, 'X'])
   })
   it('a pending wrap on a row cleared after the wrap began still wraps the next character', async () => {
     // tmux: 20 characters, then CSI 2 K (default background): the row is empty, the cursor still past the last column.
-    const seed = seedFrom([[formats({ cursor_x: '20', cursor_y: '0' })], [], [''], [''], ['']])
+    const seed = seedFrom([[formats({ cursor_x: '20', cursor_y: '0' })], [], [''], [''], [''], ['', '']])
     const terminal = await render(seed.bytes)
     await new Promise<void>((resolve) => terminal.write('X', resolve))
     // The cleared cells come back as spaces (D13's empty-cell degradation).
@@ -80,7 +80,7 @@ describe('seedFrom', () => {
     expect(capturedRowWidth('x'.repeat(30), 20, [])).toBe(20)
   })
   it('tab stops hold on the alternate screen, also on a later entry', async () => {
-    const seed = seedFrom([[formats({ alternate_on: '1', pane_tabs: '4' })], [], ['\tX', '', '', '', ''], ['normal'], []])
+    const seed = seedFrom([[formats({ alternate_on: '1', pane_tabs: '4' })], [], ['\tX', '', '', '', ''], ['normal'], [], ['', '']])
     const terminal = await render(seed.bytes)
     expect(lines(terminal)[0]).toBe('    X')
     await new Promise<void>((resolve) => terminal.write('\x1b[?1049l\x1b[?1049h\x1b[H\tY', resolve))
@@ -88,7 +88,7 @@ describe('seedFrom', () => {
   })
   it('attributes never leak from one block or row into the next', async () => {
     // Red text ends history; the screen starts in the default colour.
-    const seed = seedFrom([[formats({ history_size: '1' })], ['\x1b[31mred'], ['plain', '', '', '', ''], [''], []])
+    const seed = seedFrom([[formats({ history_size: '1' })], ['\x1b[31mred'], ['plain', '', '', '', ''], [''], [], ['', '']])
     const terminal = await render(seed.bytes)
     const plain = terminal.buffer.active.getLine(1)!.getCell(0)!
     expect(plain.getChars()).toBe('p')
@@ -96,7 +96,7 @@ describe('seedFrom', () => {
   })
   it('a row break while a background is active does not paint the next row (tmux carries attributes across rows)', async () => {
     // Six rows into five: the last break scrolls. The red background runs into row 5 and stops after "ab".
-    const seed = seedFrom([[formats({ history_size: '1' })], ['history'], ['one', 'two', 'three', '\x1b[41mred row  ', 'ab\x1b[49m plain'], [''], []])
+    const seed = seedFrom([[formats({ history_size: '1' })], ['history'], ['one', 'two', 'three', '\x1b[41mred row  ', 'ab\x1b[49m plain'], [''], [], ['', '']])
     const terminal = await render(seed.bytes)
     const buffer = terminal.buffer.active
     const last = buffer.getLine(buffer.baseY + 4)!
@@ -106,17 +106,27 @@ describe('seedFrom', () => {
     expect(last.getCell(15)!.isBgDefault()).toBe(true)
   })
   it('tab stops are in place before captured rows with literal tabs are replayed', async () => {
-    const seed = seedFrom([[formats({ pane_tabs: '4' })], [], ['\tX', '', '', '', ''], [''], []])
+    const seed = seedFrom([[formats({ pane_tabs: '4' })], [], ['\tX', '', '', '', ''], [''], [], ['', '']])
     const terminal = await render(seed.bytes)
     expect(lines(terminal)[0]).toBe('    X')
   })
+  it('a line wrapped from the history into the screen stays one line (the boundary capture is one line)', async () => {
+    const twenty = 'A'.repeat(20)
+    const replies = (boundary: string[]) => [[formats({ history_size: '1', cursor_y: '1' })], [twenty], ['BBB', 'next', '', '', ''], [''], [], boundary]
+    const joined = await render(seedFrom(replies([twenty + 'BBB'])).bytes)
+    expect(joined.buffer.active.getLine(1)!.isWrapped).toBe(true)
+    expect(lines(joined).slice(0, 3)).toEqual([twenty, 'BBB', 'next'])
+    // Two lines: the screen's first row starts its own line.
+    const apart = await render(seedFrom(replies([twenty, 'BBB'])).bytes)
+    expect(apart.buffer.active.getLine(1)!.isWrapped).toBe(false)
+  })
   it('refuses incomplete replies', () => {
-    expect(() => seedFrom([['a\tb'], [], [], [], []])).toThrow('incomplete')
-    expect(() => seedFrom([[formats({})]])).toThrow('5 replies')
+    expect(() => seedFrom([['a\tb'], [], [], [], [], []])).toThrow('incomplete')
+    expect(() => seedFrom([[formats({})]])).toThrow('6 replies')
   })
   it('captures only the history the replica keeps, in one group', () => {
     const commands = seedCommands('s1')
-    expect(commands).toHaveLength(5)
+    expect(commands).toHaveLength(6)
     expect(commands[1]).toContain(String(-TERMINAL_OPTIONS.scrollback))
   })
 })
@@ -130,7 +140,7 @@ function fakeControl() {
   control.feed('%begin 1 1 0\n%end 1 1 0\n')
   return { control, log, written }
 }
-const seedReplies = (n: number, screen = 'seeded') => [1, 2, 3, 4, 5].map((k) => `%begin 2 ${n + k} 1\n${k === 1 ? formats({}) : k === 3 ? screen : ''}\n%end 2 ${n + k} 1\n`).join('')
+const seedReplies = (n: number, screen = 'seeded') => [1, 2, 3, 4, 5, 6].map((k) => `%begin 2 ${n + k} 1\n${k === 1 ? formats({}) : k === 3 ? screen : ''}\n%end 2 ${n + k} 1\n`).join('')
 const text = (event: LogEvent) => event.kind === 'layout' ? `<${event.cols}x${event.rows}>` : `${event.kind}:${new TextDecoder().decode(event.bytes).replaceAll('\x1b', '⎋').slice(0, 12)}`
 
 describe('reseed', () => {
@@ -139,7 +149,7 @@ describe('reseed', () => {
     const events: LogEvent[] = []
     log.attach({ event: (event) => { events.push(event) }, invalid: () => {} })
     const done = reseed(control, log, 's1', 'test')
-    // One chunk: output, the four replies, then more output.
+    // One chunk: output, the replies, then more output.
     control.feed(`%output %0 before\n${seedReplies(1)}%output %0 after\n`)
     await done
     log.flush()
