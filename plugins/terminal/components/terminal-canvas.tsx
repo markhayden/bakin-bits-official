@@ -20,7 +20,7 @@ export interface TerminalViewHandle { fitToDevice(): boolean; refit(): void }
 export function TerminalCanvas({ session, writable, captureTab, attempt, inputEnabled, inputHandle, viewHandle, onCtrlChange, onStatus, onInput, onClaim, onSession, onSizeFrozen, onResult, onRendererFailed }: {
   inputEnabled: boolean; inputHandle: RefObject<TerminalInputHandle | null>; viewHandle: RefObject<TerminalViewHandle | null>; onCtrlChange(armed: boolean): void;
   session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string): void; onClaim(data: string): void; onSession(session: Session): void; onSizeFrozen(frozen: boolean): void; onResult(result: InputResult): void
-  /** The renderer hit a parser exception: this screen is stale and must be rebuilt. */
+  /** The renderer hit a parser exception: this screen has stopped and must be rebuilt. */
   onRendererFailed(): void
 }) {
   const pane = useRef<HTMLDivElement>(null)
@@ -178,7 +178,15 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     patchEraseAbove(term)
     // A parser exception would wedge every later write: the screen is
     // rebuilt (a fresh connection and sync) instead.
-    const parser = guardParser(term, () => callbacks.current.onRendererFailed())
+    // Failed, it stops: no input, and its socket closes (a failed screen
+    // never reconnects itself; only a rebuild does).
+    const parser = guardParser(term, () => {
+      ready.current = false
+      reset()
+      socket.current?.close()
+      setStatus('Renderer failed')
+      callbacks.current.onRendererFailed()
+    })
     const disposeRenderer = enableWebgl(term)
     inputHandle.current = {
       key(key) {

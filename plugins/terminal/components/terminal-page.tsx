@@ -50,11 +50,11 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const [attempt, setAttempt] = useState(0)
   const [streamStatus, setStreamStatus] = useState('Connecting')
   useEffect(() => { setCaptureTab(true); setAttempt(0); setStreamStatus('Connecting') }, [sessionId])
-  // A failed renderer reconnects on its own once; failing again within a
-  // minute stays failed until the operator reconnects (no rebuild loop).
+  // A failed renderer is rebuilt once; failing again within a minute it
+  // stays stopped ("Renderer failed") until the operator reconnects.
   const lastRendererRebuild = useRef(0)
   const rendererFailed = useCallback(() => {
-    if (Date.now() - lastRendererRebuild.current < 60_000) { setStreamStatus('Renderer failed'); return }
+    if (Date.now() - lastRendererRebuild.current < 60_000) return
     lastRendererRebuild.current = Date.now()
     setAttempt((value) => value + 1)
   }, [])

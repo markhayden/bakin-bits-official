@@ -188,6 +188,19 @@ describe('TerminalSocketClient', () => {
     expect(socket().of('input').map((frame) => frame.data)).toEqual(['a', 'next generation'])
   })
 
+  it('a closed client stays closed: no status, no reconnect on resume/reconnect, no input (a failed screen stops)', async () => {
+    let created = 0
+    const { client, events, socket } = setup({ createSocket: (url) => { created++; return new FakeSocket(url) } })
+    client.connect(); socket().open()
+    socket().server({ type: 'sync', epoch: 1, session, snapshot: '', cursor: 0, sizeFrozen: false })
+    const statuses = events.statuses.length
+    client.close()
+    client.resume(); client.reconnect(); client.connect()
+    await Bun.sleep(30)
+    expect(created).toBe(1)
+    expect(events.statuses).toHaveLength(statuses)
+    expect(client.input(1, 'ls\r')).toBe(false)
+  })
   it('reconnect() replaces an open socket with a fresh one and a new sync', () => {
     const { client, socket } = setup()
     client.connect(); socket().open()
