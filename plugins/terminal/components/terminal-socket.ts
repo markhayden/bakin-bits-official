@@ -6,6 +6,7 @@
  * dropped is the caller's "may have been delivered".
  */
 import type { Session } from '../lib/contracts'
+import { RawPicture, type DisplayState, type PictureHeader, type PictureTarget } from './raw-picture'
 import type { ScreenDevice } from './terminal-view'
 
 export interface SocketLike {
@@ -36,7 +37,12 @@ export interface TerminalSocketOptions {
   /** The screen that sizes the session disconnected (true) or is back (false); every sync says it too. */
   onPresence(presence: Presence): void
   onResult(result: InputResult): void
+  /** Connection status: `Connected` once input may flow (bridge: the sync; raw path: the first applied replay). */
   onStatus(status: string): void
+  /** The raw path: a terminal for each picture (components/raw-picture.ts). Absent: the bridge path only. */
+  onPicture?(header: PictureHeader): PictureTarget
+  /** The raw path's display state (a rebase or rebuild never changes the connection status). */
+  onDisplay?(state: DisplayState, detail?: Record<string, unknown>): void
   createSocket?: (url: string) => SocketLike
   ackBytes?: number
   ackMs?: number
@@ -63,6 +69,11 @@ export class TerminalSocketClient {
   private ackTimer: ReturnType<typeof setTimeout> | undefined
   private retry = 0
   private retryTimer: ReturnType<typeof setTimeout> | undefined
+  /** The raw path's picture on this connection (set by its first join). */
+  private raw: RawPicture | undefined
+  private retiredTotal = 0
+  private retiredSent = 0
+  private retireTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor(private options: TerminalSocketOptions) {}
 
@@ -161,6 +172,7 @@ export class TerminalSocketClient {
   }
 
   private receive(raw: unknown): void {
+    if (raw instanceof ArrayBuffer && this.raw) { this.raw.binary(new Uint8Array(raw)); return }
     if (raw instanceof ArrayBuffer) {
       const bytes = new Uint8Array(raw)
       const epoch = this.epoch
@@ -168,8 +180,20 @@ export class TerminalSocketClient {
       this.options.onOutput(bytes, () => { if (epoch === this.epoch) this.written_(bytes.byteLength) })
       return
     }
-    const message = JSON.parse(String(raw)) as { type: string } & Record<string, unknown>
+    const text = String(raw)
+    const message = JSON.parse(text) as { type: string } & Record<string, unknown>
     switch (message.type) {
+      case 'join':
+      case 'rebase':
+        this.picture()?.message(message, text)
+        this.options.onSession(message.session as Session)
+        this.options.onPresence(presenceOf(message))
+        return
+      case 'layout':
+      case 'barrier':
+      case 'rebuilding':
+        this.raw?.message(message, text)
+        return
       case 'sync':
         this.synced = true
         this.retry = 0
@@ -206,6 +230,42 @@ export class TerminalSocketClient {
     }
   }
 
+  /** The raw path's picture for this connection, made on its first join. */
+  private picture(): RawPicture | undefined {
+    if (this.raw || !this.options.onPicture) return this.raw
+    const create = this.options.onPicture
+    this.raw = new RawPicture({
+      create,
+      retired: (total) => this.retired(total),
+      applied: (epoch) => {
+        this.socket?.send(JSON.stringify({ type: 'replay-applied', epoch }))
+        // The first applied replay lets input flow; later ones change only the display.
+        if (!this.synced) {
+          this.synced = true
+          this.retry = 0
+          this.options.onStatus('Connected')
+        }
+      },
+      display: (state, detail) => this.options.onDisplay?.(state, detail),
+    })
+    return this.raw
+  }
+
+  /** Report the raw path's retired total, batched like ACKs. */
+  private retired(total: number): void {
+    this.retiredTotal = total
+    if (total - this.retiredSent >= (this.options.ackBytes ?? 16 * 1024)) this.sendRetired()
+    else this.retireTimer ??= setTimeout(() => this.sendRetired(), this.options.ackMs ?? 50)
+  }
+
+  private sendRetired(): void {
+    clearTimeout(this.retireTimer)
+    this.retireTimer = undefined
+    if (this.retiredTotal === this.retiredSent) return
+    this.retiredSent = this.retiredTotal
+    this.socket?.send(JSON.stringify({ type: 'retired', bytes: this.retiredTotal }))
+  }
+
   private written_(bytes: number): void {
     this.written += bytes
     if (this.written - this.ackedSent >= (this.options.ackBytes ?? 16 * 1024)) this.ack()
@@ -222,6 +282,12 @@ export class TerminalSocketClient {
 
   private reset(): void {
     this.synced = false
+    this.raw?.close()
+    this.raw = undefined
+    this.retiredTotal = 0
+    this.retiredSent = 0
+    clearTimeout(this.retireTimer)
+    this.retireTimer = undefined
     this.viewerSeq = 0
     this.inFlight.clear()
     this.pending = undefined

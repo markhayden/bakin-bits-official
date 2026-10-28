@@ -261,3 +261,77 @@ describe('TerminalSocketClient', () => {
     expect(events.presence).toEqual([{ sizeFrozen: true, nativeClients: 0 }, { sizeFrozen: false, nativeClients: 1 }])
   })
 })
+
+describe('TerminalSocketClient on the raw path', () => {
+  const checkpoint = { cols: 100, rows: 30, joinState: 0, penHasExtended: false, altEnteredCols: null }
+  function raw() {
+    const pictures: string[] = []
+    const displays: string[] = []
+    const written: Array<() => void> = []
+    const rig = setup({
+      onPicture: (header) => {
+        pictures.push(`${header.type} ${header.epoch}`)
+        return { write: (_data, done) => { written.push(done) }, resize: () => undefined, finish: () => undefined, live: () => undefined, discard: () => undefined }
+      },
+      onDisplay: (state) => { displays.push(state) },
+    })
+    return { ...rig, pictures, displays, flush: () => { for (const done of written.splice(0)) done() } }
+  }
+  it('joins into a picture, accepts input only after the replay is applied, and says so', () => {
+    const { client, socket, events, pictures, displays, flush } = raw()
+    client.connect()
+    socket().open()
+    socket().server({ type: 'join', epoch: 1, session, sizeFrozen: false, nativeClients: 0, fidelity: { rebuilds: {} }, checkpoint, bytes: 3, baseSeq: 1, throughSeq: 1 })
+    expect(pictures).toEqual(['join 1'])
+    expect(events.sessions).toEqual([session])
+    socket().server(new TextEncoder().encode('abc'))
+    socket().server({ type: 'barrier', epoch: 1, throughSeq: 1 })
+    expect(client.input(1, 'early')).toBe(false)
+    flush()
+    expect(socket().of('replay-applied')).toEqual([{ type: 'replay-applied', epoch: 1 }])
+    expect(events.statuses.at(-1)).toBe('Connected')
+    expect(displays).toEqual(['replaying', 'live'])
+    expect(client.input(1, 'ls')).toBe(1)
+  })
+  it('a rebase changes the picture, never the input: Ctrl-C still goes while it replays', () => {
+    const { client, socket, events, pictures, displays, flush } = raw()
+    client.connect()
+    socket().open()
+    socket().server({ type: 'join', epoch: 1, session, checkpoint, bytes: 0, baseSeq: 1, throughSeq: 1 })
+    socket().server({ type: 'barrier', epoch: 1, throughSeq: 1 })
+    flush()
+    socket().server({ type: 'rebuilding', cause: 'overload', fidelity: { rebuilds: { overload: 1 } } })
+    socket().server({ type: 'rebase', epoch: 2, session, checkpoint, bytes: 5, baseSeq: 9, throughSeq: 9 })
+    socket().server(new TextEncoder().encode('fresh'))
+    expect(pictures).toEqual(['join 1', 'rebase 2'])
+    expect(displays.slice(-2)).toEqual(['rebuilding', 'replaying'])
+    expect(client.input(1, '\x03')).toBe(1)
+    expect(events.statuses.filter((status) => status === 'Connected')).toHaveLength(1)
+  })
+  it('reports the retired total, batched, and starts a new count with a new connection', async () => {
+    const { client, socket, flush } = raw()
+    client.connect()
+    socket().open()
+    const join = { type: 'join', epoch: 1, session, checkpoint, bytes: 20, baseSeq: 1, throughSeq: 1 }
+    socket().server(join)
+    socket().server(new Uint8Array(20))
+    flush()
+    // Past ackBytes (10): sent at once, as the total.
+    const total = new TextEncoder().encode(JSON.stringify(join)).length + 20
+    expect(socket().of('retired').at(-1)).toEqual({ type: 'retired', bytes: total })
+    socket().close(4000)
+    await until(() => FakeSocket.all.length === 2, 'reconnected')
+    socket().open()
+    socket().server(join)
+    expect(socket().of('retired').at(-1)).toEqual({ type: 'retired', bytes: new TextEncoder().encode(JSON.stringify(join)).length })
+  })
+  it('the bridge path is unchanged: a sync and its output, no picture', () => {
+    const { client, socket, events, pictures } = raw()
+    client.connect()
+    socket().open()
+    socket().server({ type: 'sync', epoch: 1, session, snapshot: '', cursor: 0 })
+    socket().server(new TextEncoder().encode('out'))
+    expect(pictures).toEqual([])
+    expect(events.output).toHaveLength(1)
+  })
+})
