@@ -298,7 +298,9 @@ export function patchChunkedPrintClear(terminal: object): void {
   let chunkLength = 0
   let continues = false
   parser.parse = (data, length, promiseResult) => {
-    continues = printedTo === chunkLength && length > 0
+    // A chunk that decoded to nothing (a partial UTF-8 write) is no parser action: the run continues past it.
+    if (length === 0) return parse(data, length, promiseResult)
+    continues = printedTo === chunkLength
     printedTo = -1
     chunkLength = length
     return parse(data, length, promiseResult)

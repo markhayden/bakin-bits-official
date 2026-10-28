@@ -244,6 +244,19 @@ describe('a grapheme cluster split across writes at the margin (wraparound off)'
     }
     expect(await run(true)).toBe(await run(false))
   })
+  it('patched, every three-part byte partition lays out like the whole write (a partial write decodes to nothing)', async () => {
+    const data = Buffer.from('\x1b[?7l\x1b[1;10HZ👨\u200d👩\u200d👧X')
+    const make = () => { const term = new headless.Terminal({ cols: 10, rows: 3, allowProposedApi: true }); applyTerminalProfile(term); return term }
+    const cells = (term: Term) => Array.from({ length: 10 }, (_, x) => { const cell = term.buffer.active.getLine(0)!.getCell(x)!; return `${cell.getChars()}/${cell.getWidth()}` }).join('|')
+    const whole = make()
+    await new Promise<void>((resolve) => whole.write(data, resolve))
+    const expected = cells(whole)
+    for (let a = 1; a < data.length; a++) for (let b = a + 1; b < data.length; b++) {
+      const split = make()
+      for (const part of [data.subarray(0, a), data.subarray(a, b), data.subarray(b)]) await new Promise<void>((resolve) => split.write(part, resolve))
+      expect(cells(split), `split at ${a}, ${b}`).toBe(expected)
+    }
+  })
   it('patched, chunking does not change the layout', async () => {
     const [whole, split] = await layouts(() => {
       const term = new headless.Terminal({ cols: 10, rows: 3, allowProposedApi: true })
