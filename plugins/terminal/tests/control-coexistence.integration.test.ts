@@ -1,7 +1,8 @@
 import { afterAll, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Database } from 'bun:sqlite'
 import { DeliveryUncertainError } from '../lib/contracts'
 import type { ControlClient } from '../lib/control'
 import { Sessions } from '../lib/sessions'
@@ -24,9 +25,15 @@ if (process.env.TERMINAL_PROCESS_TEST === '1') {
 }
 afterAll(() => rmSync(bakinHome, { recursive: true, force: true }))
 
-// Prints numbered lines as fast as it can and answers every input line once.
-const FLOOD = `$|=1; use IO::Select; my $s = IO::Select->new(\\*STDIN); my $i = 0;
-while (1) { print "n ", ++$i, "\\n"; if ($s->can_read(0)) { my $l = <STDIN>; last unless defined $l; chomp $l; print "GOT[$l]\\n" } }`
+/** Absence cannot be polled for: wait out a window, saying why it is long enough. */
+const settle = (ms: number, why: string) => { void why; return Bun.sleep(ms) }
+
+// Prints numbered lines as fast as it can, answers every input line once,
+// and records each line it received in a receipt file: the program's own
+// count, independent of what the event log delivered.
+const FLOOD = `$|=1; use IO::Select; use IO::Handle; open(my $r, '>>', $ARGV[0]) or die; $r->autoflush(1);
+my $s = IO::Select->new(\\*STDIN); my $i = 0;
+while (1) { print "n ", ++$i, "\\n"; if ($s->can_read(0)) { my $l = <STDIN>; last unless defined $l; chomp $l; print $r "$l\\n"; print "GOT[$l]\\n" } }`
 
 processTest('commands keep working while output floods the control client', async () => {
   const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-coexist-'))
@@ -73,8 +80,10 @@ processTest('commands keep working while output floods the control client', asyn
     }
     follow()
     writeFileSync(join(root, 'flood.pl'), FLOOD)
+    const receiptsFile = join(root, 'receipts.txt')
+    const receipts = () => existsSync(receiptsFile) ? readFileSync(receiptsFile, 'utf8').split('\n').filter(Boolean) : []
     let generation = session.generation
-    await manager.writeNext(session.id, human, generation, `exec perl ${join(root, 'flood.pl')}\r`)
+    await manager.writeNext(session.id, human, generation, `exec perl ${join(root, 'flood.pl')} ${receiptsFile}\r`)
     await wait(() => lines > 5000, 'the flood is streaming')
 
     // Input arrives exactly once while output floods.
@@ -91,11 +100,22 @@ processTest('commands keep working while output floods the control client', asyn
     expect(await processes.windowSize(session.id)).toEqual({ cols: 100, rows: 30 })
     await wait(() => layouts.includes('100x30'), 'layout event')
 
-    // Liveness and screen queries answer. (The bridge's own server Screen is
-    // bounded and may fail under an unthrottled flood until a reattach — B2's
-    // bounded-load design; the raw path replaces it.)
+    // Capture and liveness answer on the same streaming control client, with
+    // their own replies (correlation holds under output). (The bridge's own
+    // server Screen is bounded and may fail under an unthrottled flood until
+    // a reattach — B2's bounded-load design; the raw path replaces it.)
+    const streaming = (processes as unknown as { controls: Map<string, ControlClient> }).controls.get(session.id)!
+    for (let round = 0; round < 20; round++) {
+      const [captured, dead, size] = await Promise.all([
+        streaming.command(['capture-pane', '-p', '-t', session.id]),
+        streaming.command(['display-message', '-p', '-t', session.id, '#{pane_dead}']),
+        streaming.command(['display-message', '-p', '-t', session.id, '#{window_width}x#{window_height}']),
+      ])
+      expect(captured.some((line) => /^n \d+$/.test(line))).toBe(true)
+      expect(dead).toEqual(['0'])
+      expect(size).toEqual(['100x30'])
+    }
     expect(await processes.alive(session.id)).toBe(true)
-    expect(await processes.screen(session.id)).toContain('n ')
 
     // Native admission rides the client-resized subscription: an admitted app sizes the session.
     const reserved = await manager.reserveAttach(session.id, operator)
@@ -120,16 +140,32 @@ processTest('commands keep working while output floods the control client', asyn
     const control = (processes as unknown as { controls: Map<string, ControlClient> }).controls.get(session.id)!
     const transport = (control as unknown as { transport: { write(line: string): void } }).transport
     const send = transport.write.bind(transport)
-    transport.write = (line) => { send(line); if (line.includes('"send-keys" "-t"') && line.includes('"-H"')) control.close('test drop') }
     const sequence = manager.get(session.id, human).inputSequence
+    let consumedBeforeSend: number | undefined
+    transport.write = (line) => {
+      const keys = line.includes('"send-keys" "-t"') && line.includes('"-H"')
+      // Consume before delivery: the sequence is persisted before the keys leave.
+      if (keys) {
+        const db = new Database(join(root, 'terminal.db'), { readonly: true })
+        const row = db.query('SELECT value FROM sessions WHERE id=?').get(session.id) as { value: string }
+        consumedBeforeSend = (JSON.parse(row.value) as { inputSequence: number }).inputSequence
+        db.close()
+      }
+      send(line)
+      if (keys) control.close('test drop')
+    }
     await expect(manager.writeNext(session.id, human, generation, 'maybe\r')).rejects.toBeInstanceOf(DeliveryUncertainError)
-    // The sequence was consumed: the input is never retried.
+    expect(consumedBeforeSend).toBe(sequence + 1)
     expect(manager.get(session.id, human).inputSequence).toBe(sequence + 1)
 
-    // No duplicates: every answer arrived exactly once.
-    await Bun.sleep(300)
+    // Exactly once, by the program's own receipts: no duplicate, and the
+    // uncertain input was never retried (at most the one attempt landed).
+    await settle(1000, 'a retry, had there been one, would have landed by now')
+    const received = receipts()
+    expect(received.filter((line) => line.startsWith('hello'))).toEqual(['hello-1', 'hello-2', 'hello-3'])
+    expect(received.filter((line) => line === 'maybe').length).toBeLessThanOrEqual(1)
+    // The event log delivered each answer it carried once.
     expect([...answers.entries()].filter(([key]) => key.startsWith('hello'))).toEqual([['hello-1', 1], ['hello-2', 1], ['hello-3', 1]])
-    expect((answers.get('maybe') ?? 0)).toBeLessThanOrEqual(1)
     // The flood never overflowed the log or broke the connection before the deliberate drop.
     expect(reasons.filter((reason) => reason !== 'reattached' && reason !== 'detached' && reason !== 'test drop')).toEqual([])
   } finally {
