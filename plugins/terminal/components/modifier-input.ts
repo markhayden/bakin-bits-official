@@ -13,7 +13,13 @@ export function isKey(data: string): boolean {
   if ([...data].length === 1) return true
   if (!data.startsWith('\x1b')) return false
   const sequence = data.slice(1)
-  return [...sequence].length === 1 || /^(?:O|\[)[ABCDHF]$/.test(sequence) || /^\[1;\d+[ABCDHF]$/.test(sequence) || /^\[[356](?:;\d+)?~$/.test(sequence)
+  return [...sequence].length === 1
+    // Cursor keys, Home/End, F1–F4 (SS3 or CSI 1;m), Shift+Tab.
+    || /^(?:O|\[)[ABCDHFPQS]$/.test(sequence) || /^\[1;\d+[ABCDHFPQS]$/.test(sequence) || sequence === '[Z'
+    // Tilde keys: Insert, Delete, Page Up/Down, F5–F12, modified or not.
+    || /^\[\d+(?:;\d+)?~$/.test(sequence)
+  // Not CSI 1;m R: a modified F3 and a cursor-position reply are the same
+  // bytes, so it stays a reply (untouched, consuming nothing).
 }
 
 /**
@@ -24,7 +30,9 @@ export function isKey(data: string): boolean {
  * by the next key), and Android's composition path alike, so the source
  * cannot be told apart reliably. Instead:
  * - one key takes the modifiers and consumes a one-shot one, however it
- *   arrived (a locked Control makes every key Control+key);
+ *   arrived (a locked Control makes every key Control+key). This is a
+ *   transformation per delivered chunk, not a held key: a dictated or
+ *   predicted single letter is one key too;
  * - other text (words, autocorrect, dictation, CJK commits) is sent as
  *   typed and consumes a one-shot modifier;
  * - paste is sent exactly as pasted;
@@ -71,7 +79,8 @@ export class ModifierInput {
 
   /** What to send for one onData event. */
   data(data: string): string {
-    if (this.passthrough || this.pasting) return data
+    // xterm flushes an empty composition as "": it is not a key.
+    if (!data || this.passthrough || this.pasting) return data
     if (isKey(data)) {
       const sent = consumeModifiers(data, activeModifiers(this.state))
       this.clearOnce()

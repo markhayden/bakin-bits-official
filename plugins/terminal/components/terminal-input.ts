@@ -114,10 +114,12 @@ export function consumeModifiers(data: string, mods: ActiveModifiers, source: 't
     return data
   }
   if (data === '\r') return prefix(mods, '\r')
-  if (data === '\x7f') return prefix(mods, mods.ctrl ? '\x08' : '\x7f')
+  // A typed DEL is Backspace, an autocorrect/Android deletion, or a hardware
+  // Ctrl+8: it is sent as typed (the sheet's ⌫ takes the modifiers).
+  if (data === '\x7f') return data
   if (data === '\t') return data
   // A control character a hardware keyboard already made (Ctrl+C, Escape): Option still prefixes it.
-  if (data.length === 1 && (data < ' ' || data === '\x7f')) return prefix(mods, data)
+  if (data.length === 1 && data < ' ') return prefix(mods, data)
   if (data.length !== 1 || data > '~') return data
   if (mods.alt) {
     // xterm: Option + letter or space carries Ctrl too; Option + anything else is ESC + the character.

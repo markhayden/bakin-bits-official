@@ -72,7 +72,9 @@ describe('typed text under the bar modifiers', () => {
     expect(consumeModifiers('\x1b[D', alt)).toBe('\x1b[1;3D')
     expect(consumeModifiers('\x1b[3~', both)).toBe('\x1b[3;7~')
     expect(consumeModifiers('\r', alt)).toBe('\x1b\r')
-    expect(consumeModifiers('\x7f', ctrl)).toBe('\x08')
+    // A typed DEL (Backspace, an autocorrect deletion, hardware Ctrl+8) is sent as typed.
+    expect(consumeModifiers('\x7f', ctrl)).toBe('\x7f')
+    expect(consumeModifiers('\x7f', alt)).toBe('\x7f')
   })
   it('merges the bar modifiers into keys a hardware keyboard already modified', () => {
     expect(consumeModifiers('\x1b[1;5D', alt)).toBe('\x1b[1;7D')
