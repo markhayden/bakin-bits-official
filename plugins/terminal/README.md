@@ -163,7 +163,10 @@ cursor, and an explicit truncation flag.
     session's ordered event log (output and layout changes, batched, bounded
     at 8 MiB queued; a lost connection or a stalled reader invalidates it).
     The log is the source of the server replica (in progress; viewers still
-    render the attached client's redraws).
+    render the attached client's redraws). A replica is rebuilt from tmux by
+    one grouped command (history, screen and modes in one capture); the seed
+    lands in the log at that command's reply, so no output is lost or
+    repeated around it.
 
   Neither one sizes the window (`window-size manual`): only Bakin's explicit
   resize does, so an extra client, such as a terminal app, never reshapes a

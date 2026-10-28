@@ -138,7 +138,7 @@ export interface ControlHandlers {
   closed?(reason: string): void
 }
 
-interface Pending { blocks: number; replies: string[][]; resolve(replies: string[][]): void; reject(error: Error): void }
+interface Pending { blocks: number; replies: string[][]; onReply?(replies: string[][]): void; resolve(replies: string[][]): void; reject(error: Error): void }
 
 export class ControlClient {
   private pending: Pending[] = []
@@ -207,15 +207,20 @@ export class ControlClient {
     next.replies.push(block.lines)
     if (next.replies.length < next.blocks) return
     this.pending.shift()
+    // Synchronously, before the parser feeds anything after this reply.
+    try { next.onReply?.(next.replies) } catch (error) {
+      next.reject(error instanceof Error ? error : new Error(String(error)))
+      return
+    }
     next.resolve(next.replies)
   }
-  private send(commands: string[][]): Promise<string[][]> {
+  private send(commands: string[][], onReply?: (replies: string[][]) => void): Promise<string[][]> {
     if (this.closed) return Promise.reject(new ControlError('Terminal control connection closed'))
     if (this.pending.length >= MAX_PENDING) return Promise.reject(new ControlError('Terminal control queue is full'))
     const line = commands.map(controlCommandLine).join(' ; ')
     const reply = new Promise<string[][]>((resolve, reject) => {
       const timer = setTimeout(() => this.close('timeout'), this.timeoutMs)
-      this.pending.push({ blocks: commands.length, replies: [], resolve: (replies) => { clearTimeout(timer); resolve(replies) }, reject: (error) => { clearTimeout(timer); reject(error) } })
+      this.pending.push({ blocks: commands.length, replies: [], onReply, resolve: (replies) => { clearTimeout(timer); resolve(replies) }, reject: (error) => { clearTimeout(timer); reject(error) } })
     })
     this.transport.write(`${line}\n`)
     return reply
@@ -226,11 +231,13 @@ export class ControlClient {
   /**
    * Several commands as one line, run by tmux as one group with nothing in
    * between: one reply per command, in order. A failing command rejects the
-   * whole group (tmux skips the rest).
+   * whole group (tmux skips the rest). `onReply` runs at the group's final
+   * reply, synchronously — the boundary: output tmux sent before it has been
+   * fed, output after it has not (a throw rejects the group).
    */
-  group(commands: string[][]): Promise<string[][]> {
+  group(commands: string[][], onReply?: (replies: string[][]) => void): Promise<string[][]> {
     if (commands.length === 0) return Promise.resolve([])
-    return this.send(commands)
+    return this.send(commands, onReply)
   }
   /** Deliver bytes to a pane exactly (send-keys -H bypasses key tables). */
   async sendKeys(target: string, data: Uint8Array): Promise<void> {

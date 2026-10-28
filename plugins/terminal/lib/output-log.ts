@@ -22,6 +22,8 @@ export type LogEvent =
   /** `offset`: output bytes before this event in the log. */
   | { seq: number; kind: 'output'; offset: number; bytes: Uint8Array }
   | { seq: number; kind: 'layout'; cols: number; rows: number }
+  /** Reset to this picture (lib/reseed.ts); output after it follows the seed. */
+  | { seq: number; kind: 'seed'; bytes: Uint8Array; cols: number; rows: number; reason: string }
 
 export interface LogConsumer {
   event(event: LogEvent): void | Promise<void>
@@ -85,6 +87,16 @@ export class OutputLog {
     this.push({ seq: ++this.seq, kind: 'layout', cols, rows })
   }
 
+  /**
+   * A reseed's boundary: everything already received is queued before it,
+   * everything after follows it. Its bytes count against the bound.
+   */
+  seed(bytes: Uint8Array, cols: number, rows: number, reason: string): void {
+    if (this.failure) return
+    this.flush()
+    this.push({ seq: ++this.seq, kind: 'seed', bytes, cols, rows, reason })
+  }
+
   /** Emit the pending output batch now (a barrier: everything before it is in the log). */
   flush(): void {
     clearTimeout(this.timer)
@@ -126,7 +138,7 @@ export class OutputLog {
     const attachment = this.attachment
     if (!attachment || this.failure) return
     attachment.queue.push(event)
-    if (event.kind === 'output') attachment.queuedBytes += event.bytes.length
+    if (event.kind !== 'layout') attachment.queuedBytes += event.bytes.length
     if (attachment.queuedBytes > MAX_QUEUED_BYTES || attachment.queue.length > MAX_QUEUED_EVENTS) { this.invalidate('overflow'); return }
     void this.deliver(attachment)
   }
@@ -144,7 +156,7 @@ export class OutputLog {
           if (attachment.live) this.invalidate(`consumer failed: ${error instanceof Error ? error.message : String(error)}`)
           return
         }
-        if (event.kind === 'output' && attachment.live && !this.failure) attachment.queuedBytes -= event.bytes.length
+        if (event.kind !== 'layout' && attachment.live && !this.failure) attachment.queuedBytes -= event.bytes.length
       }
     } finally {
       attachment.delivering = false

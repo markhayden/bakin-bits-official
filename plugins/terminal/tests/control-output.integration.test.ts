@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ControlClient } from '../lib/control'
+import headless from '@xterm/headless'
 import { MAX_QUEUED_BYTES, OutputLog, parseLayoutChange, type LogEvent } from '../lib/output-log'
+import { reseed } from '../lib/reseed'
+import { applyTerminalProfile, TERMINAL_OPTIONS } from '../lib/terminal-profile'
 
 // Spec D13 / T31a against the managed tmux: the control client's %output
 // feeds the ordered event log. Run with
@@ -127,6 +130,55 @@ describe('control-mode output into the event log (real tmux)', () => {
     await until(() => events.includes('<100x30>'))
     expect(events.indexOf('<100x30>')).toBeGreaterThan(events.findIndex((event) => event.includes('before')))
   }, 30000)
+
+  processTest('reseeds during a numbered stream leave no gap and no duplicate', async () => {
+    const N = 3000
+    root = mkdtempSync('/tmp/bakin-control-')
+    socket = join(root, 's')
+    // Paced so the reseeds land mid-stream; awk, not seq (macOS seq prints 1e+06).
+    writeFileSync(join(root, 'numbers.sh'), `stty -echo; read _; awk 'BEGIN { for (i = 1; i <= ${N}; i++) { print i; if (i % 25 == 0) system("sleep 0.004") } }'; echo DONE; sleep 60\n`)
+    // The managed config keeps 50,000 history lines (tmux's own default is 2,000).
+    run('start-server', ';', 'set-option', '-g', 'history-limit', '50000', ';', 'new-session', '-d', '-s', 'w', '-x', '80', '-y', '24', `sh ${join(root, 'numbers.sh')}`)
+    const log = new OutputLog()
+    // The replica: a profiled terminal fed by the log, reset by each seed.
+    const replica = new headless.Terminal({ cols: 80, rows: 24, ...TERMINAL_OPTIONS })
+    applyTerminalProfile(replica)
+    const write = (data: Uint8Array) => new Promise<void>((resolve) => replica.write(data, resolve))
+    let seen = 0
+    let seeds = 0
+    let done = false
+    log.attach({
+      event: async (event) => {
+        if (event.kind === 'layout') { replica.resize(event.cols, event.rows); return }
+        if (event.kind === 'seed') { seeds++; replica.reset(); replica.resize(event.cols, event.rows); await write(event.bytes); return }
+        const text = new TextDecoder().decode(event.bytes)
+        seen += text.split('\n').length - 1
+        if (text.includes('DONE')) done = true
+        await write(event.bytes)
+      },
+      invalid: (reason) => { invalid.push(reason) },
+    })
+    const invalid: string[] = []
+    const client = attach(log)
+    await client.ready
+    await client.sendKeys('w', new TextEncoder().encode('\r'))
+    for (const at of [800, 1600, 2400]) {
+      await until(() => seen >= at)
+      await reseed(client, log, 'w', `test at ${at}`)
+    }
+    await until(() => done)
+    log.flush()
+    await until(() => seeds === 3)
+    await Bun.sleep(100)
+    const buffer = replica.buffer.active
+    const rows = Array.from({ length: buffer.length }, (_, y) => buffer.getLine(y)!.translateToString(true))
+    const numbers = rows.filter((row) => /^\d+$/.test(row)).map(Number)
+    expect(numbers).toEqual(Array.from({ length: N }, (_, i) => i + 1))
+    // The visible screen is tmux's.
+    const screen = run('capture-pane', '-p', '-t', 'w').split('\n').slice(0, 24).map((row) => row.trimEnd())
+    expect(rows.slice(buffer.baseY, buffer.baseY + 24).map((row) => row.trimEnd())).toEqual(screen)
+    expect(invalid).toEqual([])
+  }, 60000)
 
   processTest('%exit (the control client detached) and EOF (the server died) end the connection: nothing hangs', async () => {
     server('sleep 60')
