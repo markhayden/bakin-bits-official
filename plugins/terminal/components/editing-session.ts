@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { isKey } from './modifier-input'
 
 /**
  * The phone editing session (spec D9 item 9). The key bar shows while the
@@ -54,14 +55,18 @@ export function enterHidesKeyboard(event: Pick<KeyboardEvent, 'key' | 'code' | '
 /**
  * The last character of what the operator has typed on the current line, as
  * far as it can be told from what was sent: bracketed-paste markers are
- * stripped, terminal replies and other escape sequences leave it as it was,
- * and a deletion makes it unknown. Feeds the `\` + Return continuation check.
+ * stripped, terminal replies leave it as it was, and a deletion or a key
+ * that moves the cursor makes it unknown. Feeds the `\` + Return continuation check.
  */
 export function lineTail(previous: string, sent: string): string {
   const open = '\x1b[200~', close = '\x1b[201~'
   const paste = sent.startsWith(open) && sent.endsWith(close)
   const text = paste ? sent.slice(open.length, -close.length) : sent
-  if (!paste && text.startsWith('\x1b')) return previous
+  if (!paste && text.startsWith('\x1b')) {
+    // A key that moves or edits (arrows, Delete, Home…) leaves the cursor
+    // somewhere unknown; xterm's own replies leave the line as it was.
+    return isKey(text) ? '' : previous
+  }
   if (text.includes('\x7f') || text.includes('\b')) return ''
   return text ? text.at(-1)! : previous
 }

@@ -57,9 +57,10 @@ describe('the line tail (for `\\` + Return continuation)', () => {
   it('is the last character typed or pasted, ignoring paste markers and replies', () => {
     expect(lineTail('', 'echo a\\')).toBe('\\')
     expect(lineTail('a', '\x1b[200~line\\\x1b[201~')).toBe('\\')
-    // A cursor-position reply or an arrow key leaves it as it was.
+    // A cursor-position reply leaves it as it was; an arrow or Delete makes it unknown.
     expect(lineTail('\\', '\x1b[12;3R')).toBe('\\')
-    expect(lineTail('\\', '\x1b[A')).toBe('\\')
+    expect(lineTail('\\', '\x1b[D')).toBe('')
+    expect(lineTail('\\', '\x1b[3~')).toBe('')
     // A deletion makes it unknown; Return moves on.
     expect(lineTail('\\', '\x7f')).toBe('')
     expect(lineTail('\\', '\r')).toBe('\r')
