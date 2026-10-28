@@ -135,14 +135,17 @@ export class TmuxProcesses implements ProcessDriver {
     this.logs.set(session.id, log)
     // The replica starts from a seed; a failed reseed invalidates the log, which ends it.
     const replica = new Replica({
-      reseed: (reason, turn) => reseed(control, log, session.id, reason, { attempt: turn }),
+      reseed: (reason, turn, scope) => reseed(control, log, session.id, reason, { attempt: turn, scope }),
       // The replica's lifecycle is logged, never its contents; rebuilds are the session's fidelity.
       diagnostic: (event) => {
+        const fidelity = this.fidelity(session.id)
         if (event.kind === 'rebuilding') {
-          const fidelity = this.fidelity(session.id)
-          this.fidelities.set(session.id, { rebuilds: { ...fidelity.rebuilds, [event.cause]: (fidelity.rebuilds[event.cause] ?? 0) + 1 }, lastCause: event.cause })
+          this.fidelities.set(session.id, { ...fidelity, rebuilds: { ...fidelity.rebuilds, [event.cause]: (fidelity.rebuilds[event.cause] ?? 0) + 1 }, lastCause: event.cause, ...(event.cause === 'overload' ? { history: 'incomplete' as const } : {}) })
         }
-        this.log?.info(`Terminal replica ${event.kind}`, { sessionId: session.id, ...event })
+        // A full seed after an overload: the history tmux kept is back (earlier output may still be missing).
+        if (event.kind === 'seeded' && event.history && fidelity.history === 'incomplete') this.fidelities.set(session.id, { ...fidelity, history: 'reloaded' })
+        // Seeds feed the fidelity only: a rebuild's episode is logged by 'rebuilding' and 'rebuilt'.
+        if (event.kind !== 'seeded') this.log?.info(`Terminal replica ${event.kind}`, { sessionId: session.id, ...event })
       },
     })
     log.attach(replica)

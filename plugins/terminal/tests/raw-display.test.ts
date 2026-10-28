@@ -299,6 +299,20 @@ describe('RawDisplay replacement', () => {
     expect(rebase).toBeGreaterThan(0)
     expect(kinds.slice(rebase)).toEqual(['rebase', 'bytes 1', 'barrier'])
   })
+  it('under a flood, a throttled replacement takes the latest published cut even if the replica is rebuilding again', async () => {
+    const h = harness({ kind: 'live', cut: cut(['a'], 1) })
+    h.display.start()
+    // A seed lands (and is published) inside the throttle, then the replica rebuilds again at once.
+    h.src.tell().rebuilding('overload')
+    h.src.set({ kind: 'live', cut: cut(['fresh'], 5) })
+    h.src.tell().rebased()
+    h.src.set({ kind: 'rebuilding', cause: 'overload' })
+    h.src.tell().rebuilding('overload')
+    expect(h.kinds().filter((kind) => kind === 'rebase')).toEqual([])
+    h.advance(RESYNC_INTERVAL_MS)
+    await new Promise((resolve) => setTimeout(resolve, RESYNC_INTERVAL_MS + 20))
+    expect(h.sent.find((frame) => 'json' in frame && frame.json.type === 'rebase')).toMatchObject({ json: { baseSeq: 5 } })
+  })
   it('lets the viewer type once any replay it was sent is applied, an applied one crossing a replacement included', () => {
     const h = harness({ kind: 'live', cut: cut(['a'], 1) })
     h.display.start()

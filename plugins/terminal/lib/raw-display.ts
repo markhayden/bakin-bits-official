@@ -43,8 +43,13 @@ const ENCODER_SCRATCH_BYTES = 3 * 16 * 1024
 const TEXT_CHUNK = 16 * 1024
 const FRAME_BYTES = 64 * 1024
 
-/** The rebuilds a session's output has been through, by cause, and the last (sticky for the session, spec D13 decision 1). */
-export interface Fidelity { rebuilds: Partial<Record<RebuildCause, number>>; lastCause?: RebuildCause }
+/**
+ * The rebuilds a session's output has been through, by cause, and the last
+ * (sticky for the session, spec D13 decision 1); `history` after an
+ * overload: `incomplete` while the pictures are the screen alone,
+ * `reloaded` once a full seed brought back what tmux kept.
+ */
+export interface Fidelity { rebuilds: Partial<Record<RebuildCause, number>>; lastCause?: RebuildCause; history?: 'incomplete' | 'reloaded' }
 
 export interface RawSource {
   subscribe(listener: ReplicaListener): { state: ReplicaState; unsubscribe(): void }
@@ -126,6 +131,8 @@ export class RawDisplay implements ReplicaListener {
   private replaying: Cut | undefined
   /** The cut a replay generator holds until it is done (its barrier may wait for credit). */
   private pinned: Cut | undefined
+  /** The replica's latest published cut, kept until a replacement takes it (one at most). */
+  private latest: Cut | undefined
   /** The live event being sent, while its frames are. */
   private sending: LogEvent | undefined
   /** Live events after the current picture's cut, not yet sent. */
@@ -173,6 +180,7 @@ export class RawDisplay implements ReplicaListener {
     this.replay = undefined
     this.replaying = undefined
     this.pinned = undefined
+    this.latest = undefined
     this.live = undefined
     this.sending = undefined
     this.control = []
@@ -226,6 +234,9 @@ export class RawDisplay implements ReplicaListener {
 
   rebased(): void {
     if (this.closed) return
+    // Kept now: under a flood the replica may be rebuilding again when the throttle lets the viewer replace.
+    const state = this.source.state()
+    if (state.kind === 'live') this.latest = state.cut
     this.waitingForSeed = false
     this.replacement = true
     if (!this.replaying) this.replaceSoon()
@@ -244,15 +255,21 @@ export class RawDisplay implements ReplicaListener {
   /** Replace the picture with the replica's latest cut, at most once per RESYNC_INTERVAL_MS. */
   private replaceSoon(): void {
     // Only while a replacement is still owed; a replay in progress finishes first (its barrier asks again).
-    if (this.closed || !this.replacement || this.replacementTimer || this.waitingForSeed || this.replaying) return
+    if (this.closed || !this.replacement || this.replacementTimer || this.replaying) return
+    // Waiting for a seed with no picture kept: the next `rebased` asks again.
+    if (this.waitingForSeed && !this.latest) return
     const wait = this.lastReplacementAt + RESYNC_INTERVAL_MS - this.now()
     if (wait > 0) { this.replacementTimer = setTimeout(() => { this.replacementTimer = undefined; this.replaceSoon() }, wait); return }
     const state = this.source.state()
-    if (state.kind !== 'live') { this.waitingForSeed = state.kind !== 'ended'; if (state.kind === 'ended') this.ended(); return }
-    this.begin(state.cut, this.epoch === 0 ? 'join' : 'rebase')
+    if (state.kind === 'ended') { this.ended(); return }
+    // The replica's cut now, or the latest one it published (it may be rebuilding again).
+    const cut = state.kind === 'live' ? state.cut : this.latest
+    if (!cut) { this.waitingForSeed = true; return }
+    this.begin(cut, this.epoch === 0 ? 'join' : 'rebase')
   }
 
   private begin(cut: Cut, kind: 'join' | 'rebase'): void {
+    this.latest = undefined
     this.epoch++
     this.replacement = false
     this.lastReplacementAt = this.now()
@@ -331,18 +348,20 @@ export class RawDisplay implements ReplicaListener {
 
   /**
    * What this viewer holds beyond the replica (lib/memory.ts): a replay's
-   * cut while its generator is unfinished (its checkpoint text when no longer
-   * the replica's base, and its tail), the backlog and the event being sent,
-   * the encoder's scratch, bytes in flight.
+   * cut while its generator is unfinished and the latest cut it keeps (each
+   * one's checkpoint text when not the replica's base, and its tail), the
+   * backlog and the event being sent, the encoder's scratch, bytes in flight.
    */
   *retainedSteps(): Generator<void, number> {
     let bytes = this.backlogBytes + this.backlog.length * EVENT_OVERHEAD_BYTES + (this.sent - this.retired)
     if (this.sending?.kind === 'output') bytes += this.sending.bytes.length + EVENT_OVERHEAD_BYTES
-    const cut = this.pinned
-    if (cut) {
-      bytes += ENCODER_SCRATCH_BYTES
-      const current = this.source.state()
-      if (current.kind !== 'live' || current.cut.checkpoint !== cut.checkpoint) bytes += yield* textSteps(cut.checkpoint.data)
+    if (this.pinned) bytes += ENCODER_SCRATCH_BYTES
+    const current = this.source.state()
+    const base = current.kind === 'live' ? current.cut.checkpoint : undefined
+    // A replay's cut and the latest one kept: their text when not the replica's own base, and their tails.
+    for (const cut of [this.pinned, this.latest]) {
+      if (!cut) continue
+      if (cut.checkpoint !== base) bytes += yield* textSteps(cut.checkpoint.data)
       for (const event of cut.tail) bytes += (event.kind === 'output' ? event.bytes.length : 0) + EVENT_OVERHEAD_BYTES
     }
     return bytes

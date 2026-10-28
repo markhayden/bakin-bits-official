@@ -33,7 +33,7 @@ function fixture(quietMs = 10) {
     advance: (ms: number) => { now += ms },
     bridge: (text: string) => bridge!(encode(text)),
     raw: (text: string) => replica.event({ seq: ++seq, kind: 'output', offset: 0, bytes: encode(text) }),
-    seed: () => replica.event({ seq: ++seq, kind: 'seed', bytes: encode('\x1bc'), cols: 20, rows: 4, reason: 'test' }),
+    seed: () => replica.event({ seq: ++seq, kind: 'seed', bytes: encode('\x1bc'), cols: 20, rows: 4, reason: 'test', history: true }),
   }
 }
 const compared = async (manager: Sessions, id: string, count: number) => {

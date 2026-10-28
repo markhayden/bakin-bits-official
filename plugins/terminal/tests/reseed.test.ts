@@ -32,6 +32,17 @@ describe('seedFrom', () => {
     expect(terminal.modes.bracketedPasteMode).toBe(true)
     expect(terminal.buffer.active.getLine(terminal.buffer.active.baseY)!.getCell(0)!.isBold()).toBeTruthy()
   })
+  it('a screen seed carries no history: no history capture asked for, the rest in order', async () => {
+    const full = seedCommands('%1')
+    const screen = seedCommands('%1', 'screen')
+    expect(full).toHaveLength(5)
+    expect(screen).toEqual([full[0], full[2], full[3], full[4]])
+    // tmux has history, the seed still has none: the screen is the first block.
+    const terminal = await render(seedFrom([[formats({ history_size: '500' })], ['on screen'], [''], []], 'screen').bytes)
+    expect(terminal.buffer.active.length).toBe(terminal.rows)
+    expect(terminal.buffer.active.getLine(0)!.translateToString(true)).toBe('on screen')
+    expect(() => seedFrom([[formats({})], [], [''], [], []], 'screen')).toThrow('needs 4 replies')
+  })
   it('ignores the clamped history block when tmux has no history', async () => {
     const terminal = await render(seedFrom([[formats({})], ['row zero, clamped'], ['screen'], [''], []]).bytes)
     expect(lines(terminal)[0]).toBe('screen')

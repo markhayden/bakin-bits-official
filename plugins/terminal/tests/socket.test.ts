@@ -376,7 +376,7 @@ describe('TerminalViewer', () => {
 describe('TerminalViewer on the raw path', () => {
   const seeded = async () => {
     const replica = new Replica({ reseed: (_reason, turn) => turn(async () => undefined), idleMs: 1e9 })
-    await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bcready'), cols: 100, rows: 30, reason: 'test' })
+    await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bcready'), cols: 100, rows: 30, reason: 'test', history: true })
     return replica
   }
   /** Display bytes as the client retires them: binary frames and text display frames (not results, pings or presence). */
@@ -439,7 +439,7 @@ describe('TerminalViewer on the raw path', () => {
     peer.client({ type: 'input', generation: 1, viewerSeq: 1, data: '\x03' })
     await until(() => peer.of('result').length === 1, 'Ctrl-C while rebuilding')
     expect(peer.of('result')[0]!.status).toBe('accepted')
-    await replica.event({ seq: 2, kind: 'seed', bytes: new TextEncoder().encode('\x1bcafter'), cols: 100, rows: 30, reason: 'overload' })
+    await replica.event({ seq: 2, kind: 'seed', bytes: new TextEncoder().encode('\x1bcafter'), cols: 100, rows: 30, reason: 'overload', history: true })
     await until(() => peer.of('rebase').length === 1, 'rebase', )
     expect(peer.of('rebase')[0]).toMatchObject({ epoch: 2, baseSeq: 2 })
     expect(writes.map((write) => write.data)).toEqual(['\x03'])
@@ -501,7 +501,7 @@ describe('TerminalViewer on the raw path', () => {
   })
   it('a replica found only after the deadline closes at once', async () => {
     const seeded = new Replica({ reseed: (_reason, turn) => turn(async () => undefined), idleMs: 1e9 })
-    await seeded.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 100, rows: 30, reason: 'test' })
+    await seeded.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 100, rows: 30, reason: 'test', history: true })
     const raw: { replica?: RawSource } = {}
     const { manager } = fakeManager(session(), raw)
     const peer = fakeSocket()

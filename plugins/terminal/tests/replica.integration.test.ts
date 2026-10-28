@@ -133,6 +133,9 @@ processTest('a flood faster than the replica parses: it rebuilds from tmux inste
     // After convergence the bridge and the replica agree (earlier comparisons may not: the bridge redraws while the replica waits).
     expect(shadow.mismatched).toBe(mismatched)
     expect(h.logs.filter((entry) => entry.message === 'Terminal replica ended')).toEqual([])
+    // The overload's pictures were the screen alone; once quiet, a full seed brought the history back.
+    await until(() => h.driver.fidelity(h.session.id).history === 'reloaded', 'history restored', 10_000)
+    expect(replica.terminal!.buffer.normal.length).toBeGreaterThan(1000)
     const rebuilt = h.logs.filter((entry) => entry.message === 'Terminal replica rebuilt')
     // One record per episode: from the first rebuild to the seed applied whole.
     expect(rebuilt.length).toBe(replica.stats.rebuilds.overload!)
@@ -149,7 +152,7 @@ processTest('a flood faster than the replica parses: it rebuilds from tmux inste
 processTest('a checkpoint over full scrollback never holds the event loop for 8 ms', async () => {
   let seq = 0
   const replica = new Replica({ reseed: async () => {} })
-  await replica.event({ seq: ++seq, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 120, rows: 40, reason: 'test' })
+  await replica.event({ seq: ++seq, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 120, rows: 40, reason: 'test', history: true })
   const deliver = async (text: string) => {
     const bytes = new TextEncoder().encode(text)
     for (let at = 0; at < bytes.length; at += BATCH_BYTES) await replica.event({ seq: ++seq, kind: 'output', offset: at, bytes: bytes.subarray(at, at + BATCH_BYTES) })

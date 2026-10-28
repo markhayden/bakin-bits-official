@@ -358,7 +358,12 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       onResult: (result) => callbacks.current.onResult(result),
       onStatus: (next) => {
         if (next !== 'Connected') { ready.current = false; reset() }
-        else ready.current = true
+        else {
+          ready.current = true
+          // Ready (the sync, or the first applied replay): fit again; a size asked for before was refused while joining.
+          sentSize.current = ''
+          requestAnimationFrame(applyView)
+        }
         setStatus(next)
       },
     })

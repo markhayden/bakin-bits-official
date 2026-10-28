@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { heapStats } from 'bun:jsc'
 import { transformPluginCss } from '@makinbakin/sdk/testing/ui/conformance'
 import { TerminalService, terminalEnvironment } from '../lib/service'
 import { tmuxConfig } from '../lib/tmux-config'
@@ -9,7 +10,8 @@ import { Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
 import type { PluginSocket } from '@makinbakin/sdk/types'
 import { command, creatingScreen, failure, human } from '../lib/http'
-import { TerminalViewer } from '../lib/socket'
+import { TerminalViewer, viewersRetainedSteps } from '../lib/socket'
+import { drain } from '../lib/terminal-state'
 import { attachBody, confirmBody, launch, operator, resolveRef } from '../lib/cli'
 
 const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-preview-'))
@@ -74,6 +76,11 @@ const server = Bun.serve<ViewerData>({
       return new Response('Upgrade required', { status: 426 })
     }
     try {
+      // The preview's memory for the bounded-load gate: the heap after a collection, and resident memory.
+      if (url.pathname === '/__memory') {
+        Bun.gc(true)
+        return Response.json({ heap: heapStats().heapSize, rss: process.memoryUsage.rss(), estimate: { sessions: drain(manager.retainedSteps()), viewers: drain(viewersRetainedSteps()) } })
+      }
       if (url.pathname === '/api/plugins/projects/') return Response.json({ projects: [{ id: 'project-1', title: 'Bakin' }] })
       // The CLI's launch routes (the terminal app side of a handoff), as the plugin serves them.
       if (url.pathname === '/api/plugins/terminal/cli/attach') {
@@ -114,7 +121,7 @@ const server = Bun.serve<ViewerData>({
     } catch (error) { return failure(error) }
   },
 })
-console.log(JSON.stringify({ url: `http://127.0.0.1:${server.port}`, workingDirectory: root, tmux: service.tmux }))
+console.log(JSON.stringify({ url: `http://127.0.0.1:${server.port}`, workingDirectory: root, tmux: service.tmux, pid: process.pid }))
 let stopping = false
 async function shutdown() {
   if (stopping) return

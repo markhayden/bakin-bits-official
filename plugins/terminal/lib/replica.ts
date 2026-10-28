@@ -32,6 +32,7 @@ import headless from '@xterm/headless'
 import { checkpointSteps, type Checkpoint, CHECKPOINT_FORMAT, type CheckpointResult, pieces } from './checkpoint'
 import { EVENT_OVERHEAD_BYTES, terminalSteps, textSteps } from './memory'
 import type { LogConsumer, LogEvent } from './output-log'
+import type { SeedScope } from './reseed'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
 import { internals, HAS_EXTENDED, type Term } from './terminal-state'
 import { altEnteredCols, guardParser, type patchLinkLifetime } from './xterm-fixes'
@@ -49,6 +50,19 @@ export const CHECKPOINT_SLICE_MS = 3
 export const MAX_BACKLOG_BYTES = 4 * 1024 * 1024
 /** Rebuilds of one session start at most this often while output keeps coming. */
 export const REBUILD_INTERVAL_MS = 1000
+/**
+ * While a seed is parsed, output keeps queuing in the log (MAX_QUEUED_BYTES,
+ * 8 MiB, invalidates it): overload pressure gives the seed up only past
+ * this. It gives a seed room to land under a flood, not a guarantee; what
+ * makes it land is a small seed (an overload rebuild's is the screen alone).
+ */
+export const SEED_ABANDON_BYTES = 6 * 1024 * 1024
+/**
+ * Output quiet this long after an overload: the screen-only pictures it left
+ * get their history back with one full seed (tmux kept what its own history
+ * bound allows).
+ */
+export const HISTORY_QUIET_MS = 1000
 /** Output quiet this long while waiting: rebuild at once (the flood is over). */
 export const REBUILD_QUIET_MS = 100
 
@@ -60,6 +74,8 @@ export type ReplicaDiagnostic =
   | { kind: 'rebuilt'; cause: RebuildCause; skippedBytes: number; fromSeq: number; toSeq: number; ms: number }
   | { kind: 'ended'; reason: string }
   | { kind: 'listener failed'; error: string }
+  /** A seed applied whole: with the pane's history, or the screen alone (a flood's). */
+  | { kind: 'seeded'; reason: string; history: boolean }
 
 /** Runs one capture in the heavy-work queue (lib/reseed.ts ReseedOptions.attempt). */
 export type CaptureTurn = <T>(capture: () => Promise<T>) => Promise<T>
@@ -70,10 +86,12 @@ export interface ReplicaOptions {
    * `turn`: settles once the seed is queued in the log (or the capture
    * failed, which invalidates the log).
    */
-  reseed(reason: string, turn: CaptureTurn): Promise<unknown>
+  reseed(reason: string, turn: CaptureTurn, scope: SeedScope): Promise<unknown>
   diagnostic?(event: ReplicaDiagnostic): void
   /** Quiet time before a checkpoint is tried (CHECKPOINT_IDLE_MS). */
   idleMs?: number
+  /** Quiet time before an overload's history is restored (HISTORY_QUIET_MS). */
+  historyQuietMs?: number
   now?(): number
 }
 
@@ -190,6 +208,11 @@ export class Replica implements LogConsumer {
   private term: Term | undefined
   private links: LinkLifetime | undefined
   private listeners = new Set<ReplicaListener>()
+  /** A seed is being parsed (overload pressure lets it finish, within SEED_ABANDON_BYTES). */
+  private seeding = false
+  /** An overload left the picture without its history: a full seed is owed once output is quiet. */
+  private historyPending = false
+  private historyTimer: ReturnType<typeof setTimeout> | undefined
   private parser: { readonly failed: boolean } | undefined
   private base: { checkpoint: Checkpoint; seq: number } | undefined
   private tail: LogEvent[] = []
@@ -276,7 +299,7 @@ export class Replica implements LogConsumer {
   start(): void {
     if (this.term || this.capturing || this.failure) return
     this.capturing = true
-    void this.options.reseed('attach', this.turn()).catch(() => undefined).finally(() => { this.capturing = false })
+    void this.options.reseed('attach', this.turn(), 'full').catch(() => undefined).finally(() => { this.capturing = false })
   }
 
   event(event: LogEvent): Promise<void> {
@@ -286,7 +309,11 @@ export class Replica implements LogConsumer {
   }
 
   pressure(queuedOutputBytes: number): void {
-    if (queuedOutputBytes >= MAX_BACKLOG_BYTES && this.term && !this.failure) this.rebuild('overload', queuedOutputBytes)
+    if (queuedOutputBytes < MAX_BACKLOG_BYTES || !this.term || this.failure) return
+    // A seed being applied is let finish (its picture is what viewers wait for under a
+    // flood), unless the log itself is near its bound: then it is given up like any work.
+    if (this.seeding && queuedOutputBytes < SEED_ABANDON_BYTES) return
+    this.rebuild('overload', queuedOutputBytes)
   }
 
   invalid(reason: string): void { this.end(`log invalid: ${reason}`) }
@@ -321,6 +348,8 @@ export class Replica implements LogConsumer {
     if (this.failure) return
     this.taken++
     if (event.kind === 'seed') { await this.seed(event); return }
+    // Output arriving, parsed or skipped, keeps a history restore waiting for quiet.
+    if (event.kind === 'output') this.armHistory()
     // Before the first seed, or while rebuilding, output is not this replica's stream.
     if (this.rebuilding) {
       if (event.kind === 'output') this.skip(event.bytes.length)
@@ -354,6 +383,11 @@ export class Replica implements LogConsumer {
   }
 
   private async seed(event: Extract<LogEvent, { kind: 'seed' }>): Promise<void> {
+    this.seeding = true
+    try { await this.applySeed(event) } finally { this.seeding = false }
+  }
+
+  private async applySeed(event: Extract<LogEvent, { kind: 'seed' }>): Promise<void> {
     this.term?.dispose()
     clearTimeout(this.idleTimer)
     const { terminal, links } = profileTerminal(event.cols, event.rows)
@@ -386,6 +420,10 @@ export class Replica implements LogConsumer {
         altEnteredCols: terminal.buffer.active.type === 'alternate' ? altEnteredCols(terminal) ?? null : null,
       },
     }
+    this.options.diagnostic?.({ kind: 'seeded', reason: event.reason, history: event.history })
+    if (event.history) { this.historyPending = false; clearTimeout(this.historyTimer) }
+    // A screen-only picture: its history comes back once output is quiet, even if none follows.
+    else this.armHistory()
     this.notify((listener) => listener.rebased())
     const episode = this.episode
     this.episode = undefined
@@ -407,6 +445,8 @@ export class Replica implements LogConsumer {
     if (this.rebuilding || this.failure) return
     const tailBytes = this.tailBytes
     this.rebuilding = cause
+    // An overload's pictures are the screen alone until output is quiet again.
+    if (cause === 'overload') { this.historyPending = true; clearTimeout(this.historyTimer) }
     this.base = undefined
     this.tail = []
     this.tailBytes = 0
@@ -448,8 +488,28 @@ export class Replica implements LogConsumer {
     if (!cause || this.capturing || this.failure) return
     this.capturing = true
     // Settled, the seed is queued in the log and on its way (it ends the rebuild when it is applied);
-    // a failed capture invalidates the log (lib/reseed.ts), which ends the replica.
-    void this.options.reseed(cause, this.turn()).catch(() => undefined).finally(() => { this.capturing = false })
+    // a failed capture invalidates the log (lib/reseed.ts), which ends the replica. An overload's seed
+    // is the screen alone: small enough to land while the flood goes on.
+    void this.options.reseed(cause, this.turn(), cause === 'overload' ? 'screen' : 'full').catch(() => undefined).finally(() => { this.capturing = false })
+  }
+
+  /** (Re)start the quiet wait before a history restore, while one is owed. */
+  private armHistory(): void {
+    if (!this.historyPending || this.failure) return
+    clearTimeout(this.historyTimer)
+    this.historyTimer = setTimeout(() => this.restoreHistory(), this.options.historyQuietMs ?? HISTORY_QUIET_MS)
+  }
+
+  /**
+   * Output has been quiet: one full seed through the log's ordered boundary
+   * gives the picture its history back. The picture stays shown meanwhile
+   * (this is not a rebuild); `historyPending` clears only when that seed lands.
+   */
+  private restoreHistory(): void {
+    if (!this.historyPending || this.failure) return
+    if (this.rebuilding || !this.base || this.capturing) { this.armHistory(); return }
+    this.capturing = true
+    void this.options.reseed('history', this.turn(), 'full').catch(() => undefined).finally(() => { this.capturing = false })
   }
 
   private armIdle(): void {
@@ -500,6 +560,7 @@ export class Replica implements LogConsumer {
     if (this.failure) return
     this.failure = reason
     clearTimeout(this.idleTimer)
+    clearTimeout(this.historyTimer)
     clearTimeout(this.captureTimer)
     this.interrupt?.()
     this.rebuilding = undefined

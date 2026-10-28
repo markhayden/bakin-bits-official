@@ -24,7 +24,8 @@ export type LogEvent =
   | { seq: number; kind: 'output'; offset: number; bytes: Uint8Array }
   | { seq: number; kind: 'layout'; cols: number; rows: number }
   /** Reset to this picture (lib/reseed.ts); output after it follows the seed. */
-  | { seq: number; kind: 'seed'; bytes: Uint8Array; cols: number; rows: number; reason: string }
+  /** `history`: the seed carries the pane's history (a `screen` seed does not, lib/reseed.ts). */
+  | { seq: number; kind: 'seed'; bytes: Uint8Array; cols: number; rows: number; reason: string; history: boolean }
 
 export interface LogConsumer {
   event(event: LogEvent): void | Promise<void>
@@ -103,10 +104,10 @@ export class OutputLog {
    * everything after follows it. Its bytes count against the bound. False
    * when the seed was not kept (no consumer, or the log is or became invalid).
    */
-  seed(bytes: Uint8Array, cols: number, rows: number, reason: string): boolean {
+  seed(bytes: Uint8Array, cols: number, rows: number, reason: string, history = true): boolean {
     if (this.failure || !this.attachment) return false
     this.flush()
-    this.push({ seq: ++this.seq, kind: 'seed', bytes, cols, rows, reason })
+    this.push({ seq: ++this.seq, kind: 'seed', bytes, cols, rows, reason, history })
     return !this.failure
   }
 

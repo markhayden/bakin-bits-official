@@ -29,15 +29,24 @@ export const SEED_FORMATS = [
  * are captured with attributes (-e), trailing spaces kept (-N) and, except
  * the last, wrapped lines joined (-J).
  */
-export function seedCommands(target: string, history = TERMINAL_OPTIONS.scrollback): string[][] {
-  return [
-    ['display-message', '-p', '-t', target, SEED_FORMATS.map((name) => `#{${name}}`).join('\t')],
-    // -E -1 clamps to row 0 when there is no history: history_size (same group) says whether this block is real.
-    ['capture-pane', '-p', '-e', '-J', '-N', '-S', String(-history), '-E', '-1', '-t', target],
+/**
+ * How much a seed carries: `full` is the pane with its history (up to the
+ * scrollback); `screen` is everything but the history (the screen, the saved
+ * normal screen under the alternate one, the visual rows, every format) —
+ * small enough to land under a flood (spec D13, plan T33e).
+ */
+export type SeedScope = 'full' | 'screen'
+
+export function seedCommands(target: string, scope: SeedScope = 'full', history = TERMINAL_OPTIONS.scrollback): string[][] {
+  const formats = ['display-message', '-p', '-t', target, SEED_FORMATS.map((name) => `#{${name}}`).join('\t')]
+  const screens = [
     ['capture-pane', '-p', '-e', '-J', '-N', '-S', '0', '-E', '-', '-t', target],
     ['capture-pane', '-p', '-e', '-J', '-N', '-a', '-q', '-t', target],
     ['capture-pane', '-p', '-e', '-N', '-S', '0', '-E', '-', '-t', target],
   ]
+  // -E -1 clamps to row 0 when there is no history: history_size (same group) says whether this block is real.
+  if (scope === 'full') return [formats, ['capture-pane', '-p', '-e', '-J', '-N', '-S', String(-history), '-E', '-1', '-t', target], ...screens]
+  return [formats, ...screens]
 }
 
 export interface Seed {
@@ -165,17 +174,20 @@ export function capturedRowWidth(row: string, cols: number, stops: number[]): nu
 }
 
 /** Turn the replies of `seedCommands` into seed bytes (pure). */
-export function seedFrom(replies: string[][]): Seed {
-  if (replies.length !== 5) throw new Error(`A seed needs 5 replies, got ${replies.length}`)
+export function seedFrom(replies: string[][], scope: SeedScope = 'full'): Seed {
+  const expected = scope === 'full' ? 5 : 4
+  if (replies.length !== expected) throw new Error(`A ${scope} seed needs ${expected} replies, got ${replies.length}`)
+  // A screen seed has no history reply: the others move up by one.
+  const at = scope === 'full' ? 0 : -1
   const values = (replies[0]![0] ?? '').split('\t')
   if (values.length !== SEED_FORMATS.length) throw new Error('Seed formats are incomplete')
   const formats: Record<string, string> = Object.fromEntries(SEED_FORMATS.map((name, i) => [name, values[i]!]))
   const cols = number(formats, 'pane_width')
   const rows_ = number(formats, 'pane_height')
-  const history = number(formats, 'history_size') > 0 ? replies[1]! : []
-  const screen = replies[2]!
-  const savedNormal = replies[3]!
-  const visual = replies[4]!
+  const history = scope === 'full' && number(formats, 'history_size') > 0 ? replies[1]! : []
+  const screen = replies[2 + at]!
+  const savedNormal = replies[3 + at]!
+  const visual = replies[4 + at]!
   const cursorX = number(formats, 'cursor_x')
   const cursorY = number(formats, 'cursor_y')
   const upper = number(formats, 'scroll_region_upper')
@@ -235,6 +247,8 @@ export interface ReseedOptions {
    * process); the waits between attempts are outside it.
    */
   attempt?<T>(capture: () => Promise<T>): Promise<T>
+  /** How much the seed carries (default `full`). */
+  scope?: SeedScope
 }
 
 /**
@@ -245,6 +259,7 @@ export interface ReseedOptions {
  * for one log share the attempt in flight.
  */
 export function reseed(control: ControlClient, log: OutputLog, target: string, reason: string, options: ReseedOptions = {}): Promise<Seed> {
+  const scope = options.scope ?? 'full'
   const sleep = options.sleep ?? ((ms: number) => Bun.sleep(ms))
   const turn = options.attempt ?? (<T>(capture: () => Promise<T>) => capture())
   const running = inFlight.get(log)
@@ -256,10 +271,10 @@ export function reseed(control: ControlClient, log: OutputLog, target: string, r
       if (log.invalidReason) throw new Error(`Reseed abandoned: the log is invalid (${log.invalidReason})`)
       let seed: Seed | undefined
       try {
-        await turn(() => control.group(seedCommands(target), (replies) => {
-          seed = seedFrom(replies)
+        await turn(() => control.group(seedCommands(target, scope), (replies) => {
+          seed = seedFrom(replies, scope)
           // A seed the log did not keep (no consumer, or it overflowed) is a failure.
-          if (!log.seed(seed.bytes, seed.cols, seed.rows, reason)) throw new Error(`the log did not take the seed (${log.invalidReason ?? 'no consumer'})`)
+          if (!log.seed(seed.bytes, seed.cols, seed.rows, reason, scope === 'full')) throw new Error(`the log did not take the seed (${log.invalidReason ?? 'no consumer'})`)
         }))
         return seed!
       } catch (error) {

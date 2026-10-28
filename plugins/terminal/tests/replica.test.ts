@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import { restoreCheckpoint } from '../lib/checkpoint'
 import { BATCH_BYTES, type LogEvent } from '../lib/output-log'
 import {
-  CHECKPOINT_BYTES, heavyWorkRunning, MAX_BACKLOG_BYTES, MAX_TAIL_BYTES, MAX_TAIL_EVENTS, REBUILD_INTERVAL_MS, REBUILD_QUIET_MS, Replica,
+  CHECKPOINT_BYTES, heavyWorkRunning, MAX_BACKLOG_BYTES, SEED_ABANDON_BYTES, MAX_TAIL_BYTES, MAX_TAIL_EVENTS, REBUILD_INTERVAL_MS, REBUILD_QUIET_MS, Replica,
   type Cut, type ReplicaDiagnostic, runSliced,
 } from '../lib/replica'
 import { EVENT_OVERHEAD_BYTES, terminalBytes } from '../lib/memory'
@@ -10,6 +10,10 @@ import { drain, fullState, stateDiff, type Term } from '../lib/terminal-state'
 import { emulator, settled } from './helpers/terminal-fuzz'
 
 const encode = (text: string) => new TextEncoder().encode(text)
+async function until(check: () => boolean, label: string, ms = 3000): Promise<void> {
+  for (const start = Date.now(); Date.now() - start < ms; await Bun.sleep(5)) if (check()) return
+  throw new Error(`timed out: ${label}`)
+}
 
 /** A log's events, numbered like the log numbers them. */
 function stream() {
@@ -23,17 +27,18 @@ function stream() {
       return event
     },
     layout: (cols: number, rows: number): LogEvent => ({ seq: ++seq, kind: 'layout', cols, rows }),
-    seed: (text: string, cols: number, rows: number): LogEvent => ({ seq: ++seq, kind: 'seed', bytes: encode(text), cols, rows, reason: 'test' }),
+    seed: (text: string, cols: number, rows: number, history = true): LogEvent => ({ seq: ++seq, kind: 'seed', bytes: encode(text), cols, rows, reason: 'test', history }),
   }
 }
 
 function replica(options: Partial<ConstructorParameters<typeof Replica>[0]> = {}) {
   const reseeds: string[] = []
+  const scopes: string[] = []
   const diagnostics: ReplicaDiagnostic[] = []
   // Captures take their turn in the heavy-work queue, as lib/reseed.ts does.
-  const r = new Replica({ reseed: (reason, turn) => turn(async () => { reseeds.push(reason) }), diagnostic: (event) => diagnostics.push(event), ...options })
+  const r = new Replica({ reseed: (reason, turn, scope) => turn(async () => { reseeds.push(reason); scopes.push(scope) }), diagnostic: (event) => diagnostics.push(event), ...options })
   const ended = () => diagnostics.flatMap((event) => event.kind === 'ended' ? [event.reason] : [])
-  return { r, reseeds, diagnostics, ended }
+  return { r, reseeds, scopes, diagnostics, ended }
 }
 
 /** A viewer's join: the base restored, then the tail. */
@@ -264,15 +269,24 @@ describe('Replica', () => {
     r.close()
   })
 
-  it('a seed too large for one step is parsed in pieces, and overload stops it', async () => {
+  it('a seed under a flood is let finish (its picture is what viewers wait for), and is given up only near the log bound', async () => {
     const s = stream()
     const { r, reseeds } = replica()
     await r.event(s.seed('\x1bc', 80, 24))
+    // Pressure while the seed is parsed: the seed lands whole, its picture joinable.
     const big = s.seed('\x1bc' + flood(2 * 1024 * 1024), 80, 24)
     const pending = r.event(big)
     await Bun.sleep(5)
     r.pressure(MAX_BACKLOG_BYTES)
     await pending
+    expect(r.cut()?.baseSeq).toBe(big.seq)
+    expect(reseeds).toEqual([])
+    // Near the log's own bound, the seed is given up like any work.
+    const second = s.seed('\x1bc' + flood(2 * 1024 * 1024), 80, 24)
+    const abandoned = r.event(second)
+    await Bun.sleep(5)
+    r.pressure(SEED_ABANDON_BYTES)
+    await abandoned
     expect(r.cut()).toBeUndefined()
     expect(r.rebuildCause).toBe('overload')
     expect(reseeds).toEqual(['overload'])
@@ -391,6 +405,46 @@ describe('Replica', () => {
     r.pressure(MAX_BACKLOG_BYTES)
     r.close()
     expect(ended()).toEqual(['log invalid: overflow'])
+  })
+})
+
+describe('Replica history after an overload', () => {
+  it('an overload asks for screen-only seeds; quiet output brings the history back with one full seed', async () => {
+    const s = stream()
+    const { r, reseeds, scopes, diagnostics } = replica({ idleMs: 1e9, historyQuietMs: 40 })
+    await r.event(s.seed('\x1bc', 40, 10))
+    r.pressure(MAX_BACKLOG_BYTES)
+    await until(() => reseeds.length === 1, 'the overload capture')
+    expect([reseeds[0], scopes[0]]).toEqual(['overload', 'screen'])
+    // The screen-only seed lands: joinable at once, history still owed.
+    await r.event(s.seed('\x1bcscreen only', 40, 10, false))
+    expect(r.cut()).toBeDefined()
+    expect(diagnostics).toContainEqual({ kind: 'seeded', reason: 'test', history: false })
+    // Output keeps coming: no restore while it does.
+    for (let i = 0; i < 5; i++) { await r.event(s.output('more')); await Bun.sleep(15) }
+    expect(reseeds).toHaveLength(1)
+    // Quiet: one full seed is asked for, and the picture stays joinable meanwhile (not a rebuild).
+    await until(() => reseeds.length === 2, 'the history restore')
+    expect([reseeds[1], scopes[1]]).toEqual(['history', 'full'])
+    expect(r.cut()).toBeDefined()
+    await r.event(s.seed('\x1bcwith history', 40, 10, true))
+    // Restored: nothing more is asked for.
+    await Bun.sleep(100)
+    expect(reseeds).toHaveLength(2)
+    r.close()
+  })
+  it('a quiet restore waits for a seed in flight and for the end of a rebuild', async () => {
+    const s = stream()
+    const { r, reseeds } = replica({ idleMs: 1e9, historyQuietMs: 30 })
+    await r.event(s.seed('\x1bc', 40, 10))
+    r.pressure(MAX_BACKLOG_BYTES)
+    await until(() => reseeds.length === 1, 'the overload capture')
+    // Still rebuilding (the screen seed has not landed): the restore waits.
+    await Bun.sleep(80)
+    expect(reseeds).toHaveLength(1)
+    await r.event(s.seed('\x1bc', 40, 10, false))
+    await until(() => reseeds.length === 2, 'the restore after the seed')
+    r.close()
   })
 })
 
