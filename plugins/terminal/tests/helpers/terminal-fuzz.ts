@@ -8,7 +8,6 @@ import headless from '@xterm/headless'
 import { restoreCheckpoint, takeCheckpoint, type Checkpoint } from '../../lib/checkpoint'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from '../../lib/terminal-profile'
 import { internals, type Term } from '../../lib/terminal-state'
-import { carriedUtf8 } from '../../lib/xterm-fixes'
 
 /** mulberry32, with unbiased integers (rejection sampling). */
 export function prng(seed: number) {
@@ -111,10 +110,10 @@ export function generate(seed: number, cols: number, rows: number, branches = 26
     events.push({ kind: 'output', bytes: bytes.subarray(i, i + size) })
     i += size
   }
-  // Sometimes one write past WRITE_PIECE with a three-byte character across its boundary.
-  const large = r.int(4) === 0
+  // Sometimes one write past xterm's own 128 KiB parse split, with a three-byte character across it.
+  const large = r.int(6) === 0
   if (large) {
-    const big = new TextEncoder().encode('a'.repeat(65534) + '漢字 after a large write\r\n')
+    const big = new TextEncoder().encode('a'.repeat(131070) + '漢字 after a large write\r\n')
     events.splice(r.int(events.length), 0, { kind: 'output', bytes: big })
     used['large-write'] = 1
   }
@@ -141,8 +140,7 @@ export function apply(term: Term, event: Event): void {
 export function joinCategory(term: Term): string {
   const handler = internals(term)._inputHandler
   const state = handler._parser.currentState
-  // With the profile, a split character waits in its carried tail rather than xterm's decoder.
-  if (handler._utf8Decoder.interim[0] || carriedUtf8(term)) return 'mid-UTF-8'
+  if (handler._utf8Decoder.interim[0]) return 'mid-UTF-8'
   if (state === 0) return handler._parser.precedingJoinState ? 'after-print' : 'quiescent'
   if (state <= 2) return 'mid-ESC'
   if (state <= 6) return 'mid-CSI'

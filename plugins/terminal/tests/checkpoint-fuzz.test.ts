@@ -149,7 +149,7 @@ describe('checkpoint fuzz', () => {
       }
     }
     const seconds = (performance.now() - start) / 1000
-    console.log(`fuzz: ${mine.length} streams (${trimmedStreams} trimmed their scrollback, ${tinyStreams} at ${TINY.size.join('×')}, ${used['large-write'] ?? 0} with a split past WRITE_PIECE) in ${seconds.toFixed(1)} s; ${cuts.length} joins; checkpoints ${accepted}/${attempts}; categories ${JSON.stringify(categories)}; rejections ${JSON.stringify([...rejected].sort((a, b) => b[1] - a[1]).slice(0, 6))}`)
+    console.log(`fuzz: ${mine.length} streams (${trimmedStreams} trimmed their scrollback, ${tinyStreams} at ${TINY.size.join('×')}, ${used['large-write'] ?? 0} with a split past xterm's parse split) in ${seconds.toFixed(1)} s; ${cuts.length} joins; checkpoints ${accepted}/${attempts}; categories ${JSON.stringify(categories)}; rejections ${JSON.stringify([...rejected].sort((a, b) => b[1] - a[1]).slice(0, 6))}`)
     expect(problems.slice(0, 5)).toEqual([])
     // About a third of a draw per stream for every branch, as across the whole matrix.
     expect(missingBranches(used, Math.ceil(mine.length / 3))).toEqual([])

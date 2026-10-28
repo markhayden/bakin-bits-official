@@ -10,7 +10,7 @@
  */
 import headless from '@xterm/headless'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
-import { altEnteredCols, carriedUtf8Bytes } from './xterm-fixes'
+import { altEnteredCols } from './xterm-fixes'
 
 export type Term = InstanceType<typeof headless.Terminal>
 
@@ -165,8 +165,8 @@ export function fullState(terminal: Term) {
     parser: `${parser.currentState},${parser._parseStack.state},${parser.precedingJoinState}`,
     // Params with their continuation flags (past 32 params, digits are rejected).
     sequence: parser.currentState ? `${JSON.stringify(parser._params.toArray())}:${parser._collect}:${+parser._params._rejectDigits}${+parser._params._rejectSubDigits}${+parser._params._digitIsSub}` : '-',
-    // Partial characters: UTF-8 in xterm's decoder and the bytes the profile holds back; a lone surrogate from a string write.
-    utf8: `${[...handler._utf8Decoder.interim].join('.')}+${carriedUtf8Bytes(terminal).join('.')}+${handler._stringDecoder._interim}`,
+    // Partial characters: the UTF-8 bytes xterm's decoder holds; a lone surrogate from a string write.
+    utf8: `${[...handler._utf8Decoder.interim].join('.')}+${handler._stringDecoder._interim}`,
     osc: parser._oscParser._state ? `${parser._oscParser._state}:${parser._oscParser._id}:${payloads(parser._oscParser._active)}` : '-',
     dcs: parser._dcsParser._active?.length ? `${parser._dcsParser._ident}:${payloads(parser._dcsParser._active)}` : '-',
   }

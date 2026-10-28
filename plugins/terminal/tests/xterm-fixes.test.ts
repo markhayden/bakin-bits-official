@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import headless from '@xterm/headless'
-import { carriedUtf8, patchEraseAbove, WRITE_PIECE } from '../lib/xterm-fixes'
+import { patchEraseAbove } from '../lib/xterm-fixes'
 import { Screen } from '../lib/screen'
 import { applyTerminalProfile } from '../lib/terminal-profile'
 import { loadGraphemeProvider } from '../lib/unicode-widths'
@@ -116,115 +116,59 @@ describe('erase above (ED 1) with the cursor in the last column', () => {
   })
 })
 
-describe('UTF-8 chunk boundaries', () => {
-  const zwj = Buffer.from('🧑‍💻X')
-  // Split inside the ZWJ, after its first two bytes.
-  const splitAt = 6
+describe('UTF-8 split across writes', () => {
+  const zwj = Buffer.from('🧑\u200d💻X')
   const writeBytes = (terminal: Term, data: Uint8Array) => new Promise<void>(resolve => terminal.write(data, resolve))
-  it('stock xterm 6.0.0 loses the grapheme join across a split codepoint (fails once upstream fixes it)', async () => {
+  it('stock xterm 6.0.0 drops a held character whose continuation byte carries no payload (fails once upstream fixes it)', async () => {
     const stock = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
     loadGraphemeProvider(stock as never)
-    await writeBytes(stock, zwj.subarray(0, splitAt))
-    await writeBytes(stock, zwj.subarray(splitAt))
-    expect(stock.buffer.active.cursorX).toBe(5)
+    // Split after E2 80, inside the ZWJ: the held 0x80 ends xterm's count early.
+    await writeBytes(stock, zwj.subarray(0, 6))
+    await writeBytes(stock, zwj.subarray(6))
+    expect(stock.buffer.active.getLine(0)!.translateToString(true)).toBe('🧑💻X')
   })
   it('patched, every split point lays out like the whole write', async () => {
-    for (let at = 1; at < zwj.length; at++) {
-      const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
+    const text = Buffer.from('🧑\u200d💻X中é€\u{1F004}')
+    const whole = new headless.Terminal({ cols: 30, rows: 2, allowProposedApi: true })
+    applyTerminalProfile(whole)
+    await writeBytes(whole, text)
+    for (let at = 1; at < text.length; at++) {
+      const terminal = new headless.Terminal({ cols: 30, rows: 2, allowProposedApi: true })
       applyTerminalProfile(terminal)
-      await writeBytes(terminal, zwj.subarray(0, at))
-      await writeBytes(terminal, zwj.subarray(at))
-      expect(terminal.buffer.active.cursorX, `split at ${at}`).toBe(3)
+      await writeBytes(terminal, text.subarray(0, at))
+      await writeBytes(terminal, text.subarray(at))
+      expect(terminal.buffer.active.getLine(0)!.translateToString(true), `split at ${at}`).toBe(whole.buffer.active.getLine(0)!.translateToString(true))
+      expect(terminal.buffer.active.cursorX, `split at ${at}`).toBe(whole.buffer.active.cursorX)
     }
   })
-  it('a large write never reaches xterm\'s own 128 KiB split inside a codepoint', async () => {
-    const text = 'a'.repeat(131066) + '🧑\u200d💻X'
-    const terminal = new headless.Terminal({ cols: 80, rows: 2, scrollback: 0, allowProposedApi: true })
-    applyTerminalProfile(terminal)
-    await writeBytes(terminal, Buffer.from(text))
-    const whole = new headless.Terminal({ cols: 80, rows: 2, scrollback: 0, allowProposedApi: true })
-    applyTerminalProfile(whole)
-    for (let offset = 0; offset < text.length; offset += 4096) await new Promise<void>(resolve => whole.write(text.slice(offset, offset + 4096), resolve))
-    expect(terminal.buffer.active.cursorX).toBe(whole.buffer.active.cursorX)
-    // The same text as one string write.
-    const string = new headless.Terminal({ cols: 80, rows: 2, scrollback: 0, allowProposedApi: true })
-    applyTerminalProfile(string)
-    await new Promise<void>(resolve => string.write(text, resolve))
-    expect(string.buffer.active.cursorX).toBe(whole.buffer.active.cursorX)
-  })
-  it('a four-byte character cut at every offset across a piece boundary is kept whole', async () => {
-    for (let lead = 0; lead < 4; lead++) {
-      const text = 'a'.repeat(WRITE_PIECE - 1 - lead) + '🀄X'
+  it('a write past xterm\'s own 128 KiB parse split keeps a three-byte character across it whole', async () => {
+    for (let lead = 0; lead < 3; lead++) {
       const terminal = new headless.Terminal({ cols: 80, rows: 2, scrollback: 0, allowProposedApi: true })
       applyTerminalProfile(terminal)
-      await writeBytes(terminal, Buffer.from(text))
+      await writeBytes(terminal, Buffer.from('a'.repeat(131072 - 1 - lead) + '漢X'))
       const buffer = terminal.buffer.active
-      // The text wraps: its end is on the cursor's row (🀄 may have wrapped onto it).
       const end = buffer.getLine(buffer.baseY + buffer.cursorY - 1)!.translateToString(true) + buffer.getLine(buffer.baseY + buffer.cursorY)!.translateToString(true)
-      expect(end, `lead at ${lead}`).toEndWith('🀄X')
+      expect(end, `lead at ${lead}`).toEndWith('漢X')
     }
   })
-  it('invalid input (a run of continuation bytes past a piece boundary) is still written, and settles', async () => {
+  it('a held character is xterm\'s own state again: a reset treats it exactly as stock xterm does', async () => {
+    const run = async (profiled: boolean) => {
+      const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
+      if (profiled) applyTerminalProfile(terminal)
+      terminal.write(Uint8Array.of(0xe4), () => terminal.reset())
+      terminal.write(Uint8Array.of(0xb8))
+      await writeBytes(terminal, Uint8Array.of(0xad))
+      return terminal.buffer.active.getLine(0)!.translateToString(true)
+    }
+    expect(await run(true)).toBe(await run(false))
+  })
+  it('invalid input (a run of continuation bytes) is still written, and settles', async () => {
     const terminal = new headless.Terminal({ cols: 20, rows: 2, scrollback: 0, allowProposedApi: true })
     applyTerminalProfile(terminal)
     const bytes = new Uint8Array(200_000).fill(0x80)
     bytes[bytes.length - 1] = 0x41
     await writeBytes(terminal, bytes)
     expect(terminal.buffer.active.getLine(0)!.translateToString(true)).toContain('A')
-  })
-  it('the carried tail is reported as of the parser\'s position, not the writer\'s', async () => {
-    const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
-    applyTerminalProfile(terminal)
-    const zh = Buffer.from('中X')
-    const seen: number[] = []
-    // Queued back to back: the second write takes the carry before the first is parsed.
-    terminal.write(zh.subarray(0, 1), () => seen.push(carriedUtf8(terminal)))
-    terminal.write(zh.subarray(1), () => seen.push(carriedUtf8(terminal)))
-    await new Promise<void>((resolve) => terminal.write('', resolve))
-    expect(seen).toEqual([1, 0])
-  })
-  it('a reset inside a queued callback is not undone by a later publication', async () => {
-    const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
-    applyTerminalProfile(terminal)
-    terminal.write(Uint8Array.of(0xe4), () => terminal.reset())
-    await new Promise<void>((resolve) => terminal.write('', resolve))
-    expect(carriedUtf8(terminal)).toBe(0)
-  })
-  it('a reset where the parser is keeps a tail from a write queued behind it', async () => {
-    const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
-    applyTerminalProfile(terminal)
-    terminal.write('A', () => terminal.reset())
-    terminal.write(Uint8Array.of(0xe4))
-    await new Promise<void>((resolve) => terminal.write('', resolve))
-    expect(carriedUtf8(terminal)).toBe(1)
-    await writeBytes(terminal, Uint8Array.of(0xb8, 0xad))
-    expect(terminal.buffer.active.getLine(0)!.translateToString(true)).toBe('中')
-  })
-  it('an empty write (a barrier: settled(), a checkpoint attempt) keeps a carried tail', async () => {
-    const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
-    applyTerminalProfile(terminal)
-    const zh = Buffer.from('中X')
-    await writeBytes(terminal, zh.subarray(0, 2))
-    await new Promise<void>((resolve) => terminal.write('', resolve))
-    await writeBytes(terminal, zh.subarray(2))
-    expect(terminal.buffer.active.getLine(0)!.translateToString(true)).toBe('中X')
-  })
-  it('a string write drops a carried tail instead of handing it to xterm\'s decoder', async () => {
-    const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
-    applyTerminalProfile(terminal)
-    await writeBytes(terminal, Uint8Array.from([0xe4, 0xb8]))
-    await new Promise<void>(resolve => terminal.write('', resolve))
-    terminal.reset()
-    await writeBytes(terminal, Uint8Array.from([0xad, 0x41]))
-    expect(terminal.buffer.active.getLine(0)!.translateToString(true)).not.toContain('中')
-  })
-  it('a write of only an incomplete sequence still settles; a reset drops the carried bytes', async () => {
-    const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
-    applyTerminalProfile(terminal)
-    await writeBytes(terminal, Uint8Array.from([0xe4, 0xb8]))
-    terminal.reset()
-    await writeBytes(terminal, Uint8Array.from([0xad, 0x41]))
-    expect(terminal.buffer.active.getLine(0)!.translateToString(true)).not.toContain('中')
   })
 })
 
@@ -278,6 +222,16 @@ describe('a grapheme cluster split across writes at the margin (wraparound off)'
       return term
     })
     expect(split).not.toBe(whole)
+  })
+  it('patched, a wide character overwritten in its second cell across writes keeps the same layout', async () => {
+    const make = () => { const term = new headless.Terminal({ cols: 2, rows: 1, allowProposedApi: true }); applyTerminalProfile(term); return term }
+    const whole = make()
+    await write(whole, '\x1b[?7l漢漢X')
+    const split = make()
+    await write(split, '\x1b[?7l漢漢')
+    await write(split, 'X')
+    const cells = (term: Term) => [0, 1].map((x) => { const cell = term.buffer.active.getLine(0)!.getCell(x)!; return `${cell.getChars()}/${cell.getWidth()}` }).join('|')
+    expect(cells(split)).toBe(cells(whole))
   })
   it('patched, chunking does not change the layout', async () => {
     const [whole, split] = await layouts(() => {

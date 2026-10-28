@@ -200,105 +200,29 @@ export function guardParser(terminal: object, onFailure: (error: unknown) => voi
   return { get failed() { return failed } }
 }
 
-/** How many bytes at the end of `data` begin a UTF-8 sequence that is not complete yet. */
-export function incompleteUtf8Tail(data: Uint8Array): number {
-  for (let back = 1; back <= Math.min(3, data.length); back++) {
-    const byte = data[data.length - back]!
-    if ((byte & 0xc0) === 0x80) continue
-    const length = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : byte >= 0xc0 ? 2 : 1
-    return length > back ? back : 0
-  }
-  return 0
-}
-
-const carried = new WeakMap<object, () => Uint8Array>()
 /**
- * Bytes of an incomplete UTF-8 sequence held back from `terminal`'s parser
- * (patchUtf8Boundaries), as of the parser's position (read it from a write
- * callback or after one): parser state outside xterm, so a checkpoint waits
- * for it to complete.
+ * xterm 6.0.0's UTF-8 decoder counts the bytes it held from the previous
+ * write by their payload: a continuation byte carrying no payload bits
+ * (0x80, as in ZWJ, E2 80 8D) ends the count early, so it reads ahead too
+ * far, takes the next character's lead byte for a bad continuation and
+ * drops the held character — a write split after `E2 80` loses the ZWJ
+ * (🧑‍💻 then takes 4 cells instead of 2). The held bytes are prepended to the
+ * next input and decoded with it, by the decoder's correct main loop.
  */
-export function carriedUtf8(terminal: object): number { return carried.get(terminal)?.().length ?? 0 }
-/** The bytes themselves (two held tails of the same length can complete differently). */
-export function carriedUtf8Bytes(terminal: object): number[] { return [...(carried.get(terminal)?.() ?? [])] }
-
-/** Largest piece handed to xterm: below its own 128 KiB parse split, so it never cuts a codepoint itself. */
-export const WRITE_PIECE = 64 * 1024
-
-/**
- * xterm 6.0.0: a write that ends inside a UTF-8 sequence loses the grapheme
- * join state when the sequence completes in the next write (a ZWJ split
- * after `E2 80` turns 🧑‍💻 from 2 cells into 4); xterm also splits large
- * writes itself at 128 KiB, anywhere. So every write reaches xterm in pieces
- * of at most WRITE_PIECE that end on a codepoint boundary (a string on a
- * surrogate pair's boundary); an incomplete UTF-8 tail is carried into the
- * next byte write. Text written as a string, or a reset, drops a carried
- * tail (those bytes can no longer complete); an empty write keeps it.
- */
-export function patchUtf8Boundaries(terminal: { write(data: string | Uint8Array, callback?: () => void): void; reset(): void }): void {
-  const write = terminal.write.bind(terminal)
-  const reset = terminal.reset.bind(terminal)
-  // The incomplete tail and the write call it came from (calls are numbered in submission order).
-  let carry: { bytes: Uint8Array; owner: number } | undefined
-  let submitted = 0
-  // The last write call the parser has finished, and where the last reset happened (in those numbers).
-  let parsed = 0
-  let resetAt = 0
-  // The tail carried as of where the parser is (not where the writer is: a
-  // later write may already have taken it). Each write publishes the carry it
-  // left once it is parsed, so a callback sees the state at its own position;
-  // a carry from before the last reset is gone.
-  let carriedAtParse: Uint8Array = new Uint8Array(0)
-  carried.set(terminal, () => carriedAtParse)
-  // Pieces in order; the last carries the caller's callback, so it fires after all of them are parsed.
-  const pieces = (data: string | Uint8Array, boundary: (end: number) => number, callback?: () => void) => {
-    const id = ++submitted
-    const left = carry
-    const done = () => {
-      parsed = id
-      carriedAtParse = left && left.owner > resetAt ? left.bytes : new Uint8Array(0)
-      callback?.()
-    }
-    if (data.length === 0) { write(data, done); return }
-    for (let offset = 0; offset < data.length;) {
-      let end = Math.min(offset + WRITE_PIECE, data.length)
-      if (end < data.length) end = boundary(end)
-      write(data.slice(offset, end), end === data.length ? done : undefined)
-      offset = end
-    }
-  }
-  terminal.write = (data, callback) => {
-    if (typeof data === 'string') {
-      // An empty write is a barrier (a caller waiting for the parser), not
-      // text: the carried tail still completes with the next bytes.
-      if (data) carry = undefined
-      // Never between a surrogate pair's halves.
-      pieces(data, (end) => (/[\ud800-\udbff]/.test(data[end - 1]!) ? end - 1 : end), callback)
-      return
-    }
-    let bytes = data
-    if (carry) {
-      bytes = new Uint8Array(carry.bytes.length + data.length)
-      bytes.set(carry.bytes)
-      bytes.set(data, carry.bytes.length)
-    }
-    const tail = incompleteUtf8Tail(bytes)
-    carry = tail ? { bytes: bytes.slice(bytes.length - tail), owner: submitted + 1 } : undefined
-    const complete = tail ? bytes.subarray(0, bytes.length - tail) : bytes
-    // Back off to the lead byte of a codepoint that would be cut: it is at
-    // most three bytes back (invalid input with longer runs is cut where it is).
-    pieces(complete, (end) => {
-      for (let back = 0; back <= 3; back++) if ((complete[end - back]! & 0xc0) !== 0x80) return end - back
-      return end
-    }, callback)
-  }
-  // A reset happens where the parser is: it drops a tail held from writes
-  // already parsed, never one from a write still queued behind it.
-  terminal.reset = () => {
-    resetAt = parsed
-    if (carry && carry.owner <= parsed) carry = undefined
-    carriedAtParse = new Uint8Array(0)
-    reset()
+export function patchUtf8Decoder(terminal: object): void {
+  const decoder = (core(terminal)?._inputHandler as { _utf8Decoder?: { interim: Uint8Array; decode(input: Uint8Array, target: Uint32Array): number } } | undefined)?._utf8Decoder
+  if (!decoder || typeof decoder.decode !== 'function') return
+  const decode = decoder.decode.bind(decoder)
+  decoder.decode = (input, target) => {
+    const empty = decoder.interim.indexOf(0)
+    const held = empty === -1 ? decoder.interim.length : empty
+    if (!held || !input.length) return decode(input, target)
+    const merged = new Uint8Array(held + input.length)
+    merged.set(decoder.interim.subarray(0, held))
+    merged.set(input, held)
+    decoder.interim.fill(0)
+    // One codepoint completes from the held bytes and at least one input byte, so `target` (sized for the input) holds the result.
+    return decode(merged, target)
   }
 }
 
@@ -350,26 +274,27 @@ interface PrintInternals {
   print(data: Uint32Array, start: number, end: number): void
   _activeBuffer: { x: number; y: number; ybase: number; lines: { get(index: number): PrintLine | undefined } }
   _parser: { precedingJoinState: number }
-  _unicodeService: { charProperties(codepoint: number, preceding: number): number }
 }
 
 /**
  * xterm 6.0.0: every print call first clears a wide cell before the cursor
- * (so a character never overwrites half of one). When the call's first
- * character joins the cluster in that cell — a write split inside a
- * grapheme cluster, at the margin with wraparound off — the clear erases
- * the cluster it is joining, so the same bytes lay out differently by
- * chunking. That one clear is skipped when the first character joins.
+ * (so a character never overwrites half of one), but a run of printing
+ * inside one call does not — so where a write boundary splits a run, the
+ * same bytes lay out differently by chunking (a cluster at the margin with
+ * wraparound off loses its base; a wide character overwritten in its
+ * second cell loses its first). A print call that continues the previous
+ * one (no control or escape in between, which is exactly when the join
+ * state is still set) skips that clear, as the unsplit run would.
  */
-export function patchSplitClusterReset(terminal: object): void {
+export function patchChunkedPrintClear(terminal: object): void {
   const handler = core(terminal)?._inputHandler as PrintInternals | undefined
-  if (!handler || typeof handler.print !== 'function' || !handler._unicodeService || !handler._parser) return
+  if (!handler || typeof handler.print !== 'function' || !handler._parser) return
   const print = handler.print.bind(handler)
   handler.print = (data, start, end) => {
     const buffer = handler._activeBuffer
     const x = buffer.x
-    const joins = end > start && x > 0 && (handler._unicodeService.charProperties(data[start]!, handler._parser.precedingJoinState) & 1) !== 0
-    const line = joins ? buffer.lines.get(buffer.ybase + buffer.y) : undefined
+    const continues = end > start && x > 0 && handler._parser.precedingJoinState !== 0
+    const line = continues ? buffer.lines.get(buffer.ybase + buffer.y) : undefined
     if (!line || line.getWidth(x - 1) !== 2) { print(data, start, end); return }
     const set = line.setCellFromCodepoint
     let first = true
