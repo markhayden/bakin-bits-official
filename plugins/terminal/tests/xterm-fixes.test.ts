@@ -149,6 +149,14 @@ describe('UTF-8 chunk boundaries', () => {
     await new Promise<void>(resolve => string.write(text, resolve))
     expect(string.buffer.active.cursorX).toBe(whole.buffer.active.cursorX)
   })
+  it('invalid input (a run of continuation bytes past a piece boundary) is still written, and settles', async () => {
+    const terminal = new headless.Terminal({ cols: 20, rows: 2, scrollback: 0, allowProposedApi: true })
+    applyTerminalProfile(terminal)
+    const bytes = new Uint8Array(200_000).fill(0x80)
+    bytes[bytes.length - 1] = 0x41
+    await writeBytes(terminal, bytes)
+    expect(terminal.buffer.active.getLine(0)!.translateToString(true)).toContain('A')
+  })
   it('a string write drops a carried tail instead of handing it to xterm\'s decoder', async () => {
     const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
     applyTerminalProfile(terminal)

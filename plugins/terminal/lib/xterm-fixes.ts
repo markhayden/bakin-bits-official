@@ -254,8 +254,12 @@ export function patchUtf8Boundaries(terminal: { write(data: string | Uint8Array,
     const tail = incompleteUtf8Tail(bytes)
     carry = tail ? bytes.slice(bytes.length - tail) : undefined
     const complete = tail ? bytes.subarray(0, bytes.length - tail) : bytes
-    // Back off to the lead byte of a codepoint that would be cut.
-    pieces(complete, (end) => { while ((complete[end]! & 0xc0) === 0x80) end--; return end }, callback)
+    // Back off to the lead byte of a codepoint that would be cut: at most
+    // three bytes (invalid input with longer runs is cut where it is).
+    pieces(complete, (end) => {
+      for (let back = 0; back < 3; back++) if ((complete[end - back]! & 0xc0) !== 0x80) return end - back
+      return end
+    }, callback)
   }
   terminal.reset = () => { carry = undefined; reset() }
 }
