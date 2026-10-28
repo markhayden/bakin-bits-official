@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 're
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Button } from '@makinbakin/sdk/ui'
-import { ArrowDown, ZoomOut } from 'lucide-react'
+import { ArrowDown, Keyboard, ZoomOut } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import { clampSize } from '../lib/sizing'
 import { clientId } from './api'
@@ -15,7 +15,9 @@ import '@xterm/xterm/css/xterm.css'
 /** What the page asks of the canvas: "Fit to this device" claims the size; refit applies a new smallest-text choice. */
 export interface TerminalViewHandle { fitToDevice(): boolean; refit(): void }
 
-export function TerminalCanvas({ session, writable, captureTab, attempt, inputEnabled, inputHandle, viewHandle, onCtrlChange, onStatus, onInput, onClaim, onSession, onPresence, onResult }: {
+export function TerminalCanvas({ session, writable, captureTab, attempt, offerKeyboard = false, inputEnabled, inputHandle, viewHandle, onCtrlChange, onStatus, onInput, onClaim, onSession, onPresence, onResult }: {
+  /** Show the corner keyboard button (a touch screen with the keyboard down). */
+  offerKeyboard?: boolean
   inputEnabled: boolean; inputHandle: RefObject<TerminalInputHandle | null>; viewHandle: RefObject<TerminalViewHandle | null>; onCtrlChange(armed: boolean): void;
   session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string): void; onClaim(data: string): void; onSession(session: Session): void; onPresence(presence: Presence): void; onResult(result: InputResult): void
 }) {
@@ -164,6 +166,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     term.open(element.current!)
     const disposeRenderer = enableWebgl(term)
     inputHandle.current = {
+      focus: () => term.focus(),
       key(key) {
         if (!ready.current || !callbacks.current.inputEnabled) { reset(); return }
         const data = encodeTerminalKey(key, term.modes.applicationCursorKeysMode, ctrl.current)
@@ -190,7 +193,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     }
     const leave = (event: Event) => {
       const target = event.target
-      if (!(target instanceof Element) || !target.closest('.terminal-xterm, .terminal-input-controls')) reset()
+      if (!(target instanceof Element) || !target.closest('.terminal-xterm, [data-terminal-keys]')) reset()
     }
     const hide = () => { if (document.hidden) reset() }
     const textarea = term.textarea!
@@ -403,7 +406,9 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     </div>
     {/* Top-right, outside the scrolling content: the bottom rows hold the program's input line.
         Pressing a control never takes focus from the terminal (no keyboard flicker). */}
-    {(paused || zoom !== undefined) && <div ref={actions} className="terminal-view-actions" onMouseDown={(event) => event.preventDefault()}>
+    {(paused || zoom !== undefined || offerKeyboard) && <div ref={actions} className="terminal-view-actions" onMouseDown={(event) => event.preventDefault()}>
+      {/* Touch screens with the keyboard down: one tap brings it back (spec D9 item 9). */}
+      {offerKeyboard && <Button size="icon-sm" variant="secondary" aria-label="Show keyboard" title="Show keyboard" onClick={() => terminal.current?.focus()}><Keyboard /></Button>}
       {zoom !== undefined && <Button size="icon-sm" variant="secondary" aria-label="Reset view" title="Reset view" onClick={() => zoomTo(undefined)}><ZoomOut /></Button>}
       {paused && <Button size="sm" variant="secondary" aria-label="Follow cursor" title="Follow cursor" onClick={resumeFollow}><ArrowDown />Live</Button>}
     </div>}

@@ -123,7 +123,8 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     await controlsInTopCorner(phone)
     const panned = await pane(phone)
     expect(panned.scrollLeft).toBeGreaterThan(100)
-    expect(panned.scrollTop).toBeLessThan(start.maxTop - 100)
+    // Up by as much as the grid allows (the phone's pane is tall with the keyboard down).
+    expect(panned.scrollTop).toBeLessThan(start.scrollTop - Math.min(100, start.maxTop / 2))
 
     // Follow cursor brings the cursor back into view.
     await phone.getByRole('button', { name: 'Follow cursor', exact: true }).tap()

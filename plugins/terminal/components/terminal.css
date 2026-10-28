@@ -61,10 +61,45 @@
   [data-bakin-plugin="terminal"] .terminal-size-detail { display: none; }
 }
 
-/* Compact input follows the public TerminalInput recipe on phones and tablets. */
-@media (min-width: 48rem) {
-  [data-bakin-plugin="terminal"] .terminal-input-controls { display: none; }
+/* The phone key bar (spec D9 item 9): one row above the keyboard. The page
+   renders it only while the keyboard is up. The strip scrolls sideways under
+   a fade; ••• stays put. Keys never select text or open iOS's long-press
+   callout, and a sideways flick scrolls the strip without pressing a key. */
+[data-bakin-plugin="terminal"] .terminal-key-bar {
+  display: flex;
+  align-items: center;
+  border-top: 1px solid var(--bakin-color-border-subtle);
+  background: var(--bakin-color-canvas-default);
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
-@media (any-pointer: coarse) {
-  [data-bakin-plugin="terminal"] .terminal-input-controls { display: flex; }
+[data-bakin-plugin="terminal"] .terminal-key-strip {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: var(--bakin-layout-gap-dense);
+  padding: var(--bakin-layout-space-1) var(--bakin-layout-space-2);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  touch-action: pan-x;
+  mask-image: linear-gradient(to right, #000 calc(100% - var(--bakin-layout-space-6)), transparent);
 }
+[data-bakin-plugin="terminal"] .terminal-key-strip::-webkit-scrollbar { display: none; }
+[data-bakin-plugin="terminal"] .terminal-key-strip > * { flex-shrink: 0; }
+[data-bakin-plugin="terminal"] .terminal-key-divider {
+  align-self: center;
+  width: 1px;
+  height: var(--bakin-layout-space-6);
+  margin: 0 var(--bakin-layout-space-1);
+  background: var(--bakin-color-border-subtle);
+}
+[data-bakin-plugin="terminal"] .terminal-key-pin { font-family: var(--bakin-typography-family-mono, ui-monospace, monospace); }
+[data-bakin-plugin="terminal"] .terminal-key-more {
+  flex-shrink: 0;
+  padding: var(--bakin-layout-space-1) var(--bakin-layout-space-2);
+  border-left: 1px solid var(--bakin-color-border-subtle);
+}
+
