@@ -412,12 +412,13 @@ export class Replica implements LogConsumer {
     this.tailBytes = 0
     clearTimeout(this.idleTimer)
     this.interrupt?.()
-    this.notify((listener) => listener.rebuilding(cause))
     if (!this.episode) {
       this.episode = { cause, since: this.now(), fromSeq: this.appliedSeq + 1, skippedBytes: 0 }
       this.stats.rebuilds[cause] = (this.stats.rebuilds[cause] ?? 0) + 1
       this.options.diagnostic?.({ kind: 'rebuilding', cause, backlog, tailBytes })
     }
+    // After the counts and the diagnostic: a listener reading the session's fidelity sees this rebuild.
+    this.notify((listener) => listener.rebuilding(cause))
     this.scheduleCapture()
   }
 

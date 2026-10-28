@@ -425,7 +425,9 @@ describe('Replica subscription', () => {
     await r.event(s.seed('\x1bc', 40, 10))
     await r.event(s.output('before'))
     // An event still being parsed is not committed: the cut leaves it out, the listener is told of it.
-    const inFlight = r.event(s.output('x'.repeat(50_000)))
+    const taken = r.activity
+    const inFlight = r.event(s.output('x'.repeat(200_000)))
+    while (r.activity === taken) await Promise.resolve()
     const l = listener()
     const { state } = r.subscribe(l.handle)
     if (state.kind !== 'live') throw new Error('expected a live cut')
@@ -435,6 +437,24 @@ describe('Replica subscription', () => {
     expect(seqs).toEqual([2, 3, 4])
     expect(state.cut.throughSeq).toBe(2)
     expect(l.events.every((e) => e.seq > state.cut.throughSeq)).toBe(true)
+    r.close()
+  })
+  it('a subscription taken while a checkpoint runs misses nothing and repeats nothing', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 120, 40))
+    const crossing = (async () => { await deliver(r, s, flood(CHECKPOINT_BYTES + BATCH_BYTES)) })()
+    while (heavyWorkRunning() === 0) await new Promise((resolve) => setImmediate(resolve))
+    const l = listener()
+    const { state } = r.subscribe(l.handle)
+    if (state.kind !== 'live') throw new Error('expected a live cut')
+    await crossing
+    await r.event(s.output('after the checkpoint'))
+    await r.idle()
+    expect(r.stats.accepted).toBe(1)
+    const seqs = [...state.cut.tail.map((e) => e.seq), ...l.events.map((e) => e.seq)]
+    expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, i) => i + 2))
+    expect(seqs.at(-1)).toBe(r.cut()!.throughSeq)
     r.close()
   })
   it('a cut stays whole when a checkpoint replaces the tail', async () => {
@@ -456,7 +476,10 @@ describe('Replica subscription', () => {
     await r.event(s.seed('\x1bc', 40, 10))
     const l = listener()
     r.subscribe(l.handle)
-    const interrupted = r.event(s.output('y'.repeat(50_000)))
+    const taken = r.activity
+    const interrupted = r.event(s.output('y'.repeat(200_000)))
+    // Parsing has started (the replica took the event) when the rebuild comes.
+    while (r.activity === taken) await Promise.resolve()
     r.pressure(MAX_BACKLOG_BYTES)
     await interrupted
     expect(l.told).toEqual(['rebuilding overload'])
