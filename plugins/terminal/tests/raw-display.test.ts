@@ -171,7 +171,7 @@ describe('RawDisplay credit', () => {
     for (let last = -1; last !== h.total();) { last = h.total(); h.display.retire(last) }
     const settled = h.total()
     h.display.retire(5)
-    h.src.tell().event(output(seq++, chunk))
+    h.src.tell().event(output(seq, chunk))
     expect(h.total() - settled).toBe(4_000)
   })
   it('counts a JSON frame by its UTF-8 bytes', () => {
