@@ -266,7 +266,8 @@ export class Sessions {
     authorize(session, principal, this.enabled(), true, generation)
     if (session.state !== 'running') throw new TerminalError('Session has exited')
     if (sequence !== session.inputSequence + 1) throw new TerminalError('Input sequence is stale or out of order; do not retry ambiguous input')
-    if (Buffer.byteLength(data) > 65536) throw new TerminalError('Input exceeds 64 KiB', 413)
+    // The Return of a Paste + Enter counts too.
+    if (Buffer.byteLength(data) + (options.paste && options.enter ? 1 : 0) > 65536) throw new TerminalError('Input exceeds 64 KiB', 413)
     // No attachment (a resize could not be reconciled): refuse before consuming, so nothing is uncertain.
     if (!this.driver.connected(id)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
     // Consume the sequence before delivery. A transport failure is never auto-retried.

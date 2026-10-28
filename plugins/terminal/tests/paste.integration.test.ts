@@ -80,13 +80,15 @@ processTest('a viewer paste is bracketed only when the program enabled bracketed
     // Paste + Enter: the Return follows the paste, in one write.
     await paste("printf 'RAN_%s\\n' AFTER_PASTE", true)
     await until(async () => (await screen()).includes('RAN_AFTER_PASTE'), 'paste then Return')
-    // A paste that fails sends no Return (here its file cannot be written): the line is not run.
+    // A paste that fails sends no Return (here its file cannot be written): the line already typed is not run.
+    await type("printf 'TYPED_%s\\n' NOT_RUN")
     rmSync(join(root, 'paste'), { recursive: true, force: true })
     writeFileSync(join(root, 'paste'), 'not a directory')
-    await expect(paste("printf 'NEVER_%s\\n' RUN", true)).rejects.toThrow()
+    await expect(paste(' and more', true)).rejects.toThrow()
     await Bun.sleep(500)
-    expect(await screen()).not.toContain('NEVER_RUN')
+    expect(await screen()).not.toContain('TYPED_NOT_RUN')
     rmSync(join(root, 'paste'), { force: true })
+    await type('\x15')
   } finally {
     await manager?.shutdown()
     await service.command(['kill-server'], true)

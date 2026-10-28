@@ -149,7 +149,20 @@ export class TmuxProcesses implements ProcessDriver {
         this.pastesSwept = false
       }
       // Not pasted (the paste deletes it): the buffer may exist. Its own tmux client, not the control connection.
-      if (!pasted && !await this.service.command(['delete-buffer', '-b', name], true).then(() => true, () => false)) this.pastesSwept = false
+      if (!pasted && !await this.deletePasteBuffers((buffer) => buffer === name)) this.pastesSwept = false
+    }
+  }
+  /** Delete the paste buffers `which` picks; true only when tmux answered and each one went. */
+  private async deletePasteBuffers(which: (name: string) => boolean): Promise<boolean> {
+    try {
+      // Not `optional`: a tmux that cannot be reached is a failure, not an empty list.
+      const listed = (await this.service.command(['list-buffers', '-F', '#{buffer_name}'])).split('\n')
+      for (const name of listed.filter((buffer) => buffer.startsWith(PASTE_BUFFER_PREFIX) && which(buffer))) {
+        await this.service.command(['delete-buffer', '-b', name])
+      }
+      return true
+    } catch {
+      return false
     }
   }
   /** Paste files and buffers left by a crash or a failed cleanup; true when everything went. */
@@ -160,12 +173,7 @@ export class TmuxProcesses implements ProcessDriver {
     } catch {
       clean = false
     }
-    const listed = await this.service.command(['list-buffers', '-F', '#{buffer_name}'], true).then((output) => output, () => undefined)
-    if (listed === undefined) return false
-    for (const name of listed.split('\n').filter((buffer) => buffer.startsWith(PASTE_BUFFER_PREFIX))) {
-      if (!await this.service.command(['delete-buffer', '-b', name], true).then(() => true, () => false)) clean = false
-    }
-    return clean
+    return await this.deletePasteBuffers(() => true) && clean
   }
   connected(id: string): boolean { return this.bridges.has(id) && !this.controls.get(id)?.isClosed }
   async resize(id: string, cols: number, rows: number): Promise<void> {

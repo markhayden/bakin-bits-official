@@ -1,7 +1,7 @@
 import './setup-dom'
 import { afterEach, expect, test } from 'bun:test'
 import { useState } from 'react'
-import { cleanup, fireEvent, render, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import { KeyBar } from '../components/key-bar'
 import type { PasteOutcome } from '../components/compose-sheet'
 import { NO_MODIFIERS, type ModifierState } from '../components/terminal-input'
@@ -177,4 +177,19 @@ test('Escape returns to the keyboard from a sheet, but not inside a composition 
   expect(sent).toEqual([])
   fireEvent.keyDown(textarea, { key: 'Escape' })
   expect(sent).toEqual(['keyboard'])
+})
+
+test('the compose textarea follows the page’s draft: an accepted paste clearing it empties the sheet', () => {
+  let clear = () => {}
+  function Page() {
+    const [draft, setDraft] = useState('sent text')
+    clear = () => setDraft('')
+    return <KeyBar session="compose" disabled={false} modifiers={NO_MODIFIERS} draft={{ text: draft, kept: true }} onDraft={setDraft}
+      onKey={() => {}} onModifier={() => {}} onSheet={() => {}} onCompose={() => {}} onPaste={() => 'sent'} onKeyboard={() => {}} onHide={() => {}} />
+  }
+  const view = render(<Page />)
+  const textarea = view.getByRole('textbox', { name: 'Text to send' }) as HTMLTextAreaElement
+  expect(textarea.value).toBe('sent text')
+  act(() => clear())
+  expect(textarea.value).toBe('')
 })
