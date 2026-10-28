@@ -28,3 +28,27 @@ test('parser overflow and persistence failures remain visible without hanging di
     await expect(noisy.snapshot()).rejects.toThrow('reconnect')
   } finally { noisy.close() }
 })
+
+test('writes queued behind a busy parser are coalesced: small chunks are not paced by xterm\'s timer', async () => {
+  const screen = new Screen(80, 24)
+  const chunk = new TextEncoder().encode('ab\r\n')
+  const order: number[] = []
+  const start = performance.now()
+  await Promise.all(Array.from({ length: 5000 }, (_, i) => screen.write(chunk, () => order.push(i))))
+  // One xterm write per chunk took about 1.3 ms each (6.5 s for these).
+  expect(performance.now() - start).toBeLessThan(1500)
+  expect(order).toEqual(Array.from({ length: 5000 }, (_, i) => i))
+  expect(screen.text()).toContain('ab')
+  screen.close()
+})
+
+test('a capture sees exactly the writes queued before it', async () => {
+  const screen = new Screen(20, 3)
+  const before = screen.write(new TextEncoder().encode('one'))
+  const snapshot = screen.capture(() => screen.text().split('\n')[0])
+  const after = screen.write(new TextEncoder().encode(' two'))
+  expect(await snapshot).toBe('one')
+  await Promise.all([before, after])
+  expect(screen.text().split('\n')[0]).toBe('one two')
+  screen.close()
+})

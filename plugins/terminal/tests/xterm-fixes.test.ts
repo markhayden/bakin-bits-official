@@ -102,7 +102,10 @@ describe('erase above (ED 1) with the cursor in the last column', () => {
     const second = screen.write(new TextEncoder().encode('queued'))
     const [one, two] = await Promise.allSettled([first, second])
     expect(one.status === 'rejected' && String(one.reason)).toContain('submit boom')
-    expect(two.status === 'rejected' && String(two.reason)).toContain('reconnect required')
+    // Queued together, they were one submission: both fail with it.
+    expect(two.status === 'rejected' && String(two.reason)).toContain('submit boom')
+    // A write after the failure is refused at once.
+    await expect(screen.write(new TextEncoder().encode('later'))).rejects.toThrow('reconnect required')
     expect(screen.failed).toBe(true)
     expect((screen as unknown as { queuedBytes: number }).queuedBytes).toBe(0)
     await expect(screen.snapshot()).rejects.toThrow()
