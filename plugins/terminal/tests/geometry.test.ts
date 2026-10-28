@@ -5,8 +5,8 @@ import { altEntry } from '../lib/xterm-fixes'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from '../lib/terminal-profile'
 import { fullState, internals, linkUri, type Term } from '../lib/terminal-state'
 
-function profiled(cols: number, rows: number): Term {
-  const terminal = new headless.Terminal({ cols, rows, ...TERMINAL_OPTIONS, scrollback: 200 })
+function profiled(cols: number, rows: number, scrollback = 200): Term {
+  const terminal = new headless.Terminal({ cols, rows, ...TERMINAL_OPTIONS, scrollback })
   applyTerminalProfile(terminal).setLive(false)
   return terminal
 }
@@ -92,6 +92,95 @@ describe('installGeometry', () => {
   })
 })
 
+/** The link id in a cell (0 for none). */
+function linkAt(terminal: Term, buffer: 'normal' | 'alternate', y: number, x: number): number {
+  const cell = terminal.buffer[buffer].getLine(y)!.getCell(x) as unknown as { bg: number; extended: { urlId: number } }
+  return cell.bg & 0x10000000 ? cell.extended.urlId : 0
+}
+type LinkEntries = Map<number, { lines: { line: number }[] }>
+const linkEntries = (terminal: Term) => (internals(terminal)._oscLinkService as unknown as { _dataByLinkId: LinkEntries })._dataByLinkId
+const markersOf = (terminal: Term, buffer: 'normal' | 'alt') => (internals(terminal).buffers[buffer] as unknown as { markers: unknown[] }).markers
+
+describe('installGeometry refusals and links', () => {
+  it('refuses, with nothing changed, when the source holds more lines than the target can', async () => {
+    const target = profiled(30, 5, 5)
+    await write(target, 'kept\r\n')
+    const source = profiled(30, 5, 200)
+    await write(source, Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\r\n'))
+    const before = text(target)
+    expect(installGeometry(target, source)).toBe(false)
+    expect(text(target)).toEqual(before)
+  })
+  it("puts link markers on the target's own buffers: the link outlives the source, and dies with its lines", async () => {
+    const target = new headless.Terminal({ cols: 30, rows: 5, ...TERMINAL_OPTIONS, scrollback: 5 })
+    const { links } = applyTerminalProfile(target)
+    const source = profiled(30, 5, 5)
+    await write(source, '\x1b]8;;https://a.example\x07link\x1b]8;;\x07\r\n')
+    installGeometry(target, source)
+    const id = linkAt(target, 'normal', 0, 0)
+    const entry = linkEntries(target).get(id)!
+    expect(entry.lines.length).toBe(1)
+    expect(markersOf(target, 'normal')).toContain(entry.lines[0])
+    source.dispose()
+    expect(linkUri(target, id)).toBe('https://a.example')
+    // Scrolled out of the history: the marker is disposed, the entry is an orphan, and a sweep reclaims it.
+    await write(target, '\r\n'.repeat(20))
+    expect(entry.lines.length).toBe(0)
+    links.sweep()
+    expect(linkEntries(target).has(id)).toBe(false)
+  })
+  it('maps one source link to one target link across both screens', async () => {
+    const target = profiled(30, 5)
+    await write(target, '\x1b[?1049h')
+    const source = profiled(30, 5)
+    await write(source, '\x1b]8;;https://both.example\x07norm\x1b[?1049h\x1b[Halt\x1b]8;;\x07')
+    installGeometry(target, source)
+    const normal = linkAt(target, 'normal', 0, 0)
+    expect(normal).not.toBe(0)
+    expect(linkAt(target, 'alternate', 0, 0)).toBe(normal)
+    expect(linkEntries(target).get(normal)!.lines.length).toBe(2)
+  })
+  it("keeps the pen's open anonymous link the same link as tmux's cells when one anonymous source link has its URI", async () => {
+    const target = profiled(30, 5)
+    await write(target, '\x1b]8;;https://pen.example\x07ab')
+    const source = profiled(30, 5)
+    await write(source, '\x1b]8;;https://pen.example\x07ab')
+    installGeometry(target, source)
+    await write(target, 'c')
+    expect(linkAt(target, 'normal', 0, 2)).toBe(linkAt(target, 'normal', 0, 0))
+  })
+  it('keeps the pen apart when two anonymous source links share its URI (the recorded limit)', async () => {
+    const target = profiled(30, 5)
+    await write(target, '\x1b]8;;https://pen.example\x07ab')
+    const source = profiled(30, 5)
+    await write(source, '\x1b]8;;https://pen.example\x07a\x1b]8;;\x07 \x1b]8;;https://pen.example\x07b')
+    installGeometry(target, source)
+    await write(target, 'c')
+    const pen = linkAt(target, 'normal', 0, 3)
+    expect(linkUri(target, pen)).toBe('https://pen.example')
+    expect([linkAt(target, 'normal', 0, 0), linkAt(target, 'normal', 0, 2)]).not.toContain(pen)
+    expect(linkAt(target, 'normal', 0, 0)).not.toBe(linkAt(target, 'normal', 0, 2))
+  })
+  it('follows the output again and announces the scroll and the cursor', async () => {
+    const target = profiled(30, 5)
+    await write(target, Array.from({ length: 20 }, (_, i) => `t ${i}`).join('\r\n'))
+    target.scrollLines(-5)
+    const source = profiled(30, 5)
+    await write(source, Array.from({ length: 30 }, (_, i) => `s ${i}`).join('\r\n'))
+    const scrolls: number[] = []
+    let moves = 0
+    target.onScroll((y) => scrolls.push(y))
+    target.onCursorMove(() => { moves++ })
+    installGeometry(target, source)
+    expect(target.buffer.active.viewportY).toBe(target.buffer.active.baseY)
+    expect(scrolls.at(-1)).toBe(target.buffer.active.baseY)
+    expect(moves).toBeGreaterThan(0)
+    // Output keeps following (not held by the old user scroll).
+    await write(target, '\r\nmore')
+    expect(target.buffer.active.viewportY).toBe(target.buffer.active.baseY)
+  })
+})
+
 describe('installGeometry and how the alternate screen was entered', () => {
   it('entered by 47 (no return slot saved): the normal slot moves with the viewport, not to tmux', async () => {
     const target = profiled(40, 5)
@@ -103,6 +192,17 @@ describe('installGeometry and how the alternate screen was entered', () => {
     await write(source, 'normal\x1b[3;9H\x1b[?1049h\x1b[Happ')
     installGeometry(target, source)
     expect({ x: normal.savedX, row: normal.savedY - normal.ybase }).toEqual(before)
+  })
+  it("entered by 47: the inactive normal cursor stays the target's own, not tmux's", async () => {
+    // (xterm carries the alternate cursor out on 47l, so this is the state the server's checkpoint compares.)
+    const target = profiled(40, 5)
+    await write(target, 'normal\x1b[1;5H\x1b[?47h\x1b[Happ')
+    target.resize(30, 5)
+    const source = profiled(30, 5)
+    await write(source, 'normal\x1b[3;9H\x1b[?1049h\x1b[Happ')
+    installGeometry(target, source)
+    const normal = internals(target).buffers.normal
+    expect([normal.x, normal.y]).toEqual([4, 0])
   })
 })
 
