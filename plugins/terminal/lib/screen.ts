@@ -1,7 +1,7 @@
 import headless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { cursorVisibilitySequence, trackCursorVisibility } from './cursor-visibility'
-import { terminalBytes } from './memory'
+import { terminalSteps } from './memory'
 import { screenView, type ScreenView } from './shadow'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
 import { guardParser } from './xterm-fixes'
@@ -24,6 +24,7 @@ export class Screen {
   private open: Pending[] | undefined
   private overflow = false
   private parser: { readonly failed: boolean }
+  private links: ReturnType<typeof applyTerminalProfile>['links']
   get failed(): boolean { return this.overflow || this.parser.failed }
   // SerializeAddon leaves DECTCEM out: a joining screen must know whether the
   // program hid its cursor (Claude Code does; the viewer then never follows it sideways).
@@ -33,7 +34,7 @@ export class Screen {
     this.terminal.loadAddon(this.serializer)
     this.cursor = trackCursorVisibility(this.terminal)
     // The shared profile (spec D13): one parse for the server and every viewer.
-    applyTerminalProfile(this.terminal)
+    this.links = applyTerminalProfile(this.terminal).links
     // A parser exception fails this screen (a reconnect rebuilds it) instead of wedging every later write.
     this.parser = guardParser(this.terminal, () => { this.overflow = true })
   }
@@ -115,8 +116,15 @@ export class Screen {
   }
   serialize(): string { return this.serializer.serialize() + cursorVisibilitySequence(this.cursor.hidden) }
   view(): ScreenView { return screenView(this.terminal) }
-  /** What this screen holds (lib/memory.ts): its emulator and the output waiting for the parser. */
-  retainedBytes(): number { return terminalBytes(this.terminal) + this.queuedBytes }
+  /** What this screen holds (lib/memory.ts): its emulator and the output waiting for the parser. Steps: run it sliced. */
+  *retainedSteps(): Generator<void, number> {
+    const queued = this.queuedBytes
+    return (yield* terminalSteps(this.terminal)) + queued
+  }
+  /** Sweep link orphans erased since the last sweep (lib/xterm-fixes.ts), between parses. */
+  maintain(): Promise<void> {
+    return this.capture(() => { if (this.links.orphans() > 0) this.links.sweep() }).catch(() => undefined)
+  }
   text(): string {
     const buffer = this.terminal.buffer.active
     return Array.from({ length: this.terminal.rows }, (_, index) => buffer.getLine(buffer.baseY + index)?.translateToString(true) ?? '').join('\n')

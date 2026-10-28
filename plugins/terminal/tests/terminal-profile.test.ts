@@ -206,6 +206,22 @@ describe('xterm 6.0.0 workarounds', () => {
     expect(profile.links.sweeps()).toBeLessThanOrEqual(2)
     expect(linkAt(terminal, 0)).toBe('https://x.example/0')
   })
+  it('links: orphans still referenced at a sweep are reclaimed by the next one once erased, without new links', async () => {
+    const { terminal, profile } = profiled(30, 12, 0)
+    let links = '\x1b[1"q'
+    for (let i = 0; i < 300; i++) links += `\x1b]8;;https://x.example/${i}\x1b\\L\x1b]8;;\x1b\\`
+    // Protected cells survive the selective erase (their markers do not): referenced orphans, kept by the sweep.
+    await write(terminal, links + '\x1b[0"q\x1b[?2J')
+    expect(profile.links.orphans()).toBe(300)
+    // Erased for real: nothing references them, and no new link arrives to trigger a sweep.
+    await write(terminal, '\x1b[2J')
+    expect(profile.links.orphans()).toBe(300)
+    // The owner's periodic sweep, sliced (lib/replica.ts maintain, lib/screen.ts maintain).
+    for (const _ of profile.links.sweepSteps()) { /* each step is one line */ }
+    expect(profile.links.orphans()).toBe(0)
+    const registry = (terminal as unknown as { _core: { _oscLinkService: { _dataByLinkId: Map<number, unknown> } } })._core._oscLinkService._dataByLinkId
+    expect(registry.size).toBe(0)
+  })
   it('links stay alive while shown, and orphaned entries are reclaimed within a bound', async () => {
     const { terminal, profile } = profiled(20, 2, 0)
     // A link scrolled out of a region: stock xterm can expire it while it is still on screen.

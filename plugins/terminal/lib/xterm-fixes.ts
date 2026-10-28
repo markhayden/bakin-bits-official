@@ -120,29 +120,36 @@ export const LINK_ORPHAN_LIMIT = 256
  * orphan nothing references: no extended cell in either buffer (a line's
  * attribute map keeps stale entries, so the cell's own bit decides) and not
  * the current pen (an open link prints its next character with it). A link
- * re-opened with the same id revives its entry.
+ * re-opened with the same id revives its entry. Orphans still referenced at
+ * a sweep wait for the next one: the owner sweeps periodically (sliced,
+ * `sweepSteps`) while any orphan remains, so ones erased since are reclaimed
+ * without new links arriving.
  */
-export function patchLinkLifetime(terminal: object): { orphans(): number; sweeps(): number; sweep(): void } {
+export function patchLinkLifetime(terminal: object): { orphans(): number; sweeps(): number; sweep(): void; sweepSteps(): Generator<void, void> } {
   const service = core(terminal)?._oscLinkService as LinkService | undefined
   const orphans = new Set<LinkEntry>()
   // Sweep again only after new orphans accumulate, so links that stay
   // referenced never make every later expiry rescan the buffers.
   let threshold = LINK_ORPHAN_LIMIT
   let sweeps = 0
-  const sweep = () => {
+  const pen = () => (core(terminal)?._inputHandler as { _curAttrData?: { extended?: { urlId?: number } } } | undefined)?._curAttrData?.extended?.urlId
+  // A step per line. Only a revived entry (it has lines again) or the pen
+  // can reference an orphan, and both are checked once the walk is done.
+  function* sweepSteps(): Generator<void, void> {
     const all = buffers(terminal)
     if (!service || !all) return
     sweeps++
     const referenced = new Set<number>()
-    const pen = (core(terminal)?._inputHandler as { _curAttrData?: { extended?: { urlId?: number } } } | undefined)?._curAttrData?.extended?.urlId
-    if (pen) referenced.add(pen)
     for (const buffer of [all.normal, all.alt]) for (let y = 0; y < buffer.lines.length; y++) {
       const line = buffer.lines.get(y)
       if (!line?._data) continue
       for (const [key, value] of Object.entries(line._extendedAttrs ?? {})) {
         if (value?.urlId && line._data[Number(key) * 3 + 2]! & HAS_EXTENDED) referenced.add(value.urlId)
       }
+      yield
     }
+    const current = pen()
+    if (current) referenced.add(current)
     for (const entry of orphans) {
       if (entry.lines.length > 0) { orphans.delete(entry); continue }
       if (referenced.has(entry.id)) continue
@@ -152,6 +159,7 @@ export function patchLinkLifetime(terminal: object): { orphans(): number; sweeps
     }
     threshold = orphans.size + LINK_ORPHAN_LIMIT
   }
+  const sweep = () => { for (const _ of sweepSteps()) { /* run to completion */ } }
   if (service && typeof service._removeMarkerFromLink === 'function' && service._dataByLinkId instanceof Map) {
     service._removeMarkerFromLink = (entry, marker) => {
       const index = entry.lines.indexOf(marker)
@@ -162,7 +170,7 @@ export function patchLinkLifetime(terminal: object): { orphans(): number; sweeps
       if (orphans.size > threshold) sweep()
     }
   }
-  return { orphans: () => [...orphans].filter(entry => entry.lines.length === 0).length, sweeps: () => sweeps, sweep }
+  return { orphans: () => [...orphans].filter(entry => entry.lines.length === 0).length, sweeps: () => sweeps, sweep, sweepSteps }
 }
 
 /**

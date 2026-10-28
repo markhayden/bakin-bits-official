@@ -5,7 +5,8 @@ import {
   CHECKPOINT_BYTES, heavyWorkRunning, MAX_BACKLOG_BYTES, MAX_TAIL_BYTES, MAX_TAIL_EVENTS, REBUILD_INTERVAL_MS, REBUILD_QUIET_MS, Replica,
   type JoinPoint, type ReplicaDiagnostic, runSliced,
 } from '../lib/replica'
-import { fullState, stateDiff, type Term } from '../lib/terminal-state'
+import { EVENT_OVERHEAD_BYTES, terminalBytes } from '../lib/memory'
+import { drain, fullState, stateDiff, type Term } from '../lib/terminal-state'
 import { emulator, settled } from './helpers/terminal-fuzz'
 
 const encode = (text: string) => new TextEncoder().encode(text)
@@ -390,6 +391,36 @@ describe('Replica', () => {
     r.pressure(MAX_BACKLOG_BYTES)
     r.close()
     expect(ended()).toEqual(['log invalid: overflow'])
+  })
+})
+
+describe('Replica memory', () => {
+  it('reports what it holds, sliced: the emulator, the base text and the tail', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    expect(drain(r.retainedSteps())).toBe(0)
+    await r.event(s.seed('\x1bc' + 'seeded\r\n'.repeat(50), 40, 10))
+    const seeded = drain(r.retainedSteps())
+    expect(seeded).toBeGreaterThan(terminalBytes(r.terminal!))
+    await r.event(s.output('x'.repeat(1000)))
+    // The tail's bytes and its event.
+    expect(drain(r.retainedSteps()) - seeded).toBeGreaterThanOrEqual(1000 + EVENT_OVERHEAD_BYTES)
+    // Run sliced like the server's reading: the same total.
+    expect(await runSliced(r.retainedSteps())).toBe(drain(r.retainedSteps()))
+    r.close()
+  })
+  it('sweeps link orphans erased since the last sweep when maintained', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 30, 12))
+    let links = '\x1b[1"q'
+    for (let i = 0; i < 300; i++) links += `\x1b]8;;https://x.example/${i}\x1b\\L\x1b]8;;\x1b\\`
+    await r.event(s.output(links + '\x1b[0"q\x1b[?2J\x1b[2J'))
+    const registry = () => (r.terminal as unknown as { _core: { _oscLinkService: { _dataByLinkId: Map<number, unknown> } } })._core._oscLinkService._dataByLinkId.size
+    expect(registry()).toBe(300)
+    await r.maintain()
+    expect(registry()).toBe(0)
+    r.close()
   })
 })
 

@@ -60,6 +60,8 @@ export class OutputLog {
   /** Why the log is invalid, once it is. */
   get invalidReason(): string | undefined { return this.failure }
   get pendingBytes(): number { return (this.attachment?.queuedBytes ?? 0) + this.batchBytes }
+  /** Events waiting for the consumer, and batched output not yet an event. */
+  get pendingEvents(): number { return (this.attachment?.queue.length ?? 0) + this.batch.length }
 
   /** The one consumer. Nothing from before it attached reaches it: it starts from a known state (D13 reseed). */
   attach(consumer: LogConsumer): () => void {

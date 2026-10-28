@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import type { Session } from './contracts'
 import { TerminalError } from './contracts'
 import { ControlClient } from './control'
+import { EVENT_OVERHEAD_BYTES } from './memory'
 import { OutputLog, parseLayoutChange } from './output-log'
 import { Replica } from './replica'
 import { reseed } from './reseed'
@@ -46,8 +47,10 @@ export interface ProcessDriver {
   detach(id?: string): Promise<void>
   /** The session's server replica (spec D13), while attached; shadow-only until the raw path (R2). */
   replica?(id: string): Replica | undefined
-  /** What the attached sessions' replicas and event logs hold (lib/memory.ts). */
-  retainedBytes?(): number
+  /** What the attached sessions' replicas and event logs hold (lib/memory.ts). Steps: run it sliced. */
+  retainedSteps?(): Generator<void, number>
+  /** Periodic upkeep of the attached sessions' replicas (link orphans). */
+  maintain?(): Promise<void>
   /** The terminal apps attached to a session. */
   clients(id: string): Promise<NativeClient[]>
   detachClient(name: string): Promise<void>
@@ -134,11 +137,14 @@ export class TmuxProcesses implements ProcessDriver {
       replica.start()
     }).catch(() => undefined)
   }
-  retainedBytes(): number {
+  *retainedSteps(): Generator<void, number> {
     let total = 0
-    for (const replica of this.replicas.values()) if (!replica.ended) total += replica.retainedBytes()
-    for (const log of this.logs.values()) total += log.pendingBytes
+    for (const log of this.logs.values()) total += log.pendingBytes + log.pendingEvents * EVENT_OVERHEAD_BYTES
+    for (const replica of [...this.replicas.values()]) if (!replica.ended) total += yield* replica.retainedSteps()
     return total
+  }
+  async maintain(): Promise<void> {
+    await Promise.all([...this.replicas.values()].map((replica) => replica.maintain()))
   }
   /** The session's ordered event log, while its control connection is attached. */
   outputLog(id: string): OutputLog | undefined { return this.logs.get(id) }

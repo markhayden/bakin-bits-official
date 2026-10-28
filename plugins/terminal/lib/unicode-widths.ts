@@ -106,3 +106,38 @@ export function textWidth(text: string, provider: UnicodeProvider): number {
   }
   return width
 }
+
+/** The most UTF-8 a tmux 3.7c cell keeps (its grid data): a code point that would pass it is dropped. */
+export const TMUX_CELL_BYTES = 32
+
+const utf8Length = (codepoint: number): number => codepoint < 0x80 ? 1 : codepoint < 0x800 ? 2 : codepoint < 0x10000 ? 3 : 4
+function textBytes(text: string): number {
+  let bytes = 0
+  for (const char of text) bytes += utf8Length(char.codePointAt(0)!)
+  return bytes
+}
+interface CellLine { _data: Uint32Array; _combined: Record<number, string>; addCodepointToCell(index: number, codepoint: number, width: number): void }
+const limited = new WeakSet<object>()
+const CONTENT_MASK = 0x1fffff
+const IS_COMBINED = 0x200000
+
+/**
+ * A cell keeps at most TMUX_CELL_BYTES of UTF-8, as tmux 3.7c does: the
+ * combining marks or joined characters past it are dropped (a cell stays a
+ * cell tmux would redraw alike, and no one cell grows without bound).
+ * xterm appends to a cell in `BufferLine.addCodepointToCell` alone; its
+ * prototype is shared by every terminal of that xterm module, patched once.
+ */
+export function applyTmuxCellLimit(terminal: object): void {
+  const line = (terminal as { _core?: { buffers?: { normal?: { lines?: { get(index: number): object | undefined } } } } })._core?.buffers?.normal?.lines?.get(0)
+  const prototype = line && Object.getPrototypeOf(line) as CellLine | undefined
+  if (!prototype || limited.has(prototype) || typeof prototype.addCodepointToCell !== 'function') return
+  limited.add(prototype)
+  const add = prototype.addCodepointToCell
+  prototype.addCodepointToCell = function (this: CellLine, index, codepoint, width) {
+    const content = this._data[index * 3]!
+    const current = content & IS_COMBINED ? textBytes(this._combined[index] ?? '') : content & CONTENT_MASK ? utf8Length(content & CONTENT_MASK) : 0
+    if (current + utf8Length(codepoint) > TMUX_CELL_BYTES) return
+    add.call(this, index, codepoint, width)
+  }
+}

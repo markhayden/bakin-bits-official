@@ -30,11 +30,13 @@
  */
 import headless from '@xterm/headless'
 import { checkpointSteps, type Checkpoint, CHECKPOINT_FORMAT, type CheckpointResult, pieces } from './checkpoint'
-import { EVENT_OVERHEAD_BYTES, terminalBytes, textBytes } from './memory'
+import { EVENT_OVERHEAD_BYTES, terminalSteps, textSteps } from './memory'
 import type { LogConsumer, LogEvent } from './output-log'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
 import { internals, HAS_EXTENDED, type Term } from './terminal-state'
-import { altEnteredCols, guardParser } from './xterm-fixes'
+import { altEnteredCols, guardParser, type patchLinkLifetime } from './xterm-fixes'
+
+type LinkLifetime = ReturnType<typeof patchLinkLifetime>
 
 export const CHECKPOINT_BYTES = 1024 * 1024
 export const CHECKPOINT_IDLE_MS = 2000
@@ -146,10 +148,11 @@ export async function runSliced<T>(steps: Generator<void, T>, abandon: () => boo
   }
 }
 
-function profileTerminal(cols: number, rows: number): Term {
+function profileTerminal(cols: number, rows: number): { terminal: Term; links: LinkLifetime } {
   const terminal = new headless.Terminal({ cols, rows, ...TERMINAL_OPTIONS })
-  applyTerminalProfile(terminal).setLive(false)
-  return terminal
+  const profile = applyTerminalProfile(terminal)
+  profile.setLive(false)
+  return { terminal, links: profile.links }
 }
 
 /** From the first rebuild to the seed applied whole (a seed overtaken while it is parsed does not end it). */
@@ -157,6 +160,7 @@ interface Episode { cause: RebuildCause; since: number; fromSeq: number; skipped
 
 export class Replica implements LogConsumer {
   private term: Term | undefined
+  private links: LinkLifetime | undefined
   private parser: { readonly failed: boolean } | undefined
   private base: { checkpoint: Checkpoint; seq: number } | undefined
   private tail: LogEvent[] = []
@@ -189,11 +193,19 @@ export class Replica implements LogConsumer {
   get tailSize(): number { return this.tailBytes }
   /**
    * What the replica holds (lib/memory.ts): its emulator, the base
-   * checkpoint's text and the tail. Read at any turn: an estimate, not a
-   * view of the screen.
+   * checkpoint's text and the tail. Steps (run it sliced): an estimate read
+   * across turns, never a view of the screen.
    */
-  retainedBytes(): number {
-    return (this.term ? terminalBytes(this.term) : 0) + (this.base ? textBytes(this.base.checkpoint.data) : 0) + this.tailBytes + this.tail.length * EVENT_OVERHEAD_BYTES
+  *retainedSteps(): Generator<void, number> {
+    const terminal = this.term
+    const base = this.base
+    const fixed = this.tailBytes + this.tail.length * EVENT_OVERHEAD_BYTES
+    return (terminal ? yield* terminalSteps(terminal) : 0) + (base ? yield* textSteps(base.checkpoint.data) : 0) + fixed
+  }
+
+  /** Sweep link orphans erased since the last sweep (lib/xterm-fixes.ts), between events: a walk must not race the parser. */
+  maintain(): Promise<void> {
+    return this.serial(async () => { if (this.links && this.links.orphans() > 0) this.links.sweep() })
   }
   /** Why the replica is waiting for a seed, while it is. */
   get rebuildCause(): RebuildCause | undefined { return this.rebuilding }
@@ -290,8 +302,9 @@ export class Replica implements LogConsumer {
   private async seed(event: Extract<LogEvent, { kind: 'seed' }>): Promise<void> {
     this.term?.dispose()
     clearTimeout(this.idleTimer)
-    const terminal = profileTerminal(event.cols, event.rows)
+    const { terminal, links } = profileTerminal(event.cols, event.rows)
     this.term = terminal
+    this.links = links
     this.parser = guardParser(terminal, () => undefined)
     this.base = undefined
     this.tail = []

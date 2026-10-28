@@ -84,7 +84,26 @@ async function widths(sample: string): Promise<[number, number]> {
   return [Number(run('display', '-p', '-t', 'w', '#{cursor_x}')), x]
 }
 
+/** The text of the line a sample lands on, in tmux and in the profile. */
+async function lineText(sample: string): Promise<[string, string]> {
+  await widths(sample)
+  const y = run('display', '-p', '-t', 'w', '#{cursor_y}')
+  const inTmux = run('capture-pane', '-p', '-t', 'w', '-S', y, '-E', y)
+  const emulator = new headless.Terminal({ cols: 200, rows: 5, ...TERMINAL_OPTIONS })
+  applyTerminalProfile(emulator)
+  await new Promise<void>(resolve => emulator.write(sample, resolve))
+  const inProfile = emulator.buffer.active.getLine(0)!.translateToString(true).trimEnd()
+  emulator.dispose()
+  return [inTmux, inProfile]
+}
+
 describe('character widths: the profile against tmux 3.7c', () => {
+  processTest('a cell keeps what tmux keeps of a long combining sequence (32 bytes of UTF-8), and a long joined emoji whole', async () => {
+    for (const sample of [`a${'\u0301'.repeat(60)}b`, `a${'\u20dd'.repeat(60)}b`, '\u{1f468}\u200d\u{1f469}\u200d\u{1f467}\u200d\u{1f466}Z']) {
+      const [inTmux, inProfile] = await lineText(sample)
+      expect(inProfile, JSON.stringify(sample)).toBe(inTmux)
+    }
+  }, 30000)
   processTest('the generated width table is what this tmux measures (regenerate it when this fails)', () => {
     expect(renderTmuxWidthTable(tmux)).toBe(readFileSync(join(import.meta.dir, '../lib/tmux-width-table.ts'), 'utf8'))
   }, 60000)

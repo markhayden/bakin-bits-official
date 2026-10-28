@@ -8,6 +8,7 @@ import { TerminalService } from './lib/service'
 import { TmuxProcesses } from './lib/processes'
 import { Sessions } from './lib/sessions'
 import { MemoryWarning, RETAINED_WARNING_BYTES } from './lib/memory'
+import { runSliced } from './lib/replica'
 import { TerminalError, terminalSettings, type Principal } from './lib/contracts'
 import { agentCommand, command, creatingScreen, failure, human } from './lib/http'
 import { sessionOptions } from './lib/session-options'
@@ -132,14 +133,20 @@ export default definePlugin({
     }
     await maintenancePass()
     maintenance = setInterval(() => { void maintenancePass() }, 60 * 60 * 1000)
-    // The memory budget (spec D13): read every minute and on every Health run.
+    // The memory budget (spec D13): a sliced reading, with the emulators'
+    // upkeep, every minute and on every Health run (one at a time).
     const memory = new MemoryWarning(ctx.log)
-    const watchMemory = (): number => {
-      const retained = manager?.retainedBytes() ?? 0
-      memory.observe(retained)
-      return retained
-    }
-    memoryWatch = setInterval(watchMemory, 60 * 1000)
+    let reading: Promise<number> | undefined
+    const readMemory = (): Promise<number> => reading ??= (async () => {
+      try {
+        const current = manager
+        await current?.maintainEmulators()
+        const retained = current ? await runSliced(current.retainedSteps()) ?? 0 : 0
+        memory.observe(retained)
+        return retained
+      } finally { reading = undefined }
+    })()
+    memoryWatch = setInterval(() => { void readMemory().catch((error) => ctx.log?.error('Terminal memory reading failed', error instanceof Error ? error : new Error(String(error)))) }, 60 * 1000)
     // Three outcomes (Bakin self-healing PR 1): every family is declared up front and every
     // instance names its subject — the Terminal page is the operator's control for all three.
     const TERMINAL_SUBJECT = { kind: 'plugin', id: 'terminal', label: 'Terminal' } as const
@@ -188,7 +195,7 @@ export default definePlugin({
         const updateRequired = Boolean(ready && await service?.updateRequired())
         const retained = sessions().list({ kind: 'human', id: 'health' }).filter((session) => session.cleanupReason)
         const observations: HealthObservationInput[] = []
-        const retainedBytes = watchMemory()
+        const retainedBytes = await readMemory()
         for (const [key, summary, problem] of [
           ['service', 'Persistent terminal service unavailable', !ready],
           ['maintenance', 'Terminal maintenance failed', maintenanceFailed],

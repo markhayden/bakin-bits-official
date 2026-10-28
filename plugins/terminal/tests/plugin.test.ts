@@ -76,7 +76,8 @@ test('live sessions past the memory warning are ONE Health observation, and it c
   const { Sessions } = await import('../lib/sessions')
   const { RETAINED_CLEAR_BYTES, RETAINED_WARNING_BYTES } = await import('../lib/memory')
   let retained = RETAINED_WARNING_BYTES + 50e6
-  const reading = spyOn(Sessions.prototype, 'retainedBytes').mockImplementation(() => retained)
+  // eslint-disable-next-line require-yield -- a reading with no steps
+  const reading = spyOn(Sessions.prototype, 'retainedSteps').mockImplementation(function* () { return retained })
   const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-memory-'))
   const checks: HealthCheckRegistrationInput[] = []
   const warnings: unknown[] = []

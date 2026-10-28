@@ -1,4 +1,4 @@
-import { applyTmuxWidths } from './unicode-widths'
+import { applyTmuxCellLimit, applyTmuxWidths } from './unicode-widths'
 import { patchAltBufferCapacity, patchChunkedPrintClear, patchEraseAbove, patchLinkLifetime, patchReflowStaleMaps, patchSharedTabStops, patchUtf8Decoder } from './xterm-fixes'
 
 /** The xterm surface the profile drives; both @xterm/xterm and @xterm/headless provide it. */
@@ -78,7 +78,8 @@ export function clipboardText(data: string): string | undefined {
  * - Titles and icon names longer than TITLE_LIMIT are ignored.
  * - Bells, titles and clipboard offers fire only while `live`.
  * - Character widths as tmux 3.7c lays them out: Unicode 15 grapheme
- *   clusters corrected by a table generated from the managed tmux.
+ *   clusters corrected by a table generated from the managed tmux; a cell
+ *   keeps at most tmux's 32 bytes of UTF-8.
  * - xterm 6.0.0 workarounds (lib/xterm-fixes.ts).
  */
 export function applyTerminalProfile(terminal: ProfileTerminal & object, effects: TerminalEffects = {}): { setLive(live: boolean): void; links: ReturnType<typeof patchLinkLifetime> } {
@@ -114,6 +115,7 @@ export function applyTerminalProfile(terminal: ProfileTerminal & object, effects
   terminal.onTitleChange((title) => { if (live) effects.title?.(title) })
   // Character widths as tmux 3.7c lays them out (lib/unicode-widths.ts).
   applyTmuxWidths(terminal)
+  applyTmuxCellLimit(terminal)
   patchEraseAbove(terminal)
   patchAltBufferCapacity(terminal)
   patchReflowStaleMaps(terminal)

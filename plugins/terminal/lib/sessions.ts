@@ -88,11 +88,15 @@ export class Sessions {
     this.pending = next.catch(() => {})
     return next
   }
-  /** What live sessions hold in this process (lib/memory.ts): bridge screens, replicas and their logs. */
-  retainedBytes(): number {
-    let total = this.driver.retainedBytes?.() ?? 0
-    for (const screen of this.screens.values()) total += screen.retainedBytes()
+  /** What live sessions hold in this process (lib/memory.ts): bridge screens, replicas and their logs. Steps: run it sliced. */
+  *retainedSteps(): Generator<void, number> {
+    let total = this.driver.retainedSteps ? yield* this.driver.retainedSteps() : 0
+    for (const screen of [...this.screens.values()]) total += yield* screen.retainedSteps()
     return total
+  }
+  /** Periodic upkeep of live sessions' emulators (link orphans erased since their last sweep). */
+  async maintainEmulators(): Promise<void> {
+    await Promise.all([this.driver.maintain?.(), ...[...this.screens.values()].map((screen) => screen.maintain())])
   }
   list(principal: Principal): Session[] {
     if (principal.kind === 'agent' && !this.enabled().includes(principal.id)) throw new TerminalError('Terminal is disabled for this agent', 403)

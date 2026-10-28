@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import headless from '@xterm/headless'
-import { applyTmuxWidths, tmuxWidth } from '../lib/unicode-widths'
+import { applyTmuxCellLimit, applyTmuxWidths, TMUX_CELL_BYTES, tmuxWidth } from '../lib/unicode-widths'
 import { TMUX_WIDTHS } from '../lib/tmux-width-table'
 
 type Term = InstanceType<typeof headless.Terminal>
@@ -49,5 +49,26 @@ describe('tmux widths over the grapheme provider', () => {
     expect(await cursorAfter('\u2630X', table)).toBe(3)
     // Joined after a ZWJ, the grapheme rules decide the cluster's width.
     expect(await cursorAfter('👨\u200d\u2630X', table)).toBe(await cursorAfter('👨\u200d\u2630X', []))
+  })
+})
+
+describe('the tmux cell limit', () => {
+  const cell = async (text: string) => {
+    const terminal = new headless.Terminal({ cols: 40, rows: 2, allowProposedApi: true })
+    applyTmuxWidths(terminal as never)
+    applyTmuxCellLimit(terminal)
+    await write(terminal, text)
+    const line = terminal.buffer.active.getLine(0)!
+    const cells = [line.getCell(0)!.getChars(), line.getCell(1)!.getChars()]
+    terminal.dispose()
+    return cells
+  }
+  it(`keeps at most ${TMUX_CELL_BYTES} bytes of UTF-8 in a cell, dropping marks past it`, async () => {
+    expect(await cell(`a${'\u0301'.repeat(60)}b`)).toEqual([`a${'\u0301'.repeat(15)}`, 'b'])
+    expect(await cell(`a${'\u20dd'.repeat(60)}b`)).toEqual([`a${'\u20dd'.repeat(10)}`, 'b'])
+  })
+  it('keeps a joined emoji within the limit whole', async () => {
+    const family = '\u{1f468}\u200d\u{1f469}\u200d\u{1f467}\u200d\u{1f466}'
+    expect((await cell(family))[0]).toBe(family)
   })
 })

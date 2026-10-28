@@ -5,7 +5,7 @@ import { EVENT_OVERHEAD_BYTES, MemoryWarning, RETAINED_CLEAR_BYTES, RETAINED_WAR
 import { MAX_TAIL_BYTES, MAX_TAIL_EVENTS } from '../lib/replica'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from '../lib/terminal-profile'
 import type { Term } from '../lib/terminal-state'
-import type { Shape } from './helpers/memory-measure'
+import type { Measurement, Shape } from './helpers/memory-measure'
 
 describe('MemoryWarning', () => {
   it('turns on past the warning with one log line, and off only below the clear line', () => {
@@ -43,46 +43,46 @@ describe('terminalBytes', () => {
   })
 })
 
-// A local measurement (spec D13 memory budget, plan T32d): heap after GC on
-// Bun 1.4.3, each shape in a fresh process (tests/helpers/memory-measure.ts).
-// Run with TERMINAL_MEMORY_TEST=1; it prints what it measured.
+// A local measurement (spec D13 memory budget, plan T32d) on Bun 1.4.3, each
+// shape in a fresh process (tests/helpers/memory-measure.ts). Run with
+// TERMINAL_MEMORY_TEST=1; it prints what it measured.
 const measurement = process.env.TERMINAL_MEMORY_TEST === '1' ? it : it.skip
 const MB = 1e6
 const mb = (bytes: number) => `${(bytes / MB).toFixed(1)} MB`
-async function measure(shape: Shape): Promise<{ measured: number; estimate: number }> {
+async function measure(shape: Shape): Promise<Measurement> {
   const child = Bun.spawn([process.execPath, join(import.meta.dir, 'helpers/memory-measure.ts'), shape], { stdout: 'pipe', stderr: 'inherit' })
   const output = await new Response(child.stdout).text()
   expect(await child.exited).toBe(0)
-  const result = JSON.parse(output) as { measured: number; estimate: number }
-  console.log(`${shape}: measured ${mb(result.measured)}, estimated ${mb(result.estimate)}`)
+  const result = JSON.parse(output) as Measurement
+  console.log(`${shape}: measured ${mb(result.measured)}, estimated ${mb(result.estimate)}${result.peak === undefined ? '' : `, peak ${mb(result.peak)}`}`)
   return result
 }
+/** Within 25%, or 1 MB for a small reading (the emulator's own baseline dominates it). */
+const close = ({ measured, estimate }: Measurement) => Math.abs(estimate - measured) <= Math.max(0.25 * measured, MB)
 
 describe('memory budget (measured)', () => {
-  measurement('the estimate stays within 25% of the measured heap for coloured, linked, underlined and grapheme content', async () => {
-    for (const shape of ['coloured', 'linked', 'underlined', 'graphemes'] as const) {
-      const { measured, estimate } = await measure(shape)
-      expect(Math.abs(estimate - measured) / measured).toBeLessThan(0.25)
+  measurement('the estimate follows the heap for every content shape, long strings and wide sessions included', async () => {
+    for (const shape of ['coloured', 'linked', 'underlined', 'graphemes', 'long-links', 'long-graphemes', 'grapheme-replica', 'wide'] as const) {
+      expect(close(await measure(shape)), shape).toBe(true)
     }
-  }, 120000)
+  }, 600000)
 
-  measurement('retained: a replica at 120 × 10,000 rows with its base and a full tail is at most 32 MB', async () => {
-    const { measured, estimate } = await measure('replica')
+  measurement('retained: a replica at 120 × 10,000 rows of the reference workload, with its base and a full tail, is at most 32 MB', async () => {
+    const result = await measure('replica')
     // The tail is bounded by construction (a longer one rebuilds): its bytes and its events.
     const tail = MAX_TAIL_BYTES + MAX_TAIL_EVENTS * EVENT_OVERHEAD_BYTES
-    console.log(`replica with a full tail: at most ${mb(measured + tail)}`)
-    expect(measured + tail).toBeLessThanOrEqual(32 * MB)
-    expect(Math.abs(estimate - measured) / measured).toBeLessThan(0.25)
+    console.log(`replica with a full tail: at most ${mb(result.measured + tail)}`)
+    expect(result.measured + tail).toBeLessThanOrEqual(32 * MB)
+    expect(close(result)).toBe(true)
   }, 120000)
 
-  measurement('peak: R1 shadow mode with full queues, a verifier and three joins is at most 96 MB', async () => {
-    const { measured } = await measure('peak')
-    expect(measured).toBeLessThanOrEqual(96 * MB)
+  measurement('peak: R1 shadow mode at a checkpoint attempt (replica, Screen, verifier, full queues, three joins) is at most 96 MB live', async () => {
+    const { peak } = await measure('checkpoint-peak')
+    expect(peak!).toBeLessThanOrEqual(96 * MB)
   }, 120000)
 
-  measurement('a wide, densely coloured session (400 × 150, per-cell colours) is recorded, not gated', async () => {
-    const { measured, estimate } = await measure('wide')
-    expect(Math.abs(estimate - measured) / measured).toBeLessThan(0.25)
+  measurement('resident memory through a checkpoint attempt and a rebuild seed is recorded, not gated', async () => {
+    for (const shape of ['checkpoint-rss', 'reseed-peak'] as const) expect((await measure(shape)).peak!).toBeGreaterThan(0)
   }, 300000)
 })
 
