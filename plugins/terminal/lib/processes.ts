@@ -1,6 +1,10 @@
+import { randomUUID } from 'node:crypto'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { Session } from './contracts'
 import { TerminalError } from './contracts'
 import { ControlClient } from './control'
+import { inputParts } from './paste'
 import { TerminalService, terminalEnvironment } from './service'
 
 /** A tmux client on a session that is not Bakin's own bridge or control client: a terminal app (Ghostty and friends) or anything else that attached. */
@@ -100,7 +104,33 @@ export class TmuxProcesses implements ProcessDriver {
     // blocks and would break the control client's FIFO correlation.
     const [mode] = await control.command(['display-message', '-p', '-t', id, '#{pane_in_mode}'])
     if (mode?.trim() === '1') await control.command(['send-keys', '-X', '-t', id, 'cancel'])
-    await control.sendKeys(id, new TextEncoder().encode(data))
+    for (const part of inputParts(data)) {
+      if (!part.paste) await control.sendKeys(id, new TextEncoder().encode(part.text))
+      else if (part.text) await this.paste(control, id, part.text)
+    }
+  }
+  /**
+   * A paste as tmux makes one (lib/paste.ts): bracketed only if the program
+   * enabled bracketed paste. The text travels through a private file (a
+   * control command line cannot hold line breaks) into a buffer that the
+   * paste deletes; `-r` keeps the bytes exactly as sent.
+   */
+  private async paste(control: ControlClient, id: string, text: string): Promise<void> {
+    const dir = join(this.service.root, 'paste')
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    const name = `bakin-paste-${randomUUID()}`
+    const file = join(dir, name)
+    writeFileSync(file, text, { mode: 0o600 })
+    let pasted = false
+    try {
+      await control.command(['load-buffer', '-b', name, file])
+      await control.command(['paste-buffer', '-p', '-r', '-d', '-b', name, '-t', id])
+      pasted = true
+    } finally {
+      rmSync(file, { force: true })
+      // A paste that failed after the load leaves the buffer: removed here (it may not exist).
+      if (!pasted) await control.command(['delete-buffer', '-b', name]).catch(() => undefined)
+    }
   }
   connected(id: string): boolean { return this.bridges.has(id) && !this.controls.get(id)?.isClosed }
   async resize(id: string, cols: number, rows: number): Promise<void> {
