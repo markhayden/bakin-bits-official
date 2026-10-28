@@ -192,21 +192,19 @@ rawTest('overload (D13 bounded load): 30 s of flood with a stalled viewer — ev
     })
     server.onClose((code) => { stall.closes.push(code ?? 0); void ws.close({ code }) })
   })
-  // How fresh the healthy viewer's picture is: the newest stamp in what it has received (it writes
-  // what arrives at once; the screen-reader rows cannot say, a fresh terminal per picture refreshes them late).
-  let newestStamp = 0
   let reloaded = false
   page.on('websocket', (ws) => ws.on('framereceived', (frame) => {
     if (typeof frame.payload === 'string') {
       const message = JSON.parse(frame.payload) as { type: string; fidelity?: { history?: string } }
       if (message.type === 'rebase' && message.fidelity?.history === 'reloaded') reloaded = true
-      return
     }
-    const text = new TextDecoder().decode(frame.payload)
-    const at = text.lastIndexOf('t 1')
-    const stamp = at >= 0 ? /^t (\d{13}) /.exec(text.slice(at)) : null
-    if (stamp) newestStamp = Math.max(newestStamp, Number(stamp[1]))
   }))
+  // How fresh the healthy viewer's screen is: the newest stamp in its rendered rows (as screen readers
+  // get them: refreshed on render, a second apart at most, and from the whole picture when one is shown).
+  const shownStamp = () => page.evaluate(() => {
+    const stamps = [...document.querySelectorAll('.xterm-accessibility-tree > div')].map((row) => /^t (\d{13}) /.exec(row.textContent ?? '')?.[1]).filter(Boolean).map(Number)
+    return stamps.length ? Math.max(...stamps) : 0
+  })
   try {
     await open(page, id)
     await open(stalledPage, id)
@@ -224,19 +222,30 @@ rawTest('overload (D13 bounded load): 30 s of flood with a stalled viewer — ev
     await typeLine(page, `perl -MTime::HiRes=time -e '$| = 1; while (1) { printf "t %d %s\\n", time * 1000, "x" x 200 }'`)
     const floodStarted = Date.now()
     while (pane('#{pane_current_command}') !== 'perl' && Date.now() - floodStarted < 5_000) await Bun.sleep(20)
+    // How fresh the healthy screen is, from the first second of the flood; a sample with no stamp shown is a miss.
+    const lags: number[] = []
+    let misses = 0
+    const observe = async () => { const shown = await shownStamp(); if (shown) lags.push(Date.now() - shown); else misses++ }
+    await Bun.sleep(1_000)
     // The stalled viewer is evicted within the stall window (10 s) of filling, which is at once.
-    while (!stall.closes.length && Date.now() - floodStarted < 20_000) { await sample(); await Bun.sleep(100) }
+    for (let last = 0; !stall.closes.length && Date.now() - floodStarted < 20_000; await Bun.sleep(100)) {
+      await sample()
+      if (Date.now() - last >= 1_000) { last = Date.now(); await observe() }
+    }
     const evicted = Date.now() - floodStarted
     expect(stall.closes[0]).toBe(4000)
     expect(evicted).toBeLessThan(11_000)
-    // Sustain the flood for 30 s, reading the memory and how fresh the healthy viewer is.
-    const lags: number[] = []
-    let settled: number | undefined
+    // Sustain the flood for 30 s, reading the memory and how fresh the healthy viewer is. The heap swings
+    // with each rebuild cycle (queues filling and draining, ~10 MiB): growth is judged on the median of
+    // each window, the second ten seconds against the third, once the scrollback has filled.
+    const windows: [number[], number[]] = [[], []]
     while (Date.now() - floodStarted < 30_000) {
-      await sample()
-      // By 10 s the scrollback is full: from then on the heap must not keep growing.
-      if (settled === undefined && Date.now() - floodStarted >= 10_000) settled = peak.heap
-      if (newestStamp) lags.push(Date.now() - newestStamp)
+      const now = await memory()
+      peak.heap = Math.max(peak.heap, now.heap)
+      peak.rss = Math.max(peak.rss, now.rss)
+      const at = Date.now() - floodStarted
+      if (at >= 10_000) windows[at < 20_000 ? 0 : 1].push(now.heap)
+      await observe()
       await Bun.sleep(1_000)
     }
     // Still flooding at the end: the Ctrl-C below is what stops it.
@@ -248,13 +257,16 @@ rawTest('overload (D13 bounded load): 30 s of flood with a stalled viewer — ev
     const stopped = Date.now() - interrupted
     lags.sort((a, b) => a - b)
     const lag = lags[Math.ceil(lags.length * 0.95) - 1] ?? Infinity
+    expect(misses).toBe(0)
     const mib = (bytes: number) => (bytes / 2 ** 20).toFixed(1)
     console.log(`evicted ${evicted} ms; heap growth ${mib(peak.heap - before.heap)} MiB (resident ${mib(peak.rss - before.rss)} MiB; estimated at the peak: sessions ${mib(peakEstimate.sessions)} MiB, viewers ${mib(peakEstimate.viewers)} MiB); display lag p95 ${lag} ms; Ctrl-C stopped the flood in ${stopped} ms`)
-    console.log(`heap growth after the scrollback filled (10 s → 30 s): ${mib(peak.heap - settled!)} MiB`)
+    const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]!
+    const [second, third] = [median(windows[0]), median(windows[1])]
+    console.log(`heap medians 10–20 s ${mib(second - before.heap)} MiB, 20–30 s ${mib(third - before.heap)} MiB over the start; freshness samples ${lags.length} (${lags.map((n) => n.toFixed(0)).join(' ')})`)
     expect(stopped).toBeLessThan(1_000)
     // Bounded: a flat heap once the session's scrollback is full, and the whole within the
     // session's peak budget (T32d, 96 MB: replica, bridge Screen, queues and joins).
-    expect(peak.heap - settled!).toBeLessThan(8 * 2 ** 20)
+    expect(third - second).toBeLessThan(8 * 2 ** 20)
     expect(peak.heap - before.heap).toBeLessThan(96 * 1e6)
     // About a second of lag is allowed under overload.
     expect(lag).toBeLessThan(1_500)

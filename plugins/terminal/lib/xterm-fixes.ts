@@ -340,3 +340,14 @@ export function patchChunkedPrintClear(terminal: object): void {
     try { print(data, start, end) } finally { delete (line as Partial<PrintLine>).setCellFromCodepoint }
   }
 }
+
+/**
+ * xterm 6.0.0 places its input textarea (IME, the software keyboard, focus
+ * scrolling) only when the cursor moves after `open()`. A terminal written
+ * before it is opened (the raw path's picture, replayed unseen and shown at
+ * its barrier) leaves it unplaced until new output moves the cursor: place
+ * it once, from the cursor the picture left.
+ */
+export function syncTextarea(terminal: object): void {
+  ;(core(terminal) as { _syncTextArea?(): void } | undefined)?._syncTextArea?.()
+}

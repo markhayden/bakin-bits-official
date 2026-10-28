@@ -140,9 +140,11 @@ export class TmuxProcesses implements ProcessDriver {
       diagnostic: (event) => {
         const fidelity = this.fidelity(session.id)
         if (event.kind === 'rebuilding') {
-          this.fidelities.set(session.id, { ...fidelity, rebuilds: { ...fidelity.rebuilds, [event.cause]: (fidelity.rebuilds[event.cause] ?? 0) + 1 }, lastCause: event.cause, ...(event.cause === 'overload' ? { history: 'incomplete' as const } : {}) })
+          this.fidelities.set(session.id, { ...fidelity, rebuilds: { ...fidelity.rebuilds, [event.cause]: (fidelity.rebuilds[event.cause] ?? 0) + 1 }, lastCause: event.cause })
         }
-        // A full seed after an overload: the history tmux kept is back (earlier output may still be missing).
+        // Every committed seed says where the history is: a screen-only one leaves it incomplete; a
+        // full one after that brings back what tmux kept (earlier output may still be missing).
+        if (event.kind === 'seeded' && !event.history) this.fidelities.set(session.id, { ...fidelity, history: 'incomplete' })
         if (event.kind === 'seeded' && event.history && fidelity.history === 'incomplete') this.fidelities.set(session.id, { ...fidelity, history: 'reloaded' })
         // Seeds feed the fidelity only: a rebuild's episode is logged by 'rebuilding' and 'rebuilt'.
         if (event.kind !== 'seeded') this.log?.info(`Terminal replica ${event.kind}`, { sessionId: session.id, ...event })

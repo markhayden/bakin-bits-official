@@ -6,6 +6,7 @@ import {
   type Cut, type ReplicaDiagnostic, runSliced,
 } from '../lib/replica'
 import { EVENT_OVERHEAD_BYTES, terminalBytes } from '../lib/memory'
+import { SeedDeferred } from '../lib/reseed'
 import { drain, fullState, stateDiff, type Term } from '../lib/terminal-state'
 import { emulator, settled } from './helpers/terminal-fuzz'
 
@@ -420,8 +421,8 @@ describe('Replica history after an overload', () => {
     await r.event(s.seed('\x1bcscreen only', 40, 10, false))
     expect(r.cut()).toBeDefined()
     expect(diagnostics).toContainEqual({ kind: 'seeded', reason: 'test', history: false })
-    // Output keeps coming: no restore while it does.
-    for (let i = 0; i < 5; i++) { await r.event(s.output('more')); await Bun.sleep(15) }
+    // Output keeps coming (the log tells the replica of each event as it takes it): no restore while it does.
+    for (let i = 0; i < 5; i++) { r.pressure(0); await r.event(s.output('more')); await Bun.sleep(15) }
     expect(reseeds).toHaveLength(1)
     // Quiet: one full seed is asked for, and the picture stays joinable meanwhile (not a rebuild).
     await until(() => reseeds.length === 2, 'the history restore')
@@ -431,6 +432,40 @@ describe('Replica history after an overload', () => {
     // Restored: nothing more is asked for.
     await Bun.sleep(100)
     expect(reseeds).toHaveLength(2)
+    r.close()
+  })
+  it('a restore whose turn comes after output resumed is given up (no capture, no failure) and tried again', async () => {
+    const s = stream()
+    const captures: string[] = []
+    let resumeOnce = true
+    const r = new Replica({
+      idleMs: 1e9, historyQuietMs: 30,
+      reseed: async (reason, turn, scope) => {
+        // Output arrives while the restore waits for its turn.
+        if (reason === 'history' && resumeOnce) { resumeOnce = false; r.pressure(0) }
+        try { await turn(async () => { captures.push(`${reason} ${scope}`) }) } catch (error) { if (!(error instanceof SeedDeferred)) throw error; throw error }
+      },
+    })
+    await r.event(s.seed('\x1bc', 40, 10))
+    r.pressure(MAX_BACKLOG_BYTES)
+    await until(() => captures.length === 1, 'the overload capture')
+    await r.event(s.seed('\x1bc', 40, 10, false))
+    // The first restore is given up at its turn; once quiet again, the second captures.
+    await until(() => captures.length === 2, 'the restore after quiet')
+    expect(captures).toEqual(['overload screen', 'history full'])
+    expect(r.ended).toBeUndefined()
+    r.close()
+  })
+  it('while history is owed, a width rebuild seeds the screen alone too', async () => {
+    const s = stream()
+    const { r, reseeds, scopes } = replica({ idleMs: 1e9, historyQuietMs: 5_000 })
+    await r.event(s.seed('\x1bc', 40, 10))
+    r.pressure(MAX_BACKLOG_BYTES)
+    await until(() => reseeds.length === 1, 'the overload capture')
+    await r.event(s.seed('\x1bc', 40, 10, false))
+    await r.event(s.layout(60, 10))
+    await until(() => reseeds.length === 2, 'the width capture')
+    expect(scopes).toEqual(['screen', 'screen'])
     r.close()
   })
   it('a quiet restore waits for a seed in flight and for the end of a rebuild', async () => {

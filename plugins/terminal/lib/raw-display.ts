@@ -288,7 +288,8 @@ export class RawDisplay implements ReplicaListener {
     const header = this.options.header()
     // The viewer could not describe the session (it is gone): nothing of this picture is sent.
     if (!header) { this.close(); return }
-    yield { json: { type: kind, epoch, ...header, fidelity: this.options.fidelity(), checkpoint: sideState(cut.checkpoint), bytes: checkpointBytes(cut.checkpoint.data), baseSeq: cut.baseSeq, throughSeq: cut.throughSeq } }
+    // `history` is this picture's own (the session's fidelity may have moved on while it waited for credit).
+    yield { json: { type: kind, epoch, ...header, fidelity: this.options.fidelity(), history: cut.history ? 'complete' : 'incomplete', checkpoint: sideState(cut.checkpoint), bytes: checkpointBytes(cut.checkpoint.data), baseSeq: cut.baseSeq, throughSeq: cut.throughSeq } }
     for (const bytes of checkpointText(cut.checkpoint.data)) yield { bytes }
     for (const event of cut.tail) yield* eventFrames(event)
     yield { json: { type: 'barrier', epoch, throughSeq: cut.throughSeq } }

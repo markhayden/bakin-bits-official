@@ -9,7 +9,7 @@ import { clampSize } from '../lib/sizing'
 import { trackCursorVisibility } from '../lib/cursor-visibility'
 import { applyTerminalProfile, isAllowedLink, TERMINAL_OPTIONS } from '../lib/terminal-profile'
 import { restoreSideState } from '../lib/side-state'
-import { guardParser } from '../lib/xterm-fixes'
+import { guardParser, syncTextarea } from '../lib/xterm-fixes'
 import { clientId } from './api'
 import { enableWebgl } from './terminal-renderer'
 import { TerminalSocketClient, type InputResult, type Presence } from './terminal-socket'
@@ -198,43 +198,36 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     // Follow the cursor once per rendered batch, unless the operator panned away.
     let follow = 0
     /**
-     * A terminal and everything that belongs to it: its addons and
-     * renderer, the shared profile, the parser guard, the cursor tracker and
-     * its own listeners. The bridge path keeps one per connection; the raw
-     * path (spec D13) mounts a fresh one per picture (components/raw-picture.ts).
+     * A terminal and everything that belongs to it: the shared profile, the
+     * parser guard, the cursor tracker and its own listeners, made before it
+     * is shown; `attach` opens it in the pane with its addons and renderer.
+     * The bridge path keeps one per connection. The raw path (spec D13)
+     * replays each picture into a fresh one (components/raw-picture.ts) and
+     * shows it only at the picture's barrier: the one shown until then stays,
+     * and the screen-reader rows of the new one start from the whole picture.
      */
-    const mount = (cols: number, rows: number) => {
+    const create = (cols: number, rows: number) => {
       const term = new Terminal({ cols, rows, ...TERMINAL_OPTIONS, fontSize: terminal.current?.options.fontSize ?? callbacks.current.zoom ?? BASE_FONT, screenReaderMode: true, convertEol: false, theme: { background }, linkHandler: LINK_HANDLER })
-      const fitAddon = new FitAddon()
-      term.loadAddon(fitAddon)
-      term.loadAddon(new WebLinksAddon((event, uri) => LINK_HANDLER.activate(event, uri)))
-      term.open(host)
-      pane.current!.setAttribute('data-font-size', String(term.options.fontSize))
       // Show/hide cursor as the output sets it; a sync's snapshot ends with it too.
       const cursor = trackCursorVisibility(term)
       // The shared profile (spec D13): queries are tmux's to answer (a viewer's
       // replies would be typed into the pane), links and clipboard are policed,
       // and the xterm 6.0.0 workarounds apply.
       const profile = applyTerminalProfile(term)
+      // Shown, or replaying to be shown next (a failure of either counts).
+      let active = true
       // A parser exception would wedge every later write: the screen is
       // rebuilt (a fresh connection and sync) instead. Failed, it stops: no
       // input, and its socket closes (a failed screen never reconnects
       // itself; only a rebuild does).
       const parser = guardParser(term, () => {
-        if (terminal.current !== term) return
+        if (!active) return
         ready.current = false
         reset()
         socket.current?.close()
         setStatus('Renderer failed')
         callbacks.current.onRendererFailed()
       })
-      const disposeRenderer = enableWebgl(term)
-      const textarea = term.textarea!
-      // No QuickType suggestions inserted into the terminal (spec D9 item 2); compose has its own textarea.
-      textarea.setAttribute('autocomplete', 'off')
-      // Focusing the terminal to type goes back to the cursor (like ↓ Live).
-      const typing = () => resumeFollow()
-      textarea.addEventListener('focus', typing)
       term.attachCustomKeyEventHandler((event) => event.key !== 'Tab' || (callbacks.current.inputEnabled && callbacks.current.captureTab))
       // Watching + typing claims the session (claim-on-type); the page decides
       // whether to confirm. Drop control keys so a stray Ctrl-key can't claim.
@@ -250,19 +243,39 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       })
       term.onRender(() => { if (!follow) follow = requestAnimationFrame(() => { follow = 0; followCursor() }) })
       term.onSelectionChange(() => { if (term.hasSelection()) pause(true) })
-      terminal.current = term
-      fit.current = fitAddon
-      cursorVisibility.current = cursor
+      let detach: (() => void) | undefined
       return {
         term, profile, parser,
+        /** Show it in the pane: addons, renderer and its textarea's listeners. */
+        attach() {
+          const fitAddon = new FitAddon()
+          term.loadAddon(fitAddon)
+          term.loadAddon(new WebLinksAddon((event, uri) => LINK_HANDLER.activate(event, uri)))
+          term.open(host)
+          pane.current!.setAttribute('data-font-size', String(term.options.fontSize))
+          const disposeRenderer = enableWebgl(term)
+          const textarea = term.textarea!
+          // No QuickType suggestions inserted into the terminal (spec D9 item 2); compose has its own textarea.
+          textarea.setAttribute('autocomplete', 'off')
+          // Focusing the terminal to type goes back to the cursor (like ↓ Live).
+          const typing = () => resumeFollow()
+          textarea.addEventListener('focus', typing)
+          terminal.current = term
+          fit.current = fitAddon
+          cursorVisibility.current = cursor
+          detach = () => { textarea.removeEventListener('focus', typing); disposeRenderer() }
+        },
         dispose() {
-          textarea.removeEventListener('focus', typing)
-          disposeRenderer()
+          active = false
+          detach?.()
           term.dispose()
         },
       }
     }
-    let bundle = mount(session.cols, session.rows)
+    let bundle = create(session.cols, session.rows)
+    bundle.attach()
+    /** The raw path's picture being replayed, not shown yet. */
+    let pending: ReturnType<typeof create> | undefined
     // The raw path sizes this screen from the picture and its ordered layouts, never from session updates.
     rawPath.current = false
     inputHandle.current = {
@@ -333,23 +346,42 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       // The raw path: every picture in a fresh terminal at its own size (keyboard focus kept).
       onPicture: (header) => {
         rawPath.current = true
-        const focused = document.activeElement === bundle.term.textarea
-        bundle.dispose()
-        bundle = mount(header.checkpoint.cols, header.checkpoint.rows)
-        const { term, profile, parser } = bundle
+        pending?.dispose()
+        const next = create(header.checkpoint.cols, header.checkpoint.rows)
+        pending = next
+        const { term, profile, parser } = next
         // Replayed bells, titles and clipboard offers stay silent until the barrier.
         profile.setLive(false)
-        if (focused) term.focus()
-        sentSize.current = ''
-        requestAnimationFrame(applyView)
         let discarded = false
         return {
           write: (data, done) => { if (discarded) return; term.write(data, () => { if (!parser.failed) done() }) },
-          resize: (cols, rows) => { if (discarded) return; term.resize(cols, rows); requestAnimationFrame(applyView) },
+          resize: (cols, rows) => {
+            if (discarded) return
+            term.resize(cols, rows)
+            if (pending !== next) requestAnimationFrame(applyView)
+          },
           finish: (side) => { if (!discarded) restoreSideState(term, side) },
-          live: () => { if (!discarded) profile.setLive(true) },
-          // Cancelled by a newer picture (or the connection): it stays shown until that one mounts.
-          discard: () => { discarded = true },
+          // The barrier: this picture replaces the one shown (keyboard focus kept), and goes live.
+          live: () => {
+            if (discarded || pending !== next) return
+            const focused = document.activeElement === bundle.term.textarea
+            bundle.dispose()
+            bundle = next
+            pending = undefined
+            next.attach()
+            // Written before it was opened: draw it and place its input textarea now (nothing else would until new output).
+            term.refresh(0, term.rows - 1)
+            syncTextarea(term)
+            profile.setLive(true)
+            if (focused) term.focus()
+            sentSize.current = ''
+            requestAnimationFrame(applyView)
+          },
+          // Cancelled by a newer picture (or the connection): one still replaying goes; one shown stays until the next.
+          discard: () => {
+            discarded = true
+            if (pending === next) { next.dispose(); pending = undefined }
+          },
         }
       },
       onDisplay: (state) => { pane.current?.setAttribute('data-display', state) },
@@ -399,6 +431,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       document.removeEventListener('pointerdown', leave)
       document.removeEventListener('visibilitychange', hide)
       window.removeEventListener('blur', clearOnce)
+      pending?.dispose()
       bundle.dispose(); terminal.current = null
     }
   }, [session.id, attempt])

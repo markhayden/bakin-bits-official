@@ -32,7 +32,7 @@ import headless from '@xterm/headless'
 import { checkpointSteps, type Checkpoint, CHECKPOINT_FORMAT, type CheckpointResult, pieces } from './checkpoint'
 import { EVENT_OVERHEAD_BYTES, terminalSteps, textSteps } from './memory'
 import type { LogConsumer, LogEvent } from './output-log'
-import type { SeedScope } from './reseed'
+import { SeedDeferred, type SeedScope } from './reseed'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
 import { internals, HAS_EXTENDED, type Term } from './terminal-state'
 import { altEnteredCols, guardParser, type patchLinkLifetime } from './xterm-fixes'
@@ -113,7 +113,11 @@ export interface ReplicaStats {
  * `throughSeq` (the tail's last, or the base's own seq). A subscriber is
  * told of events after `throughSeq` only.
  */
-export interface Cut { checkpoint: Checkpoint; baseSeq: number; tail: readonly LogEvent[]; throughSeq: number }
+export interface Cut {
+  checkpoint: Checkpoint; baseSeq: number; tail: readonly LogEvent[]; throughSeq: number
+  /** The picture carries the pane's history (false: a flood's screen-only seed, until the quiet restore). */
+  history: boolean
+}
 
 /** Where a replica is: joinable (its cut), waiting for its first seed or a rebuild's, or ended. */
 export type ReplicaState =
@@ -213,6 +217,9 @@ export class Replica implements LogConsumer {
   /** An overload left the picture without its history: a full seed is owed once output is quiet. */
   private historyPending = false
   private historyTimer: ReturnType<typeof setTimeout> | undefined
+  private lastIngressAt = -Infinity
+  /** Whether the base carries the pane's history (a screen-only seed, and checkpoints of it, do not). */
+  private baseHistory = true
   private parser: { readonly failed: boolean } | undefined
   private base: { checkpoint: Checkpoint; seq: number } | undefined
   private tail: LogEvent[] = []
@@ -272,7 +279,7 @@ export class Replica implements LogConsumer {
     if (this.rebuilding) return { kind: 'rebuilding', cause: this.rebuilding }
     if (!this.base) return { kind: 'seeding' }
     const tail = this.tail.slice()
-    return { kind: 'live', cut: { checkpoint: this.base.checkpoint, baseSeq: this.base.seq, tail, throughSeq: tail.at(-1)?.seq ?? this.base.seq } }
+    return { kind: 'live', cut: { checkpoint: this.base.checkpoint, baseSeq: this.base.seq, tail, throughSeq: tail.at(-1)?.seq ?? this.base.seq, history: this.baseHistory } }
   }
 
   /** The live cut, or undefined while there is none (no seed yet, rebuilding, or ended). */
@@ -309,6 +316,9 @@ export class Replica implements LogConsumer {
   }
 
   pressure(queuedOutputBytes: number): void {
+    // Told on every event the log takes: that is ingress (quiet for a history restore counts from it).
+    this.lastIngressAt = this.now()
+    this.armHistory()
     if (queuedOutputBytes < MAX_BACKLOG_BYTES || !this.term || this.failure) return
     // A seed being applied is let finish (its picture is what viewers wait for under a
     // flood), unless the log itself is near its bound: then it is given up like any work.
@@ -348,8 +358,6 @@ export class Replica implements LogConsumer {
     if (this.failure) return
     this.taken++
     if (event.kind === 'seed') { await this.seed(event); return }
-    // Output arriving, parsed or skipped, keeps a history restore waiting for quiet.
-    if (event.kind === 'output') this.armHistory()
     // Before the first seed, or while rebuilding, output is not this replica's stream.
     if (this.rebuilding) {
       if (event.kind === 'output') this.skip(event.bytes.length)
@@ -421,6 +429,7 @@ export class Replica implements LogConsumer {
       },
     }
     this.options.diagnostic?.({ kind: 'seeded', reason: event.reason, history: event.history })
+    this.baseHistory = event.history
     if (event.history) { this.historyPending = false; clearTimeout(this.historyTimer) }
     // A screen-only picture: its history comes back once output is quiet, even if none follows.
     else this.armHistory()
@@ -490,7 +499,9 @@ export class Replica implements LogConsumer {
     // Settled, the seed is queued in the log and on its way (it ends the rebuild when it is applied);
     // a failed capture invalidates the log (lib/reseed.ts), which ends the replica. An overload's seed
     // is the screen alone: small enough to land while the flood goes on.
-    void this.options.reseed(cause, this.turn(), cause === 'overload' ? 'screen' : 'full').catch(() => undefined).finally(() => { this.capturing = false })
+    // While history is owed (an overload's pictures), every rebuild seed is the screen alone: the
+    // history comes back only with the quiet restore.
+    void this.options.reseed(cause, this.turn(), this.historyPending ? 'screen' : 'full').catch(() => undefined).finally(() => { this.capturing = false })
   }
 
   /** (Re)start the quiet wait before a history restore, while one is owed. */
@@ -507,9 +518,22 @@ export class Replica implements LogConsumer {
    */
   private restoreHistory(): void {
     if (!this.historyPending || this.failure) return
-    if (this.rebuilding || !this.base || this.capturing) { this.armHistory(); return }
+    if (!this.restorable()) { this.armHistory(); return }
     this.capturing = true
-    void this.options.reseed('history', this.turn(), 'full').catch(() => undefined).finally(() => { this.capturing = false })
+    // Checked again when the capture gets its turn: output may have resumed while it waited.
+    const turn = this.turn()
+    const checked: CaptureTurn = (capture) => turn(async () => {
+      if (!this.restorable()) throw new SeedDeferred('output resumed or the picture changed')
+      return capture()
+    })
+    void this.options.reseed('history', checked, 'full')
+      .catch((error) => { if (error instanceof SeedDeferred) this.armHistory() })
+      .finally(() => { this.capturing = false })
+  }
+
+  private restorable(): boolean {
+    const quiet = this.now() - this.lastIngressAt >= (this.options.historyQuietMs ?? HISTORY_QUIET_MS)
+    return quiet && !this.failure && !this.rebuilding && !this.seeding && Boolean(this.base)
   }
 
   private armIdle(): void {

@@ -9,8 +9,8 @@ const encode = (text: string) => new TextEncoder().encode(text)
 function checkpoint(data: string[]): Checkpoint {
   return { format: 1, cols: 80, rows: 24, scrollback: 10_000, data, joinState: 0, penHasExtended: false, altEnteredCols: null } as Checkpoint
 }
-function cut(data: string[], baseSeq: number, tail: LogEvent[] = []): Cut {
-  return { checkpoint: checkpoint(data), baseSeq, tail, throughSeq: tail.at(-1)?.seq ?? baseSeq }
+function cut(data: string[], baseSeq: number, tail: LogEvent[] = [], history = true): Cut {
+  return { checkpoint: checkpoint(data), baseSeq, tail, throughSeq: tail.at(-1)?.seq ?? baseSeq, history }
 }
 const output = (seq: number, text: string | Uint8Array): LogEvent => ({ seq, kind: 'output', offset: 0, bytes: typeof text === 'string' ? encode(text) : text })
 
@@ -81,6 +81,11 @@ describe('RawDisplay join', () => {
     expect(h.sent[4]).toEqual({ json: { type: 'barrier', epoch: 1, throughSeq: 6 } })
     h.src.tell().event(output(7, 'live'))
     expect(h.kinds().at(-1)).toBe('bytes 4')
+  })
+  it("says whether the picture carries the pane's history (its own cut, not the session's latest)", () => {
+    const h = harness({ kind: 'live', cut: cut(['screen only'], 4, [], false) })
+    h.display.start()
+    expect(h.sent[0]).toMatchObject({ json: { type: 'join', history: 'incomplete' } })
   })
   it('waits for a seed (absolute from the join), then joins; past the wait it resyncs', async () => {
     const h = harness({ kind: 'seeding' })

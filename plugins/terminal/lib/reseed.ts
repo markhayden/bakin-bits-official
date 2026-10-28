@@ -240,6 +240,15 @@ export const RESEED_ATTEMPTS = 5
 /** The waits between attempts (one fewer than the attempts). */
 export const RESEED_BACKOFF_MS = [100, 250, 500, 1000] as const
 
+/**
+ * Thrown by an attempt's turn to give a capture up before it starts (the
+ * reason for it went away): the reseed stops at once, with no retry and
+ * without invalidating the log.
+ */
+export class SeedDeferred extends Error {
+  constructor(reason: string) { super(`seed deferred: ${reason}`) }
+}
+
 export interface ReseedOptions {
   sleep?(ms: number): Promise<void>
   /**
@@ -278,6 +287,8 @@ export function reseed(control: ControlClient, log: OutputLog, target: string, r
         }))
         return seed!
       } catch (error) {
+        // Given up before it started (lib/replica.ts history restore): not a failure.
+        if (error instanceof SeedDeferred) throw error
         lastError = error
         // A closed connection will not answer a retry: recovery reattaches instead.
         if (control.isClosed) break
