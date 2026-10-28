@@ -13,7 +13,7 @@ afterEach(async () => { for (const manager of managers.splice(0)) await manager.
 function fixture(quietMs = 10) {
   let now = 1000
   let bridge: ((data: Uint8Array) => void) | undefined
-  const replica = new Replica({ reseed: async () => {} })
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {} })
   let seq = 0
   const logs: { message: string; data?: Record<string, unknown> }[] = []
   const driver: ProcessDriver = {

@@ -151,7 +151,7 @@ processTest('a flood faster than the replica parses: it rebuilds from tmux inste
 // The absolute gate, here because it is a wall-clock measurement (the unit suite asserts the yielding).
 processTest('a checkpoint over full scrollback never holds the event loop for 8 ms', async () => {
   let seq = 0
-  const replica = new Replica({ reseed: async () => {} })
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {} })
   await replica.event({ seq: ++seq, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 120, rows: 40, reason: 'test', history: true })
   const deliver = async (text: string) => {
     const bytes = new TextEncoder().encode(text)
@@ -181,3 +181,51 @@ processTest('a checkpoint over full scrollback never holds the event loop for 8 
   expect(worst).toBeLessThan(8)
   replica.close()
 }, 30_000)
+
+processTest("width changes install tmux's geometry: rapid resizes converge, the cursor line keeps its characters, and the replica agrees with tmux's own client", async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bakin-replica-width-'))
+  const h = await harness(root)
+  try {
+    await until(() => Boolean(h.driver.replica(h.session.id)?.cut()), 'seeded')
+    const replica = h.driver.replica(h.session.id)!
+    // Lines long enough to reflow differently in tmux and xterm, and a command line left unfinished at the cursor.
+    await h.type(`for i in 1 2 3 4 5 6; do printf 'row%s-%0150d\\n' $i 0; done\r`)
+    await until(async () => (await replica.read((t) => t.buffer.active.getLine(t.buffer.active.baseY + t.buffer.active.cursorY)?.translateToString(true) ?? '')) !== undefined, 'output')
+    await Bun.sleep(300)
+    const tail = 'abcdefghijklmnopqrstuvwxyz'.repeat(4)
+    await h.type(`echo ${tail}`)
+    await Bun.sleep(300)
+    const browser = { kind: 'browser', device: 'desktop' } as const
+    for (const cols of [70, 90, 60]) await h.manager.claim(h.session.id, human, cols, 30, browser)
+    // (tmux reports each layout change asynchronously: wait for the last one, then for its geometry.)
+    await until(async () => await replica.read((t) => t.cols) === 60 && !replica.geometryOwed, 'the newest geometry installed')
+    expect(replica.stats.geometries).toBeGreaterThan(0)
+    expect(replica.stats.rebuilds).toEqual({})
+    // The rest of the command, typed after the width change: every character lands where tmux has it.
+    // (The shell redraws its line on SIGWINCH: what it leaves is the shell's, so tmux itself is the oracle.)
+    await h.type(' done\r')
+    const ran = async () => (await h.service.command(['capture-pane', '-p', '-J', '-t', h.session.id])).includes(`${tail} done`)
+    await until(ran, 'the command ran')
+    await until(() => replica.quietMs > 500, 'the replica quiet')
+    const trimmed = (lines: string[]) => { const out = lines.map((line) => line.trimEnd()); while (out.length && out.at(-1) === '') out.pop(); return out }
+    // Wrapped rows joined, as tmux's -J capture gives them.
+    const replicaLines = async (from: 'history' | 'screen') => trimmed((await replica.read((t) => {
+      const buffer = t.buffer.active
+      const lines: string[] = []
+      for (let y = from === 'history' ? 0 : buffer.baseY; y < buffer.length; y++) {
+        const row = buffer.getLine(y)!
+        if (from === 'history' && row.isWrapped && lines.length) lines[lines.length - 1] += row.translateToString(true)
+        else lines.push(row.translateToString(true))
+      }
+      return lines
+    }))!)
+    const tmuxLines = async (args: string[]) => trimmed((await h.service.command(['capture-pane', '-p', ...args, '-t', h.session.id])).split('\n'))
+    expect(await replicaLines('screen')).toEqual(await tmuxLines([]))
+    expect(await replicaLines('history')).toEqual(await tmuxLines(['-J', '-S', '-', '-E', '-']))
+    // (Not the shadow comparison: the bridge's own emulator keeps cells from its old width after a resize,
+    // which the bridge path, retired by T38b, never fixed. tmux's captures are the oracle.)
+  } finally {
+    await h.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 40_000)

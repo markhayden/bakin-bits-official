@@ -375,7 +375,7 @@ describe('TerminalViewer', () => {
 
 describe('TerminalViewer on the raw path', () => {
   const seeded = async () => {
-    const replica = new Replica({ reseed: (_reason, turn) => turn(async () => undefined), idleMs: 1e9 })
+    const replica = new Replica({ reseed: (_reason, turn) => turn(async () => undefined), geometry: (_generation, turn) => turn(async () => undefined), idleMs: 1e9 })
     await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bcready'), cols: 100, rows: 30, reason: 'test', history: true })
     return replica
   }
@@ -483,7 +483,7 @@ describe('TerminalViewer on the raw path', () => {
     replica.close()
   })
   it('one deadline from the hello covers the replica arriving and its seed', async () => {
-    const seeding = new Replica({ reseed: (_reason, turn) => turn(async () => undefined), idleMs: 1e9 })
+    const seeding = new Replica({ reseed: (_reason, turn) => turn(async () => undefined), geometry: (_generation, turn) => turn(async () => undefined), idleMs: 1e9 })
     const raw: { replica?: RawSource } = {}
     const { manager } = fakeManager(session(), raw)
     const peer = fakeSocket()
@@ -500,7 +500,7 @@ describe('TerminalViewer on the raw path', () => {
     seeding.close()
   })
   it('a replica found only after the deadline closes at once', async () => {
-    const seeded = new Replica({ reseed: (_reason, turn) => turn(async () => undefined), idleMs: 1e9 })
+    const seeded = new Replica({ reseed: (_reason, turn) => turn(async () => undefined), geometry: (_generation, turn) => turn(async () => undefined), idleMs: 1e9 })
     await seeded.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 100, rows: 30, reason: 'test', history: true })
     const raw: { replica?: RawSource } = {}
     const { manager } = fakeManager(session(), raw)

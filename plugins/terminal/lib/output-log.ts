@@ -1,6 +1,6 @@
 /**
  * A session's ordered event log (spec D13): the pane's output bytes and its
- * layout changes, in the order tmux reported them, for the one consumer
+ * layout changes (and the captures landed among them), in the order tmux reported them, for the one consumer
  * that renders them (the server replica). Output is batched (at most
  * BATCH_BYTES, or BATCH_MS after its first byte) at arbitrary byte
  * boundaries; the consumer's parser carries state across them.
@@ -26,6 +26,12 @@ export type LogEvent =
   /** Reset to this picture (lib/reseed.ts); output after it follows the seed. */
   /** `history`: the seed carries the pane's history (a `screen` seed does not, lib/reseed.ts). */
   | { seq: number; kind: 'seed'; bytes: Uint8Array; cols: number; rows: number; reason: string; history: boolean }
+  /**
+   * tmux's picture at a width change (lib/reseed.ts, plan T34a): not a reset —
+   * the consumer installs its geometry (lib/geometry.ts) and keeps its state.
+   * `generation`: the width change it was asked for (later ones need another).
+   */
+  | { seq: number; kind: 'geometry'; bytes: Uint8Array; cols: number; rows: number; generation: number; history: boolean }
 
 export interface LogConsumer {
   event(event: LogEvent): void | Promise<void>
@@ -108,6 +114,14 @@ export class OutputLog {
     if (this.failure || !this.attachment) return false
     this.flush()
     this.push({ seq: ++this.seq, kind: 'seed', bytes, cols, rows, reason, history })
+    return !this.failure
+  }
+
+  /** A geometry capture's boundary (ordered like `seed`); false when it was not kept. */
+  geometry(bytes: Uint8Array, cols: number, rows: number, generation: number, history = true): boolean {
+    if (this.failure || !this.attachment) return false
+    this.flush()
+    this.push({ seq: ++this.seq, kind: 'geometry', bytes, cols, rows, generation, history })
     return !this.failure
   }
 

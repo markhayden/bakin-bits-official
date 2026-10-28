@@ -183,7 +183,7 @@ describe('RawDisplay credit', () => {
     const h = harness({ kind: 'live', cut: cut(['x'.repeat(40_000)], 1) }, { window: 20_000, header: () => ({ session: { title: 'é'.repeat(3000) } }) })
     h.display.start()
     // The header alone is over 6,000 bytes (3,000 characters): one text frame more fills the window.
-    expect(Buffer.byteLength(JSON.stringify(h.sent[0]!.json))).toBeGreaterThan(6000)
+    expect(Buffer.byteLength(JSON.stringify((h.sent[0] as { json: Record<string, unknown> }).json))).toBeGreaterThan(6000)
     expect(h.kinds()).toEqual(['join', 'bytes 16384'])
   })
   it('counts layout frames too: a stream of zero-output layouts is bounded by the window', () => {

@@ -136,6 +136,7 @@ export class TmuxProcesses implements ProcessDriver {
     // The replica starts from a seed; a failed reseed invalidates the log, which ends it.
     const replica = new Replica({
       reseed: (reason, turn, scope) => reseed(control, log, session.id, reason, { attempt: turn, scope }),
+      geometry: (generation, turn, scope) => reseed(control, log, session.id, 'width', { attempt: turn, scope, geometry: generation }),
       // The replica's lifecycle is logged, never its contents; rebuilds are the session's fidelity.
       diagnostic: (event) => {
         const fidelity = this.fidelity(session.id)

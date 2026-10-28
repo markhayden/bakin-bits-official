@@ -83,6 +83,16 @@ describe('installGeometry', () => {
     await write(target, '\x1b[?1049l')
     expect([target.buffer.active.cursorX, target.buffer.active.cursorY]).toEqual([3, 1])
   })
+  it("gives both screens tmux's tab stops (they are shared)", async () => {
+    const target = profiled(80, 5)
+    target.resize(60, 5)
+    const source = profiled(60, 5)
+    await write(source, '\x1b[3g\x1b[1;5H\x1bH\x1b[1;30H\x1bH\x1b[H')
+    installGeometry(target, source)
+    const stops = (buffer: 'normal' | 'alt') => Object.keys(internals(target).buffers[buffer].tabs).map(Number)
+    expect(stops('normal')).toEqual([4, 29])
+    expect(stops('alt')).toEqual([4, 29])
+  })
   it('refuses when the two disagree on size or on which screen is active', async () => {
     const target = profiled(40, 5)
     expect(installGeometry(target, profiled(30, 5))).toBe(false)

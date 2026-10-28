@@ -72,7 +72,7 @@ function filler(bytes: number): LogEvent[] {
 }
 const encode = (text: string) => new TextEncoder().encode(text)
 async function seeded(text: string, cols = 120, rows = 40): Promise<Replica> {
-  const r = new Replica({ reseed: (_reason, turn) => turn(async () => undefined), idleMs: 1e9 })
+  const r = new Replica({ reseed: (_reason, turn) => turn(async () => undefined), geometry: (_generation, turn) => turn(async () => undefined), idleMs: 1e9 })
   await r.event({ seq: 1, kind: 'seed', bytes: encode(text), cols, rows, reason: 'measure', history: true })
   await r.idle()
   return r

@@ -20,15 +20,26 @@
  *     at ingress, so a checkpoint running or waiting is abandoned;
  *   - `tail bound`: no checkpoint accepted within MAX_TAIL_BYTES (an
  *     unterminated string, a state no bytes rebuild);
- *   - `width`: tmux and xterm reflow differently (T34a's rebase).
+ *   - `width`: a width change's geometry could not be installed (below).
  *   The skipped output is superseded by the seed: it never appears in a
  *   tail. Rebuilds start at most once per REBUILD_INTERVAL_MS per session,
  *   at once when output has been quiet for REBUILD_QUIET_MS, and one
  *   capture runs at a time in the process.
+ * - **A width change** (plan T34a) is no rebuild: tmux and xterm reflow
+ *   differently, so the emulator resizes as usual and asks for a `geometry`
+ *   capture; every event meanwhile is applied. The capture lands in the log
+ *   at its boundary, is parsed into a temporary emulator, and its geometry
+ *   is installed into the live one (lib/geometry.ts), which keeps its parser
+ *   and state; the event is committed to the tail for viewers. One capture
+ *   at a time: width changes while one is out need one more (the newest
+ *   generation). A geometry that cannot be installed (sizes disagree) is a
+ *   `width` rebuild. While history is owed (an overload's), it is the screen
+ *   alone, like every seed then.
  * - A parser failure or an invalid log ends it. The log's own overflow
  *   stays the last safeguard (recovery, T35).
  */
 import headless from '@xterm/headless'
+import { installGeometry } from './geometry'
 import { checkpointSteps, type Checkpoint, CHECKPOINT_FORMAT, type CheckpointResult, pieces } from './checkpoint'
 import { EVENT_OVERHEAD_BYTES, terminalSteps, textSteps } from './memory'
 import type { LogConsumer, LogEvent } from './output-log'
@@ -76,6 +87,8 @@ export type ReplicaDiagnostic =
   | { kind: 'listener failed'; error: string }
   /** A seed applied whole: with the pane's history, or the screen alone (a flood's). */
   | { kind: 'seeded'; reason: string; history: boolean }
+  /** A width change's geometry: installed, or refused (a `width` rebuild follows). */
+  | { kind: 'geometry'; generation: number; installed: boolean; ms: number }
 
 /** Runs one capture in the heavy-work queue (lib/reseed.ts ReseedOptions.attempt). */
 export type CaptureTurn = <T>(capture: () => Promise<T>) => Promise<T>
@@ -87,6 +100,11 @@ export interface ReplicaOptions {
    * failed, which invalidates the log).
    */
   reseed(reason: string, turn: CaptureTurn, scope: SeedScope): Promise<unknown>
+  /**
+   * Ask tmux for its picture at a width change (lib/reseed.ts `geometry`):
+   * settles once the `geometry` event is queued in the log, like `reseed`.
+   */
+  geometry(generation: number, turn: CaptureTurn, scope: SeedScope): Promise<unknown>
   diagnostic?(event: ReplicaDiagnostic): void
   /** Quiet time before a checkpoint is tried (CHECKPOINT_IDLE_MS). */
   idleMs?: number
@@ -104,6 +122,8 @@ export interface ReplicaStats {
   rebuilds: Partial<Record<RebuildCause, number>>
   /** Seeds applied, by their reason. */
   seeds: Record<string, number>
+  /** Width-change geometries installed. */
+  geometries: number
   skippedBytes: number
 }
 
@@ -246,7 +266,11 @@ export class Replica implements LogConsumer {
   private capturing = false
   private lastCaptureAt = -Infinity
   private captureTimer: ReturnType<typeof setTimeout> | undefined
-  readonly stats: ReplicaStats = { accepted: 0, rejected: {}, abandoned: 0, rebuilds: {}, seeds: {}, skippedBytes: 0 }
+  /** Width changes so far; the newest still without its geometry (0: none owed); the newest asked for. */
+  private widthGeneration = 0
+  private widthOwed = 0
+  private widthAsked = 0
+  readonly stats: ReplicaStats = { accepted: 0, rejected: {}, abandoned: 0, rebuilds: {}, seeds: {}, geometries: 0, skippedBytes: 0 }
 
   constructor(private options: ReplicaOptions) {}
 
@@ -270,6 +294,8 @@ export class Replica implements LogConsumer {
   maintain(): Promise<void> {
     return this.serial(async () => { if (this.links && this.links.orphans() > 0) await runSliced(this.links.sweepSteps()) })
   }
+  /** A width change still waits for its geometry. */
+  get geometryOwed(): boolean { return this.widthOwed !== 0 }
   /** Why the replica is waiting for a seed, while it is. */
   get rebuildCause(): RebuildCause | undefined { return this.rebuilding }
   /** Changes whenever the replica takes an event. */
@@ -310,7 +336,7 @@ export class Replica implements LogConsumer {
   start(): void {
     if (this.term || this.capturing || this.failure) return
     this.capturing = true
-    void this.options.reseed('attach', this.turn(), 'full').catch(() => undefined).finally(() => { this.capturing = false })
+    void this.options.reseed('attach', this.turn(), 'full').catch(() => undefined).finally(() => this.captured())
   }
 
   event(event: LogEvent): Promise<void> {
@@ -365,7 +391,7 @@ export class Replica implements LogConsumer {
     if (this.failure) return
     this.taken++
     if (event.kind === 'seed') { await this.seed(event); return }
-    // Before the first seed, or while rebuilding, output is not this replica's stream.
+    // Before the first seed, or while rebuilding, output is not this replica's stream (a geometry is superseded too).
     if (this.rebuilding) {
       if (event.kind === 'output') this.skip(event.bytes.length)
       return
@@ -376,11 +402,12 @@ export class Replica implements LogConsumer {
       const width = event.cols !== this.term.cols
       this.term.resize(event.cols, event.rows)
       this.push(event, 0)
-      if (width) this.rebuild('width', 0)
-      else if (this.tail.length > MAX_TAIL_EVENTS) this.rebuild('tail bound', 0)
-      else this.armIdle()
+      if (this.tail.length > MAX_TAIL_EVENTS) { this.rebuild('tail bound', 0); return }
+      if (width) { this.widthOwed = ++this.widthGeneration; this.askGeometry() }
+      this.armIdle()
       return
     }
+    if (event.kind === 'geometry') { await this.geometry(event); return }
     await this.write(event.bytes)
     // Rebuilding began while the bytes were parsed: they are superseded too.
     if (this.failure || !this.base || this.rebuilding) return
@@ -395,6 +422,51 @@ export class Replica implements LogConsumer {
     this.tail.push(event)
     this.tailBytes += bytes
     this.notify((listener) => listener.event(event))
+  }
+
+  /** Install a width change's geometry (the event is the tail's, for viewers), or rebuild. */
+  private async geometry(event: Extract<LogEvent, { kind: 'geometry' }>): Promise<void> {
+    const started = this.now()
+    const terminal = this.term!
+    const { terminal: source } = profileTerminal(event.cols, event.rows)
+    try {
+      const parser = guardParser(source, () => undefined)
+      for (const piece of pieces([new TextDecoder().decode(event.bytes)])) {
+        if (this.failure || this.term !== terminal || this.rebuilding) return
+        await new Promise<void>((resolve) => source.write(piece, resolve))
+      }
+      // Overtaken while it was parsed (an overload): the rebuild's seed supersedes it.
+      if (this.failure || this.term !== terminal || this.rebuilding) return
+      const installed = !parser.failed && installGeometry(terminal, source)
+      this.options.diagnostic?.({ kind: 'geometry', generation: event.generation, installed, ms: Math.round(this.now() - started) })
+      if (!installed) { this.rebuild('width', 0); return }
+    } finally {
+      source.dispose()
+    }
+    this.stats.geometries++
+    if (event.generation >= this.widthOwed) this.widthOwed = 0
+    this.push(event, event.bytes.length)
+    this.sinceAttempt += event.bytes.length
+    if (this.tailBytes > MAX_TAIL_BYTES || this.tail.length > MAX_TAIL_EVENTS) { this.rebuild('tail bound', 0); return }
+    // A picture with its history is large: a checkpoint compacts it out of the tail.
+    if (this.sinceAttempt >= CHECKPOINT_BYTES) await this.checkpoint()
+    this.armIdle()
+  }
+
+  /** Ask for the newest width change's geometry, when the capture slot is free. */
+  private askGeometry(): void {
+    if (!this.widthOwed || this.widthAsked >= this.widthOwed || this.capturing || this.rebuilding || this.failure || !this.base) return
+    this.capturing = true
+    this.widthAsked = this.widthOwed
+    void this.options.geometry(this.widthOwed, this.turn(), this.historyPending ? 'screen' : 'full').catch(() => undefined).finally(() => this.captured())
+  }
+
+  /** A capture settled: the slot is free for whatever waited for it. */
+  private captured(): void {
+    this.capturing = false
+    // A rebuild that began while the slot was held asked for no seed: ask now.
+    if (this.rebuilding) this.scheduleCapture()
+    else this.askGeometry()
   }
 
   private async seed(event: Extract<LogEvent, { kind: 'seed' }>): Promise<void> {
@@ -415,6 +487,9 @@ export class Replica implements LogConsumer {
     this.sinceAttempt = 0
     this.rebuilding = undefined
     clearTimeout(this.captureTimer)
+    // Every width change before it is in the seed's picture (a later one asks again).
+    this.widthOwed = 0
+    this.widthAsked = this.widthGeneration
     this.stats.seeds[event.reason] = (this.stats.seeds[event.reason] ?? 0) + 1
     // The text, as a restore will parse it, in pieces (a seed can be megabytes).
     const data = [new TextDecoder().decode(event.bytes)]
@@ -464,6 +539,9 @@ export class Replica implements LogConsumer {
     this.rebuilding = cause
     // An overload's pictures are the screen alone until output is quiet again.
     if (cause === 'overload') { this.historyPending = true; clearTimeout(this.historyTimer) }
+    // The rebuild's seed is taken after every width change so far.
+    this.widthOwed = 0
+    this.widthAsked = this.widthGeneration
     this.base = undefined
     this.tail = []
     this.tailBytes = 0
@@ -509,7 +587,7 @@ export class Replica implements LogConsumer {
     // is the screen alone: small enough to land while the flood goes on.
     // While history is owed (an overload's pictures), every rebuild seed is the screen alone: the
     // history comes back only with the quiet restore.
-    void this.options.reseed(cause, this.turn(), this.historyPending ? 'screen' : 'full').catch(() => undefined).finally(() => { this.capturing = false })
+    void this.options.reseed(cause, this.turn(), this.historyPending ? 'screen' : 'full').catch(() => undefined).finally(() => this.captured())
   }
 
   /** (Re)start the quiet wait before a history restore, while one is owed. */
@@ -526,7 +604,8 @@ export class Replica implements LogConsumer {
    */
   private restoreHistory(): void {
     if (!this.historyPending || this.failure) return
-    if (!this.restorable()) { this.armHistory(); return }
+    // (The slot is busy, e.g. a width change's geometry: wait for quiet again.)
+    if (!this.restorable() || this.capturing) { this.armHistory(); return }
     this.capturing = true
     // Checked again when the capture gets its turn: output may have resumed while it waited.
     const turn = this.turn()
@@ -536,11 +615,7 @@ export class Replica implements LogConsumer {
     })
     void this.options.reseed('history', checked, 'full')
       .catch((error) => { if (error instanceof SeedDeferred) this.armHistory() })
-      .finally(() => {
-        this.capturing = false
-        // A rebuild that began while this capture held the slot asked for none: ask now.
-        if (this.rebuilding) this.scheduleCapture()
-      })
+      .finally(() => this.captured())
   }
 
   private restorable(): boolean {

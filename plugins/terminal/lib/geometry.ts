@@ -9,7 +9,7 @@
  * - from tmux: both buffers' lines (history and screen, wrap flags,
  *   combined and extended cells; links remapped into the target's registry,
  *   with markers on the target's own buffers), the active cursor (a pending
- *   wrap too), region and tab stops; the inactive normal cursor and its
+ *   wrap too), region and the shared tab stops; the inactive normal cursor and its
  *   return slot only for an alternate screen entered by 1049 (the seed's
  *   `alternate_saved_x/y` is that return point);
  * - kept by the target: its parser and decoder (an unfinished sequence
@@ -192,7 +192,8 @@ export function installGeometry(target: object, source: object): boolean {
   active.y = sourceActive.y
   active.scrollTop = sourceActive.scrollTop
   active.scrollBottom = sourceActive.scrollBottom
-  active.tabs = { ...sourceActive.tabs }
+  // Tab stops are shared by the two screens (the profile's patchSharedTabStops).
+  for (const buffer of [to.buffers.normal, to.buffers.alt]) buffer.tabs = { ...sourceActive.tabs }
   if (alternate) {
     const normal = to.buffers.normal
     if (returnSlot) {
