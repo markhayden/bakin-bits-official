@@ -23,20 +23,33 @@ export class Screen {
     this.parser = guardParser(this.terminal, () => { this.overflow = true })
   }
   write(data: Uint8Array, parsed?: () => void): Promise<void> {
-    if (this.overflow || this.queuedBytes + data.byteLength > 1024 * 1024) {
+    if (this.failed || this.queuedBytes + data.byteLength > 1024 * 1024) {
       this.overflow = true
       return Promise.reject(new Error('Terminal renderer output limit exceeded; reconnect required'))
     }
     this.queuedBytes += data.byteLength
-    this.pending = this.pending.then(() => new Promise<void>((resolve, reject) => {
-      if (this.failed) { this.queuedBytes -= data.byteLength; reject(new Error('Terminal renderer failed; reconnect required')); return }
-      this.terminal.write(data, () => {
-        this.queuedBytes -= data.byteLength
-        if (this.parser.failed) { reject(new Error('Terminal renderer failed; reconnect required')); return }
-        try { parsed?.(); resolve() }
-        catch (error) { this.overflow = true; reject(error) }
-      })
-    }))
+    // Every settlement path releases this write's charge exactly once.
+    const run = () => new Promise<void>((resolve, reject) => {
+      let charged = true
+      const release = () => { if (charged) { charged = false; this.queuedBytes -= data.byteLength } }
+      const failed = () => new Error('Terminal renderer failed; reconnect required')
+      if (this.failed) { release(); reject(failed()); return }
+      try {
+        this.terminal.write(data, () => {
+          release()
+          if (this.parser.failed) { reject(failed()); return }
+          try { parsed?.(); resolve() }
+          catch (error) { this.overflow = true; reject(error) }
+        })
+      } catch (error) {
+        // A synchronous submission failure fails the screen like a parser one.
+        release()
+        this.overflow = true
+        reject(error)
+      }
+    })
+    // Run after the previous write whether it succeeded or not.
+    this.pending = this.pending.then(run, run)
     return this.pending
   }
   snapshot(): Promise<string> { return this.capture(() => this.serialize()) }

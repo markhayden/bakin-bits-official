@@ -6,7 +6,7 @@ import { ArrowDown, ZoomOut } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import { clampSize } from '../lib/sizing'
 import { trackCursorVisibility } from '../lib/cursor-visibility'
-import { patchEraseAbove } from '../lib/xterm-fixes'
+import { guardParser, patchEraseAbove } from '../lib/xterm-fixes'
 import { clientId } from './api'
 import { enableWebgl } from './terminal-renderer'
 import { TerminalSocketClient, type InputResult } from './terminal-socket'
@@ -17,9 +17,11 @@ import '@xterm/xterm/css/xterm.css'
 /** What the page asks of the canvas: "Fit to this device" claims the size; refit applies a new smallest-text choice. */
 export interface TerminalViewHandle { fitToDevice(): boolean; refit(): void }
 
-export function TerminalCanvas({ session, writable, captureTab, attempt, inputEnabled, inputHandle, viewHandle, onCtrlChange, onStatus, onInput, onClaim, onSession, onSizeFrozen, onResult }: {
+export function TerminalCanvas({ session, writable, captureTab, attempt, inputEnabled, inputHandle, viewHandle, onCtrlChange, onStatus, onInput, onClaim, onSession, onSizeFrozen, onResult, onRendererFailed }: {
   inputEnabled: boolean; inputHandle: RefObject<TerminalInputHandle | null>; viewHandle: RefObject<TerminalViewHandle | null>; onCtrlChange(armed: boolean): void;
   session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string): void; onClaim(data: string): void; onSession(session: Session): void; onSizeFrozen(frozen: boolean): void; onResult(result: InputResult): void
+  /** The renderer hit a parser exception: this screen is stale and must be rebuilt. */
+  onRendererFailed(): void
 }) {
   const pane = useRef<HTMLDivElement>(null)
   const element = useRef<HTMLDivElement>(null)
@@ -33,8 +35,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
   const [zoom, setZoom] = useState(() => storedFont())
   // Manual pans, selections (and History) stop the view chasing the cursor.
   const [paused, setPaused] = useState(false)
-  const callbacks = useRef({ onInput, onClaim, onSession, onSizeFrozen, onResult, writable, authority, inputEnabled, onCtrlChange, captureTab: false, sizeEpoch: session.sizeEpoch, zoom, paused })
-  callbacks.current = { onInput, onClaim, onSession, onSizeFrozen, onResult, writable, authority, inputEnabled, onCtrlChange, captureTab, sizeEpoch: session.sizeEpoch, zoom, paused }
+  const callbacks = useRef({ onInput, onClaim, onSession, onSizeFrozen, onResult, onRendererFailed, writable, authority, inputEnabled, onCtrlChange, captureTab: false, sizeEpoch: session.sizeEpoch, zoom, paused })
+  callbacks.current = { onInput, onClaim, onSession, onSizeFrozen, onResult, onRendererFailed, writable, authority, inputEnabled, onCtrlChange, captureTab, sizeEpoch: session.sizeEpoch, zoom, paused }
   const [status, setStatus] = useState('Connecting')
   useEffect(() => { onStatus(status) }, [status, onStatus])
   const terminal = useRef<Terminal | null>(null)
@@ -174,6 +176,9 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
     cursorVisibility.current = trackCursorVisibility(term)
     // xterm 6.0.0 wedges on ED 1 in the last column; see lib/xterm-fixes.ts.
     patchEraseAbove(term)
+    // A parser exception would wedge every later write: the screen is
+    // rebuilt (a fresh connection and sync) instead.
+    const parser = guardParser(term, () => callbacks.current.onRendererFailed())
     const disposeRenderer = enableWebgl(term)
     inputHandle.current = {
       key(key) {
@@ -245,7 +250,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, inputEn
         sentSize.current = ''
         requestAnimationFrame(applyView)
       },
-      onOutput: (bytes, done) => term.write(bytes, done),
+      // A failed screen stops acknowledging: its output is discarded, not shown.
+      onOutput: (bytes, done) => term.write(bytes, () => { if (!parser.failed) done() }),
       onSession: (next) => callbacks.current.onSession(next),
       onPresence: (frozen) => callbacks.current.onSizeFrozen(frozen),
       onResult: (result) => callbacks.current.onResult(result),

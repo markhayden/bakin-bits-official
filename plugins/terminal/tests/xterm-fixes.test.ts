@@ -10,14 +10,16 @@ const settles = (terminal: Term, data: string) => Promise.race([write(terminal, 
 const rows = (terminal: Term) => Array.from({ length: terminal.buffer.active.length }, (_, y) => terminal.buffer.active.getLine(y)!.translateToString(true))
 
 describe('erase above (ED 1) with the cursor in the last column', () => {
-  it('stock xterm 6.0.0 still has both halves of the bug (remove the patch only when this fails)', async () => {
-    type Handler = { eraseInDisplay(params: { params: number[] }): boolean }
-    const handlerOf = (terminal: Term) => (terminal as unknown as { _core: { _inputHandler: Handler } })._core._inputHandler
-    // 1. On the bottom row with no line below: the wrong index finds nothing and throws.
+  // Upstream tripwires, one per half of the bug. Remove patchEraseAbove only
+  // when BOTH fail (upstream fixed both); one alone is not enough.
+  type Handler = { eraseInDisplay(params: { params: number[] }): boolean }
+  const handlerOf = (terminal: Term) => (terminal as unknown as { _core: { _inputHandler: Handler } })._core._inputHandler
+  it('stock xterm 6.0.0: the bottom-row crash is still there', async () => {
     const crash = new headless.Terminal({ cols: 10, rows: 3, allowProposedApi: true })
     await write(crash, 'A\x1b[3;10H')
     expect(() => handlerOf(crash).eraseInDisplay({ params: [1] })).toThrow(/isWrapped/)
-    // 2. With scrollback: the wrong index clears a history line's wrap flag instead of the line below.
+  })
+  it('stock xterm 6.0.0: with scrollback, a history line\'s wrap flag is still clobbered', async () => {
     const wrong = new headless.Terminal({ cols: 10, rows: 3, scrollback: 10, allowProposedApi: true })
     await write(wrong, 'x'.repeat(25) + '\r\n1\r\n' + 'y'.repeat(15) + '\x1b[2;10H')
     expect(wrong.buffer.active.getLine(2)!.isWrapped).toBe(true)
@@ -75,6 +77,36 @@ describe('erase above (ED 1) with the cursor in the last column', () => {
     await expect(screen.write(new TextEncoder().encode('more'))).rejects.toThrow()
     await expect(screen.snapshot()).rejects.toThrow()
     await screen.drain()
+    screen.close()
+  })
+  it('an async handler rejecting fails the Screen without an unhandled rejection', async () => {
+    const screen = new Screen(10, 3)
+    const terminal = (screen as unknown as { terminal: Term }).terminal
+    terminal.parser.registerCsiHandler({ final: 'z' }, () => Promise.reject(new Error('async boom')) as unknown as boolean)
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      await expect(screen.write(new TextEncoder().encode('\x1b[z'))).rejects.toThrow('reconnect required')
+      await new Promise(resolve => setTimeout(resolve, 50))
+      expect(unhandled).toEqual([])
+      expect(screen.failed).toBe(true)
+      await screen.drain()
+    } finally { process.off('unhandledRejection', onUnhandled); screen.close() }
+  })
+  it('a write that throws on submission fails the Screen and releases its charge; queued writes release theirs', async () => {
+    const screen = new Screen(10, 3)
+    const terminal = (screen as unknown as { terminal: Term & { write: unknown } }).terminal
+    terminal.write = () => { throw new Error('submit boom') }
+    const first = screen.write(new TextEncoder().encode('abc'))
+    const second = screen.write(new TextEncoder().encode('queued'))
+    const [one, two] = await Promise.allSettled([first, second])
+    expect(one.status === 'rejected' && String(one.reason)).toContain('submit boom')
+    expect(two.status === 'rejected' && String(two.reason)).toContain('reconnect required')
+    expect(screen.failed).toBe(true)
+    expect((screen as unknown as { queuedBytes: number }).queuedBytes).toBe(0)
+    await expect(screen.snapshot()).rejects.toThrow()
+    await expect(screen.snapshot()).rejects.toThrow()
     screen.close()
   })
 })

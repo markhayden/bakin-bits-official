@@ -63,9 +63,16 @@ export function patchEraseAbove(terminal: ParserTerminal & object): void {
  * the owner can reject instead of hanging.
  */
 export function guardParser(terminal: object, onFailure: (error: unknown) => void): { readonly failed: boolean } {
-  const handler = (terminal as { _core?: { _inputHandler?: { parse?: (data: unknown, promiseResult?: boolean) => unknown } } })._core?._inputHandler
+  const handler = (terminal as { _core?: { _inputHandler?: { parse?: (data: unknown, promiseResult?: boolean) => unknown; _logSlowResolvingAsync?: (promise: Promise<unknown>) => void } } })._core?._inputHandler
   let failed = false
   const fail = (error: unknown) => { if (!failed) { failed = true; onFailure(error) } }
+  // xterm also races an async handler's promise in a debug branch that
+  // rethrows its rejection, unhandled. Keep only the warning; the rejection
+  // is reported through the returned promise below.
+  if (handler && typeof handler._logSlowResolvingAsync === 'function') {
+    const log = handler._logSlowResolvingAsync.bind(handler)
+    handler._logSlowResolvingAsync = (promise) => log(promise.catch(() => true))
+  }
   if (handler && typeof handler.parse === 'function') {
     const parse = handler.parse.bind(handler)
     handler.parse = (data, promiseResult) => {
