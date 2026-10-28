@@ -1,6 +1,7 @@
 import headless from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { cursorVisibilitySequence, trackCursorVisibility } from './cursor-visibility'
+import { screenView, type ScreenView } from './shadow'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
 import { guardParser } from './xterm-fixes'
 
@@ -112,6 +113,7 @@ export class Screen {
     return result
   }
   serialize(): string { return this.serializer.serialize() + cursorVisibilitySequence(this.cursor.hidden) }
+  view(): ScreenView { return screenView(this.terminal) }
   text(): string {
     const buffer = this.terminal.buffer.active
     return Array.from({ length: this.terminal.rows }, (_, index) => buffer.getLine(buffer.baseY + index)?.translateToString(true) ?? '').join('\n')

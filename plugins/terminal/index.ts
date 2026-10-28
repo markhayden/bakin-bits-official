@@ -110,13 +110,14 @@ export default definePlugin({
     if (!root) throw new Error('Terminal requires Bakin with local plugin storage and verified invocation support')
     mkdirSync(root, { recursive: true, mode: 0o700 }); chmodSync(root, 0o700)
     service = new TerminalService(root)
-    manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProcesses(service), {
+    manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProcesses(service, ctx.log), {
       settings: () => terminalSettings(ctx.getSettings<Record<string, unknown>>()),
       prepare: (input) => ctx.hooks.invoke('git.prepareSessionWorktree', input),
       release: (input) => ctx.hooks.invoke('git.releaseSessionWorktree', input),
       validateLinks: async (input) => {
         if (input.taskId && !await ctx.tasks.get(input.taskId)) throw new TerminalError('Linked task was not found', 400)
       },
+      log: ctx.log,
     })
     if (await service.ready()) await manager.start()
     const maintain = async () => {

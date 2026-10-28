@@ -47,6 +47,7 @@ processTest('commands keep working while output floods the control client', asyn
   const processes = new TmuxProcesses(service)
   let manager: Sessions | undefined
   const apps: Array<ReturnType<typeof Bun.spawn>> = []
+  let following = true
   const wait = async (predicate: () => boolean | Promise<boolean>, label: string, ms = 20000) => {
     for (const start = Date.now(); Date.now() - start < ms; await Bun.sleep(25)) if (await predicate()) return
     throw new Error(`Coexistence probe timed out: ${label}`)
@@ -60,23 +61,31 @@ processTest('commands keep working while output floods the control client', asyn
     const layouts: string[] = []
     let lines = 0
     let carry = ''
-    // Follow the session's current log: a reattach starts a fresh one (as the replica will).
+    // Watch every event the session's log delivers to its replica; a reattach starts a fresh log and replica.
     const reasons: string[] = []
+    const watched = new WeakSet<object>()
     const follow = (): void => {
-      const log = processes.outputLog(session.id)
-      if (!log || log.invalidReason) { setTimeout(follow, 10); return }
-      log.attach({
-        event: (event) => {
-          if (event.kind === 'layout') { layouts.push(`${event.cols}x${event.rows}`); return }
-          const text = carry + new TextDecoder().decode(event.bytes)
-          for (const match of text.matchAll(/GOT\[([^\]\r\n]*)\]\r\n/g)) answers.set(match[1]!, (answers.get(match[1]!) ?? 0) + 1)
-          lines += text.split('\r\nn ').length - 1
-          // Keep the tail after the last complete line, so an answer straddling two events counts once.
-          const cut = text.lastIndexOf('\r\n')
-          carry = cut === -1 ? text.slice(-64) : text.slice(cut + 2).slice(-64)
-        },
-        invalid: (reason) => { reasons.push(reason); carry = ''; setTimeout(follow, 10) },
-      })
+      if (!following) return
+      const replica = processes.replica(session.id)
+      if (replica && !watched.has(replica)) {
+        watched.add(replica)
+        const deliver = replica.event.bind(replica)
+        const invalid = replica.invalid.bind(replica)
+        replica.event = (event) => {
+          if (event.kind === 'layout') layouts.push(`${event.cols}x${event.rows}`)
+          else if (event.kind === 'output') {
+            const text = carry + new TextDecoder().decode(event.bytes)
+            for (const match of text.matchAll(/GOT\[([^\]\r\n]*)\]\r\n/g)) answers.set(match[1]!, (answers.get(match[1]!) ?? 0) + 1)
+            lines += text.split('\r\nn ').length - 1
+            // Keep the tail after the last complete line, so an answer straddling two events counts once.
+            const cut = text.lastIndexOf('\r\n')
+            carry = cut === -1 ? text.slice(-64) : text.slice(cut + 2).slice(-64)
+          }
+          return deliver(event)
+        }
+        replica.invalid = (reason) => { reasons.push(reason); carry = ''; invalid(reason) }
+      }
+      setTimeout(follow, 10)
     }
     follow()
     writeFileSync(join(root, 'flood.pl'), FLOOD)
@@ -180,6 +189,7 @@ processTest('commands keep working while output floods the control client', asyn
     // The flood never overflowed the log or broke the connection before the deliberate drop.
     expect(reasons.filter((reason) => reason !== 'reattached' && reason !== 'detached' && reason !== 'test drop')).toEqual([])
   } finally {
+    following = false
     for (const child of apps) child.kill()
     await manager?.shutdown()
     await service.command(['kill-server'], true)

@@ -5,6 +5,7 @@ import { authorize, createSchema, DAY, DeliveryUncertainError, TerminalError, ty
 import type { NativeClient, ProcessDriver } from './processes'
 import { claimSize, clampSize, nextSize } from './sizing'
 import { Screen } from './screen'
+import { screenView, shadowDiff } from './shadow'
 import { Store } from './store'
 
 interface WorktreeResult { ok: boolean; error?: string; worktreePath?: string }
@@ -35,7 +36,17 @@ export interface SessionOptions {
   release(input: { sessionId: string; worktreePath: string; teardown?: boolean }): Promise<WorktreeResult | undefined>
   validateLinks?(input: CreateInput): Promise<void>
   now?(): number
+  log?: { info(message: string, data?: Record<string, unknown>): void }
+  /** Quiet time before the shadow replica is compared with the bridge (SHADOW_QUIET_MS). */
+  shadowQuietMs?: number
 }
+
+/** Bridge output quiet for this long is a point where the shadow replica and the bridge should agree. */
+export const SHADOW_QUIET_MS = 1000
+/** Mismatches are logged at most once per session in this window (each is counted). */
+export const SHADOW_LOG_MS = 10 * 60 * 1000
+/** What shadow mode has seen for a session. */
+export interface ShadowStats { compared: number; mismatched: number; last?: string; loggedAt?: number }
 
 export class Sessions {
   private pending: Promise<unknown> = Promise.resolve()
@@ -48,6 +59,8 @@ export class Sessions {
   private nativeListeners = new Map<string, Set<() => void>>()
   private reconciling = new Set<string>()
   private timers = new Set<ReturnType<typeof setTimeout>>()
+  private shadowTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  readonly shadow = new Map<string, ShadowStats>()
   private closed = false
   constructor(readonly store: Store, private driver: ProcessDriver, private options: SessionOptions) {}
   private now(): number { return this.options.now?.() ?? Date.now() }
@@ -160,11 +173,46 @@ export class Sessions {
         void screen.write(chunk, () => {
           this.store.append(session.id, chunk)
           for (const listener of this.outputListeners.get(session.id) ?? []) listener()
+          this.shadowSoon(session.id)
         }).catch(() => undefined)
       }
     }, () => this.clientsChanged(session.id))
   }
+  /** Compare the shadow replica with the bridge once the bridge has been quiet (spec D13, R1). */
+  private shadowSoon(id: string): void {
+    if (!this.driver.replica) return
+    clearTimeout(this.shadowTimers.get(id))
+    this.shadowTimers.set(id, setTimeout(() => {
+      this.shadowTimers.delete(id)
+      void this.compareShadow(id).catch(() => undefined)
+    }, this.options.shadowQuietMs ?? SHADOW_QUIET_MS))
+  }
+  private async compareShadow(id: string): Promise<void> {
+    const replica = this.driver.replica?.(id)
+    const screen = this.screens.get(id)
+    if (this.closed || !replica || !screen || screen.failed) return
+    await replica.idle()
+    // Waiting for a seed (or ended): nothing to compare yet.
+    if (!replica.joinPoint() || !replica.terminal) return
+    const mismatch = shadowDiff(await screen.capture(() => screen.view()), screenView(replica.terminal))
+    const stats = this.shadow.get(id) ?? { compared: 0, mismatched: 0 }
+    this.shadow.set(id, stats)
+    stats.compared++
+    if (!mismatch) return
+    stats.mismatched++
+    stats.last = mismatch.kind === 'row' ? `row ${mismatch.row}` : mismatch.kind
+    const now = this.now()
+    if (stats.loggedAt !== undefined && now - stats.loggedAt < SHADOW_LOG_MS) return
+    stats.loggedAt = now
+    // Kinds and rows only: never screen contents. Copy mode and tmux messages show on the bridge only.
+    this.options.log?.info('Terminal shadow replica differs from the bridge screen', {
+      sessionId: id, mismatch: stats.last, compared: stats.compared, mismatched: stats.mismatched, replica: { ...replica.stats },
+    })
+  }
   private async stopScreen(id: string): Promise<void> {
+    clearTimeout(this.shadowTimers.get(id))
+    this.shadowTimers.delete(id)
+    this.shadow.delete(id)
     const screen = this.screens.get(id)
     this.screens.delete(id)
     await this.driver.detach(id)
@@ -679,6 +727,8 @@ export class Sessions {
   async shutdown(): Promise<void> {
     for (const timer of this.timers) clearTimeout(timer)
     this.timers.clear()
+    for (const timer of this.shadowTimers.values()) clearTimeout(timer)
+    this.shadowTimers.clear()
     for (const token of [...this.reservations.keys()]) this.dropReservation(token, 'Terminal is shutting down')
     await this.pending
     this.closed = true

@@ -2,6 +2,8 @@ import type { Session } from './contracts'
 import { TerminalError } from './contracts'
 import { ControlClient } from './control'
 import { OutputLog, parseLayoutChange } from './output-log'
+import { Replica } from './replica'
+import { reseed } from './reseed'
 import { TerminalService, terminalEnvironment } from './service'
 
 /** A tmux client on a session that is not Bakin's own bridge or control client: a terminal app (Ghostty and friends) or anything else that attached. */
@@ -33,6 +35,8 @@ export interface ProcessDriver {
   terminate(id: string): Promise<void>
   inUse(path: string): Promise<boolean>
   detach(id?: string): Promise<void>
+  /** The session's server replica (spec D13), while attached; shadow-only until the raw path (R2). */
+  replica?(id: string): Replica | undefined
   /** The terminal apps attached to a session. */
   clients(id: string): Promise<NativeClient[]>
   detachClient(name: string): Promise<void>
@@ -57,7 +61,8 @@ export class TmuxProcesses implements ProcessDriver {
   private bridges = new Map<string, ReturnType<typeof Bun.spawn>>()
   private controls = new Map<string, ControlClient>()
   private logs = new Map<string, OutputLog>()
-  constructor(private service: TerminalService) {}
+  private replicas = new Map<string, Replica>()
+  constructor(private service: TerminalService, private log?: { info(message: string, data?: Record<string, unknown>): void }) {}
   async create(session: Session): Promise<void> {
     if (!await this.service.ready()) throw new TerminalError('Terminal service needs setup', 503)
     const env = terminalEnvironment()
@@ -99,10 +104,25 @@ export class TmuxProcesses implements ProcessDriver {
     })
     this.controls.set(session.id, control)
     this.logs.set(session.id, log)
-    void control.ready.then(() => control.command(['refresh-client', '-B', 'bakin-client::#{@bakin_client}'])).catch(() => undefined)
+    // The replica starts from a seed; a failed reseed invalidates the log, which ends it.
+    const replica = new Replica({
+      reseed: (reason) => reseed(control, log, session.id, reason),
+      // Shadow mode (R1): the replica's lifecycle is logged, never its contents.
+      diagnostic: (event) => this.log?.info(`Terminal replica ${event.kind}`, { sessionId: session.id, ...event }),
+    })
+    log.attach(replica)
+    this.replicas.set(session.id, replica)
+    void control.ready.then(async () => {
+      await control.command(['refresh-client', '-B', 'bakin-client::#{@bakin_client}'])
+      await reseed(control, log, session.id, 'attach')
+    }).catch(() => undefined)
   }
   /** The session's ordered event log, while its control connection is attached. */
   outputLog(id: string): OutputLog | undefined { return this.logs.get(id) }
+  replica(id: string): Replica | undefined {
+    const replica = this.replicas.get(id)
+    return replica?.ended ? undefined : replica
+  }
   private control(id: string): ControlClient {
     const control = this.controls.get(id)
     if (!control || control.isClosed) throw new TerminalError('Terminal attachment is disconnected', 503)
@@ -187,6 +207,7 @@ export class TmuxProcesses implements ProcessDriver {
     if (id) this.logs.delete(id); else this.logs.clear()
     for (const control of controls) control.close('detached')
     for (const log of logs) log.invalidate('detached')
+    if (id) this.replicas.delete(id); else this.replicas.clear()
     const clients = id ? [this.bridges.get(id)].filter((client) => client !== undefined) : [...this.bridges.values()]
     if (id) this.bridges.delete(id); else this.bridges.clear()
     for (const client of clients) { client.kill(); client.terminal?.close() }
