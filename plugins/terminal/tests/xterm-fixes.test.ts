@@ -210,4 +210,12 @@ describe('tab stops across alternate-screen switches', () => {
     await write(terminal, '\x1b[3g\x1b[1;3H\x1bH\x1b[?1049l\r')
     expect(await column(terminal)).toBe(2)
   })
+  it('leaving an alternate screen whose width changed resets the stops, as tmux does', async () => {
+    const terminal = new headless.Terminal({ cols: 20, rows: 3, allowProposedApi: true })
+    applyTerminalProfile(terminal)
+    await write(terminal, '\x1b[?1049h')
+    terminal.resize(30, 3)
+    await write(terminal, tabbed + '\x1b[?1049l\x1b[H')
+    expect(await column(terminal)).toBe(8)
+  })
 })
