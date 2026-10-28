@@ -154,15 +154,26 @@ processTest('commands keep working while output floods the control client', asyn
       send(line)
       if (keys) control.close('test drop')
     }
+    // Count every delivery attempt at the driver, across any client it attaches next.
+    const attempts: string[] = []
+    const deliver = processes.write.bind(processes)
+    processes.write = (id, data) => { attempts.push(data); return deliver(id, data) }
     await expect(manager.writeNext(session.id, human, generation, 'maybe\r')).rejects.toBeInstanceOf(DeliveryUncertainError)
     expect(consumedBeforeSend).toBe(sequence + 1)
     expect(manager.get(session.id, human).inputSequence).toBe(sequence + 1)
+    // Recovery: the next read reattaches on a fresh control client, which works.
+    await manager.readScreen(session.id, human)
+    expect((processes as unknown as { controls: Map<string, ControlClient> }).controls.get(session.id)).not.toBe(control)
+    await manager.writeNext(session.id, human, generation, 'after-recovery\r')
+    await wait(() => receipts().includes('after-recovery'), 'input after recovery')
+    // The uncertain input was attempted once and never again, recovery included.
+    expect(attempts.filter((data) => data === 'maybe\r')).toHaveLength(1)
 
     // Exactly once, by the program's own receipts: no duplicate, and the
     // uncertain input was never retried (at most the one attempt landed).
     await settle(1000, 'a retry, had there been one, would have landed by now')
     const received = receipts()
-    expect(received.filter((line) => line.startsWith('hello'))).toEqual(['hello-1', 'hello-2', 'hello-3'])
+    expect(received.filter((line) => line.startsWith('hello') || line === 'after-recovery')).toEqual(['hello-1', 'hello-2', 'hello-3', 'after-recovery'])
     expect(received.filter((line) => line === 'maybe').length).toBeLessThanOrEqual(1)
     // The event log delivered each answer it carried once.
     expect([...answers.entries()].filter(([key]) => key.startsWith('hello'))).toEqual([['hello-1', 1], ['hello-2', 1], ['hello-3', 1]])
