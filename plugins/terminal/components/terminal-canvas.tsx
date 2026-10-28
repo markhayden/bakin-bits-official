@@ -5,6 +5,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Button } from '@makinbakin/sdk/ui'
 import { ArrowDown, Keyboard, ZoomOut } from 'lucide-react'
 import type { Session } from '../lib/contracts'
+import { installGeometry } from '../lib/geometry'
 import { clampSize } from '../lib/sizing'
 import { trackCursorVisibility } from '../lib/cursor-visibility'
 import { applyTerminalProfile, isAllowedLink, TERMINAL_OPTIONS } from '../lib/terminal-profile'
@@ -361,6 +362,18 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
             if (pending !== next) requestAnimationFrame(applyView)
           },
           finish: (side) => { if (!discarded) restoreSideState(term, side) },
+          // A width change (plan T34a): tmux's picture parsed off screen, its geometry installed into this terminal.
+          geometry: (cols, rows) => {
+            const scratch = new Terminal({ cols, rows, ...TERMINAL_OPTIONS })
+            applyTerminalProfile(scratch).setLive(false)
+            const scratchParser = guardParser(scratch, () => undefined)
+            let gone = false
+            return {
+              write: (data, done) => { if (!gone) scratch.write(data, done) },
+              install: () => !discarded && !gone && !scratchParser.failed && installGeometry(term, scratch),
+              discard: () => { if (!gone) { gone = true; scratch.dispose() } },
+            }
+          },
           // The barrier: this picture replaces the one shown (keyboard focus kept), and goes live.
           live: () => {
             if (discarded || pending !== next) return

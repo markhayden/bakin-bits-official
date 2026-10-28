@@ -268,14 +268,19 @@ describe('TerminalSocketClient on the raw path', () => {
     const pictures: string[] = []
     const displays: string[] = []
     const written: Array<() => void> = []
+    /** What a geometry's install answers. */
+    const installs = { ok: true }
     const rig = setup({
       onPicture: (header) => {
         pictures.push(`${header.type} ${header.epoch}`)
-        return { write: (_data, done) => { written.push(done) }, resize: () => undefined, finish: () => undefined, live: () => undefined, discard: () => undefined }
+        return {
+          write: (_data, done) => { written.push(done) }, resize: () => undefined, finish: () => undefined, live: () => undefined, discard: () => undefined,
+          geometry: () => ({ write: (_data, done) => { written.push(done) }, install: () => installs.ok, discard: () => undefined }),
+        }
       },
       onDisplay: (state) => { displays.push(state) },
     })
-    return { ...rig, pictures, displays, flush: () => { for (const done of written.splice(0)) done() } }
+    return { ...rig, pictures, displays, installs, flush: () => { for (const done of written.splice(0)) done() } }
   }
   it('joins into a picture, accepts input only after the replay is applied, and says so', () => {
     const { client, socket, events, pictures, displays, flush } = raw()
@@ -292,6 +297,21 @@ describe('TerminalSocketClient on the raw path', () => {
     expect(events.statuses.at(-1)).toBe('Connected')
     expect(displays).toEqual(['replaying', 'live'])
     expect(client.input(1, 'ls')).toBe(1)
+  })
+  it("a geometry the picture cannot install reconnects for a fresh one (it routes like a layout)", async () => {
+    const { client, socket, flush, installs } = raw()
+    client.connect()
+    socket().open()
+    socket().server({ type: 'join', epoch: 1, session, checkpoint, bytes: 0, baseSeq: 1, throughSeq: 1 })
+    socket().server({ type: 'barrier', epoch: 1, throughSeq: 1 })
+    flush()
+    const first = socket()
+    installs.ok = false
+    first.server({ type: 'geometry', seq: 2, cols: 80, rows: 30, generation: 1, bytes: 3 })
+    first.server(new TextEncoder().encode('abc'))
+    flush()
+    await until(() => socket() !== first, 'a new connection')
+    expect(first.readyState).toBe(3)
   })
   it('a rebase changes the picture, never the input: Ctrl-C still goes while it replays', () => {
     const { client, socket, events, pictures, displays, flush } = raw()

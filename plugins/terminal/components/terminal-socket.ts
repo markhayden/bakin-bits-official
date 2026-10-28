@@ -190,6 +190,7 @@ export class TerminalSocketClient {
         this.options.onPresence(presenceOf(message))
         return
       case 'layout':
+      case 'geometry':
       case 'barrier':
         this.raw?.message(message, text)
         return
@@ -250,6 +251,8 @@ export class TerminalSocketClient {
         }
       },
       display: (state, detail) => this.options.onDisplay?.(state, detail),
+      // A fresh connection joins with a fresh picture.
+      failed: () => this.reconnect(),
     })
     return this.raw
   }

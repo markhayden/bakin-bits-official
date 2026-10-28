@@ -287,3 +287,45 @@ rawTest('overload (D13 bounded load): 30 s of flood with a stalled viewer — ev
     await browser.close()
   }
 }, 150_000)
+
+rawTest("a width change (plan T34a): the viewer installs tmux's geometry and shows what tmux shows, with no rebuild", async () => {
+  const browser = await launchChromium()
+  const client = 'raw-browser-width-test-01'
+  const page = await browser.newPage({ viewport })
+  const { id } = await createSession(page, client)
+  const tmux = process.env.TERMINAL_PREVIEW_TMUX!
+  const socket = new TerminalService(process.env.TERMINAL_PREVIEW_ROOT!).socket
+  // (The target before the rest: tmux stops reading options at the first argument.)
+  const pane = (command: string, ...args: string[]) => Bun.spawnSync([tmux, '-S', socket, command, '-t', id, ...args]).stdout.toString()
+  const gates = mkdtempSync(join(tmpdir(), 'bakin-raw-width-'))
+  const frames: string[] = []
+  page.on('websocket', (ws) => ws.on('framereceived', (frame) => {
+    if (typeof frame.payload === 'string') frames.push((JSON.parse(frame.payload) as { type: string }).type)
+  }))
+  const trimmed = (lines: string[]) => { const out = lines.map((line) => line.trimEnd()); while (out.length && out.at(-1) === '') out.pop(); return out }
+  try {
+    await open(page, id)
+    const width = Number(pane('display', '-p', '#{pane_width}').trim())
+    expect(width).toBeGreaterThan(60)
+    // Lines that wrap, then the cursor left inside a line wrapped past the width: tmux reflows the cursor's
+    // line on a resize and xterm does not (spike 2's lost character). A program holds it there, not the shell.
+    await typeLine(page, `clear; for i in 1 2 3; do printf 'row%s-%0${width + 40}d\\n' $i 0; done; printf 'cursor-%0${width + 20}d' 0; while [ ! -f ${join(gates, 'go')} ]; do sleep 0.05; done; echo; echo width-done`)
+    await waitForRow(page, "^cursor-0+$")
+    // tmux narrows the window (any size authority ends here): it reflows, and the viewer follows its geometry.
+    pane('resize-window', '-x', String(width - 30))
+    for (const start = Date.now(); !frames.includes('geometry'); await Bun.sleep(50)) {
+      if (Date.now() - start > 10_000) throw new Error('no geometry frame')
+    }
+    expect(trimmed(await rows(page))).toEqual(trimmed(pane('capture-pane', '-p').split('\n')))
+    expect(frames).not.toContain('rebuilding')
+    expect(frames.filter((type) => type === 'rebase')).toEqual([])
+    // Output after it lands where tmux has it.
+    writeFileSync(join(gates, 'go'), '')
+    await waitForRow(page, '^width-done$')
+    expect(trimmed(await rows(page))).toEqual(trimmed(pane('capture-pane', '-p').split('\n')))
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+    rmSync(gates, { recursive: true, force: true })
+  }
+}, 60_000)

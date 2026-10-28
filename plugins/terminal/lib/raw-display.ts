@@ -7,6 +7,9 @@
  * - `join` / `rebase` header (JSON): the checkpoint's side state and `bytes`,
  *   the exact UTF-8 length of its text; then that text as binary frames;
  * - tail and live output as binary frames, `layout { seq, cols, rows }`;
+ * - `geometry { seq, cols, rows, generation, bytes }` (a width change's
+ *   picture from tmux, plan T34a), then its `bytes` as binary frames: the
+ *   viewer parses them into a scratch terminal and installs its geometry;
  * - `barrier { epoch, throughSeq }`: the replay is complete;
  * - `rebuilding { cause, fidelity }`: the picture is stale until a rebase.
  * Once a header for an epoch is sent, nothing of an earlier epoch follows,
@@ -115,9 +118,13 @@ function sideState(checkpoint: Checkpoint): Record<string, unknown> {
   return { format: checkpoint.format, cols: checkpoint.cols, rows: checkpoint.rows, scrollback: checkpoint.scrollback, joinState: checkpoint.joinState, penHasExtended: checkpoint.penHasExtended, altEnteredCols: checkpoint.altEnteredCols, altEntry: checkpoint.altEntry }
 }
 
+/** The bytes an event carries to a viewer (a layout none; a seed is never in a tail). */
+const payload = (event: LogEvent): number => event.kind === 'output' || event.kind === 'geometry' ? event.bytes.length : 0
+
 function* eventFrames(event: LogEvent): Generator<Frame> {
   if (event.kind === 'layout') { yield { json: { type: 'layout', seq: event.seq, cols: event.cols, rows: event.rows } }; return }
-  if (event.kind !== 'output') return
+  if (event.kind === 'geometry') yield { json: { type: 'geometry', seq: event.seq, cols: event.cols, rows: event.rows, generation: event.generation, bytes: event.bytes.length } }
+  else if (event.kind !== 'output') return
   for (let at = 0; at < event.bytes.length; at += FRAME_BYTES) yield { bytes: event.bytes.subarray(at, at + FRAME_BYTES) }
 }
 
@@ -209,7 +216,7 @@ export class RawDisplay implements ReplicaListener {
   event(event: LogEvent): void {
     // A newer picture is owed: it will include this event.
     if (this.closed || this.waitingForSeed || this.replacement) return
-    const bytes = event.kind === 'output' ? event.bytes.length : 0
+    const bytes = payload(event)
     if (this.backlogBytes + bytes > VIEWER_QUEUE_BYTES || this.backlog.length >= VIEWER_QUEUE_EVENTS) {
       // Too far behind to catch up event by event: a newer picture replaces it (the replay in progress finishes first).
       this.dropBacklog()
@@ -322,7 +329,7 @@ export class RawDisplay implements ReplicaListener {
           if (!this.live) {
             const event = this.backlog.shift()
             if (!event) return
-            if (event.kind === 'output') this.backlogBytes -= event.bytes.length
+            this.backlogBytes -= payload(event)
             this.live = eventFrames(event)
             this.sending = event
           }
@@ -355,7 +362,7 @@ export class RawDisplay implements ReplicaListener {
    */
   *retainedSteps(): Generator<void, number> {
     let bytes = this.backlogBytes + this.backlog.length * EVENT_OVERHEAD_BYTES + (this.sent - this.retired)
-    if (this.sending?.kind === 'output') bytes += this.sending.bytes.length + EVENT_OVERHEAD_BYTES
+    if (this.sending && this.sending.kind !== 'layout') bytes += payload(this.sending) + EVENT_OVERHEAD_BYTES
     if (this.pinned) bytes += ENCODER_SCRATCH_BYTES
     const current = this.source.state()
     const base = current.kind === 'live' ? current.cut.checkpoint : undefined
@@ -363,7 +370,7 @@ export class RawDisplay implements ReplicaListener {
     for (const cut of [this.pinned, this.latest]) {
       if (!cut) continue
       if (cut.checkpoint !== base) bytes += yield* textSteps(cut.checkpoint.data)
-      for (const event of cut.tail) bytes += (event.kind === 'output' ? event.bytes.length : 0) + EVENT_OVERHEAD_BYTES
+      for (const event of cut.tail) bytes += payload(event) + EVENT_OVERHEAD_BYTES
     }
     return bytes
   }

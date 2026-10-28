@@ -186,6 +186,28 @@ describe('RawDisplay credit', () => {
     expect(Buffer.byteLength(JSON.stringify((h.sent[0] as { json: Record<string, unknown> }).json))).toBeGreaterThan(6000)
     expect(h.kinds()).toEqual(['join', 'bytes 16384'])
   })
+  it("sends a geometry as its header then its bytes (in frames), in the tail's order and live", () => {
+    const picture = encode('x'.repeat(100 * 1024))
+    const geometry: LogEvent = { seq: 3, kind: 'geometry', bytes: picture, cols: 60, rows: 24, generation: 1, history: true }
+    const h = harness({ kind: 'live', cut: cut(['base'], 1, [{ seq: 2, kind: 'layout', cols: 60, rows: 24 }, geometry]) })
+    h.display.start()
+    expect(h.kinds()).toEqual(['join', 'bytes 4', 'layout', 'geometry', 'bytes 65536', `bytes ${100 * 1024 - 65536}`, 'barrier'])
+    expect(h.sent[3]).toEqual({ json: { type: 'geometry', seq: 3, cols: 60, rows: 24, generation: 1, bytes: picture.length } })
+    h.src.tell().event({ ...geometry, seq: 4, bytes: encode('live') })
+    expect(h.kinds().slice(7)).toEqual(['geometry', 'bytes 4'])
+  })
+  it("counts a geometry's bytes against the viewer's backlog", () => {
+    const h = harness({ kind: 'live', cut: cut(['base'], 1) }, { window: 64 })
+    h.display.start()
+    h.display.retire(h.total())
+    // The window holds it back: a geometry past the backlog's bound is replaced by a newer picture.
+    h.src.tell().event(output(2, new Uint8Array(1024)))
+    h.src.tell().event({ seq: 3, kind: 'geometry', bytes: new Uint8Array(VIEWER_QUEUE_BYTES + 1), cols: 60, rows: 24, generation: 1, history: true })
+    expect(displayBytes(h.display)).toBeLessThan(VIEWER_QUEUE_BYTES)
+    // Dropped for the replacement: once the window opens, it is never sent.
+    h.display.retire(h.total())
+    expect(h.kinds()).not.toContain('geometry')
+  })
   it('counts layout frames too: a stream of zero-output layouts is bounded by the window', () => {
     const h = harness({ kind: 'live', cut: cut([''], 1) }, { window: 300 })
     h.display.start()
