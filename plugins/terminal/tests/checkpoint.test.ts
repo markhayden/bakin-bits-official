@@ -36,7 +36,7 @@ async function joinAt(cols: number, rows: number, before: Uint8Array) {
 function shown(term: Term) {
   const rows = (buffer: typeof term.buffer.normal) => Array.from({ length: buffer.length }, (_, y) => buffer.getLine(y)!.translateToString(true))
   const override = (term as unknown as { _core: { coreService: { decPrivateModes: { cursorStyle?: string; cursorBlink?: boolean } } } })._core.coreService.decPrivateModes
-  return { normal: rows(term.buffer.normal), alternate: term.buffer.active.type === 'alternate' ? rows(term.buffer.alternate) : [], cursor: `${override.cursorStyle}/${override.cursorBlink}` }
+  return { normal: rows(term.buffer.normal), alternate: term.buffer.active.type === 'alternate' ? rows(term.buffer.alternate) : [], cursor: `${override.cursorStyle}/${override.cursorBlink}/${term.options.cursorBlink}` }
 }
 
 // Spike 3's named repros (Codex's included: pending wrap, DEC graphics under a saved cursor, BEL inside DCS, idle prompt).
@@ -64,6 +64,8 @@ const NAMED: { name: string; cols: number; rows: number; before: Uint8Array; aft
   { name: 'a DECSCUSR override reset (CSI 0 SP q)', cols: 10, rows: 3, before: enc('\x1b[4 q\x1b[0 qx'), after: enc('y') },
   { name: 'a pending wrap inside a link', cols: 6, rows: 3, before: enc('\x1b]8;;https://a.example\x1b\\abcdef'), after: enc('gh\x1b]8;;\x1b\\') },
   { name: 'protected (DECSCA) cells, an erase that spares them, and a protected pen', cols: 12, rows: 3, before: enc('ab\x1b[1"qPROT\x1b[0"qcd\x1b[1"q'), after: enc('X\x1b[1;1H\x1b[?2Kafter'), atCut: true },
+  { name: 'a protected cell after a reset (SGR 0 clears protection)', cols: 12, rows: 3, before: enc('\x1b[1"qP\x1b[0"qU'), after: enc('\x1b[?2Kx'), atCut: true },
+  { name: 'DECSET 12 (cursor blinking set by the program)', cols: 12, rows: 3, before: enc('\x1b[?12hx'), after: enc('y'), atCut: true },
   { name: 'a saved cursor with protection on', cols: 12, rows: 3, before: enc('\x1b[1"q\x1b7\x1b[0"qx'), after: enc('\x1b8P\x1b[?2K'), atCut: true },
   { name: 'a link the program named like a generated one', cols: 20, rows: 3, before: enc('\x1b]8;;https://a.example\x1b\\A\x1b]8;;\x1b\\'), after: enc('\x1b]8;id=bakin-1;https://a.example\x1b\\B\x1b]8;;\x1b\\'), atCut: true },
   { name: 'custom tab stops then the alternate screen', cols: 20, rows: 3, before: enc('\x1b[3g\x1b[1;5H\x1bH\x1b[H'), after: enc('\x1b[?1049h\tX') },

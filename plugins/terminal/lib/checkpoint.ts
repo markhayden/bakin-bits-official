@@ -131,10 +131,13 @@ function printLines(terminal: Term, buffer: Buffer, from: number, slotLine = -1)
         while (x + run < end && cellKey(terminal, line.loadCell(x + run, cell)) === key) run++
         line.loadCell(x, cell)
         if (link) { out += osc8(''); link = '' }
-        protect((cell.bg & PROTECTED) !== 0)
         if (key !== defaultBlank) {
           const attributes = sgr(cell.fg, cell.bg & ~HAS_EXTENDED, null)
-          out += attributes + `\x1b[${run}X`
+          // SGR 0 clears protection in the pinned version: protection after it.
+          out += attributes
+          protectedNow = false
+          protect((cell.bg & PROTECTED) !== 0)
+          out += `\x1b[${run}X`
           pen = attributes
         }
         if (x + run < terminal.cols) out += `\x1b[${run}C`
@@ -147,21 +150,22 @@ function printLines(terminal: Term, buffer: Buffer, from: number, slotLine = -1)
       const params = extended && extended.urlId ? linkParams(terminal, extended.urlId) : null
       const key = params ? `${params.id}\u0000${params.uri}` : ''
       if (key !== link) { out += params ? osc8(params.uri, params.id) : osc8(''); link = key }
-      protect((cell.bg & PROTECTED) !== 0)
       const attributes = sgr(cell.fg, cell.bg & ~HAS_EXTENDED, extended)
-      if (attributes !== pen) { out += attributes; pen = attributes }
+      if (attributes !== pen) { out += attributes; pen = attributes; protectedNow = false }
+      protect((cell.bg & PROTECTED) !== 0)
       out += cell.getChars()
       x += cell.getWidth()
       if (slotDue) {
         if (link) { out += osc8(''); link = '' }
         out += savedSlot(terminal, buffer) + `\x1b[${x + 1}G`
         pen = ''
+        protectedNow = false
         slotDue = false
       }
     }
     if (!full) {
       if (link) { out += osc8(''); link = '' }
-      if (pen && pen !== '\x1b[0m') out += '\x1b[0m'
+      if (pen && pen !== '\x1b[0m') { out += '\x1b[0m'; protectedNow = false }
       if (next) out += '\r\n'
     }
   }
@@ -251,6 +255,8 @@ export function serialize(terminal: Term): string {
   else if (encoding === 'URXVT') out += '\x1b[?1015h'
   else if (encoding === 'UTF8') out += '\x1b[?1005h'
   if (core.coreService.isCursorHidden) out += '\x1b[?25l'
+  // Blinking is an option a program can set (DECSET 12): always written.
+  out += core.optionsService.rawOptions.cursorBlink ? '\x1b[?12h' : '\x1b[?12l'
   // DECSCUSR's override (the configured style is configuration, not state; RIS leaves no override).
   const override = core.coreService.decPrivateModes
   if (override.cursorStyle !== undefined) out += `\x1b[${({ block: 1, underline: 3, bar: 5 } as Record<string, number>)[override.cursorStyle]! + (override.cursorBlink ? 0 : 1)} q`
