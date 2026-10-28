@@ -150,7 +150,7 @@ describe('reseed', () => {
       n++
     }
     await expect(failing).rejects.toThrow("can't find pane")
-    expect(RESEED_BACKOFF_MS.length).toBe(RESEED_ATTEMPTS - 1)
+    expect(RESEED_BACKOFF_MS).toHaveLength(RESEED_ATTEMPTS - 1)
     expect(delays).toEqual([...RESEED_BACKOFF_MS])
     expect(written).toHaveLength(RESEED_ATTEMPTS)
     expect(log.invalidReason).toStartWith('reseed failed')
