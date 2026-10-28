@@ -211,22 +211,38 @@ export function incompleteUtf8Tail(data: Uint8Array): number {
   return 0
 }
 
+/** Largest piece handed to xterm: below its own 128 KiB parse split, so it never cuts a codepoint itself. */
+export const WRITE_PIECE = 64 * 1024
+
 /**
  * xterm 6.0.0: a write that ends inside a UTF-8 sequence loses the grapheme
  * join state when the sequence completes in the next write (a ZWJ split
- * after `E2 80` turns 🧑‍💻 from 2 cells into 4). Byte writes are cut only at
- * codepoint boundaries: an incomplete tail is carried into the next write,
- * and a reset drops it.
+ * after `E2 80` turns 🧑‍💻 from 2 cells into 4); xterm also splits large
+ * writes itself at 128 KiB, anywhere. So every write reaches xterm in pieces
+ * of at most WRITE_PIECE that end on a codepoint boundary (a string on a
+ * surrogate pair's boundary); an incomplete UTF-8 tail is carried into the
+ * next byte write. A string write or a reset drops a carried tail: those
+ * bytes can no longer complete.
  */
 export function patchUtf8Boundaries(terminal: { write(data: string | Uint8Array, callback?: () => void): void; reset(): void }): void {
   const write = terminal.write.bind(terminal)
   const reset = terminal.reset.bind(terminal)
   let carry: Uint8Array | undefined
+  // Pieces in order; the caller's callback rides the last, so it fires after all of them are parsed.
+  const pieces = (data: string | Uint8Array, boundary: (end: number) => number, callback?: () => void) => {
+    if (data.length === 0) { write(data, callback); return }
+    for (let offset = 0; offset < data.length;) {
+      let end = Math.min(offset + WRITE_PIECE, data.length)
+      if (end < data.length) end = boundary(end)
+      write(data.slice(offset, end), end === data.length ? callback : undefined)
+      offset = end
+    }
+  }
   terminal.write = (data, callback) => {
     if (typeof data === 'string') {
-      // Text after an unfinished sequence: xterm resolves it as it would have.
-      if (carry) { write(carry); carry = undefined }
-      write(data, callback)
+      carry = undefined
+      // Never between a surrogate pair's halves.
+      pieces(data, (end) => (/[\ud800-\udbff]/.test(data[end - 1]!) ? end - 1 : end), callback)
       return
     }
     let bytes = data
@@ -237,7 +253,9 @@ export function patchUtf8Boundaries(terminal: { write(data: string | Uint8Array,
     }
     const tail = incompleteUtf8Tail(bytes)
     carry = tail ? bytes.slice(bytes.length - tail) : undefined
-    write(tail ? bytes.subarray(0, bytes.length - tail) : bytes, callback)
+    const complete = tail ? bytes.subarray(0, bytes.length - tail) : bytes
+    // Back off to the lead byte of a codepoint that would be cut.
+    pieces(complete, (end) => { while ((complete[end]! & 0xc0) === 0x80) end--; return end }, callback)
   }
   terminal.reset = () => { carry = undefined; reset() }
 }

@@ -32,6 +32,7 @@ export function renderTmuxWidthTable(tmux: string): string {
   try {
     run('new-session', '-d', '-s', 'w', 'sleep 3600')
     const base = loadGraphemeProvider(new headless.Terminal({ allowProposedApi: true }) as never)
+    const letter = base.charProperties(0x61, 0)
     // tmux's width for each codepoint, one batch per command file.
     const tmuxWidths = (codepoints: number[]): number[] => {
       const file = join(root, 'batch.conf')
@@ -48,8 +49,21 @@ export function renderTmuxWidthTable(tmux: string): string {
         const widths = tmuxWidths(batch)
         if (widths.length !== batch.length) throw new Error(`tmux returned ${widths.length} widths for ${batch.length} codepoints at U+${batch[0]!.toString(16)}`)
         batch.forEach((codepoint, k) => {
-          const ours = base.wcwidth(codepoint)
           const theirs = widths[k]!
+          // VS16: tmux combines it and forces the cell wide
+          // (variation-selector-always-wide, on by default), as the
+          // grapheme rules do; its scalar width of 0 says otherwise.
+          if (codepoint === 0xfe0f) return
+          if (theirs === 0) {
+            // tmux puts a zero-width character in the previous cell and keeps
+            // its width; the grapheme rules may give it a cell or widen the
+            // cluster. Compare what it adds after a narrow letter.
+            const after = base.charProperties(codepoint, letter)
+            const adds = after & 1 ? ((after >> 1) & 3) - 1 : (after >> 1) & 3
+            if (adds !== 0) differing.push([codepoint, 0])
+            return
+          }
+          const ours = base.wcwidth(codepoint)
           // A spacing character the grapheme rules treat as zero-width joins
           // its letter either way; that is context, not a width.
           if (theirs !== ours && ours !== 0) differing.push([codepoint, theirs])

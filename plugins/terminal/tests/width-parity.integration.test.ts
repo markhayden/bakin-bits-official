@@ -18,6 +18,8 @@ const AGREE = [
   '👍🏽', '👨\u200d👩\u200d👧', '🧑\u200d💻', '🧑🏽\u200d💻', '🇺🇸', '🇺🇸🇬', '❤\ufe0f', '↔\ufe0f', '©\ufe0f', '#\ufe0f\u20e3', '✅ done', '⚠️ warn', '🚀🔥',
   // From the generated table: format characters, tmux's force-wide bases, newer emoji, Unicode 16 widths.
   'x\u200by', 'x\u200ey', 'x\u2060y', '☝', '✌', '🫠', '\u{1FA75}', '\u{1FAE8}', '☰',
+  // Zero-width marks the grapheme rules would widen the previous cell for.
+  '\uff76\u3099', 'a\u302a',
   // An escape between two regional indicators: tmux and the grapheme rules both pair them.
   '🇺\x1b[0m🇸',
 ]

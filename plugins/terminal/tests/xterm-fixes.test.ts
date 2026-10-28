@@ -134,6 +134,30 @@ describe('UTF-8 chunk boundaries', () => {
       expect(terminal.buffer.active.cursorX, `split at ${at}`).toBe(3)
     }
   })
+  it('a large write never reaches xterm\'s own 128 KiB split inside a codepoint', async () => {
+    const text = 'a'.repeat(131066) + '🧑\u200d💻X'
+    const terminal = new headless.Terminal({ cols: 80, rows: 2, scrollback: 0, allowProposedApi: true })
+    applyTerminalProfile(terminal)
+    await writeBytes(terminal, Buffer.from(text))
+    const whole = new headless.Terminal({ cols: 80, rows: 2, scrollback: 0, allowProposedApi: true })
+    applyTerminalProfile(whole)
+    for (let offset = 0; offset < text.length; offset += 4096) await new Promise<void>(resolve => whole.write(text.slice(offset, offset + 4096), resolve))
+    expect(terminal.buffer.active.cursorX).toBe(whole.buffer.active.cursorX)
+    // The same text as one string write.
+    const string = new headless.Terminal({ cols: 80, rows: 2, scrollback: 0, allowProposedApi: true })
+    applyTerminalProfile(string)
+    await new Promise<void>(resolve => string.write(text, resolve))
+    expect(string.buffer.active.cursorX).toBe(whole.buffer.active.cursorX)
+  })
+  it('a string write drops a carried tail instead of handing it to xterm\'s decoder', async () => {
+    const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
+    applyTerminalProfile(terminal)
+    await writeBytes(terminal, Uint8Array.from([0xe4, 0xb8]))
+    await new Promise<void>(resolve => terminal.write('', resolve))
+    terminal.reset()
+    await writeBytes(terminal, Uint8Array.from([0xad, 0x41]))
+    expect(terminal.buffer.active.getLine(0)!.translateToString(true)).not.toContain('中')
+  })
   it('a write of only an incomplete sequence still settles; a reset drops the carried bytes', async () => {
     const terminal = new headless.Terminal({ cols: 20, rows: 2, allowProposedApi: true })
     applyTerminalProfile(terminal)
