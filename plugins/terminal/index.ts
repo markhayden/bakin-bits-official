@@ -29,6 +29,9 @@ function agent(context?: PluginToolContext): Principal {
   if (!context?.invocation?.agentId) throw new TerminalError('Verified agent identity required', 403)
   return { kind: 'agent', id: context.invocation.agentId }
 }
+/** The sessions the operator saw and confirmed ending for the service update. */
+const serviceUpdateBody = z.object({ end: z.array(z.string().min(1)).max(1000) })
+
 const route = (path: string, method: 'GET' | 'POST', summary: string, handler: (request: Request) => Promise<Response>) => defineRoute({
   path, method, summary,
   handler: async (request) => { try { return await handler(request) } catch (error) { return failure(error) } },
@@ -87,6 +90,11 @@ export default definePlugin({
       return Response.json(sessionTable(sessions().list(principal), (id) => sessions().nativeClients(id)))
     }),
     route('/service', 'POST', 'Set up the persistent terminal service', async (request) => { human(request); await sessions().setupService(() => service!.install()); return Response.json({ ready: true }) }),
+    route('/service/update', 'POST', 'Apply the Terminal service update, ending the live sessions the operator confirmed', async (request) => {
+      const principal = human(request)
+      const { end } = serviceUpdateBody.parse(await request.json())
+      return Response.json(await sessions().applyServiceUpdate(end, principal, () => service!.install(), async () => Boolean(await service?.updateRequired())))
+    }),
   ],
   socketRoutes: [
     defineSocketRoute({
@@ -189,6 +197,7 @@ export default definePlugin({
       incidents: [
         { id: 'service', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
         { id: 'service-update', subjectKind: 'plugin', resolution: { type: 'repair', actionId: 'setup-service' }, required: 'never' },
+        { id: 'service-update-live', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
         { id: 'maintenance', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
         { id: 'retention', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
         { id: 'memory', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
@@ -220,9 +229,17 @@ export default definePlugin({
             resolution: { key: 'review', type: 'human', needs: 'decision', label: 'Open Terminal', href: '/terminal' },
           } })
         }
-        if (updateRequired) observations.push({ key: 'service-update', status: 'warning', summary: 'Terminal service update available', incident: {
+        // With live sessions the update ends them first: that is the operator's choice, in Terminal's confirmation.
+        const live = sessions().list({ kind: 'human', id: 'health' }).filter((session) => session.state === 'running').length
+        if (updateRequired && live) observations.push({ key: 'service-update', status: 'warning', summary: 'Terminal service update available', incident: {
+          key: 'service-update', declarationId: 'service-update-live', subject: TERMINAL_SUBJECT, title: 'Terminal service update available',
+          impact: `Terminal runs an older service setup. Applying it ends the ${live === 1 ? 'live session' : `${live} live sessions`} first; Terminal lists them before anything ends.`,
+          class: 'service_failure', disposition: 'watch',
+          resolution: { key: 'review', type: 'human', needs: 'decision', label: 'Open Terminal', href: '/terminal' },
+        } })
+        else if (updateRequired) observations.push({ key: 'service-update', status: 'warning', summary: 'Terminal service update available', incident: {
           key: 'service-update', declarationId: 'service-update', subject: TERMINAL_SUBJECT, title: 'Terminal service update available',
-          impact: 'Terminal runs an older service setup; native attach and the current terminal configuration need the update. It applies once no session is live.',
+          impact: 'Terminal runs an older service setup; native attach and the current terminal configuration need the update.',
           class: 'service_failure', disposition: 'watch',
           resolution: { key: 'apply', type: 'repair', actionId: 'setup-service', label: 'Apply update' },
         } })

@@ -53,12 +53,16 @@ browser. When the
 running service is not the one this plugin version sets up (another binary,
 another configuration, or no verified fingerprint), Terminal and Health show
 **Terminal service update available**. It is a recommendation: sessions keep
-working on the running service until you apply it. **Apply update** opens a
-confirmation that lists any live sessions and offers to end them first (setup
-needs none running), then restarts the service; a refusal stays in that
-dialog with its reason. Health's **Apply update** runs the same setup and
-refuses while any session is live, naming those sessions. Setup also refuses
-a service whose process state cannot be verified. Restarting the service drops retained tmux panes and their
+working on the running service until you apply it. **Apply update** (on the
+Terminal list) opens a confirmation that lists any live sessions and offers to
+end them first (setup needs none running), then restarts the service. Bakin
+ends exactly the sessions you were shown: if one started or the update was
+applied elsewhere meanwhile, nothing ends and the dialog says so; if one
+cannot be ended, the update is not applied and the dialog names what did end.
+Restarting drops tmux's own scrollback for ended sessions; output Bakin saved
+and retained worktrees are kept. Health offers **Apply update** directly when
+no session is live, and **Open Terminal** when some are. Setup also refuses a
+service whose process state cannot be verified. Restarting the service drops retained tmux panes and their
 in-memory scrollback; output Bakin stored and worktree records are kept. Linux
 is not supported by this release.
 

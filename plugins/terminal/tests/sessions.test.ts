@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, test } from 'bun:test'
 import { Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
-import { DAY, type Session } from '../lib/contracts'
+import { DAY, TerminalError, type Session } from '../lib/contracts'
 import type { NativeClient, ProcessDriver } from '../lib/processes'
 import { MAX_BACKLOG_BYTES, Replica, type Cut } from '../lib/replica'
 import { OutputLog } from '../lib/output-log'
@@ -44,6 +44,8 @@ function fixture(options: { raw?: boolean; storePath?: string; setting?: { raw: 
   const detachedClients: string[] = []
   /** Raw-path replicas, by session (none until a test makes one). */
   const replicas = new Map<string, Replica>()
+  /** Sessions whose kill fails (the program runs on). */
+  const unkillable = new Set<string>()
   const driver: ProcessDriver = {
     // Like TmuxProcesses.replica: an ended replica is no source.
     replica: (id) => { const replica = replicas.get(id); return replica?.ended ? undefined : replica },
@@ -52,7 +54,7 @@ function fixture(options: { raw?: boolean; storePath?: string; setting?: { raw: 
     resize: async (id, cols, rows) => { if (resizeFailure) { tmuxSizes.set(id, { cols: 77, rows: 22 }); throw resizeFailure } tmuxSizes.set(id, { cols, rows }) },
     windowSize: async (id) => { if (readBackFailure) throw readBackFailure; return tmuxSizes.get(id)! },
     title: async () => {}, alive: async (id) => live.has(id), screen: async () => '',
-    terminate: async (id) => { terminated.push(id); finals.push(`terminate ${id}`); live.delete(id) },
+    terminate: async (id) => { if (unkillable.has(id)) throw new Error('kill-session failed'); terminated.push(id); finals.push(`terminate ${id}`); live.delete(id) },
     finalCut: async (id, options) => { finals.push(`final ${id} boundary=${options.boundary}`); return finalCut.next() }, inUse: async () => false, detach: async (id) => { if (id) attached.delete(id); else attached.clear() },
     // Like tmux: a client in `vanishing` is listed once, then gone before anyone acts on it.
     clients: async (id) => {
@@ -82,7 +84,7 @@ function fixture(options: { raw?: boolean; storePath?: string; setting?: { raw: 
   })
   managers.push(manager)
   return {
-    manager, store, writes, live, attached, terminated, forgotten, bridgeLost, controlLost, attaches, finals, finalCut, paneDied, releases, outputs, natives, detachedClients, vanishing, replicas,
+    manager, store, writes, live, attached, terminated, unkillable, forgotten, bridgeLost, controlLost, attaches, finals, finalCut, paneDied, releases, outputs, natives, detachedClients, vanishing, replicas,
     /** A terminal app attaches (or resizes) in tmux; the control client notices. */
     nativeAttach: async (id: string, client: NativeClient) => {
       natives.set(id, [...(natives.get(id) ?? []).filter((entry) => entry.pid !== client.pid), client])
@@ -1260,5 +1262,55 @@ describe('final output (plan T35b)', () => {
     expect(writes).toEqual(['ls\r'])
     release(await picture())
     expect((await finishing).state).toBe('completed')
+  })
+})
+
+describe('the confirmed service update (applyServiceUpdate)', () => {
+  const setups = () => {
+    const ran: string[] = []
+    return { ran, install: async () => { ran.push('setup') } }
+  }
+  test('ends exactly the confirmed live sessions, then sets up the service', async () => {
+    const { manager, terminated } = fixture()
+    const one = await manager.create({ title: 'One', cwd: '/tmp', program: 'shell' }, human)
+    const two = await manager.create({ title: 'Two', cwd: '/tmp', program: 'shell' }, human)
+    const { ran, install } = setups()
+    expect(await manager.applyServiceUpdate([one.id, two.id], human, install, async () => true)).toEqual({ ended: ['One', 'Two'] })
+    expect(terminated.sort()).toEqual([one.id, two.id].sort())
+    expect(ran).toEqual(['setup'])
+    expect(manager.store.sessions().every((session) => session.state === 'completed')).toBe(true)
+  })
+  test('ends nothing when no update is due any more (applied elsewhere)', async () => {
+    const { manager, terminated } = fixture()
+    const one = await manager.create({ title: 'One', cwd: '/tmp', program: 'shell' }, human)
+    const { ran, install } = setups()
+    await expect(manager.applyServiceUpdate([one.id], human, install, async () => false)).rejects.toThrow('already up to date; no sessions were ended')
+    expect(terminated).toEqual([])
+    expect(ran).toEqual([])
+  })
+  test('ends nothing when the live sessions are not the confirmed ones (one started, or one the operator never saw)', async () => {
+    const { manager, terminated } = fixture()
+    const one = await manager.create({ title: 'One', cwd: '/tmp', program: 'shell' }, human)
+    const { ran, install } = setups()
+    await manager.create({ title: 'Started meanwhile', cwd: '/tmp', program: 'shell' }, human)
+    await expect(manager.applyServiceUpdate([one.id], human, install, async () => true)).rejects.toThrow('changed since you confirmed; no sessions were ended')
+    await expect(manager.applyServiceUpdate([one.id, 'not-a-session', 'other'], human, install, async () => true)).rejects.toThrow('changed since you confirmed')
+    expect(terminated).toEqual([])
+    expect(ran).toEqual([])
+  })
+  test('a session that cannot be ended stops it before setup, naming what did end', async () => {
+    const { manager, unkillable } = fixture()
+    const one = await manager.create({ title: 'One', cwd: '/tmp', program: 'shell' }, human)
+    const two = await manager.create({ title: 'Two', cwd: '/tmp', program: 'shell' }, human)
+    unkillable.add(two.id)
+    const { ran, install } = setups()
+    await expect(manager.applyServiceUpdate([one.id, two.id], human, install, async () => true)).rejects.toThrow('Ended One; Two could not be ended (kill-session failed). The update was not applied.')
+    expect(ran).toEqual([])
+  })
+  test('a setup that fails after sessions ended says so', async () => {
+    const { manager } = fixture()
+    const one = await manager.create({ title: 'One', cwd: '/tmp', program: 'shell' }, human)
+    const failing = async () => { throw new TerminalError('Could not bootstrap the Terminal LaunchAgent', 503) }
+    await expect(manager.applyServiceUpdate([one.id], human, failing, async () => true)).rejects.toThrow('Ended One; the update was not applied: Could not bootstrap the Terminal LaunchAgent')
   })
 })

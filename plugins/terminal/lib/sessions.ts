@@ -957,6 +957,38 @@ export class Sessions {
       }
     })
   }
+  /**
+   * The service update a person confirmed (Terminal's Apply update): the
+   * live sessions they were shown end, then the service is set up. Refused,
+   * ending nothing, when no update is due any more or the live sessions are
+   * no longer exactly the confirmed ones. A session that cannot be ended
+   * stops it there (no setup), and the error names what did end.
+   */
+  async applyServiceUpdate(confirmed: string[], principal: Principal, install: () => Promise<void>, required: () => Promise<boolean>): Promise<{ ended: string[] }> {
+    if (!await required()) throw new TerminalError('The Terminal service is already up to date; no sessions were ended.', 409)
+    const live = this.store.sessions().filter((session) => session.state === 'running')
+    const asked = new Set(confirmed)
+    if (live.length !== asked.size || live.some((session) => !asked.has(session.id))) {
+      throw new TerminalError('The live sessions changed since you confirmed; no sessions were ended. Review the list and confirm again.', 409)
+    }
+    const ended: string[] = []
+    const so = () => ended.length ? `Ended ${ended.join(', ')}; ` : ''
+    for (const session of live) {
+      try {
+        await this.finish(session.id, principal, session.generation, true)
+        ended.push(session.title)
+      } catch (error) {
+        throw new TerminalError(`${so()}${session.title} could not be ended (${error instanceof Error ? error.message : String(error)}). The update was not applied.`, 409)
+      }
+    }
+    try {
+      await this.setupService(install)
+    } catch (error) {
+      if (!ended.length) throw error
+      throw new TerminalError(`${so()}the update was not applied: ${error instanceof Error ? error.message : String(error)}`, error instanceof TerminalError ? error.status : 503)
+    }
+    return { ended }
+  }
   async beforeUninstall(stop: () => Promise<void>): Promise<void> {
     await this.run(async () => {
       if (this.store.sessions().some((s) => s.state !== 'completed' || s.worktreePath)) throw new TerminalError('Complete sessions and review retained worktrees before removing Terminal')

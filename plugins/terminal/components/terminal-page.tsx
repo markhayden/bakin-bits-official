@@ -46,6 +46,9 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   // The service update's confirm dialog (the whole flow lives in it) and its own error.
   const [updating, setUpdating] = useState(false)
   const [updateError, setUpdateError] = useState('')
+  const applyTrigger = useRef<HTMLButtonElement>(null)
+  /** Set by a successful update: its trigger goes with the banner, so focus goes to New terminal. */
+  const updated = useRef(false)
   const [loadError, setLoadError] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -173,6 +176,8 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const foldNotice = screenDevice() === 'phone'
   const [noticeDetails, setNoticeDetails] = useState(false)
   const missing = unavailable && unavailable.sessionId === sessionId ? unavailableNotice(unavailable.reason) : undefined
+  // An update applied elsewhere (another tab, Health) leaves nothing to confirm.
+  useEffect(() => { if (!serviceUpdateRequired && updating && !busy) setUpdating(false) }, [serviceUpdateRequired, updating, busy])
   // What the service update ends first (setup refuses while any session runs).
   const liveSessions = all.filter((item) => item.state === 'running')
   const ownerAgentName = session?.owner.kind === 'agent' ? agents.find((agent) => agent.id === session.owner.id)?.name ?? session.owner.id : undefined
@@ -322,18 +327,21 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     catch (error) { setError(error instanceof Error ? error.message : 'Service setup failed') }
     finally { setBusy(false) }
   }
-  /** The service update: end the live sessions it lists (setup refuses while any run), then restart the service. */
-  async function applyUpdate() {
+  /**
+   * The service update: the server ends exactly the live sessions this
+   * dialog listed, then restarts the service — or refuses, ending nothing,
+   * when the list no longer matches or no update is due (lib/sessions.ts
+   * applyServiceUpdate). The dialog stays busy until the page has the result.
+   */
+  async function applyUpdate(end: string[]) {
     setBusy(true); setUpdateError('')
     try {
-      for (const target of current.current.filter((item) => item.state === 'running')) {
-        await api('/session', { id: target.id, operation: 'terminate', generation: target.generation })
-      }
-      await api('/service', {})
+      await api('/service/update', { end })
+      updated.current = true
       setUpdating(false)
       toast('Terminal service updated', 'success')
     } catch (error) { setUpdateError(error instanceof Error ? error.message : 'The service update failed') }
-    finally { setBusy(false); await refresh() }
+    finally { await refresh(); setBusy(false) }
   }
   async function reopen(target: Session) {
     // A dead session cannot be reconnected — there is no live process. Reopen
@@ -346,20 +354,21 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     } catch (error) { setError(error instanceof Error ? error.message : 'Could not reopen session') }
     finally { setBusy(false) }
   }
-  const newTerminal = <Tooltip><TooltipTrigger render={<Button size="sm" onClick={() => setCreating(true)} disabled={!serviceReady || Boolean(loadError) || busy} focusableWhenDisabled />}><Plus size={16} />New terminal</TooltipTrigger><TooltipContent>New terminal. Create a persistent shell or coding CLI session.</TooltipContent></Tooltip>
+  const newTerminal = <Tooltip><TooltipTrigger render={<Button data-terminal-new="" size="sm" onClick={() => setCreating(true)} disabled={!serviceReady || Boolean(loadError) || busy} focusableWhenDisabled />}><Plus size={16} />New terminal</TooltipTrigger><TooltipContent>New terminal. Create a persistent shell or coding CLI session.</TooltipContent></Tooltip>
   const back = <Tool label="Back to terminals" description="Return to the session list." render={<Button size="icon-sm" variant="ghost" aria-label="Back to terminals" role="link" nativeButton={false} render={<PluginLink to="/terminal" />} />}><ArrowLeft size={16} /></Tool>
   const state = loading ? <SystemState kind="loading" scope="page" title="Loading terminals" description="Checking terminal service and sessions." />
     : loadError && all.length === 0 ? <SystemState kind="error" scope="page" title="Terminals could not be loaded" description={loadError} action={<Button variant="outline" onClick={() => void refresh()}><RotateCw size={16} />Retry</Button>} />
     : !serviceReady && all.length === 0 ? <SystemState kind="initial-empty" scope="page" icon={<Terminal size={32} />} title="Terminal service is not set up" description="Set up the persistent service to start using Terminal. Bakin installs tmux with this plugin. If tmux is missing, open Health and run the plugin assets repair, or run bakin install plugin-assets. If this machine cannot download it, install tmux manually." action={<Button disabled={busy} onClick={() => void setup()}><Play size={16} />Set up service</Button>} />
     : all.length === 0 ? <SystemState kind="initial-empty" scope="page" icon={<Terminal size={32} />} title="No terminals yet" description="No terminal sessions have been created." action={newTerminal} /> : undefined
   const feedback = <>
-    {serviceUpdateRequired && serviceReady && <Banner headingLevel={2} tone="attention" title="Terminal service update available"
-      description="Restarts Terminal's tmux with the current configuration. Sessions keep working until then."
-      action={<Button size="sm" disabled={busy} onClick={() => { setUpdateError(''); setUpdating(true) }}>Apply update</Button>} />}
     {!serviceReady && all.length > 0 && <SystemState kind="error" scope="inline" title="Terminal service is unavailable" description="Open Health and run the plugin assets repair, or run bakin install plugin-assets, then set up the service." action={<Button size="sm" disabled={busy} onClick={() => void setup()}>Set up service</Button>} />}
     {loadError && all.length > 0 && <SystemState kind="error" scope="inline" title="Terminals could not be refreshed" description={loadError} action={<Button size="sm" variant="outline" onClick={() => void refresh()}><RotateCw size={16} />Retry</Button>} />}
     {error && <Alert tone="danger"><AlertDescription>{error}</AlertDescription></Alert>}
   </>
+  // The list's notice (a session's own page stays the terminal's): a recommendation, not a gate.
+  const updateNotice = serviceUpdateRequired && serviceReady && <Banner headingLevel={2} tone="attention" title="Terminal service update available"
+    description="Restarts Terminal's tmux with the current configuration. Sessions keep working until then."
+    action={<Button ref={applyTrigger} size="sm" disabled={busy} onClick={() => { setUpdateError(''); updated.current = false; setUpdating(true) }}>Apply update</Button>} />
   const controls = session && <Inline gap="dense" wrap={false} aria-label="Terminal controls">
             {!ended && !session.historyDeleted && <SizeControl session={session} frozen={presence.sizeFrozen} busy={busy} onMinFont={() => viewHandle.current?.refit()} onFit={() => { if (!viewHandle.current?.fitToDevice()) setError('Size not changed: the terminal is reconnecting.') }} />}
             <Popover>
@@ -416,6 +425,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   return <TooltipProvider>{!sessionId ? <Page data-terminal-ui-ready={!loading ? '' : undefined}>
     <PageHeader title="Terminal" meta={!loading && !loadError && serviceReady ? <Badge size="xs" variant="outline">{all.filter((item) => item.state === 'running').length} running</Badge> : undefined} actions={all.length > 0 ? newTerminal : undefined} />
     <PageBody label="Terminal sessions">
+      {updateNotice}
       {feedback}
       {state ?? <Stack gap="item" align="start" className="min-h-0 w-full flex-1">
         <SegmentedControl
@@ -513,12 +523,13 @@ function Workspace({ sessionId }: { sessionId?: string }) {
       }} />
     <ConfirmDialog open={updating} busy={busy} error={updateError || undefined} onCancel={() => setUpdating(false)}
       title="Apply the Terminal service update?"
-      description={liveSessions.length ? 'Terminal restarts its tmux with the current configuration. Setup needs every session ended first: these end now, stopping their programs (unfinished worktrees are retained).' : "Terminal restarts its tmux with the current configuration. It takes a moment; nothing else changes."}
+      finalFocus={() => updated.current ? document.querySelector<HTMLElement>('[data-terminal-new]') : applyTrigger.current}
+      description={`Terminal restarts its tmux with the current configuration${liveSessions.length ? '. Setup needs every session ended first: these end now, stopping their programs and disconnecting any terminal app attached to them' : ''}. tmux's own scrollback for ended sessions is dropped; the output Bakin saved and retained worktrees are kept.`}
       confirmLabel={liveSessions.length ? `End ${liveSessions.length} ${liveSessions.length === 1 ? 'session' : 'sessions'} and update` : 'Apply update'}
       busyLabel="Updating…" confirmTone={liveSessions.length ? 'danger' : 'primary'}
-      onConfirm={() => void applyUpdate()}>
+      onConfirm={() => void applyUpdate(liveSessions.map((item) => item.id))}>
       {liveSessions.length > 0 && <Stack as="ul" role="list" gap="dense" aria-label="Sessions that will end">
-        {liveSessions.map((item) => <li key={item.id}><Text size="meta" weight="semibold">{item.title}</Text> <Text size="meta" tone="muted">· {item.program}{item.agentId ? ` · ${agents.find((agent) => agent.id === item.agentId)?.name ?? item.agentId}` : ''}</Text></li>)}
+        {liveSessions.map((item) => <li key={item.id}><Text size="meta" weight="semibold">{item.title}</Text> <Text size="meta" tone="muted">· {item.program}{item.agentId ? ` · ${agents.find((agent) => agent.id === item.agentId)?.name ?? item.agentId}` : ''}{(apps[item.id] ?? 0) > 0 ? ' · open in a terminal app' : ''}</Text></li>)}
       </Stack>}
     </ConfirmDialog>
     <ConfirmDialog open={claimData !== null} busy={busy} error={error || undefined} onCancel={() => setClaimData(null)}
