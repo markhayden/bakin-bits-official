@@ -338,6 +338,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       }
     }
     let bundle = create(session.cols, session.rows)
+    // A fresh terminal (a mount or Reconnect terminal) has shown nothing yet.
+    shown.current = false
     bundle.attach()
     /** The raw path's picture being replayed, not shown yet. */
     let pending: ReturnType<typeof create> | undefined
@@ -398,10 +400,14 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       url: url.href, clientId: clientId(),
       onSync: (sync) => {
         // A sync is a complete picture: the snapshot, then output after its cursor.
-        shown.current = true
+        // Shown once the snapshot is parsed (an empty one, an ended session's, waits for its output).
+        shown.current = false
         rawPath.current = false
         bundle.term.reset()
-        if (sync.snapshot) bundle.term.write(Uint8Array.from(atob(sync.snapshot), (value) => value.charCodeAt(0)))
+        if (sync.snapshot) {
+          const term = bundle.term
+          term.write(Uint8Array.from(atob(sync.snapshot), (value) => value.charCodeAt(0)), () => { if (bundle.term === term) shown.current = true })
+        }
         callbacks.current.onSession(sync.session)
         ready.current = sync.session.state !== 'completed'
         // Every sync re-fits: the server may hold any size by now.
@@ -409,7 +415,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
         requestAnimationFrame(applyView)
       },
       // A failed screen stops acknowledging: its output is discarded, not shown.
-      onOutput: (bytes, done) => { const { term, parser } = bundle; term.write(bytes, () => { if (!parser.failed) done() }) },
+      onOutput: (bytes, done) => { const { term, parser } = bundle; term.write(bytes, () => { if (bundle.term === term) shown.current = true; if (!parser.failed) done() }) },
       // The raw path: every picture in a fresh terminal at its own size (keyboard focus kept).
       onPicture: (header) => {
         rawPath.current = true

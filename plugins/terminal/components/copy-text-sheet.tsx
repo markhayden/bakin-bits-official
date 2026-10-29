@@ -2,20 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { RotateCw } from 'lucide-react'
 import { CodeBlock } from '@makinbakin/sdk/content'
 import { CopyButton } from '@makinbakin/sdk/patterns'
+import { shownText, type Snapshot } from '../lib/copy-text'
 import { Button, Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, Text } from '@makinbakin/sdk/ui'
-
-/** At most this many lines, and characters, are shown (Copy all still copies everything). */
-export const COPY_TEXT_SHOWN = 2_000
-export const COPY_TEXT_SHOWN_CHARS = 400_000
-
-type Snapshot = { text: string; lines: number }
-/** The newest lines within both budgets, and whether anything was left out. */
-export function shownText(all: string): { text: string; cut: boolean } {
-  const lines = all.split('\n')
-  let text = lines.length > COPY_TEXT_SHOWN ? lines.slice(-COPY_TEXT_SHOWN).join('\n') : all
-  if (text.length > COPY_TEXT_SHOWN_CHARS) text = text.slice(-COPY_TEXT_SHOWN_CHARS)
-  return { text, cut: text.length < all.length }
-}
 
 /**
  * Copy text (for a phone, where the canvas has no touch selection): the

@@ -1150,6 +1150,17 @@ rawTest('Copy text: more than 2,000 lines shows the newest and copies every one 
     await held.getByRole('menuitem', { name: 'Copy text…' }).click()
     const waiting = held.getByRole('dialog', { name: 'Copy text' })
     await waiting.getByText('The terminal is still connecting; refresh once it shows its output.').waitFor()
+    // Let it connect: Refresh then shows the output.
+    socket.block(false)
+    await held.reload()
+    await held.waitForFunction(() => document.querySelector('[data-display]')?.getAttribute('data-display') === 'live', null, { timeout: 15_000 })
+    // Reconnect terminal starts a fresh terminal: held off again, it has shown nothing yet (not "no text").
+    socket.block(true)
+    await held.getByRole('button', { name: 'Session actions' }).click()
+    await held.getByRole('menuitem', { name: 'Reconnect terminal' }).click()
+    await held.getByRole('button', { name: 'Session actions' }).click()
+    await held.getByRole('menuitem', { name: 'Copy text…' }).click()
+    await waiting.getByText('The terminal is still connecting; refresh once it shows its output.').waitFor()
     socket.block(false)
   } finally {
     await endSession(page, client, id)
