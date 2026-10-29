@@ -23,8 +23,8 @@ export interface DirectoryListing {
 
 const isFolder = (path: string): boolean => { try { return statSync(path).isDirectory() } catch { return false } }
 
-export function listDirectories(raw: string | undefined, options: { hidden?: boolean } = {}): DirectoryListing {
-  const requested = raw?.trim() || homedir()
+export function listDirectories(raw: string | undefined, options: { hidden?: boolean; home?: string } = {}): DirectoryListing {
+  const requested = raw?.trim() || (options.home ?? homedir())
   if (!isAbsolute(requested)) throw new TerminalError('The folder must be absolute (start with /).', 400)
   let path: string
   try {

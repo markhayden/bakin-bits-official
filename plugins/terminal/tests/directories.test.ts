@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from 'bun:test'
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DIRECTORY_LIMIT, listDirectories, recentDirectories } from '../lib/directories'
 import type { Session } from '../lib/contracts'
@@ -24,7 +24,9 @@ describe('listDirectories (the New terminal folder picker)', () => {
   it('resolves the path it was given (a link, a trailing slash, ..) and defaults to home', () => {
     expect(listDirectories(join(root, 'linked/')).path).toBe(join(root, 'gamma'))
     expect(listDirectories(join(root, 'beta', '..')).path).toBe(root)
-    expect(listDirectories(undefined).path).toBe(realpathSync(homedir()))
+    // No path: home (given here; a test harness's own home may not exist).
+    expect(listDirectories(undefined, { home: join(root, 'beta') }).path).toBe(join(root, 'beta'))
+    expect(listDirectories('  ', { home: join(root, 'beta') }).path).toBe(join(root, 'beta'))
     expect(listDirectories('/').parent).toBeUndefined()
   })
   it('refuses a relative path, a file, a missing folder and an unreadable one, by name', () => {
