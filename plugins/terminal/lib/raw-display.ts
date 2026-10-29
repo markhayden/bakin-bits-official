@@ -250,8 +250,9 @@ export class RawDisplay implements ReplicaListener {
 
   rebuilding(cause: RebuildCause): void {
     if (this.closed) return
-    // The picture is stale until a seed: what was queued for it is moot.
+    // The picture is stale until a seed: what was queued for it is moot, and so are its points' reports.
     this.dropBacklog()
+    this.expected.clear()
     this.replacement = true
     this.waitingForSeed = true
     this.control.push({ type: 'rebuilding', cause, fidelity: this.options.fidelity() })
@@ -321,8 +322,9 @@ export class RawDisplay implements ReplicaListener {
    */
   digestPoint(seq: number, digest: string): boolean {
     if (this.closed || this.replaying || this.replacement || this.waitingForSeed || !this.barriers.has(this.epoch)) return false
-    // The digest was read between events, and more may have come since: a point after them would compare a later picture.
-    if (this.heardSeq !== seq) return false
+    // The digest was read between events, and more may have come since: a point after them would compare a later
+    // picture. (An event the replica took without telling displays — a superseded geometry — changed nothing they show.)
+    if (this.heardSeq > seq) return false
     this.expected.set(seq, digest)
     for (const old of this.expected.keys()) { if (this.expected.size <= DIGEST_POINTS_KEPT) break; this.expected.delete(old) }
     this.backlog.push({ kind: 'digest-point', seq })

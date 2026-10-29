@@ -108,15 +108,29 @@ export const DIGEST_PERIOD_MS = 10_000
 /** Mismatches per session within the window: each rejoins its viewer; the third escalates (once); more are left alone. */
 export const DIGEST_WINDOW_MS = 10 * 60 * 1000
 export const DIGEST_ESCALATE_AT = 3
-/** Recent digest mismatches by session (a viewer's rejoin must not reset them). */
-const mismatches = new Map<string, number[]>()
-/** What a mismatch should do: rejoin the viewer, also escalate, or nothing more (bounded). */
+/**
+ * Recent digest mismatches by session, and its last escalation (a viewer's
+ * rejoin must not reset them). Bounded: at most DIGEST_ESCALATE_AT times a
+ * session, and sessions with nothing recent are dropped on every call.
+ */
+const mismatches = new Map<string, { recent: number[]; escalatedAt?: number }>()
+/** How many sessions the digest bookkeeping holds (tests). */
+export const digestSessionsTracked = (): number => mismatches.size
+/** What a mismatch should do: rejoin the viewer, also escalate (once a window), or nothing more (bounded). */
 export function digestMismatch(sessionId: string, now: number): 'rejoin' | 'escalate' | 'bounded' {
-  const recent = (mismatches.get(sessionId) ?? []).filter((at) => now - at < DIGEST_WINDOW_MS)
-  recent.push(now)
-  mismatches.set(sessionId, recent)
-  if (recent.length < DIGEST_ESCALATE_AT) return 'rejoin'
-  return recent.length === DIGEST_ESCALATE_AT ? 'escalate' : 'bounded'
+  for (const [id, entry] of mismatches) {
+    entry.recent = entry.recent.filter((at) => now - at < DIGEST_WINDOW_MS)
+    if (!entry.recent.length && (entry.escalatedAt === undefined || now - entry.escalatedAt >= DIGEST_WINDOW_MS) && id !== sessionId) mismatches.delete(id)
+  }
+  const entry = mismatches.get(sessionId) ?? { recent: [] }
+  mismatches.set(sessionId, entry)
+  // After an escalation, nothing more within the window (and nothing counts toward the next one).
+  if (entry.escalatedAt !== undefined && now - entry.escalatedAt < DIGEST_WINDOW_MS) return 'bounded'
+  entry.recent = [...entry.recent, now].slice(-DIGEST_ESCALATE_AT)
+  if (entry.recent.length < DIGEST_ESCALATE_AT) return 'rejoin'
+  entry.escalatedAt = now
+  entry.recent = []
+  return 'escalate'
 }
 
 /** How long a raw join waits for the session's replica and its seed, from the hello (lib/raw-display.ts JOIN_WAIT_MS). */
@@ -345,6 +359,8 @@ export class TerminalViewer {
       now: this.options.now,
     })
     this.raw.start()
+    // Starting can close the viewer (an ended source): no timer outlives it.
+    if (this.closed) return
     // The safety net (plan T37): points at quiet times and periodically during output.
     const replica = source
     if (replica.digest) this.digestTimer = setInterval(() => { void this.digestTick(replica) }, this.options.digestTickMs ?? DIGEST_TICK_MS)

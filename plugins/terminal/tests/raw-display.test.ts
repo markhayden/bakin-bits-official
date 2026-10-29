@@ -406,6 +406,20 @@ describe('digest points (plan T37)', () => {
     expect(h.display.digestPoint(2, 'aaaaaaaa')).toBe(false)
     expect(points(h)).toEqual([])
   })
+  it('a rebuild starting makes outstanding points stale at once (before the replacement begins)', () => {
+    const h = harness(live(1))
+    h.display.start()
+    h.display.digestPoint(1, 'aaaaaaaa')
+    h.src.tell().rebuilding('overload')
+    expect(h.display.digestReport(1, 1, 'bbbbbbbb')).toBe('stale')
+  })
+  it('an event the replica took without telling displays (a superseded geometry) does not block a later point', () => {
+    const h = harness(live(1))
+    h.display.start()
+    h.src.tell().event(output(2, 'x'))
+    // The replica's position moved on to 3 without this display hearing of 3.
+    expect(h.display.digestPoint(3, 'aaaaaaaa')).toBe(true)
+  })
   it('a rebase makes the old picture\'s points stale', async () => {
     const h = harness(live(1))
     h.display.start()

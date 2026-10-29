@@ -6,7 +6,7 @@ import type { PluginSocket } from '@makinbakin/sdk/types'
 import { DeliveryUncertainError, TerminalError, type Principal, type Session } from '../lib/contracts'
 import type { NativeClient } from '../lib/processes'
 import { Store } from '../lib/store'
-import { DIGEST_WINDOW_MS, digestMismatch, SOCKET_CLOSE, TerminalViewer, type ViewerManager } from '../lib/socket'
+import { DIGEST_WINDOW_MS, digestMismatch, digestSessionsTracked, SOCKET_CLOSE, TerminalViewer, type ViewerManager } from '../lib/socket'
 import type { RawSource } from '../lib/raw-display'
 import { makeBundle, type Bundle } from '../lib/bundle'
 import { Replica } from '../lib/replica'
@@ -540,8 +540,42 @@ describe('TerminalViewer on the raw path', () => {
     const at = Date.now()
     const id = `window-${at}`
     expect([1, 2, 3, 4, 5].map((n) => digestMismatch(id, at + n))).toEqual(['rejoin', 'rejoin', 'escalate', 'bounded', 'bounded'])
-    // Past the window it starts over.
-    expect(digestMismatch(id, at + DIGEST_WINDOW_MS + 10)).toBe('rejoin')
+    // Past the window from the escalation it starts over.
+    expect(digestMismatch(id, at + 3 + DIGEST_WINDOW_MS)).toBe('rejoin')
+  })
+  it('escalation is once a window, even as older mismatches expire one by one (staggered viewers, reconnects)', () => {
+    const at = Date.now() + 1e9
+    const id = `staggered-${at}`
+    expect([0, 300_000, 599_999, 600_001].map((offset) => digestMismatch(id, at + offset))).toEqual(['rejoin', 'rejoin', 'escalate', 'bounded'])
+  })
+  it('the bookkeeping drops sessions with nothing recent', () => {
+    const at = Date.now() + 2e9
+    for (let n = 0; n < 50; n++) digestMismatch(`old-${at}-${n}`, at)
+    const before = digestSessionsTracked()
+    digestMismatch(`new-${at}`, at + DIGEST_WINDOW_MS + 1)
+    expect(digestSessionsTracked()).toBeLessThan(before)
+    expect(digestSessionsTracked()).toBeLessThanOrEqual(1)
+  })
+  it('a viewer closed while its picture starts (an ended source) leaves no digest timer', async () => {
+    const replica = await seeded()
+    replica.close()
+    const { manager } = fakeManager(session(), { replica })
+    const intervals: number[] = []
+    const realSet = globalThis.setInterval
+    const realClear = globalThis.clearInterval
+    globalThis.setInterval = ((fn: () => void, ms: number) => { const timer = realSet(fn, ms); intervals.push(Number(timer)); return timer }) as typeof setInterval
+    globalThis.clearInterval = ((timer: number) => { const index = intervals.indexOf(Number(timer)); if (index >= 0) intervals.splice(index, 1); realClear(timer) }) as typeof clearInterval
+    try {
+      const peer = fakeSocket()
+      new TerminalViewer(manager, peer.socket, 's1', { ...options, digestTickMs: 10 })
+      peer.client({ type: 'hello', clientId: CLIENT })
+      await until(() => peer.state.closed !== null, 'closed')
+      await Bun.sleep(20)
+      expect(intervals).toEqual([])
+    } finally {
+      globalThis.setInterval = realSet
+      globalThis.clearInterval = realClear
+    }
   })
   it('a recovery slower than the join deadline closes for a reconnect at the deadline, nothing of a picture sent', async () => {
     const replica = await seeded()
