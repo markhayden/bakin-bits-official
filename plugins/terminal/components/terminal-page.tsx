@@ -365,10 +365,11 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     {loadError && all.length > 0 && <SystemState kind="error" scope="inline" title="Terminals could not be refreshed" description={loadError} action={<Button size="sm" variant="outline" onClick={() => void refresh()}><RotateCw size={16} />Retry</Button>} />}
     {error && <Alert tone="danger"><AlertDescription>{error}</AlertDescription></Alert>}
   </>
-  // The list's notice (a session's own page stays the terminal's): a recommendation, not a gate.
-  const updateNotice = serviceUpdateRequired && serviceReady && <Banner headingLevel={2} tone="attention" title="Terminal service update available"
+  // The list's notice (a session's own page stays the terminal's): a recommendation, not a gate —
+  // info, not attention; the action is the Banner stories' outline button.
+  const updateNotice = serviceUpdateRequired && serviceReady && <Banner headingLevel={2} tone="info" title="Terminal service update available"
     description="Restarts Terminal's tmux with the current configuration. Sessions keep working until then."
-    action={<Button ref={applyTrigger} size="sm" disabled={busy} onClick={() => { setUpdateError(''); updated.current = false; setUpdating(true) }}>Apply update</Button>} />
+    action={<Button ref={applyTrigger} size="sm" variant="outline" disabled={busy} onClick={() => { setUpdateError(''); updated.current = false; setUpdating(true) }}>Apply update</Button>} />
   const controls = session && <Inline gap="dense" wrap={false} aria-label="Terminal controls">
             {!ended && !session.historyDeleted && <SizeControl session={session} frozen={presence.sizeFrozen} busy={busy} onMinFont={() => viewHandle.current?.refit()} onFit={() => { if (!viewHandle.current?.fitToDevice()) setError('Size not changed: the terminal is reconnecting.') }} />}
             <Popover>

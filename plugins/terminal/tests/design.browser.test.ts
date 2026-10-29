@@ -204,7 +204,7 @@ browserTest('immersive terminals use the full workspace and retain compact navig
 }, 30000)
 
 
-browserTest('service update: an attention banner whose confirm dialog names the live sessions and confirms exactly those; refusals stay in the dialog; an update applied elsewhere closes it; focus returns', async () => {
+browserTest('service update: an info banner whose confirm dialog names the live sessions and confirms exactly those; refusals stay in the dialog; an update applied elsewhere closes it; focus returns', async () => {
   const browser = await launchChromium()
   const page = await browser.newPage({ viewport: { width: 320, height: 740 } })
   const running = { id: 'live-one', title: 'Test', program: 'shell', state: 'running', cwd: '/tmp', createdAt: 1, lastActivityAt: 1, generation: 4, revision: 1, inputSequence: 0, cols: 80, rows: 24, owner: { kind: 'human', id: 'design-fixture-client' } }
@@ -223,6 +223,8 @@ browserTest('service update: an attention banner whose confirm dialog names the 
     // A notice, not an empty state: the kit Banner, its action the only way in.
     const banner = page.locator('[data-slot="banner"]', { hasText: 'Terminal service update available' })
     await banner.waitFor()
+    // A recommendation: info, not attention.
+    expect(await banner.getAttribute('data-tone')).toBe('info')
     expect(await page.getByRole('button', { name: 'Set up service', exact: true }).count()).toBe(0)
     await page.screenshot({ path: join(import.meta.dir, '../test-results/design/migration-mobile.png') })
     const apply = banner.getByRole('button', { name: 'Apply update' })
