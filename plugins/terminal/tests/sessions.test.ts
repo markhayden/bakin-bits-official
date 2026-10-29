@@ -1071,6 +1071,23 @@ describe('final output (plan T35b)', () => {
     await stopping
     expect(installedAtClose).toBe(true)
   })
+  it('a sweep accepted before shutdown runs to its end (its save, then its maintenance), and shutdown waits for it', async () => {
+    const { manager, finalCut, live, terminated, advance } = fixture()
+    const session = await manager.create({ title: 'Idle', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    live.delete(session.id)
+    await manager.refreshStates()
+    advance()
+    let release!: (cut: Cut | undefined) => void
+    finalCut.next = () => new Promise((resolve) => { release = resolve })
+    const sweeping = manager.sweep()
+    for (let tries = 0; tries < 100 && !release; tries++) await Bun.sleep(1)
+    const stopping = manager.shutdown()
+    await Bun.sleep(5)
+    release(await picture())
+    await sweeping
+    await stopping
+    expect(terminated).toEqual([session.id])
+  })
   it('Set up service on a live server never removes a running session\'s bundle (a finish between its save and its kill)', async () => {
     const { manager, store } = fixture()
     const session = await manager.create({ title: 'Ending', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })

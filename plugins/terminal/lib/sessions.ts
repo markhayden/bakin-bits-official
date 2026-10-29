@@ -895,15 +895,21 @@ export class Sessions {
       if (session.completedAt !== undefined && this.now() - session.completedAt >= 30 * DAY && !session.historyDeleted) await this.deleteHistoryUnlocked(session.id, { kind: 'human', id: 'maintenance' })
     }
   }
-  async sweep(): Promise<void> {
-    if (this.stopping) throw new TerminalError('Terminal is shutting down', 503)
+  sweep(): Promise<void> {
+    if (this.stopping) return Promise.reject(new TerminalError('Terminal is shutting down', 503))
+    // Accepted: it runs to its end, and shutdown waits for it.
+    const work = this.sweepOnce()
+    const settled = work.then(() => undefined, () => undefined)
+    this.sweeps.add(settled)
+    void settled.then(() => this.sweeps.delete(settled))
+    return work
+  }
+  private sweeps = new Set<Promise<void>>()
+  private async sweepOnce(): Promise<void> {
     // An exited session whose final output is not saved yet (a failed save) tries again before
     // maintenance may complete it, outside the queue.
-    for (const session of this.store.sessions()) {
-      if (this.stopping) throw new TerminalError('Terminal is shutting down', 503)
-      if (session.state === 'exited' && session.outputSaved === false) await this.saveFinal(session.id)
-    }
-    return this.run(() => this.sweepUnlocked())
+    for (const session of this.store.sessions()) if (session.state === 'exited' && session.outputSaved === false) await this.saveFinal(session.id)
+    return this.run(() => this.sweepUnlocked(), true)
   }
   /**
    * Set up (or update) the tmux service in the manager's queue, so it can
@@ -949,7 +955,7 @@ export class Sessions {
       for (;;) {
         // Until the queue's tail stops moving: work accepted before the cutoff may still queue its next step.
         for (let tail = this.pending; ; tail = this.pending) { await tail; if (tail === this.pending) break }
-        const outstanding = [this.refreshing, ...this.refreshes, ...[...this.finishing.values()].flatMap((all) => [...all]), ...this.ending.values()].filter((work) => work !== undefined)
+        const outstanding = [this.refreshing, ...this.refreshes, ...this.sweeps, ...[...this.finishing.values()].flatMap((all) => [...all]), ...this.ending.values()].filter((work) => work !== undefined)
         if (!outstanding.length) return
         await Promise.allSettled(outstanding)
       }
