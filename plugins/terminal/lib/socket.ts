@@ -334,7 +334,10 @@ export class TerminalViewer {
       if (!this.closed) this.close(SOCKET_CLOSE.unavailable, 'unreadable')
     }
   }
+  /** This viewer shows an ended session's saved picture. */
+  private ended = false
   private startEnded(bundle: Bundle): void {
+    this.ended = true
     this.raw = new RawDisplay(bundleSource(bundle), {
       text: (json) => this.socket.send(json),
       binary: (bytes) => this.socket.send(bytes),
@@ -364,6 +367,8 @@ export class TerminalViewer {
   /** A failure the client recovers from by reconnecting (404 only when the session is gone). */
   private failed(error: unknown): void {
     if (error instanceof TerminalError && error.status === 404) this.close(SOCKET_CLOSE.notFound, 'Session not found')
+    // A finished picture that fails (now, or when credit resumes its replay) would fail again: final.
+    else if (this.ended) this.close(SOCKET_CLOSE.unavailable, 'unreadable')
     else this.close(SOCKET_CLOSE.resync, 'Terminal attachment unavailable; reconnect')
   }
 

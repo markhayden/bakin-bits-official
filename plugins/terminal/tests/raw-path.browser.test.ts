@@ -393,3 +393,36 @@ rawTest('an ended session (plan T35b): a terminate while watching turns the view
     await browser.close()
   }
 }, 60_000)
+
+rawTest('an ended session whose output was not saved (plan T35b): the page shows why, with no reconnect loop; another session opens normally after it', async () => {
+  const browser = await launchChromium()
+  const client = 'raw-browser-unsaved-test-01'
+  const page = await browser.newPage({ viewport })
+  const lost = await createSession(page, client)
+  const other = await createSession(page, client)
+  const tmux = process.env.TERMINAL_PREVIEW_TMUX!
+  const socket = new TerminalService(process.env.TERMINAL_PREVIEW_ROOT!).socket
+  const connections = { count: 0 }
+  page.on('websocket', () => { connections.count++ })
+  try {
+    // No viewer: the replica is lost (its control client detached), then the program ends — nothing to save.
+    for (let start = Date.now(); ; await Bun.sleep(50)) {
+      const clients = Bun.spawnSync([tmux, '-S', socket, 'list-clients', '-t', lost.id, '-F', '#{client_control_mode} #{client_name}']).stdout.toString()
+      const control = clients.split('\n').find((line) => line.startsWith('1 '))
+      if (control) { Bun.spawnSync([tmux, '-S', socket, 'detach-client', '-t', control.slice(2)]); break }
+      if (Date.now() - start > 10_000) throw new Error('no control client')
+    }
+    Bun.spawnSync([tmux, '-S', socket, 'kill-pane', '-t', lost.id])
+    await page.goto(new URL(`/terminal/${lost.id}`, base()).href)
+    await page.getByRole('heading', { name: 'Output not saved' }).waitFor({ timeout: 15_000 })
+    const seen = connections.count
+    await page.waitForTimeout(1500)
+    expect(connections.count).toBe(seen)
+    expect(await page.locator('.xterm').count()).toBe(0)
+    await open(page, other.id)
+    expect(await page.getByRole('heading', { name: 'Output not saved' }).count()).toBe(0)
+  } finally {
+    await endSession(page, client, other.id).catch(() => undefined)
+    await browser.close()
+  }
+}, 60_000)

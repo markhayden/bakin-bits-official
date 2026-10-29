@@ -446,6 +446,24 @@ describe('TerminalViewer on the raw path', () => {
       expect(peer.of('barrier')).toEqual([])
     }
   })
+  it('a replay that fails only once credit resumes it is final too (4005 unreadable, not a reconnect)', async () => {
+    const replica = await seeded()
+    const cut = replica.cut()!
+    replica.close()
+    const broken = makeBundle({ ...cut, tail: [{ seq: 2, kind: 'output', offset: 0 } as never] }, { rebuilds: {} }, 1)
+    const { manager } = fakeManager(session({ state: 'completed', outputSaved: true }), { bundle: broken })
+    const peer = fakeSocket()
+    // A window so small the replay pauses after its header: the broken event is reached only when credit returns.
+    new TerminalViewer(manager, peer.socket, 's1', { ...options, ackWindow: 1 })
+    peer.client({ type: 'hello', clientId: CLIENT })
+    await until(() => peer.of('join').length === 1 || peer.state.closed !== null, 'joined')
+    // Each retirement lets one more frame go, until the replay reaches the broken event.
+    for (let tries = 0; tries < 50 && peer.state.closed === null; tries++) {
+      peer.client({ type: 'retired', bytes: retired(peer) })
+      await Bun.sleep(5)
+    }
+    expect(peer.state.closed).toEqual({ code: 4005, reason: 'unreadable' })
+  })
   it('an ended raw-path session without its output closes 4005 with why: not saved, removed for room, or unreadable', async () => {
     for (const [fields, reason] of [[{ outputSaved: false }, 'not-saved'], [{ outputSaved: false, outputEvicted: true }, 'evicted'], [{ outputSaved: true }, 'unreadable']] as const) {
       const { manager } = fakeManager(session({ state: 'completed', ...fields }), {})
