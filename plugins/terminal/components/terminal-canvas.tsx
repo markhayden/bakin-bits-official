@@ -3,6 +3,8 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Button } from '@makinbakin/sdk/ui'
+import { Panel } from '@makinbakin/sdk/layout'
+import { CopyButton } from '@makinbakin/sdk/patterns'
 import { ArrowDown, Keyboard, ZoomOut } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import type { Fidelity } from '../lib/raw-display'
@@ -67,6 +69,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   const [zoom, setZoom] = useState(() => storedFont())
   // Manual pans, selections (and History) stop the view chasing the cursor.
   const [paused, setPaused] = useState(false)
+  /** The program's latest clipboard offer (OSC 52), live only. */
+  const [offer, setOffer] = useState<string>()
   const callbacks = useRef({ onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity, onUnavailable, writable, authority, inputEnabled, onModifiersChange, captureTab: false, sizeEpoch: session.sizeEpoch, zoom, paused })
   callbacks.current = { onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity, onUnavailable, writable, authority, inputEnabled, onModifiersChange, captureTab, sizeEpoch: session.sizeEpoch, zoom, paused }
   const [status, setStatus] = useState('Connecting')
@@ -224,7 +228,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       // The shared profile (spec D13): queries are tmux's to answer (a viewer's
       // replies would be typed into the pane), links and clipboard are policed,
       // and the xterm 6.0.0 workarounds apply.
-      const profile = applyTerminalProfile(term)
+      // OSC 52: the latest offer replaces any earlier one (one pending per session); only a tap copies it.
+      const profile = applyTerminalProfile(term, { clipboardOffer: (text) => setOffer(text) })
       // Shown, or replaying to be shown next (a failure of either counts).
       let active = true
       // A parser exception would wedge every later write: the screen is
@@ -696,11 +701,16 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     </div>
     {/* Top-right, outside the scrolling content: the bottom rows hold the program's input line.
         Pressing a control never takes focus from the terminal (no keyboard flicker). */}
-    {(paused || zoom !== undefined || offerKeyboard) && <div ref={actions} className="terminal-view-actions" onMouseDown={(event) => event.preventDefault()}>
+    {(paused || zoom !== undefined || offerKeyboard || offer !== undefined) && <div ref={actions} className="terminal-view-actions" onMouseDown={(event) => event.preventDefault()}>
       {/* Touch screens with the keyboard down: one tap brings it back (spec D9 item 9). */}
       {offerKeyboard && <Button size="icon-sm" variant="secondary" aria-label="Show keyboard" title="Show keyboard" onClick={() => terminal.current?.focus()}><Keyboard /></Button>}
       {zoom !== undefined && <Button size="icon-sm" variant="secondary" aria-label="Reset view" title="Reset view" onClick={() => zoomTo(undefined)}><ZoomOut /></Button>}
       {paused && <Button size="sm" variant="secondary" aria-label="Follow cursor" title="Follow cursor" onClick={resumeFollow}><ArrowDown />Live</Button>}
+      {/* A program's clipboard offer (OSC 52): written only on this tap, and kept until it is (a refused write leaves it). */}
+      {offer !== undefined && <Panel variant="code" padding="compact" className="terminal-view-offer flex min-w-0 items-center gap-bakin-2">
+        <code className="min-w-0 flex-1 break-all text-bakin-text-primary">{offer.split('\n', 1)[0]}</code>
+        <CopyButton size="touch" text={offer} label="Copy offered text" onCopied={() => setOffer((current) => current === offer ? undefined : current)} />
+      </Panel>}
     </div>}
   </div>
 }

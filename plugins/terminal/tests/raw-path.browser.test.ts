@@ -808,3 +808,74 @@ rawTest('native scrolling (plan T36): a selection pauses following, and ↓ Live
     await browser.close()
   }
 }, 60_000)
+
+rawTest('clipboard offers (plan T36b): a program\'s OSC 52 offer copies only on the tap, exactly; the latest replaces the last; a join or reload never replays one', async () => {
+  const browser = await launchChromium()
+  const client = 'raw-browser-offer-test-01'
+  // Chromium reads the clipboard back; WebKit cannot grant that, so there the copy is seen by the offer clearing.
+  const chromium = process.env.TERMINAL_BROWSER !== 'webkit'
+  const context = await browser.newContext({ viewport, ...(chromium ? { permissions: ['clipboard-read', 'clipboard-write'] } : {}) })
+  const page = await context.newPage()
+  const other = await (await browser.newContext({ viewport })).newPage()
+  const { id } = await createSession(page, client)
+  const copy = (on: Page) => on.getByRole('button', { name: 'Copy offered text' })
+  const offered = 'línea uno ✓\nline two\ttabbed'
+  const offerLine = (text: string) => `printf '\\033]52;c;%s\\a' ${Buffer.from(text).toString('base64')}`
+  try {
+    await open(page, id)
+    await open(other, id)
+    if (chromium) await page.evaluate(() => navigator.clipboard.writeText('sentinel'))
+    expect(await copy(page).count()).toBe(0)
+    await typeLine(page, `${offerLine('first offer')}; ${offerLine(offered)}`)
+    // Every live viewer is offered it; only the latest, shown by its first line.
+    await copy(page).waitFor()
+    await copy(other).waitFor()
+    expect(await copy(page).count()).toBe(1)
+    expect(await page.locator('.terminal-view-offer code').textContent()).toBe('línea uno ✓')
+    // Nothing wrote the clipboard on its own.
+    if (chromium) expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('sentinel')
+    // A viewer that joins now, and one that reloads, are not offered it again.
+    const late = await (await browser.newContext({ viewport })).newPage()
+    await open(late, id)
+    await other.reload()
+    await other.waitForFunction(() => document.querySelector('[data-display]')?.getAttribute('data-display') === 'live', null, { timeout: 15_000 })
+    await settleFor(late, other)
+    expect(await copy(late).count()).toBe(0)
+    expect(await copy(other).count()).toBe(0)
+    // The tap copies the whole text, exactly, and the offer is done.
+    await copy(page).click()
+    await page.locator('.terminal-view-offer').waitFor({ state: 'detached', timeout: 5_000 })
+    if (chromium) expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(offered)
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 60_000)
+
+/** Absence cannot be polled for: give each page a moment after it went live, so an offer it would replay has landed. */
+async function settleFor(...pages: Page[]): Promise<void> {
+  for (const page of pages) await page.waitForTimeout(1_000)
+}
+
+touchTest('on a phone (plan T36b) the persistent recovery notice folds to its title; Details shows the rest', async () => {
+  const client = 'raw-browser-recovery-test-02'
+  const { browser, page, id } = await phone(client)
+  const tmux = process.env.TERMINAL_PREVIEW_TMUX!
+  const socket = new TerminalService(process.env.TERMINAL_PREVIEW_ROOT!).socket
+  const notice = page.getByRole('status', { name: 'Terminal view recovered with limitations' })
+  try {
+    await open(page, id)
+    const control = Bun.spawnSync([tmux, '-S', socket, 'list-clients', '-t', id, '-F', '#{client_control_mode} #{client_name}']).stdout.toString()
+      .split('\n').filter((line) => line.startsWith('1 ')).map((line) => line.slice(2))
+    Bun.spawnSync([tmux, '-S', socket, 'detach-client', '-t', control[0]!])
+    await notice.waitFor({ timeout: 20_000 })
+    expect(await notice.textContent()).not.toContain('Cause:')
+    await notice.getByRole('button', { name: 'Details' }).click()
+    await expect(notice.textContent()).resolves.toContain("Cause: the view's connection to tmux was replaced.")
+    await notice.getByRole('button', { name: 'Hide details' }).click()
+    expect(await notice.textContent()).not.toContain('Cause:')
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 60_000)

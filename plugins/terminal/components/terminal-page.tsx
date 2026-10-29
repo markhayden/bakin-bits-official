@@ -9,6 +9,7 @@ import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, In
 import { attachCommand, shortId, type Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
 import { fidelityNotice, unavailableNotice } from '../lib/fidelity-notice'
+import { screenDevice } from './terminal-view'
 import type { UnavailableReason } from '../lib/socket'
 import type { Fidelity } from '../lib/raw-display'
 import { api } from './api'
@@ -165,6 +166,9 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   openSession.current = sessionId
   const ended = session?.state === 'exited' || session?.state === 'completed'
   const notice = fidelity && fidelity.sessionId === sessionId ? fidelityNotice(fidelity.value) : undefined
+  // On a phone the notice stays (it is persistent) but folds to its title: its details would take the terminal's rows.
+  const foldNotice = screenDevice() === 'phone'
+  const [noticeDetails, setNoticeDetails] = useState(false)
   const missing = unavailable && unavailable.sessionId === sessionId ? unavailableNotice(unavailable.reason) : undefined
   const ownerAgentName = session?.owner.kind === 'agent' ? agents.find((agent) => agent.id === session.owner.id)?.name ?? session.owner.id : undefined
   // The operator is not the tab: any human client drives a human-owned live session.
@@ -461,7 +465,8 @@ function Workspace({ sessionId }: { sessionId?: string }) {
         </Stack>}
         {state ?? (!session ? <SystemState kind="initial-empty" scope="page" icon={<Terminal size={32} />} title="Terminal not found" description="This session is not available." action={<Button variant="outline" nativeButton={false} render={<PluginLink to="/terminal" />}>Back to terminals</Button>} /> : <>
           {(!serviceReady || session.cleanupReason || (idleReturn && drivingWithAgent) || notice) && <Stack gap="item" className="shrink-0 p-bakin-4">
-          {notice && <Banner headingLevel={2} tone="attention" announce="polite" title={notice.title} description={notice.description} />}
+          {notice && <Banner headingLevel={2} tone="attention" announce="polite" title={notice.title} description={!foldNotice || noticeDetails ? notice.description : undefined}
+            action={foldNotice ? <Button size="sm" variant="outline" aria-expanded={noticeDetails} onClick={() => setNoticeDetails((open) => !open)}>{noticeDetails ? 'Hide details' : 'Details'}</Button> : undefined} />}
           {!serviceReady && <SystemState kind="error" scope="inline" title="Terminal service unavailable" description="Existing sessions are retained." action={<Button disabled={busy} onClick={() => void setup()}>Set up service</Button>} />}
           {idleReturn && drivingWithAgent && <Alert tone="attention"><AlertDescription><Inline gap="dense" wrap className="items-center justify-between"><span>You've been idle — returning control to {ownerAgentName ?? 'the agent'} shortly.</span><Button size="sm" variant="outline" onClick={markActivity}>Keep driving</Button></Inline></AlertDescription></Alert>}
           {session.cleanupReason && <Alert tone="attention"><AlertDescription>{session.cleanupReason}</AlertDescription></Alert>}

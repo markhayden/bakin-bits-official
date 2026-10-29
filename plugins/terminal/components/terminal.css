@@ -45,6 +45,10 @@
   gap: var(--bakin-layout-gap-dense);
 }
 
+/* A program's clipboard offer: its first line, cut to fit the corner (the whole text is copied). */
+[data-bakin-plugin="terminal"] .terminal-view-offer { max-width: min(20rem, calc(100vw - 6rem)); }
+[data-bakin-plugin="terminal"] .terminal-view-offer > code { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; word-break: normal; }
+
 /* 32 px to look at, 44 px to hit on touch. */
 @media (pointer: coarse) {
   [data-bakin-plugin="terminal"] .terminal-view-actions > button { position: relative; }
