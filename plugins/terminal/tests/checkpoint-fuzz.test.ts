@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'bun:test'
 import { fullState, internals, stateDiff } from '../lib/terminal-state'
+import { screenDigest, type DigestTerminal } from '../lib/digest'
 import {
   apply, emulator, FuzzReplica, generate, joinCategory, missingBranches, missingCategories, prng, settled, thinDeciles,
 } from './helpers/terminal-fuzz'
+
+/** Plan T37: wherever a joiner's full state equals the replica's, so does its digest (no false mismatch). */
+const digestOf = (terminal: unknown) => screenDigest(terminal as DigestTerminal)
 
 // Plan T32b: seeds × sizes; every joiner equals the replica at the join,
 // every 25 events after, and at the end; the replica equals a one-shot
@@ -91,6 +95,7 @@ async function stream(seed: number, cols: number, rows: number) {
       if (fromCheckpoint && core.buffers.active.x >= replica.term.cols) categories['pending-wrap'] = (categories['pending-wrap'] ?? 0) + 1
       const difference = stateDiff(fullState(replica.term), fullState(viewer))
       if (difference) problems.push(`seed ${seed} ${cols}x${rows} join@${offset} (${category}) at the join: ${difference}`)
+      else if (digestOf(replica.term) !== digestOf(viewer)) problems.push(`seed ${seed} ${cols}x${rows} join@${offset} (${category}) at the join: digest differs`)
       joiners.push({ viewer, offset, category })
       cuts.push(offset / total)
     }
@@ -100,6 +105,7 @@ async function stream(seed: number, cols: number, rows: number) {
       for (const joiner of joiners) {
         const difference = stateDiff(fullState(replica.term), fullState(joiner.viewer))
         if (difference) problems.push(`seed ${seed} ${cols}x${rows} join@${joiner.offset} (${joiner.category}) after @${offset}: ${difference}`)
+        else if (digestOf(replica.term) !== digestOf(joiner.viewer)) problems.push(`seed ${seed} ${cols}x${rows} join@${joiner.offset} (${joiner.category}) after @${offset}: digest differs`)
       }
     }
   }
@@ -110,6 +116,7 @@ async function stream(seed: number, cols: number, rows: number) {
   for (const joiner of joiners) {
     const difference = stateDiff(fullState(replica.term), fullState(joiner.viewer))
     if (difference) problems.push(`seed ${seed} ${cols}x${rows} join@${joiner.offset} (${joiner.category}) at the end: ${difference}`)
+    else if (digestOf(replica.term) !== digestOf(joiner.viewer)) problems.push(`seed ${seed} ${cols}x${rows} join@${joiner.offset} (${joiner.category}) at the end: digest differs`)
     joiner.viewer.dispose()
   }
   reference.dispose()
