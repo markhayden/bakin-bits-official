@@ -47,7 +47,7 @@ async function harness(root: string, options: { raw?: boolean; processes?: Const
   const driver = new TmuxProcesses(service, { info: (message, data) => logs.push({ message, data }) }, options.processes)
   const manager = new Sessions(new Store(join(root, 'terminal.db')), driver, {
     settings: () => ({}), prepare: async () => undefined, release: async () => undefined,
-    log: { info: (message, data) => logs.push({ message, data }) }, shadowQuietMs: 300, rawPath: () => options.raw ?? false,
+    log: { info: (message, data) => logs.push({ message, data }) }, shadowQuietMs: 300, rawPathForNew: () => options.raw ?? false,
   })
   let sequence = 0
   const session = await manager.create({ title: 'Replica', cwd: root }, human, { cols: 100, rows: 30, kind: 'browser', device: 'desktop' })

@@ -50,6 +50,8 @@ export interface Session {
   outputSaved?: boolean
   /** Its saved bundle was removed to keep every bundle within the store's limit (oldest first). */
   outputEvicted?: boolean
+  /** Its viewers take the raw path (spec D13), set at creation from the setting and kept for its life (plan T38a). */
+  rawPath?: true
 }
 export interface TerminalSettings {
   enabledAgents?: Array<{ id: string }>

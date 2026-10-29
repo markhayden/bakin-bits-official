@@ -34,7 +34,7 @@ const manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProce
   release: async () => ({ ok: false }),
   // TERMINAL_PREVIEW_RAW=1: every session's viewers take the raw path (spec D13; T38a's setting in the plugin).
   // The plugin's setting (plan T38a), set by TERMINAL_PREVIEW_RAW=1, read through the same parsing as index.ts.
-  rawPath: () => terminalSettings({ rawPath: process.env.TERMINAL_PREVIEW_RAW === '1' }).rawPath === true,
+  rawPathForNew: () => terminalSettings({ rawPath: process.env.TERMINAL_PREVIEW_RAW === '1' }).rawPath === true,
 })
 const built = await Bun.build({
   entrypoints: [join(import.meta.dir, 'live.fixture.tsx')], outdir: root, target: 'browser', format: 'esm',

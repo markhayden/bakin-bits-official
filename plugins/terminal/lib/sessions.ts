@@ -42,8 +42,13 @@ export interface SessionOptions {
   log?: { info(message: string, data?: Record<string, unknown>): void }
   /** Quiet time before the shadow replica is compared with the bridge (SHADOW_QUIET_MS). */
   shadowQuietMs?: number
-  /** Whether a session's viewers take the raw path (spec D13, T38a's setting); default the bridge path. */
-  rawPath?(session: Session): boolean
+  /**
+   * Whether a session created now takes the raw path (spec D13, T38a's
+   * setting). Asked once, at creation: the path is the session's for its
+   * life (`Session.rawPath`), so a change of the setting never splits a live
+   * session between two policies.
+   */
+  rawPathForNew?(): boolean
 }
 
 /** Bridge output quiet for this long is a point where the shadow replica and the bridge should agree. */
@@ -321,7 +326,7 @@ export class Sessions {
     // control client closed or its replica ended (a failed reseed) is a loss, recovered by attaching again;
     // a failed legacy bridge (its queue overflows in a flood) never costs a live replica, and is not
     // repaired from here (the bridge goes with T38b).
-    const lost = this.options.rawPath?.(session)
+    const lost = session.rawPath
       ? !this.replicaLive(session.id)
       : !this.driver.connected(session.id) || this.screens.get(session.id)?.failed || !this.screens.has(session.id)
     if (lost) {
@@ -353,6 +358,8 @@ export class Sessions {
         createdAt: this.now(), lastActivityAt: this.now(),
         // Its final output is a bundle once it ends (plan T35b); a crash before that leaves this false.
         outputSaved: false,
+        // Its path, for its life (plan T38a).
+        ...(this.options.rawPathForNew?.() ? { rawPath: true as const } : {}),
       }
       if ((input.checkout ?? (input.program === 'shell' ? 'existing' : 'isolated')) === 'isolated') {
         await this.sweepUnlocked()
@@ -419,7 +426,7 @@ export class Sessions {
     if (Buffer.byteLength(data) + (options.paste && options.enter ? 1 : 0) > 65536) throw new TerminalError('Input exceeds 64 KiB', 413)
     // No attachment (a resize could not be reconciled): refuse before consuming, so nothing is uncertain.
     // The raw path's input health is the control client's alone (spec D13 "Two paths").
-    const healthy = this.options.rawPath?.(session) ? this.driver.controlConnected?.(id) ?? false : this.driver.connected(id)
+    const healthy = session.rawPath ? this.driver.controlConnected?.(id) ?? false : this.driver.connected(id)
     if (!healthy) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
     // Consume the sequence before delivery. A transport failure is never auto-retried.
     session.inputSequence = sequence
@@ -555,7 +562,7 @@ export class Sessions {
   /** Whether this session's viewers take the raw path (lib/socket.ts). */
   rawPath(id: string): boolean {
     const session = this.store.sessions().find((entry) => entry.id === id)
-    return Boolean(session && this.options.rawPath?.(session))
+    return session?.rawPath === true
   }
   /** The session's replica while attached (the raw path's source). */
   replica(id: string): RawSource | undefined { return this.driver.replica?.(id) }

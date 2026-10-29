@@ -104,16 +104,19 @@ sessions).
 
 ## The new terminal viewer (preview)
 
-Settings › **Use the new terminal viewer (preview)** (off by default) shows
-each session from Bakin's own copy of it instead of a separate tmux client.
-Every browser gets the same picture, rebuilt from tmux exactly when a width
-changes. If the view ever has to be refreshed from tmux (very fast output, a
-lost connection to tmux, a difference the safety net found), the session
-shows a persistent notice naming why. When a session ends its last screen
-is kept, so an ended session opens to what it showed. Turning the setting
-off returns to the current viewer; open viewers switch when they reconnect,
-and either way a program's query is answered once, by tmux. The current
-viewer still records each session's output, so switching back (or
+Settings › **Use the new terminal viewer for new sessions (preview)** (off by
+default) gives new sessions a viewer that shows the same picture on every
+device, reflowed exactly as tmux does when a width changes. If the view ever
+has to be refreshed from tmux (very fast output, a lost connection to tmux, a
+difference the safety net found), the session shows a persistent notice
+naming why. When a session ends its last screen is kept, so an ended session
+opens to what it showed. Scrolling back through history and touch gestures
+are still being finished in this viewer.
+
+A session keeps the viewer it started with until it ends: turning the
+setting off starts new sessions with the current viewer, and open ones are
+unchanged. Either way a program's query is answered once, by tmux. The
+current viewer still records each session's output, so going back (or
 installing an earlier Terminal) keeps every ended session readable.
 
 ## Continue in a terminal app

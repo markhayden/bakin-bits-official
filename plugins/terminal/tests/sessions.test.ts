@@ -13,7 +13,7 @@ import { makeBundle } from '../lib/bundle'
 
 const managers: Sessions[] = []
 afterEach(async () => { for (const manager of managers.splice(0)) await manager.shutdown() })
-function fixture(options: { raw?: boolean; storePath?: string } = {}) {
+function fixture(options: { raw?: boolean; storePath?: string; setting?: { raw: boolean } } = {}) {
   let now = 1000
   let enabled = [{ id: 'patch' }, { id: 'chef' }]
   const writes: string[] = []
@@ -78,7 +78,7 @@ function fixture(options: { raw?: boolean; storePath?: string } = {}) {
     settings: () => ({ enabledAgents: enabled }), now: () => now,
     prepare: async () => ({ ok: false }),
     release: async (input) => { releases.push(input); return releasable ? { ok: true } : { ok: false, error: 'Unmerged work' } },
-    rawPath: () => options.raw ?? false,
+    rawPathForNew: () => options.setting?.raw ?? options.raw ?? false,
   })
   managers.push(manager)
   return {
@@ -768,6 +768,33 @@ test("raw path: a join to a live replica waits for nothing, even while another s
   expect(joined).toBe(true)
   release()
   await recovering
+  replica.close()
+})
+
+test('a session keeps the path it was created on (plan T38a): turning the setting either way never splits a live session', async () => {
+  const setting = { raw: true }
+  const { manager, bridgeLost, controlLost, attaches, replicas } = fixture({ setting })
+  const raw = await manager.create({ title: 'Raw', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+  setting.raw = false
+  const bridge = await manager.create({ title: 'Bridge', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+  // Each answers for its own path, whatever the setting says now.
+  expect([manager.rawPath(raw.id), manager.rawPath(bridge.id)]).toEqual([true, false])
+  setting.raw = true
+  expect([manager.rawPath(raw.id), manager.rawPath(bridge.id)]).toEqual([true, false])
+  // Input health: the raw session needs only its control client, the bridge one its bridge.
+  bridgeLost.add(raw.id)
+  const rawTaken = await manager.control(raw.id, human, 'take')
+  await manager.write(raw.id, human, rawTaken.generation, rawTaken.inputSequence + 1, 'ok\r')
+  controlLost.add(bridge.id)
+  const bridgeTaken = await manager.control(bridge.id, human, 'take')
+  await manager.write(bridge.id, human, bridgeTaken.generation, bridgeTaken.inputSequence + 1, 'ok\r')
+  // Recovery follows the session's path too: a lost bridge is the bridge session's to reattach, not the raw one's.
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 64, rows: 20, reason: 'test', history: true })
+  replicas.set(raw.id, replica)
+  const before = attaches.length
+  await manager.readScreen(raw.id, human)
+  expect(attaches.length).toBe(before)
   replica.close()
 })
 
