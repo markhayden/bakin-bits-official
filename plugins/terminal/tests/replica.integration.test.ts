@@ -9,6 +9,9 @@ import { Store } from '../lib/store'
 import { TerminalService, terminalEnvironment } from '../lib/service'
 import { TmuxProcesses } from '../lib/processes'
 import { tmuxConfig } from '../lib/tmux-config'
+import headless from '@xterm/headless'
+import { applyTerminalProfile, TERMINAL_OPTIONS } from '../lib/terminal-profile'
+import type { Term } from '../lib/terminal-state'
 
 // Spec D13 / T32c against the managed tmux: the shadow replica beside the
 // bridge. Run with TERMINAL_PROCESS_TEST=1 TERMINAL_TMUX=~/.bakin/bin/tmux.
@@ -210,6 +213,77 @@ processTest('a checkpoint over full scrollback never holds the event loop for 8 
   expect(worst).toBeLessThan(8)
   replica.close()
 }, 30_000)
+
+/** A screen's cells as `[x, y, chars, attributes]`, up to each row's last printed cell (tmux's `-e` capture trims the rest). */
+function screenCells(t: Term): string[] {
+  const buffer = t.buffer.active
+  const cells: string[] = []
+  const cell = buffer.getNullCell()
+  for (let y = 0; y < t.rows; y++) {
+    const line = buffer.getLine(buffer.baseY + y)!
+    const end = line.translateToString(true).length
+    for (let x = 0; x < end; x++) {
+      line.getCell(x, cell)
+      const style = [cell.getFgColorMode(), cell.getFgColor(), cell.getBgColorMode(), cell.getBgColor(), cell.isBold(), cell.isItalic(), cell.isUnderline(), cell.isInverse()].join(',')
+      cells.push(`${x},${y} ${cell.getChars() || ' '} ${style}`)
+    }
+  }
+  return cells
+}
+
+processTest('stepped width changes: at each, the cells and attributes, cursor, region and modes agree with tmux, and later output continues the pen, charset and region', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bakin-replica-steps-'))
+  const h = await harness(root)
+  try {
+    await until(() => Boolean(h.driver.replica(h.session.id)?.cut()), 'seeded')
+    const replica = h.driver.replica(h.session.id)!
+    const capture = (args: string[]) => h.service.command(['capture-pane', '-p', ...args, '-t', h.session.id])
+    // (Markers are printed in two halves: the echoed command line must not satisfy a wait for them.)
+    // Attributed lines that wrap, then state left set for later output: a region, application cursor keys,
+    // a bold green pen and the DEC graphics charset. The program then waits; the resizes happen meanwhile.
+    const setup = "for i in 1 2 3 4 5 6 7 8; do printf '\\033[1;3%sm%s\\033[0;4;38;5;%sm%0110d\\033[0;48;2;10;%s;90mend\\033[0m\\n' $((i%7)) row$i $((i*20)) $i $((i*25)); done; " +
+      "printf '%s%s\\033[3;20r\\033[?1h\\033[12;1H\\033[1;32m\\033(0' REA DY; sleep 8; printf 'qqqq\\033(B%s%s\\n' AF TER; sleep 30\r"
+    await h.type(setup)
+    await until(async () => (await capture([])).includes('READY'), 'ready')
+    const flags = '#{cursor_x} #{cursor_y} #{scroll_region_upper} #{scroll_region_lower} #{keypad_cursor_flag} #{insert_flag} #{wrap_flag}'
+    const agree = async (label: string) => {
+      await until(async () => replica.quietMs > 300, `${label}: quiet`)
+      const tmux = (await h.service.command(['display-message', '-p', '-t', h.session.id, flags])).trim()
+      const ours = await replica.read((t) => {
+        const core = (t as unknown as { _core: { buffers: { active: { scrollTop: number; scrollBottom: number } } } })._core
+        return [t.buffer.active.cursorX, t.buffer.active.cursorY, core.buffers.active.scrollTop, core.buffers.active.scrollBottom,
+          Number(t.modes.applicationCursorKeysMode), Number(t.modes.insertMode), Number(t.modes.wraparoundMode)].join(' ')
+      })
+      expect(`${label}: ${ours}`).toBe(`${label}: ${tmux}`)
+      // tmux's own attributed screen, parsed by a fresh profile terminal: the oracle for cells and attributes.
+      const { cols, rows } = (await replica.read((t) => ({ cols: t.cols, rows: t.rows })))!
+      const oracle = new headless.Terminal({ cols, rows, ...TERMINAL_OPTIONS })
+      applyTerminalProfile(oracle).setLive(false)
+      const text = (await capture(['-e'])).replace(/\n$/, '').split('\n').join('\r\n')
+      await new Promise<void>((resolve) => oracle.write(text, resolve))
+      // tmux's capture writes a line-drawing cell as its ASCII letter (no charset switch): compared as that letter.
+      expect((await replica.read(screenCells))!.map((cell) => `${label} ${cell.replace(/ ─ /, ' q ')}`)).toEqual(screenCells(oracle).map((cell) => `${label} ${cell}`))
+      oracle.dispose()
+    }
+    await agree('before')
+    for (const width of [70, 100, 55]) {
+      await h.service.command(['resize-window', '-t', h.session.id, '-x', String(width), '-y', '30'])
+      await until(async () => await replica.read((t) => t.cols) === width && !replica.geometryOwed, `width ${width}`)
+      await agree(`width ${width}`)
+    }
+    expect(replica.stats.rebuilds).toEqual({})
+    // The program's later output: the line-drawing charset and the green pen it left set, inside its region.
+    await until(async () => (await capture([])).includes('AFTER'), 'after', 20_000)
+    const replicaText = async () => (await replica.read((t) => { let all = ''; for (let y = 0; y < t.buffer.active.length; y++) all += t.buffer.active.getLine(y)!.translateToString(true) + '\n'; return all }))!
+    await until(async () => (await replicaText()).includes('AFTER'), 'the replica has it too')
+    await agree('after')
+    // (tmux's plain capture prints line-drawing cells as their ASCII letters; the -e oracle above compared the rest.)
+    expect(await replicaText()).toContain('────AFTER')
+  } finally {
+    await h.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 60_000)
 
 processTest("width changes install tmux's geometry: rapid resizes converge, the cursor line keeps its characters, and the replica agrees with tmux's own client", async () => {
   const root = mkdtempSync(join(tmpdir(), 'bakin-replica-width-'))
