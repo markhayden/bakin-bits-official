@@ -10,7 +10,12 @@ export class Store {
       CREATE TABLE IF NOT EXISTS cursors (session TEXT PRIMARY KEY, value INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS output (id INTEGER PRIMARY KEY AUTOINCREMENT, session TEXT NOT NULL, cursor INTEGER NOT NULL, data BLOB NOT NULL);
       CREATE INDEX IF NOT EXISTS output_session ON output(session, cursor);
-      CREATE TABLE IF NOT EXISTS sizes (session TEXT PRIMARY KEY, bytes INTEGER NOT NULL);`)
+      CREATE TABLE IF NOT EXISTS sizes (session TEXT PRIMARY KEY, bytes INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS bundles (session TEXT PRIMARY KEY, data BLOB NOT NULL);`)
+    // A version that knows no bundles (a rollback to B5) deletes sessions and histories without
+    // them: a bundle whose session is gone, or whose history was deleted, goes on the next open.
+    this.db.exec(`DELETE FROM bundles WHERE session NOT IN (SELECT id FROM sessions)
+      OR session IN (SELECT id FROM sessions WHERE json_extract(value, '$.historyDeleted') = 1)`)
     // Retained bytes are kept as running totals (summing the output on every
     // append made a busy session at its limit scan everything it retained);
     // they are rebuilt from the output once per open.
@@ -80,10 +85,18 @@ export class Store {
       : this.db.query('SELECT COALESCE(SUM(bytes),0) AS size FROM sizes').get()) as { size: number }
     return row.size
   }
+  /** An ended session's final output (lib/bundle.ts): one row, replaced whole. */
+  saveBundle(session: string, data: Uint8Array): void {
+    this.db.query('INSERT OR REPLACE INTO bundles VALUES (?, ?)').run(session, data)
+  }
+  bundle(session: string): Uint8Array | undefined {
+    return (this.db.query('SELECT data FROM bundles WHERE session=?').get(session) as { data: Uint8Array } | null)?.data
+  }
   deleteOutput(session: string): void {
     this.db.transaction(() => {
       this.db.query('DELETE FROM output WHERE session=?').run(session)
       this.db.query('DELETE FROM sizes WHERE session=?').run(session)
+      this.db.query('DELETE FROM bundles WHERE session=?').run(session)
     })()
   }
   deleteSession(session: string): void {
@@ -91,6 +104,7 @@ export class Store {
       this.db.query('DELETE FROM output WHERE session=?').run(session)
       this.db.query('DELETE FROM sizes WHERE session=?').run(session)
       this.db.query('DELETE FROM cursors WHERE session=?').run(session)
+      this.db.query('DELETE FROM bundles WHERE session=?').run(session)
       this.db.query('DELETE FROM sessions WHERE id=?').run(session)
     })()
   }

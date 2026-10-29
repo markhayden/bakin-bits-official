@@ -42,6 +42,12 @@ export interface Session {
   worktreePath?: string
   cleanupReason?: string
   historyDeleted?: boolean
+  /**
+   * The raw path's final output (plan T35b): false from the session's start
+   * until its bundle is saved, true after. Absent on sessions from before the
+   * raw path, which show their legacy retained output.
+   */
+  outputSaved?: boolean
 }
 export interface TerminalSettings {
   enabledAgents?: Array<{ id: string }>

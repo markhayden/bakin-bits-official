@@ -58,3 +58,40 @@ test('retained totals survive a reopen: they are rebuilt from the output', () =>
   expect(second.bytes()).toBe(30)
   for (const file of [path, `${path}-wal`, `${path}-shm`]) rmSync(file, { force: true })
 })
+test('bundles (plan T35b): one row per session, replaced whole, deleted with its history or its session', () => {
+  const store = new Store(':memory:')
+  stores.push(store)
+  const session = (id: string) => ({ id, title: id, cwd: '/tmp', program: 'shell', owner: { kind: 'human', id: 'h' }, generation: 1, inputSequence: 0, cols: 80, rows: 24, sizeEpoch: 0, sizeRevision: 0, state: 'completed', createdAt: 1, lastActivityAt: 1 }) as const
+  store.save(session('a'))
+  store.save(session('b'))
+  store.saveBundle('a', Buffer.from('first'))
+  store.saveBundle('a', Buffer.from('second'))
+  store.saveBundle('b', Buffer.from('other'))
+  expect(Buffer.from(store.bundle('a')!).toString()).toBe('second')
+  store.deleteOutput('a')
+  expect(store.bundle('a')).toBeUndefined()
+  store.deleteSession('b')
+  expect(store.bundle('b')).toBeUndefined()
+})
+test('on open, a bundle whose session or history a version without bundles deleted is removed (a rollback reconciled)', () => {
+  const path = join(tmpdir(), `terminal-bundles-${crypto.randomUUID()}.db`)
+  try {
+    const session = (id: string, extra: Record<string, unknown> = {}) => ({ id, title: id, cwd: '/tmp', program: 'shell', owner: { kind: 'human', id: 'h' }, generation: 1, inputSequence: 0, cols: 80, rows: 24, sizeEpoch: 0, sizeRevision: 0, state: 'completed', createdAt: 1, lastActivityAt: 1, ...extra }) as never
+    const first = new Store(path)
+    for (const id of ['kept', 'gone', 'erased']) { first.save(session(id)); first.saveBundle(id, Buffer.from(id)) }
+    first.close()
+    // What a rolled-back version does: it removes the session row and the history, never the bundle.
+    const { Database } = require('bun:sqlite') as typeof import('bun:sqlite')
+    const old = new Database(path)
+    old.query('DELETE FROM sessions WHERE id=?').run('gone')
+    old.query('UPDATE sessions SET value=? WHERE id=?').run(JSON.stringify({ ...(session('erased') as object), historyDeleted: true }), 'erased')
+    old.close()
+    const reopened = new Store(path)
+    stores.push(reopened)
+    expect(Buffer.from(reopened.bundle('kept')!).toString()).toBe('kept')
+    expect(reopened.bundle('gone')).toBeUndefined()
+    expect(reopened.bundle('erased')).toBeUndefined()
+  } finally {
+    for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true })
+  }
+})
