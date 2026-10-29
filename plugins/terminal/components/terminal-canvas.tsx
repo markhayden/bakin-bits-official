@@ -8,6 +8,7 @@ import type { Session } from '../lib/contracts'
 import type { Fidelity } from '../lib/raw-display'
 import type { UnavailableReason } from '../lib/socket'
 import { installGeometry } from '../lib/geometry'
+import { routeScroll } from './scroll-route'
 import { screenDigest } from '../lib/digest'
 import { clampSize } from '../lib/sizing'
 import { trackCursorVisibility } from '../lib/cursor-visibility'
@@ -471,11 +472,13 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   // A new claim (by anyone) starts a fresh exchange: what this screen sent before is no longer known to the server.
   useEffect(() => { sentSize.current = '' }, [authority, session.sizeEpoch])
 
-  // Pinch (two fingers, or Ctrl+wheel on a trackpad) sets this device's font;
-  // one-finger drags, wheels and scrollbar or arrow-key scrolling pan natively
-  // and pause cursor-follow. None of it focuses the keyboard or sends input:
-  // wheels are taken in the capture phase, before xterm can turn them into
-  // scrollback scrolling or (in full-screen programs) arrow keys.
+  // Pinch (two fingers, or Ctrl+wheel on a trackpad) sets this device's font.
+  // A vertical wheel or one-finger drag pans the grid where it overflows and
+  // scrolls xterm's history where there is history (components/scroll-route.ts,
+  // plan T36); horizontal ones pan. Every one pauses cursor-follow. None of it
+  // focuses the keyboard or sends input: wheels are always taken in the capture
+  // phase, before xterm can turn them into mouse reports or (in full-screen
+  // programs) arrow keys, and history is scrolled here, never by xterm.
   useEffect(() => {
     const el = pane.current
     if (!el) return
@@ -483,19 +486,52 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     let frame = 0
     let commit: ReturnType<typeof setTimeout> | undefined
     const distance = (touches: TouchList) => Math.hypot(touches[0]!.clientX - touches[1]!.clientX, touches[0]!.clientY - touches[1]!.clientY)
+    /** A vertical scroll of `delta` px, routed to the pane or the history; true when the history took part. */
+    let carry = 0
+    const scrollVertical = (delta: number): boolean => {
+      const term = terminal.current
+      const rendered = screen()
+      if (!term || !rendered?.clientHeight) { el.scrollBy(0, delta); return false }
+      const buffer = term.buffer.active
+      const route = routeScroll(delta, el, { viewportY: buffer.viewportY, baseY: buffer.baseY, alternate: buffer.type === 'alternate' }, rendered.clientHeight / term.rows, carry)
+      carry = route.carry
+      if (route.pan) el.scrollBy(0, route.pan)
+      if (route.lines) term.scrollLines(route.lines)
+      // Anywhere above the live screen the view stays put (↓ Live comes back).
+      if (term.buffer.active.viewportY < term.buffer.active.baseY) pause(true)
+      else if (route.pan) pause()
+      return route.lines !== 0
+    }
+    /** Whether a one-finger vertical drag of `delta` belongs to the history (the native pan is left the rest). */
+    const historyTakes = (delta: number): boolean => {
+      const buffer = terminal.current?.buffer.active
+      if (!buffer || buffer.type === 'alternate') return false
+      const inHistory = buffer.viewportY < buffer.baseY
+      return inHistory || (delta < 0 && el.scrollTop <= 0 && buffer.viewportY > 0)
+    }
+    let lastY: number | undefined
     const preview = (size: number) => {
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(() => setFont(size))
     }
     const start = (event: TouchEvent) => {
       if (event.touches.length === 2) pinch = { distance: distance(event.touches), font: terminal.current?.options.fontSize ?? BASE_FONT }
+      lastY = event.touches.length === 1 ? event.touches[0]!.clientY : undefined
+      carry = 0
     }
     const move = (event: TouchEvent) => {
       if (pinch && event.touches.length === 2) {
         event.preventDefault()
         pinch.next = pinchFont(pinch.font, pinch.distance, distance(event.touches), minFont())
         preview(pinch.next)
-      } else if (event.touches.length === 1) pause()
+      } else if (event.touches.length === 1) {
+        const y = event.touches[0]!.clientY
+        // The finger moving down shows what is above: a negative scroll.
+        const delta = lastY === undefined ? 0 : lastY - y
+        lastY = y
+        if (delta && historyTakes(delta)) { event.preventDefault(); scrollVertical(delta); return }
+        pause()
+      }
     }
     const end = (event: TouchEvent) => {
       if (!pinch || event.touches.length >= 2) return
@@ -509,15 +545,12 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     }
     const wheel = (event: WheelEvent) => {
       if (!event.ctrlKey) {
-        // A pane that overflows pans; one that fits leaves the wheel to the terminal.
-        // The pane scrolls itself: left alone, the browser would scroll xterm's
-        // own history viewport under the pointer instead.
-        if (!overflows()) return
+        // Always ours: xterm never sees a wheel (no mouse reports, no arrow keys, no history it scrolls itself).
         event.preventDefault()
         event.stopPropagation()
         const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? el.clientHeight : 1
-        el.scrollBy(event.deltaX * unit, event.deltaY * unit)
-        pause()
+        if (event.deltaX) { el.scrollBy(event.deltaX * unit, 0); pause() }
+        if (event.deltaY) scrollVertical(event.deltaY * unit)
         return
       }
       event.preventDefault()
@@ -582,6 +615,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   function resumeFollow() {
     callbacks.current.paused = false
     setPaused(false)
+    // Out of the history to the live screen (D10), then to the cursor.
+    terminal.current?.scrollToBottom()
     // After the browser has applied any layout change (the keyboard opening).
     requestAnimationFrame(followCursor)
   }

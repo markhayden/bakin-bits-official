@@ -514,3 +514,113 @@ rawTest('two viewers and a terminal app on one session (plan T38a): a program\'s
     await browser.close()
   }
 }, 60_000)
+
+/** The first and last rows the screen reader sees (the visible window of the buffer). */
+async function window_(page: Page): Promise<{ first: string; last: string }> {
+  const all = (await rows(page)).map((row) => row.trim()).filter(Boolean)
+  return { first: all[0] ?? '', last: all.at(-1) ?? '' }
+}
+const wheelOver = async (page: Page, deltaY: number, times = 1) => {
+  const box = (await page.locator('.terminal-pane').boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  for (let n = 0; n < times; n++) await page.mouse.wheel(0, deltaY)
+}
+
+rawTest('native scrolling (plan T36): the wheel scrolls the history to its top, pauses following, and ↓ Live comes back; output while scrolled up and the other viewer stay put', async () => {
+  const browser = await launchChromium()
+  const client = 'raw-browser-scroll-test-01'
+  const page = await browser.newPage({ viewport })
+  const other = await (await browser.newContext({ viewport })).newPage()
+  const { id } = await createSession(page, client)
+  try {
+    await open(page, id)
+    await open(other, id)
+    await typeLine(page, 'clear; seq -f "line-%g" 1 300')
+    await waitForRow(page, '^line-300$')
+    // Up into the history, past its top: it stops at the first line.
+    await wheelOver(page, -2000, 20)
+    await waitForRow(page, '^line-1$')
+    await page.getByRole('button', { name: 'Follow cursor' }).waitFor()
+    // Output while scrolled up (typed on the other viewer: typing here returns to the cursor, D10) does not move this view.
+    await typeLine(other, 'seq -f "more-%g" 1 5')
+    await waitForRow(other, '^more-5$')
+    expect(await hasRow(page, '^more-5$')).toBe(false)
+    expect((await window_(page)).first).toBe('line-1')
+    // ↓ Live: the live screen again.
+    await page.getByRole('button', { name: 'Follow cursor' }).click()
+    await waitForRow(page, '^more-5$')
+    expect(await page.getByRole('button', { name: 'Follow cursor' }).count()).toBe(0)
+    // Down from the history to the live screen by wheel too.
+    await wheelOver(page, -400, 2)
+    await wheelOver(page, 4000, 4)
+    await waitForRow(page, '^more-5$')
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 90_000)
+
+rawTest('native scrolling (plan T36): a mouse-reporting program gets no input from the wheel, and the alternate screen has no history to scroll', async () => {
+  const browser = await launchChromium()
+  const client = 'raw-browser-scroll-test-02'
+  const page = await browser.newPage({ viewport })
+  const { id } = await createSession(page, client)
+  const tmux = process.env.TERMINAL_PREVIEW_TMUX!
+  const socket = new TerminalService(process.env.TERMINAL_PREVIEW_ROOT!).socket
+  try {
+    await open(page, id)
+    // A grid that fits the pane (nothing to pan): the wheel would otherwise be xterm's to turn into reports.
+    Bun.spawnSync([tmux, '-S', socket, 'resize-window', '-t', id, '-x', '60', '-y', '15'])
+    await page.waitForFunction(() => { const pane = document.querySelector('.terminal-pane')!; return pane.scrollHeight <= pane.clientHeight + 1 && pane.scrollWidth <= pane.clientWidth + 1 }, null, { timeout: 10_000 })
+    await typeLine(page, 'seq -f "before-%g" 1 100')
+    await waitForRow(page, '^before-100$')
+    // Mouse reporting on (SGR), on the alternate screen; anything the program receives is shown by cat -v.
+    await typeLine(page, `printf '\\033[?1049h\\033[?1000;1006h%s%s\\n' READ Y; stty -echo -icanon; cat -v`)
+    await waitForRow(page, '^READY$')
+    const before = await rows(page)
+    await wheelOver(page, -600, 5)
+    await wheelOver(page, 600, 5)
+    await page.waitForTimeout(1500)
+    // No mouse report, no arrow key reached the program; the alternate screen did not scroll.
+    expect((await rows(page)).join('\n')).not.toContain('^[')
+    expect(await rows(page)).toEqual(before)
+    await page.keyboard.press('Control+C')
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 60_000)
+
+rawTest('native scrolling on a phone (plan T36): a one-finger drag down scrolls the history, a drag up comes back', async () => {
+  if (process.env.TERMINAL_BROWSER === 'webkit') return // touch is dispatched through Chromium's DevTools protocol
+  const browser = await launchChromium()
+  const client = 'raw-browser-scroll-test-03'
+  const context = await browser.newContext({ viewport: { width: 390, height: 760 }, hasTouch: true, isMobile: true })
+  const page = await context.newPage()
+  const { id } = await createSession(page, client)
+  const cdp = await context.newCDPSession(page)
+  const drag = async (fromY: number, toY: number) => {
+    const box = (await page.locator('.terminal-pane').boundingBox())!
+    const x = box.x + box.width / 2
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y: box.y + fromY }] })
+    for (let step = 1; step <= 10; step++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: box.y + fromY + ((toY - fromY) * step) / 10 }] })
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  }
+  try {
+    await open(page, id)
+    await typeLine(page, 'clear; seq -f "line-%g" 1 200')
+    await waitForRow(page, '^line-200$')
+    const live = await window_(page)
+    // Finger down: what is above comes into view (several drags reach well into the history).
+    for (let n = 0; n < 4; n++) await drag(100, 500)
+    const scrolled = await window_(page)
+    expect(scrolled.last).not.toBe(live.last)
+    await page.getByRole('button', { name: 'Follow cursor' }).waitFor()
+    // Finger up: back down toward the live screen.
+    for (let n = 0; n < 12; n++) await drag(500, 100)
+    await waitForRow(page, '^line-200$')
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 90_000)
