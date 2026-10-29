@@ -240,9 +240,11 @@ processTest('stepped width changes: at each, the cells and attributes, cursor, r
     const capture = (args: string[]) => h.service.command(['capture-pane', '-p', ...args, '-t', h.session.id])
     // (Markers are printed in two halves: the echoed command line must not satisfy a wait for them.)
     // Attributed lines that wrap, then state left set for later output: a region, application cursor keys,
-    // a bold green pen and the DEC graphics charset. The program then waits; the resizes happen meanwhile.
+    // a bold green pen and the DEC graphics charset. The program then waits for the gate file, released
+    // after the last width change was compared; its later output scrolls inside the region (in capitals,
+    // which the line-drawing set leaves alone), then draws with the charset it left set.
     const setup = "for i in 1 2 3 4 5 6 7 8; do printf '\\033[1;3%sm%s\\033[0;4;38;5;%sm%0110d\\033[0;48;2;10;%s;90mend\\033[0m\\n' $((i%7)) row$i $((i*20)) $i $((i*25)); done; " +
-      "printf '%s%s\\033[3;20r\\033[?1h\\033[12;1H\\033[1;32m\\033(0' REA DY; sleep 8; printf 'qqqq\\033(B%s%s\\n' AF TER; sleep 30\r"
+      "printf '%s%s\\033[3;20r\\033[?1h\\033[12;1H\\033[1;32m\\033(0' REA DY; until [ -e gate ]; do sleep 0.1; done; for i in $(seq 1 24); do printf 'IN-REGION %s\\n' $i; done; printf 'qqqq\\033(B%s%s\\n' AF TER; printf '%s%s' DO NE; sleep 30\r"
     await h.type(setup)
     await until(async () => (await capture([])).includes('READY'), 'ready')
     const flags = '#{cursor_x} #{cursor_y} #{scroll_region_upper} #{scroll_region_lower} #{keypad_cursor_flag} #{insert_flag} #{wrap_flag}'
@@ -272,13 +274,20 @@ processTest('stepped width changes: at each, the cells and attributes, cursor, r
       await agree(`width ${width}`)
     }
     expect(replica.stats.rebuilds).toEqual({})
-    // The program's later output: the line-drawing charset and the green pen it left set, inside its region.
-    await until(async () => (await capture([])).includes('AFTER'), 'after', 20_000)
+    // The program's later output: the line-drawing charset and the green pen it left set, scrolling inside its region.
+    const outside = (screen: string) => { const rows = screen.split('\n'); return [...rows.slice(0, 2), ...rows.slice(20)] }
+    const before = outside(await capture([]))
+    writeFileSync(join(root, 'gate'), '')
+    await until(async () => (await capture([])).includes('DONE'), 'after', 20_000)
     const replicaText = async () => (await replica.read((t) => { let all = ''; for (let y = 0; y < t.buffer.active.length; y++) all += t.buffer.active.getLine(y)!.translateToString(true) + '\n'; return all }))!
-    await until(async () => (await replicaText()).includes('AFTER'), 'the replica has it too')
+    await until(async () => (await replicaText()).includes('DONE'), 'the replica has it too')
     await agree('after')
     // (tmux's plain capture prints line-drawing cells as their ASCII letters; the -e oracle above compared the rest.)
     expect(await replicaText()).toContain('────AFTER')
+    // The region scrolled: its last line holds the newest output, the rows above and below it kept theirs.
+    const rows = (await capture([])).split('\n')
+    expect([rows[17], rows[18], rows[19]]).toEqual(['IN-REGION 24', 'qqqqAFTER', 'DONE'])
+    expect(outside(await capture([]))).toEqual(before)
   } finally {
     await h.close()
     rmSync(root, { recursive: true, force: true })
