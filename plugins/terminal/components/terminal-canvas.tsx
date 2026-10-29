@@ -400,13 +400,14 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       url: url.href, clientId: clientId(),
       onSync: (sync) => {
         // A sync is a complete picture: the snapshot, then output after its cursor.
-        // Shown once the snapshot is parsed (an empty one, an ended session's, waits for its output).
+        // Shown once the snapshot is parsed (an empty one, an ended session's, waits for its output) — by the terminal
+        // on screen: a disposed one's queued write can still call back after Reconnect terminal.
         shown.current = false
         rawPath.current = false
         bundle.term.reset()
         if (sync.snapshot) {
           const term = bundle.term
-          term.write(Uint8Array.from(atob(sync.snapshot), (value) => value.charCodeAt(0)), () => { if (bundle.term === term) shown.current = true })
+          term.write(Uint8Array.from(atob(sync.snapshot), (value) => value.charCodeAt(0)), () => { if (terminal.current === term) shown.current = true })
         }
         callbacks.current.onSession(sync.session)
         ready.current = sync.session.state !== 'completed'
@@ -415,7 +416,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
         requestAnimationFrame(applyView)
       },
       // A failed screen stops acknowledging: its output is discarded, not shown.
-      onOutput: (bytes, done) => { const { term, parser } = bundle; term.write(bytes, () => { if (bundle.term === term) shown.current = true; if (!parser.failed) done() }) },
+      onOutput: (bytes, done) => { const { term, parser } = bundle; term.write(bytes, () => { if (terminal.current === term) shown.current = true; if (!parser.failed) done() }) },
       // The raw path: every picture in a fresh terminal at its own size (keyboard focus kept).
       onPicture: (header) => {
         rawPath.current = true
