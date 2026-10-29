@@ -295,10 +295,15 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
           // No QuickType suggestions inserted into the terminal (spec D9 item 2); compose has its own textarea.
           textarea.setAttribute('autocomplete', 'off')
           // Focusing the terminal to type goes back to the cursor (like ↓ Live).
-          // Focus that only bounced through an element now gone (a copy's
-          // hidden textarea, which gives it back) is not a return: the view stays.
+          // Focus that only bounced — away and back in one synchronous turn,
+          // through an element now gone (a copy's hidden textarea, which gives
+          // it back) — is not a return: the view stays. Any later focus is.
           let lostTo: Element | null = null
-          const left = (event: FocusEvent) => { lostTo = event.relatedTarget instanceof Element ? event.relatedTarget : null }
+          const left = (event: FocusEvent) => {
+            const target = event.relatedTarget instanceof Element ? event.relatedTarget : null
+            lostTo = target
+            if (target) queueMicrotask(() => { if (lostTo === target) lostTo = null })
+          }
           const typing = () => {
             const bounced = lostTo !== null && !lostTo.isConnected
             lostTo = null

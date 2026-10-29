@@ -1013,6 +1013,15 @@ rawTest('clipboard offers (plan T36b): focus — a replaced offer keeps a keyboa
     await typeLine(other, offerLine('offer B'))
     await page.locator('.terminal-view-offer code', { hasText: 'offer B' }).waitFor()
     expect(await page.evaluate(() => document.activeElement?.getAttribute('data-slot'))).toBe('copy-button')
+    // Paused in the history while on Copy, the offer replaced again: deliberately focusing the terminal still returns to the cursor.
+    await typeLine(other, 'seq -f "fill-%g" 1 200')
+    await waitForRow(other, '^fill-200$')
+    await wheelOver(page, -1000, 3)
+    await live.waitFor()
+    await typeLine(other, offerLine('offer B2'))
+    await page.locator('.terminal-view-offer code', { hasText: 'offer B2' }).waitFor()
+    await page.locator('.xterm-helper-textarea').focus()
+    await live.waitFor({ state: 'detached', timeout: 5_000 })
     // The terminal focused, then into the history; copying through the fallback path keeps the view there.
     await typeLine(page, 'clear; seq -f "line-%g" 1 300')
     await waitForRow(page, '^line-300$')
