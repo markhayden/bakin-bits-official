@@ -143,6 +143,11 @@ after its check, a refused copy keeps it to try again, and **×** dismisses it.
 Opening, reloading or reconnecting never brings an old offer back. tmux's own
 copy mode sends its copies to attached terminal apps, not to this viewer.
 
+To copy terminal text on a phone (the terminal has no touch selection),
+choose Session actions › **Copy text…**: the history and screen open as plain
+text in a sheet, where the system's own long-press selection works, with
+**Copy all** (every line, even past the 2,000 shown) and **Refresh**.
+
 A session keeps the viewer it started with until it ends: turning the
 setting off starts new sessions with the current viewer, and open ones are
 unchanged. Either way a program's query is answered once, by tmux. The
