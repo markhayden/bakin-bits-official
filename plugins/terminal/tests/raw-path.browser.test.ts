@@ -364,3 +364,29 @@ rawTest('a lost replica (plan T35a): the viewer recovers it from tmux and shows 
     await browser.close()
   }
 }, 60_000)
+
+rawTest('an ended session (plan T35b): after a terminate, a reload shows its saved final picture, with no input', async () => {
+  const browser = await launchChromium()
+  const client = 'raw-browser-ended-test-01'
+  const page = await browser.newPage({ viewport })
+  const { id } = await createSession(page, client)
+  try {
+    await open(page, id)
+    await typeLine(page, `printf '%s-%s\\n' final words`)
+    await waitForRow(page, '^final-words$')
+    await endSession(page, client, id)
+    // Served from the bundle (a join), not the bridge's legacy output (a sync), which holds the words too.
+    const frames: string[] = []
+    page.on('websocket', (ws) => ws.on('framereceived', (frame) => {
+      if (typeof frame.payload === 'string') frames.push((JSON.parse(frame.payload) as { type: string }).type)
+    }))
+    await page.reload()
+    await page.waitForFunction(() => document.querySelector('[data-display]')?.getAttribute('data-display') === 'live', null, { timeout: 15_000 })
+    await waitForRow(page, '^final-words$')
+    expect(await page.getByText('Ended', { exact: true }).count()).toBeGreaterThan(0)
+    expect(frames).toContain('join')
+    expect(frames).not.toContain('sync')
+  } finally {
+    await browser.close()
+  }
+}, 60_000)

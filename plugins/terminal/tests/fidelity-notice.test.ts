@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { fidelityNotice } from '../lib/fidelity-notice'
+import { fidelityNotice, unavailableNotice } from '../lib/fidelity-notice'
 
 const LIMITS = 'Formatting and terminal behavior may remain incorrect until the application resets or redraws.'
 
@@ -31,5 +31,10 @@ describe('fidelityNotice (spec D13 recovery contract, decision 1)', () => {
     const notice = fidelityNotice({ rebuilds: { overload: 1, 'tail bound': 2, width: 1 }, recoveries: 1 })!
     expect(notice.title).toBe('Terminal view recovered with limitations')
     expect(notice.description).toEndWith("Cause: the view's connection to tmux was replaced; output arrived faster than the view could follow; the view could not save a restorable copy of recent output in time; a width change could not be applied in place.")
+  })
+  it('an ended session without its output says why', () => {
+    expect(unavailableNotice('not-saved').title).toBe('Output not saved')
+    expect(unavailableNotice('evicted')).toMatchObject({ title: 'Output removed', description: expect.stringContaining('storage limit') })
+    expect(unavailableNotice('unreadable').title).toBe('Output unavailable')
   })
 })

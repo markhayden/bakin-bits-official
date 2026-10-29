@@ -4,6 +4,7 @@ import { DeliveryUncertainError, TerminalError, type Principal, type Session } f
 import type { NativeClient } from '../lib/processes'
 import { SOCKET_CLOSE, TerminalViewer, type ViewerManager } from '../lib/socket'
 import type { RawSource } from '../lib/raw-display'
+import { makeBundle, type Bundle } from '../lib/bundle'
 import { Replica } from '../lib/replica'
 
 const CLIENT = 'browser-0123456789abcdef'
@@ -15,7 +16,7 @@ function session(overrides: Partial<Session> = {}): Session {
   }
 }
 
-function fakeManager(initial = session(), raw: { replica?: RawSource } | undefined = undefined) {
+function fakeManager(initial = session(), raw: { replica?: RawSource; bundle?: Bundle } | undefined = undefined) {
   let current = initial
   const chunks: Buffer[] = []
   let floor = 0
@@ -63,6 +64,7 @@ function fakeManager(initial = session(), raw: { replica?: RawSource } | undefin
     resizeAs: async () => current,
     rawPath: () => raw !== undefined,
     replica: () => raw?.replica,
+    bundle: async () => raw?.bundle,
     ensureReplica: async (id) => { ensured.push(id); if (ensureError) throw ensureError; await ensureStall },
     fidelity: () => ({ rebuilds: {} }),
   }
@@ -403,6 +405,40 @@ describe('TerminalViewer on the raw path', () => {
       expect(peer.of('join')).toEqual([])
       replica.close()
     }
+  })
+  it('an ended raw-path session joins from its bundle: the saved picture, its fidelity, then the barrier; no input', async () => {
+    const replica = await seeded()
+    await replica.event({ seq: 2, kind: 'output', offset: 0, bytes: new TextEncoder().encode(' last words') })
+    const bundle = makeBundle(replica.cut()!, { rebuilds: { overload: 1 } }, 1)
+    replica.close()
+    const { manager, ensured } = fakeManager(session({ state: 'completed', outputSaved: true }), { bundle })
+    const peer = fakeSocket()
+    new TerminalViewer(manager, peer.socket, 's1', options)
+    peer.client({ type: 'hello', clientId: CLIENT })
+    await until(() => peer.of('barrier').length === 1, 'barrier')
+    expect(ensured).toEqual([])
+    expect(peer.of('join')[0]).toMatchObject({ epoch: 1, session: { state: 'completed' }, fidelity: { rebuilds: { overload: 1 } } })
+    expect(peer.binary.map((bytes) => Buffer.from(bytes).toString()).join('')).toContain('last words')
+    expect(peer.of('sync')).toEqual([])
+  })
+  it('an ended raw-path session without its output closes 4005 with why: not saved, removed for room, or unreadable', async () => {
+    for (const [fields, reason] of [[{ outputSaved: false }, 'not-saved'], [{ outputSaved: false, outputEvicted: true }, 'evicted'], [{ outputSaved: true }, 'unreadable']] as const) {
+      const { manager } = fakeManager(session({ state: 'completed', ...fields }), {})
+      const peer = fakeSocket()
+      new TerminalViewer(manager, peer.socket, 's1', options)
+      peer.client({ type: 'hello', clientId: CLIENT })
+      await until(() => peer.state.closed !== null, 'closed')
+      expect(peer.state.closed).toEqual({ code: 4005, reason })
+      expect(peer.of('join')).toEqual([])
+    }
+  })
+  it('an ended session from before the raw path keeps its legacy output (a sync)', async () => {
+    const { manager } = fakeManager(session({ state: 'completed' }), {})
+    const peer = fakeSocket()
+    new TerminalViewer(manager, peer.socket, 's1', options)
+    peer.client({ type: 'hello', clientId: CLIENT })
+    await until(() => peer.of('sync').length === 1, 'sync')
+    expect(peer.of('join')).toEqual([])
   })
   it('a recovery slower than the join deadline closes for a reconnect at the deadline, nothing of a picture sent', async () => {
     const replica = await seeded()

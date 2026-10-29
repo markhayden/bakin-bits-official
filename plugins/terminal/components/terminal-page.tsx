@@ -8,7 +8,8 @@ import { toast } from '@makinbakin/sdk/hooks'
 import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Terminal, RotateCw, Keyboard, Ruler, AppWindow } from 'lucide-react'
 import { attachCommand, shortId, type Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
-import { fidelityNotice } from '../lib/fidelity-notice'
+import { fidelityNotice, unavailableNotice } from '../lib/fidelity-notice'
+import type { UnavailableReason } from '../lib/socket'
 import type { Fidelity } from '../lib/raw-display'
 import { api } from './api'
 import { KeyBar } from './key-bar'
@@ -82,6 +83,9 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   // The raw path's fidelity for the open session (server-held: every join restates it, so a reconnect keeps the notice).
   const [fidelity, setFidelity] = useState<{ sessionId: string; value: Fidelity }>()
   const fidelityChanged = useCallback((value: Fidelity) => { if (sessionId) setFidelity({ sessionId, value }) }, [sessionId])
+  // An ended raw-path session with no output to show: the reason, for the open session only.
+  const [unavailable, setUnavailable] = useState<{ sessionId: string; reason: UnavailableReason }>()
+  const unavailableChanged = useCallback((reason: UnavailableReason) => { if (sessionId) setUnavailable({ sessionId, reason }) }, [sessionId])
   const [agents, setAgents] = useState<SessionOptionsData['agents']>([])
   const [agentsError, setAgentsError] = useState('')
   const agentChoices = useTerminalAgents(agents)
@@ -161,6 +165,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   openSession.current = sessionId
   const ended = session?.state === 'exited' || session?.state === 'completed'
   const notice = fidelity && fidelity.sessionId === sessionId ? fidelityNotice(fidelity.value) : undefined
+  const missing = unavailable && unavailable.sessionId === sessionId ? unavailableNotice(unavailable.reason) : undefined
   const ownerAgentName = session?.owner.kind === 'agent' ? agents.find((agent) => agent.id === session.owner.id)?.name ?? session.owner.id : undefined
   // The operator is not the tab: any human client drives a human-owned live session.
   const writable = Boolean(session && session.owner.kind === 'human' && session.state === 'running')
@@ -462,7 +467,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
           {session.cleanupReason && <Alert tone="attention"><AlertDescription>{session.cleanupReason}</AlertDescription></Alert>}
           </Stack>}
           <Separator />
-          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : <TerminalCanvas key={session.id} session={session} writable={writable} offerKeyboard={keyed && editing === 'idle' && Boolean(inputEnabled)} inputEnabled={Boolean(inputEnabled)} inputHandle={inputHandle} viewHandle={viewHandle} onModifiersChange={setModifiers} captureTab={captureTab} attempt={attempt} onStatus={streamChanged} onInput={(data, paste) => input(data, { paste })} onClaim={handleClaim} onSession={update} onPresence={setPresence} onResult={handleResult} onRendererFailed={rendererFailed} onFidelity={fidelityChanged} />}
+          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : missing ? <SystemState kind="initial-empty" scope="page" title={missing.title} description={missing.description} /> : <TerminalCanvas key={session.id} session={session} writable={writable} offerKeyboard={keyed && editing === 'idle' && Boolean(inputEnabled)} inputEnabled={Boolean(inputEnabled)} inputHandle={inputHandle} viewHandle={viewHandle} onModifiersChange={setModifiers} captureTab={captureTab} attempt={attempt} onStatus={streamChanged} onInput={(data, paste) => input(data, { paste })} onClaim={handleClaim} onSession={update} onPresence={setPresence} onResult={handleResult} onRendererFailed={rendererFailed} onFidelity={fidelityChanged} onUnavailable={unavailableChanged} />}
         </>)}
       </Stack>
     </WorkspacePageBody>

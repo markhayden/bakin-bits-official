@@ -11,10 +11,10 @@ class FakeSocket implements SocketLike {
   readyState = 0
   onopen: (() => void) | null = null
   onmessage: ((event: { data: unknown }) => void) | null = null
-  onclose: ((event: { code: number }) => void) | null = null
+  onclose: ((event: { code: number; reason?: string }) => void) | null = null
   constructor(readonly url: string) { FakeSocket.all.push(this) }
   send(data: string) { this.sent.push(JSON.parse(data)) }
-  close(code = 1000) { this.readyState = 3; this.onclose?.({ code }) }
+  close(code = 1000, reason?: string) { this.readyState = 3; this.onclose?.({ code, reason }) }
   open() { this.readyState = 1; this.onopen?.() }
   server(payload: Record<string, unknown> | Uint8Array) {
     this.onmessage?.({ data: payload instanceof Uint8Array ? payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength) : JSON.stringify(payload) })
@@ -329,6 +329,17 @@ describe('TerminalSocketClient on the raw path', () => {
     expect(displays.slice(-2)).toEqual(['rebuilding', 'replaying'])
     expect(client.input(1, '\x03')).toBe(1)
     expect(events.statuses.filter((status) => status === 'Connected')).toHaveLength(1)
+  })
+  it('4005 says why the ended session has no output and never reconnects', async () => {
+    const reasons: string[] = []
+    const { client, socket, events } = setup({ onUnavailable: (reason) => { reasons.push(reason) } })
+    client.connect()
+    socket().open()
+    socket().close(4005, 'evicted')
+    await Bun.sleep(700)
+    expect(reasons).toEqual(['evicted'])
+    expect(events.statuses.at(-1)).toBe('Output unavailable')
+    expect(FakeSocket.all).toHaveLength(1)
   })
   it("passes the session's fidelity up from every picture header and rebuilding notice, a reconnect's join included", async () => {
     const { client, socket, fidelities } = raw()

@@ -8,7 +8,7 @@ import type { Fidelity, RawSource } from './raw-display'
 import { Screen } from './screen'
 import { screenView, shadowDiff } from './shadow'
 import { Store } from './store'
-import { makeBundle } from './bundle'
+import { makeBundle, type Bundle } from './bundle'
 import { visibleText } from './terminal-state'
 
 interface WorktreeResult { ok: boolean; error?: string; worktreePath?: string }
@@ -571,6 +571,8 @@ export class Sessions {
     if (this.get(id, principal).state === 'running' && this.replicaLive(id)) return Promise.resolve()
     return this.run(async () => { await this.ensureAttached(this.get(id, principal)) })
   }
+  /** An ended session's saved final output, read across turns (undefined: none, or unreadable). */
+  bundle(id: string): Promise<Bundle | undefined> { return this.store.bundle(id) }
   /** The rebuilds the session's output has been through. */
   fidelity(id: string): Fidelity { return this.driver.fidelity?.(id) ?? { rebuilds: {} } }
   /** The terminal apps admitted to a session right now. */

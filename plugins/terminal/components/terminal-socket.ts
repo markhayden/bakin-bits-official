@@ -7,6 +7,7 @@
  */
 import type { Session } from '../lib/contracts'
 import type { Fidelity } from '../lib/raw-display'
+import type { UnavailableReason } from '../lib/socket'
 import { RawPicture, type DisplayState, type PictureHeader, type PictureTarget } from './raw-picture'
 import type { ScreenDevice } from './terminal-view'
 
@@ -15,7 +16,7 @@ export interface SocketLike {
   readyState: number
   onopen: (() => void) | null
   onmessage: ((event: { data: unknown }) => void) | null
-  onclose: ((event: { code: number }) => void) | null
+  onclose: ((event: { code: number; reason?: string }) => void) | null
   send(data: string): void
   close(code?: number): void
 }
@@ -46,6 +47,8 @@ export interface TerminalSocketOptions {
   onDisplay?(state: DisplayState, detail?: Record<string, unknown>): void
   /** The raw path: the session's fidelity, as every picture header and rebuilding notice carries it (server-held, so a reconnect restates it). */
   onFidelity?(fidelity: Fidelity): void
+  /** An ended raw-path session has no output to show (lib/socket.ts UnavailableReason); the client does not reconnect. */
+  onUnavailable?(reason: UnavailableReason): void
   createSocket?: (url: string) => SocketLike
   ackBytes?: number
   ackMs?: number
@@ -92,7 +95,7 @@ export class TerminalSocketClient {
     this.connections++
     socket.onopen = () => { socket.send(JSON.stringify({ type: 'hello', clientId: this.options.clientId })) }
     socket.onmessage = (event) => { if (this.socket === socket) this.receive(event.data) }
-    socket.onclose = (event) => { if (this.socket === socket) this.dropped(event.code) }
+    socket.onclose = (event) => { if (this.socket === socket) this.dropped(event.code, event.reason) }
   }
 
   /** A reconnect is already scheduled: run it now instead of waiting. */
@@ -324,10 +327,15 @@ export class TerminalSocketClient {
     this.reset()
   }
 
-  private dropped(code: number): void {
+  private dropped(code: number, reason?: string): void {
     this.lost()
     this.socket = undefined
     if (this.stopped) return
+    if (code === 4005) {
+      this.options.onStatus('Output unavailable')
+      this.options.onUnavailable?.(reason === 'evicted' || reason === 'unreadable' ? reason : 'not-saved')
+      return
+    }
     const terminal = TERMINAL_CLOSES[code]
     if (terminal) { this.options.onStatus(terminal); return }
     const delays = this.options.reconnectMs ?? [500, 1000, 2000, 5000, 10000]

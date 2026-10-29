@@ -6,6 +6,7 @@ import { Button } from '@makinbakin/sdk/ui'
 import { ArrowDown, Keyboard, ZoomOut } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import type { Fidelity } from '../lib/raw-display'
+import type { UnavailableReason } from '../lib/socket'
 import { installGeometry } from '../lib/geometry'
 import { clampSize } from '../lib/sizing'
 import { trackCursorVisibility } from '../lib/cursor-visibility'
@@ -40,7 +41,7 @@ const LINK_HANDLER = {
   },
 }
 
-export function TerminalCanvas({ session, writable, captureTab, attempt, offerKeyboard = false, inputEnabled, inputHandle, viewHandle, onModifiersChange, onStatus, onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity }: {
+export function TerminalCanvas({ session, writable, captureTab, attempt, offerKeyboard = false, inputEnabled, inputHandle, viewHandle, onModifiersChange, onStatus, onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity, onUnavailable }: {
   /** Show the corner keyboard button (a touch screen with the keyboard down). */
   offerKeyboard?: boolean
   inputEnabled: boolean; inputHandle: RefObject<TerminalInputHandle | null>; viewHandle: RefObject<TerminalViewHandle | null>; onModifiersChange(state: ModifierState): void;
@@ -49,6 +50,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   onRendererFailed(): void
   /** The raw path: the session's fidelity from the server (lib/fidelity-notice.ts says what to show). */
   onFidelity?(fidelity: Fidelity): void
+  /** An ended raw-path session has no output to show. */
+  onUnavailable?(reason: UnavailableReason): void
 }) {
   const pane = useRef<HTMLDivElement>(null)
   const element = useRef<HTMLDivElement>(null)
@@ -62,8 +65,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   const [zoom, setZoom] = useState(() => storedFont())
   // Manual pans, selections (and History) stop the view chasing the cursor.
   const [paused, setPaused] = useState(false)
-  const callbacks = useRef({ onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity, writable, authority, inputEnabled, onModifiersChange, captureTab: false, sizeEpoch: session.sizeEpoch, zoom, paused })
-  callbacks.current = { onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity, writable, authority, inputEnabled, onModifiersChange, captureTab, sizeEpoch: session.sizeEpoch, zoom, paused }
+  const callbacks = useRef({ onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity, onUnavailable, writable, authority, inputEnabled, onModifiersChange, captureTab: false, sizeEpoch: session.sizeEpoch, zoom, paused })
+  callbacks.current = { onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity, onUnavailable, writable, authority, inputEnabled, onModifiersChange, captureTab, sizeEpoch: session.sizeEpoch, zoom, paused }
   const [status, setStatus] = useState('Connecting')
   useEffect(() => { onStatus(status) }, [status, onStatus])
   const terminal = useRef<Terminal | null>(null)
@@ -402,6 +405,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       },
       onDisplay: (state) => { pane.current?.setAttribute('data-display', state) },
       onFidelity: (fidelity) => callbacks.current.onFidelity?.(fidelity),
+      onUnavailable: (reason) => callbacks.current.onUnavailable?.(reason),
       onSession: (next) => callbacks.current.onSession(next),
       onPresence: (presence) => callbacks.current.onPresence(presence),
       onResult: (result) => callbacks.current.onResult(result),

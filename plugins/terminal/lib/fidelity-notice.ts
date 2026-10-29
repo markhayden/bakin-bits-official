@@ -9,6 +9,7 @@
  * history's state moves.
  */
 import type { Fidelity } from './raw-display'
+import type { UnavailableReason } from './socket'
 
 export interface FidelityNotice { title: string; description: string }
 
@@ -50,4 +51,11 @@ export function fidelityNotice(fidelity: Fidelity | undefined): FidelityNotice |
     title: 'Terminal view recovered with limitations',
     description: `Some earlier output may be missing or differ. ${LIMITS}${history(fidelity)}${cause}`,
   }
+}
+
+/** What an ended raw-path session shows instead of its output, by why there is none (plan T35b). */
+export function unavailableNotice(reason: UnavailableReason): FidelityNotice {
+  if (reason === 'evicted') return { title: 'Output removed', description: "This session's saved output was removed to stay within Terminal's storage limit. Session metadata is retained." }
+  if (reason === 'unreadable') return { title: 'Output unavailable', description: "This session's saved output could not be read. Session metadata is retained." }
+  return { title: 'Output not saved', description: 'This session ended without its output being saved. Session metadata is retained.' }
 }

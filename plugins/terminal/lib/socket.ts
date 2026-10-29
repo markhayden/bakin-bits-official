@@ -37,6 +37,7 @@ import { z } from 'zod'
 import type { PluginSocket } from '@makinbakin/sdk/types'
 import type { NativeClient, WriteOptions } from './processes'
 import { type Fidelity, JOIN_WAIT_MS, RawDisplay, type RawSource } from './raw-display'
+import { bundleSource, type Bundle } from './bundle'
 import { DeliveryUncertainError, screenDevice, TerminalError, type Principal, type Session, type SizeClaimant } from './contracts'
 
 export const ACK_WINDOW = 256 * 1024
@@ -53,7 +54,12 @@ export const SOCKET_CLOSE = {
   silent: 4002,
   protocol: 4003,
   notFound: 4004,
+  /** An ended raw-path session's output is not there to show (plan T35b): the reason names why; final. */
+  unavailable: 4005,
 } as const
+
+/** Why an ended raw-path session has no picture: the close reason of SOCKET_CLOSE.unavailable. */
+export type UnavailableReason = 'not-saved' | 'evicted' | 'unreadable'
 
 export interface ViewerManager {
   get(id: string, principal: Principal): Session
@@ -74,6 +80,8 @@ export interface ViewerManager {
   ensureReplica(id: string, principal: Principal): Promise<void>
   /** What the session's output has been through: rebuilds and recoveries (sticky). */
   fidelity(id: string): Fidelity
+  /** An ended session's saved final output (lib/bundle.ts), if it can be read. */
+  bundle(id: string): Promise<Bundle | undefined>
 }
 
 const message = z.discriminatedUnion('type', [
@@ -261,6 +269,8 @@ export class TerminalViewer {
     try { session = this.manager.get(this.sessionId, principal) }
     catch (error) { this.failed(error); return }
     if (session.state === 'running' && this.manager.rawPath(this.sessionId)) { this.rawPath = true; await this.joinRaw(); return }
+    // Ended on the raw path, from its era (sessions from before it keep their legacy output): its bundle, or why there is none.
+    if (session.outputSaved !== undefined && this.manager.rawPath(this.sessionId)) { await this.joinEnded(session); return }
     if (await this.sync()) void this.pump()
   }
 
@@ -303,6 +313,40 @@ export class TerminalViewer {
       fidelity: () => this.manager.fidelity(this.sessionId),
       resync: (reason) => this.close(SOCKET_CLOSE.resync, reason),
       deadline,
+      window: this.window(),
+      pauseEvictMs: this.options.pauseEvictMs ?? PAUSE_EVICT_MS,
+      now: this.options.now,
+    })
+    this.raw.start()
+  }
+
+  /** An ended session's final picture, joined like a live one; the session's own fidelity travels in the bundle. */
+  private async joinEnded(session: Session): Promise<void> {
+    const bundle = session.outputSaved ? await this.manager.bundle(this.sessionId) : undefined
+    if (this.closed) return
+    if (!bundle) {
+      const reason: UnavailableReason = session.outputEvicted ? 'evicted' : session.outputSaved ? 'unreadable' : 'not-saved'
+      this.close(SOCKET_CLOSE.unavailable, reason)
+      return
+    }
+    this.raw = new RawDisplay(bundleSource(bundle), {
+      text: (json) => this.socket.send(json),
+      binary: (bytes) => this.socket.send(bytes),
+    }, {
+      header: () => {
+        try {
+          const current = this.manager.get(this.sessionId, this.principal!)
+          const presence = this.presenceOf(current)
+          this.sentPresence = JSON.stringify(presence)
+          return { session: current, ...presence }
+        } catch (error) {
+          this.failed(error)
+          return undefined
+        }
+      },
+      fidelity: () => bundle.fidelity,
+      resync: (reason) => this.close(SOCKET_CLOSE.resync, reason),
+      deadline: this.now() + (this.options.replicaWaitMs ?? REPLICA_WAIT_MS),
       window: this.window(),
       pauseEvictMs: this.options.pauseEvictMs ?? PAUSE_EVICT_MS,
       now: this.options.now,
