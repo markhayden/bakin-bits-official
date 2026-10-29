@@ -273,10 +273,13 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
           textarea.addEventListener('focus', typing)
           // However the view got into the history (xterm's scrollbar too), it stays paused there.
           const scrolled = term.onScroll(() => { if (term.buffer.active.viewportY < term.buffer.active.baseY) pause(true) })
+          // A gesture (its fling, its remainder) belongs to the buffer it began on: a new picture or a buffer switch ends it.
+          gestureReset.current()
+          const switched = term.buffer.onBufferChange(() => gestureReset.current())
           terminal.current = term
           fit.current = fitAddon
           cursorVisibility.current = cursor
-          detach = () => { textarea.removeEventListener('focus', typing); scrolled.dispose(); disposeRenderer() }
+          detach = () => { textarea.removeEventListener('focus', typing); scrolled.dispose(); switched.dispose(); disposeRenderer() }
         },
         dispose() {
           active = false
@@ -517,7 +520,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
      * the end. A vertical drag with history is ours (history, then the pan,
      * in one motion, with a fling); anything else is the browser's native pan.
      */
-    let drag: { x: number; y: number; owner?: 'ours' | 'native'; samples: { at: number; dy: number }[] } | undefined
+    let drag: { x: number; y: number; owner?: 'ours' | 'native' | 'ended'; samples: { at: number; dy: number }[] } | undefined
     let fling = 0
     const stopFling = () => { cancelAnimationFrame(fling); fling = 0 }
     const startFling = (samples: { at: number; dy: number }[]) => {
@@ -533,7 +536,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       }
       if (Math.abs(velocity) > 0.2) fling = requestAnimationFrame(step)
     }
-    gestureReset.current = () => { stopFling(); carry = 0 }
+    // A deliberate return (or a new picture) also ends a drag still under the finger: its release flings nothing.
+    gestureReset.current = () => { stopFling(); carry = 0; if (drag) drag = { ...drag, owner: drag.owner === 'native' ? 'native' : 'ended', samples: [] } }
     const preview = (size: number) => {
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(() => setFont(size))
@@ -564,15 +568,18 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
         drag.owner = Math.abs(dy) >= Math.abs(dx) && hasHistory() ? 'ours' : 'native'
       }
       if (drag.owner === 'native') { pause(); return }
+      // The browser's scroll was cancelled from the first move: an ended drag stays still.
       event.preventDefault()
+      if (drag.owner === 'ended') return
       if (dx) { el.scrollBy(dx, 0); pause() }
       if (dy) scrollVertical(dy)
       drag.samples.push({ at: performance.now(), dy })
       if (drag.samples.length > 20) drag.samples.shift()
     }
     const end = (event: TouchEvent) => {
-      if (event.touches.length === 0 && drag?.owner === 'ours') startFling(drag.samples)
-      if (event.touches.length === 0) drag = undefined
+      // Only a release flings; a cancelled touch (the system took it) stops where it was.
+      if (event.touches.length === 0 && drag?.owner === 'ours' && event.type === 'touchend') startFling(drag.samples)
+      if (event.touches.length === 0) { drag = undefined; if (event.type === 'touchcancel') carry = 0 }
       if (!pinch || event.touches.length >= 2) return
       // The last move may still be waiting for its frame: commit what it asked for.
       const size = pinch.next

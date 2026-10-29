@@ -646,14 +646,15 @@ async function phone(client: string) {
   const { id } = await createSession(page, client)
   const cdp = await context.newCDPSession(page)
   const pane = async () => (await page.locator('.terminal-pane').boundingBox())!
-  /** One finger from one point of the pane to another, in ten moves. */
-  const drag = async (from: { x: number; y: number }, to: { x: number; y: number }) => {
+  /** One finger from one point of the pane to another, in ten moves; `meanwhile` runs before it lifts (or is cancelled). */
+  const drag = async (from: { x: number; y: number }, to: { x: number; y: number }, finish: 'touchEnd' | 'touchCancel' = 'touchEnd', meanwhile?: () => Promise<unknown>) => {
     const box = await pane()
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + from.x, y: box.y + from.y }] })
     for (let step = 1; step <= 10; step++) {
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: box.x + from.x + ((to.x - from.x) * step) / 10, y: box.y + from.y + ((to.y - from.y) * step) / 10 }] })
     }
-    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await meanwhile?.()
+    await cdp.send('Input.dispatchTouchEvent', { type: finish, touchPoints: [] })
   }
   const tap = async (at: { x: number; y: number }) => {
     const box = await pane()
@@ -723,6 +724,85 @@ touchTest('native scrolling on a phone (plan T36): a tap never reaches a mouse-r
     expect((await rows(page)).join('\n')).not.toContain('^[')
     expect(await page.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea'))).toBe(true)
     await page.keyboard.press('Control+C')
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 60_000)
+
+/** The highest line-N the view shows (the bottom of what is visible). */
+const lastLine = async (page: Page) => Math.max(...(await rows(page)).map((row) => Number(/^line-(\d+)$/.exec(row.trim())?.[1] ?? 0)))
+
+touchTest('native scrolling on a phone (plan T36): a released drag flings on, a cancelled one stops where it was', async () => {
+  const client = 'raw-browser-scroll-test-07'
+  const { browser, page, id, drag } = await phone(client)
+  try {
+    await open(page, id)
+    await typeLine(page, 'clear; seq -f "line-%g" 1 2000')
+    await waitForRow(page, '^line-2000$')
+    const moved = async (finish: 'touchEnd' | 'touchCancel') => {
+      const from = await lastLine(page)
+      await drag({ x: 195, y: 100 }, { x: 195, y: 400 }, finish)
+      await settled(page)
+      return from - await lastLine(page)
+    }
+    const cancelled = await moved('touchCancel')
+    const released = await moved('touchEnd')
+    expect(cancelled).toBeGreaterThan(0)
+    // The same drag, released, keeps going well past where a cancelled one stopped.
+    expect(released).toBeGreaterThan(cancelled * 2)
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 90_000)
+
+touchTest('native scrolling on a phone (plan T36): returning to the cursor while a finger is still down ends that drag (no fling back into the history)', async () => {
+  const client = 'raw-browser-scroll-test-08'
+  const { browser, page, id, drag } = await phone(client)
+  try {
+    await open(page, id)
+    await typeLine(page, 'clear; seq -f "line-%g" 1 2000')
+    await waitForRow(page, '^line-2000$')
+    await drag({ x: 195, y: 100 }, { x: 195, y: 500 }, 'touchEnd')
+    await settled(page)
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+    // Down again, and before lifting the finger: focus the terminal to type (a deliberate return, D10).
+    await drag({ x: 195, y: 100 }, { x: 195, y: 500 }, 'touchEnd', () => page.locator('.xterm-helper-textarea').focus())
+    await settled(page)
+    expect(await shows(page, '^line-2000$')).toBe(true)
+    expect(await page.getByRole('button', { name: 'Follow cursor' }).count()).toBe(0)
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 90_000)
+
+rawTest('native scrolling (plan T36): a selection pauses following, and ↓ Live clears it', async () => {
+  const browser = await launchChromium()
+  const client = 'raw-browser-scroll-test-09'
+  const page = await browser.newPage({ viewport })
+  const { id } = await createSession(page, client)
+  // xterm's copy handler acts (and prevents the default) only while there is a selection.
+  const selected = () => page.evaluate(() => {
+    const copy = new Event('copy', { bubbles: true, cancelable: true })
+    document.querySelector('.xterm')!.dispatchEvent(copy)
+    return copy.defaultPrevented
+  })
+  try {
+    await open(page, id)
+    await typeLine(page, 'clear; seq -f "line-%g" 1 20')
+    await waitForRow(page, '^line-20$')
+    expect(await selected()).toBe(false)
+    const screen = (await page.locator('.xterm-screen').boundingBox())!
+    await page.mouse.move(screen.x + 4, screen.y + 30)
+    await page.mouse.down()
+    await page.mouse.move(screen.x + 200, screen.y + 90, { steps: 8 })
+    await page.mouse.up()
+    expect(await selected()).toBe(true)
+    await page.getByRole('button', { name: 'Follow cursor' }).click()
+    expect(await selected()).toBe(false)
+    expect(await page.getByRole('button', { name: 'Follow cursor' }).count()).toBe(0)
   } finally {
     await endSession(page, client, id)
     await browser.close()
