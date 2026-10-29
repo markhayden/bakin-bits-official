@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 /**
  * The private tmux server's configuration — the ONE source; setup writes it
  * and the service fingerprint hashes it. The running daemon is never patched
@@ -5,7 +7,10 @@
  * and applies through a drained Set up service.
  */
 export function tmuxConfig(): string {
-  return [
+  return `${BODY}set -g @bakin_config ${CONFIG_STAMP}\n`
+}
+
+const BODY = [
     // Sessions outlive their programs and their clients; Bakin owns cleanup.
     'set -g exit-empty off',
     'set -g remain-on-exit on',
@@ -17,6 +22,9 @@ export function tmuxConfig(): string {
     'set -g mouse off',
     'set -g default-terminal xterm-256color',
     'set -g allow-passthrough off',
+    // A clear erases the screen, as xterm's does: no copy of it pushed into
+    // tmux's history that the browser's replica never has (spec D13).
+    'set -g scroll-on-clear off',
     // Native clients (Ghostty and friends): modern keys, OSC 52, titles.
     'set -g extended-keys on',
     "set -as terminal-features 'xterm-ghostty:hyperlinks:extkeys'",
@@ -39,4 +47,12 @@ export function tmuxConfig(): string {
     'bind-key -T prefix ? list-keys -N -T prefix',
     '',
   ].join('\n')
-}
+
+/** The body's hash, set as `@bakin_config`: a running server reporting it loaded this configuration. */
+export const CONFIG_STAMP = createHash('sha256').update(BODY).digest('hex').slice(0, 16)
+
+/**
+ * What a server that loaded this configuration reports (`show-options -gv
+ * <name>`): setup records its fingerprint only once these all match.
+ */
+export const VERIFIED_OPTIONS: Readonly<Record<string, string>> = { '@bakin_config': CONFIG_STAMP, 'scroll-on-clear': 'off' }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test'
-import { tmuxConfig } from '../lib/tmux-config'
+import { createHash } from 'node:crypto'
+import { CONFIG_STAMP, tmuxConfig, VERIFIED_OPTIONS } from '../lib/tmux-config'
 
 const lines = tmuxConfig().trim().split('\n')
 
@@ -14,7 +15,14 @@ describe('tmuxConfig', () => {
       'set -g mouse off',
       'set -g default-terminal xterm-256color',
       'set -g allow-passthrough off',
+      'set -g scroll-on-clear off',
     ]) expect(lines).toContain(line)
+  })
+
+  it('ends with its stamp, the hash of everything before it, which setup verifies with scroll-on-clear', () => {
+    expect(lines.at(-1)).toBe(`set -g @bakin_config ${CONFIG_STAMP}`)
+    expect(VERIFIED_OPTIONS).toEqual({ '@bakin_config': CONFIG_STAMP, 'scroll-on-clear': 'off' })
+    expect(CONFIG_STAMP).toBe(createHash('sha256').update(tmuxConfig().slice(0, tmuxConfig().lastIndexOf('set -g @bakin_config'))).digest('hex').slice(0, 16))
   })
 
   it('gives native clients modern keys, clipboard and a Bakin window title', () => {

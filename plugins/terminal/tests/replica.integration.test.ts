@@ -8,7 +8,7 @@ import { Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
 import { TerminalService, terminalEnvironment } from '../lib/service'
 import { TmuxProcesses } from '../lib/processes'
-import { tmuxConfig } from '../lib/tmux-config'
+import { tmuxConfig, VERIFIED_OPTIONS } from '../lib/tmux-config'
 import headless from '@xterm/headless'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from '../lib/terminal-profile'
 import type { Term } from '../lib/terminal-state'
@@ -230,6 +230,36 @@ function screenCells(t: Term): string[] {
   }
   return cells
 }
+
+processTest('a clear erases the screen in tmux as in the replica: no copy of it in either history (scroll-on-clear off)', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bakin-replica-clear-'))
+  const h = await harness(root)
+  try {
+    // The server runs the generated configuration (what setup verifies).
+    for (const [name, value] of Object.entries(VERIFIED_OPTIONS)) expect(`${name} ${(await h.service.command(['show-options', '-gv', name])).trim()}`).toBe(`${name} ${value}`)
+    await until(() => Boolean(h.driver.replica(h.session.id)?.cut()), 'seeded')
+    const replica = h.driver.replica(h.session.id)!
+    const capture = (args: string[]) => h.service.command(['capture-pane', '-p', ...args, '-t', h.session.id])
+    // A screen of numbered lines, then a full-screen erase (ED 2, as clear programs send) with the program still running.
+    await h.type("for i in $(seq 1 40); do printf 'line %s\\n' $i; done; printf '\\033[2J%s%s' CLE ARED; sleep 30\r")
+    await until(async () => (await capture([])).includes('CLEARED'), 'cleared')
+    const history = async () => (await replica.read((t) => {
+      const buffer = t.buffer.active
+      const lines: string[] = []
+      for (let y = 0; y < buffer.baseY; y++) lines.push(buffer.getLine(y)!.translateToString(true))
+      return lines
+    }))!
+    await until(async () => replica.quietMs > 300 && (await replica.read((t) => t.buffer.active.getLine(t.buffer.active.baseY + t.buffer.active.cursorY)!.translateToString(true)))!.includes('CLEARED'), 'the replica has it')
+    const tmuxHistory = (await capture(['-S', '-', '-E', '-1'])).replace(/\n$/, '').split('\n').map((line) => line.trimEnd())
+    const ours = (await history()).map((line) => line.trimEnd())
+    // tmux's -S - -E -1 prints one empty line when the history is empty.
+    expect(ours.length ? ours : ['']).toEqual(tmuxHistory)
+    expect(tmuxHistory.some((line) => line === 'line 40')).toBe(false)
+  } finally {
+    await h.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 40_000)
 
 processTest('stepped width changes: at each, the cells and attributes, cursor, region and modes agree with tmux, and later output continues the pen, charset and region', async () => {
   const root = mkdtempSync(join(tmpdir(), 'bakin-replica-steps-'))

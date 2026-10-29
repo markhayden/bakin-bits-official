@@ -46,7 +46,10 @@ Terminal picks up the repaired executable without a Bakin restart.
 
 The service's configuration comes from the plugin (`lib/tmux-config.ts`), and
 setup records a fingerprint of the binary pin, configuration and program
-arguments only after the restarted service is verified ready. When the
+arguments only after the restarted service is verified running it (it reports
+the configuration's stamp and its options). A `clear` erases the screen
+without copying it into scrollback (`scroll-on-clear off`), in tmux as in the
+browser. When the
 running service is not the one this plugin version sets up (another binary,
 another configuration, or no verified fingerprint), Terminal and Health show
 **Terminal service update available**: end live sessions, then choose **Set up

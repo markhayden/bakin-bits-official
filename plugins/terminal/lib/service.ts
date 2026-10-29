@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import manifest from '../bakin-plugin.json'
 import { TerminalError } from './contracts'
-import { tmuxConfig } from './tmux-config'
+import { tmuxConfig, VERIFIED_OPTIONS } from './tmux-config'
 
 const bakinHome = () => process.env.BAKIN_HOME || join(homedir(), '.bakin')
 
@@ -154,14 +154,21 @@ export class TerminalService {
     const result = Bun.spawn(['launchctl', 'bootstrap', `gui/${process.getuid!()}`, this.plist], { stdout: 'ignore', stderr: 'pipe' })
     if (await result.exited) throw new TerminalError('Could not bootstrap the Terminal LaunchAgent', 503)
     for (let i = 0; i < 40; i++) {
-      if (await this.ready()) {
+      if (await this.ready() && await this.loadedConfig()) {
         // Recorded only now: a file on disk is not proof the daemon runs it.
         writeFileSync(this.record, JSON.stringify({ fingerprint: desired, verifiedAt: new Date().toISOString() }), { mode: 0o600 })
         return
       }
       await Bun.sleep(50)
     }
-    throw new TerminalError('Terminal service did not become ready', 503)
+    throw new TerminalError('Terminal service did not become ready with its configuration', 503)
+  }
+  /** The running server reports the generated configuration's stamp and its verified options. */
+  private async loadedConfig(): Promise<boolean> {
+    for (const [name, value] of Object.entries(VERIFIED_OPTIONS)) {
+      if ((await this.execute(['show-options', '-gv', name], true)).trim() !== value) return false
+    }
+    return true
   }
   async uninstall(): Promise<void> {
     if (!existsSync(this.plist)) return
