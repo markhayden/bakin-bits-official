@@ -31,8 +31,8 @@ import '@xterm/xterm/css/xterm.css'
 export interface TerminalViewHandle {
   fitToDevice(): boolean
   refit(): void
-  /** The terminal's text now (Copy text): history and screen, plain. */
-  text(): { text: string; lines: number }
+  /** The terminal's text now (Copy text): history and screen, plain; undefined until its first picture is shown. */
+  text(): { text: string; lines: number } | undefined
 }
 
 /** How long a copied offer shows its check before it goes (the kit CopyButton's own acknowledgement time). */
@@ -86,6 +86,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
    */
   const [offer, setOffer] = useState<{ text: string; rev: number }>()
   const offerRev = useRef(0)
+  /** Whether a picture has been shown (a sync applied, or a raw picture gone live): before it the terminal is merely empty. */
+  const shown = useRef(false)
   const offerPanel = useRef<HTMLDivElement>(null)
   const focusOffer = useRef(false)
   useLayoutEffect(() => {
@@ -362,7 +364,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       },
     }
     viewHandle.current = {
-      text: () => bufferText(bundle.term.buffer.active),
+      text: () => shown.current ? bufferText(bundle.term.buffer.active) : undefined,
       fitToDevice() {
         const term = bundle.term
         const box = paneBox()
@@ -396,6 +398,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       url: url.href, clientId: clientId(),
       onSync: (sync) => {
         // A sync is a complete picture: the snapshot, then output after its cursor.
+        shown.current = true
         rawPath.current = false
         bundle.term.reset()
         if (sync.snapshot) bundle.term.write(Uint8Array.from(atob(sync.snapshot), (value) => value.charCodeAt(0)))
@@ -441,6 +444,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
           // The barrier: this picture replaces the one shown (keyboard focus kept), and goes live.
           live: () => {
             if (discarded || pending !== next) return
+            shown.current = true
             const focused = document.activeElement === bundle.term.textarea
             bundle.dispose()
             bundle = next

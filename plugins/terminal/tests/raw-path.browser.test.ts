@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TerminalService } from '../lib/service'
-import { launchChromium } from './browser'
+import { launchChromium, viewerSocket } from './browser'
 
 // Spec D13 / plan T33: the raw path against the preview with it forced on
 // (TERMINAL_PREVIEW_RAW=1 for both the preview and this run). The overload
@@ -1108,3 +1108,51 @@ rawTest('Copy text: the session menu opens the terminal\'s text as page text (hi
     await browser.close()
   }
 }, 60_000)
+
+rawTest('Copy text: more than 2,000 lines shows the newest and copies every one exactly; reopening takes new output; before the first picture it says the terminal is connecting', async () => {
+  const browser = await launchChromium()
+  const client = 'raw-browser-copy-text-02'
+  const { page } = await recordingPage(browser, { viewport: { width: 390, height: 760 }, hasTouch: true, isMobile: true })
+  const { id } = await createSession(page, client)
+  try {
+    await open(page, id)
+    await typeLine(page, 'clear; seq -f "row-%g" 1 2500')
+    await waitForRow(page, '^row-2500$')
+    await page.getByRole('button', { name: 'Session actions' }).click()
+    await page.getByRole('menuitem', { name: 'Copy text…' }).click()
+    const sheet = page.getByRole('dialog', { name: 'Copy text' })
+    await sheet.getByText(/Showing the newest part of/).waitFor()
+    const shown = await sheet.locator('[data-slot="code-block"]').textContent() ?? ''
+    expect(shown).toContain('row-2500')
+    expect(shown).not.toContain('row-1\n')
+    await sheet.getByRole('button', { name: 'Copy all terminal text' }).click()
+    const written = (await clipboard.writes(page))[0] ?? ''
+    // Every row, in order, exactly once.
+    const rows = written.split('\n').filter((line) => /^row-\d+$/.test(line))
+    expect(rows).toEqual(Array.from({ length: 2500 }, (_, n) => `row-${n + 1}`))
+    // New output, then opening again: a new snapshot takes it.
+    await page.keyboard.press('Escape')
+    await sheet.waitFor({ state: 'detached' })
+    await typeLine(page, `printf '%s-%s\\n' after refresh`)
+    await waitForRow(page, '^after-refresh$')
+    await page.getByRole('button', { name: 'Session actions' }).click()
+    await page.getByRole('menuitem', { name: 'Copy text…' }).click()
+    await sheet.waitFor()
+    expect(await sheet.locator('[data-slot="code-block"]').textContent()).toContain('after-refresh')
+    await page.keyboard.press('Escape')
+    await sheet.waitFor({ state: 'detached' })
+    // A fresh page whose viewer socket is held off: no picture yet, so it says so (not "no text").
+    const held = await (await browser.newContext({ viewport: { width: 390, height: 760 } })).newPage()
+    const socket = await viewerSocket(held)
+    socket.block(true)
+    await held.goto(new URL(`/terminal/${id}`, base()).href)
+    await held.getByRole('button', { name: 'Session actions' }).click()
+    await held.getByRole('menuitem', { name: 'Copy text…' }).click()
+    const waiting = held.getByRole('dialog', { name: 'Copy text' })
+    await waiting.getByText('The terminal is still connecting; refresh once it shows its output.').waitFor()
+    socket.block(false)
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 90_000)

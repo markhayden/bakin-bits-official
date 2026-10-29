@@ -48,7 +48,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const [updating, setUpdating] = useState(false)
   // Copy text: the terminal's text as it was when the sheet opened.
   const [copying, setCopying] = useState(false)
-  const [copyText, setCopyText] = useState<{ text: string; lines: number }>()
+  const readText = useCallback(() => viewHandle.current?.text(), [])
   const [updateError, setUpdateError] = useState('')
   const applyTrigger = useRef<HTMLButtonElement>(null)
   /** Set by a successful update: its trigger goes with the banner, so focus goes to New terminal. */
@@ -423,7 +423,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
               </>}
             <SessionActions session={session} busy={busy} onOperate={(operation, id) => void operate(operation, {}, id)} onConfirm={setConfirm}>
                 <DropdownMenuSwitchItem checked={captureTab} onCheckedChange={setCaptureTab} disabled={session.historyDeleted}><Keyboard size={16} />Capture Tab</DropdownMenuSwitchItem>
-                <DropdownMenuItem disabled={session.historyDeleted || Boolean(missing)} onClick={() => { setCopyText(viewHandle.current?.text()); setCopying(true) }}><ClipboardCopy size={16} />Copy text…</DropdownMenuItem>
+                <DropdownMenuItem disabled={session.historyDeleted || Boolean(missing)} onClick={() => setCopying(true)}><ClipboardCopy size={16} />Copy text…</DropdownMenuItem>
                 <DropdownMenuItem disabled={session.historyDeleted} onClick={() => setAttempt((value) => value + 1)}><RotateCw size={16} />Reconnect terminal</DropdownMenuItem>
                 <DropdownMenuItem disabled={busy} onClick={() => void saveDefaultSize(session)}><Ruler size={16} />Use this size as the default</DropdownMenuItem>
                 <DropdownMenuSeparator />
@@ -514,7 +514,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
       </Stack>
     </WorkspacePageBody>
   </WorkspacePage>}
-    <CopyTextSheet open={copying} text={copyText} onOpenChange={setCopying} />
+    <CopyTextSheet open={copying} read={readText} onOpenChange={setCopying} />
     <NewSession open={creating} onOpenChange={setCreating} onCreated={(created) => { update(created); router.push(`/terminal/${encodeURIComponent(created.id)}`) }} />
     <ConfirmDialog open={confirm !== null} busy={busy} error={error || undefined} onCancel={() => setConfirm(null)}
       title={confirm?.operation === 'terminate' ? 'Terminate this session?' : confirm?.operation === 'delete' ? 'Delete this session?' : 'Delete output history?'}
