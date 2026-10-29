@@ -266,3 +266,28 @@ browserTest('service update: an info banner whose confirm dialog names the live 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   } finally { await browser.close() }
 }, 40000)
+
+browserTest('a failed refresh above a shown list is a danger Banner with Retry, not an empty state; it clears once a refresh works', async () => {
+  const browser = await launchChromium()
+  const page = await browser.newPage({ viewport: { width: 1100, height: 700 } })
+  const shown = { id: 'shown-one', title: 'Still listed', program: 'shell', state: 'running', cwd: '/tmp', createdAt: 1, lastActivityAt: 1, generation: 1, revision: 1, inputSequence: 0, cols: 80, rows: 24, owner: { kind: 'human', id: 'design-fixture-client' } }
+  const state = { failing: false }
+  try {
+    await page.route('**/api/plugins/terminal/sessions', route => state.failing
+      ? route.fulfill({ status: 503, json: { error: 'Terminal is restarting' } })
+      : route.fulfill({ json: { sessions: [shown], serviceReady: true } }))
+    await page.goto(process.env.TERMINAL_PREVIEW_URL!)
+    await page.getByText('Still listed').first().waitFor()
+    state.failing = true
+    const banner = page.locator('[data-slot="banner"]', { hasText: 'Terminals could not be refreshed' })
+    await banner.waitFor({ timeout: 10_000 })
+    expect(await banner.getAttribute('data-tone')).toBe('danger')
+    expect(await banner.textContent()).toContain('The list shows the last refresh')
+    // The list stays; nothing renders as an empty state.
+    expect(await page.getByText('Still listed').first().isVisible()).toBe(true)
+    expect(await page.locator('[data-slot="system-state"]').count()).toBe(0)
+    state.failing = false
+    await banner.getByRole('button', { name: 'Retry' }).click()
+    await banner.waitFor({ state: 'detached' })
+  } finally { await browser.close() }
+}, 30000)
