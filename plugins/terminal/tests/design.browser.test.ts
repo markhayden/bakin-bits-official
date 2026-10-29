@@ -204,18 +204,47 @@ browserTest('immersive terminals use the full workspace and retain compact navig
 }, 30000)
 
 
-browserTest('service migration remains visible and explains why live sessions block setup', async () => {
+browserTest('service update: an attention banner whose confirm dialog names the live sessions, ends them, then updates; a refusal stays in the dialog', async () => {
   const browser = await launchChromium()
   const page = await browser.newPage({ viewport: { width: 320, height: 740 } })
+  const running = { id: 'live-one', title: 'Test', program: 'shell', state: 'running', cwd: '/tmp', createdAt: 1, lastActivityAt: 1, generation: 4, revision: 1, inputSequence: 0, cols: 80, rows: 24, owner: { kind: 'human', id: 'design-fixture-client' } }
+  const state = { live: true, updated: false, refuse: true }
+  const calls: Array<Record<string, unknown>> = []
   try {
-    await page.route('**/api/plugins/terminal/sessions', route => route.fulfill({ json: { sessions: [], serviceReady: true, serviceUpdateRequired: true } }))
-    await page.route('**/api/plugins/terminal/service', route => route.fulfill({ status: 409, json: { error: "Terminal still has 2 live terminal panes. End them and press Set up service again to switch to Bakin's tmux." } }))
+    await page.route('**/api/plugins/terminal/sessions', route => route.fulfill({ json: { sessions: [state.live ? running : { ...running, state: 'completed', revision: 2 }], serviceReady: true, serviceUpdateRequired: !state.updated } }))
+    await page.route('**/api/plugins/terminal/session', async route => {
+      calls.push({ path: 'session', ...route.request().postDataJSON() })
+      state.live = false
+      await route.fulfill({ json: { ...running, state: 'completed', revision: 2 } })
+    })
+    await page.route('**/api/plugins/terminal/service', async route => {
+      calls.push({ path: 'service' })
+      if (state.refuse) return route.fulfill({ status: 409, json: { error: 'Terminal still has 1 live terminal pane.' } })
+      state.updated = true
+      await route.fulfill({ json: { ready: true } })
+    })
     await page.goto(process.env.TERMINAL_PREVIEW_URL!)
-    await page.getByText('Terminal service update available', { exact: true }).waitFor()
-    await page.getByRole('button', { name: 'Set up service', exact: true }).click()
-    await page.getByText(/2 live terminal panes/).waitFor()
-    expect(await page.getByText('Terminal service update available', { exact: true }).count()).toBe(1)
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    // A notice, not an empty state: the kit Banner, its action the only way in.
+    const banner = page.locator('[data-slot="banner"]', { hasText: 'Terminal service update available' })
+    await banner.waitFor()
+    expect(await page.getByRole('button', { name: 'Set up service', exact: true }).count()).toBe(0)
     await page.screenshot({ path: join(import.meta.dir, '../test-results/design/migration-mobile.png') })
+    await banner.getByRole('button', { name: 'Apply update' }).click()
+    const dialog = page.getByRole('dialog')
+    await dialog.getByRole('list', { name: 'Sessions that will end' }).getByText('Test').waitFor()
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-confirm-dialog]')!).opacity === '1')
+    await page.screenshot({ path: join(import.meta.dir, '../test-results/design/migration-dialog-mobile.png') })
+    expect(calls).toEqual([])
+    // The service refuses: the error shows in the dialog, which stays open.
+    await dialog.getByRole('button', { name: 'End 1 session and update' }).click()
+    await dialog.getByText(/1 live terminal pane/).waitFor()
+    expect(calls).toEqual([{ path: 'session', id: 'live-one', operation: 'terminate', generation: 4 }, { path: 'service' }])
+    // It works the second time (nothing left to end): the dialog closes and the banner goes.
+    state.refuse = false
+    await dialog.getByRole('button', { name: 'Apply update' }).click()
+    await dialog.waitFor({ state: 'detached' })
+    await banner.waitFor({ state: 'detached' })
+    expect(calls.at(-1)).toEqual({ path: 'service' })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   } finally { await browser.close() }
-}, 15000)
+}, 20000)

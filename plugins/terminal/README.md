@@ -52,10 +52,13 @@ without copying it into scrollback (`scroll-on-clear off`), in tmux as in the
 browser. When the
 running service is not the one this plugin version sets up (another binary,
 another configuration, or no verified fingerprint), Terminal and Health show
-**Terminal service update available**: end live sessions, then choose **Set up
-service** (or Health's **Apply update**). Setup refuses while any session is
-live, naming those sessions, and refuses a service whose process state cannot
-be verified. Restarting the service drops retained tmux panes and their
+**Terminal service update available**. It is a recommendation: sessions keep
+working on the running service until you apply it. **Apply update** opens a
+confirmation that lists any live sessions and offers to end them first (setup
+needs none running), then restarts the service; a refusal stays in that
+dialog with its reason. Health's **Apply update** runs the same setup and
+refuses while any session is live, naming those sessions. Setup also refuses
+a service whose process state cannot be verified. Restarting the service drops retained tmux panes and their
 in-memory scrollback; output Bakin stored and worktree records are kept. Linux
 is not supported by this release.
 
