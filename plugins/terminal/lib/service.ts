@@ -153,22 +153,27 @@ export class TerminalService {
     writeFileSync(this.plist, this.plistXml(tmux, terminalEnvironment()), { mode: 0o600 })
     const result = Bun.spawn(['launchctl', 'bootstrap', `gui/${process.getuid!()}`, this.plist], { stdout: 'ignore', stderr: 'pipe' })
     if (await result.exited) throw new TerminalError('Could not bootstrap the Terminal LaunchAgent', 503)
+    // What the last attempt found wrong, for the error.
+    let failed = 'it did not answer'
     for (let i = 0; i < 40; i++) {
-      if (await this.ready() && await this.loadedConfig()) {
+      const wrong = await this.ready() ? await this.configMismatch() : 'it did not answer'
+      failed = wrong ?? failed
+      if (!wrong) {
         // Recorded only now: a file on disk is not proof the daemon runs it.
         writeFileSync(this.record, JSON.stringify({ fingerprint: desired, verifiedAt: new Date().toISOString() }), { mode: 0o600 })
         return
       }
       await Bun.sleep(50)
     }
-    throw new TerminalError('Terminal service did not become ready with its configuration', 503)
+    throw new TerminalError(`Terminal service did not become ready with its configuration (${failed}); no fingerprint was recorded.`, 503)
   }
-  /** The running server reports the generated configuration's stamp and its verified options. */
-  private async loadedConfig(): Promise<boolean> {
+  /** What the running server reports differently from the generated configuration (its stamp, its verified options), if anything. */
+  private async configMismatch(): Promise<string | undefined> {
     for (const [name, value] of Object.entries(VERIFIED_OPTIONS)) {
-      if ((await this.execute(['show-options', '-gv', name], true)).trim() !== value) return false
+      const actual = (await this.execute(['show-options', '-gv', name], true)).trim()
+      if (actual !== value) return `${name} is ${actual ? `'${actual}'` : 'unset'}`
     }
-    return true
+    return undefined
   }
   async uninstall(): Promise<void> {
     if (!existsSync(this.plist)) return

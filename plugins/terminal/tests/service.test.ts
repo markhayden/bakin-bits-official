@@ -137,9 +137,14 @@ describe('terminal service managed binary', () => {
   it('records nothing when the restarted server runs without the generated configuration', async () => {
     oldPlist()
     // An old configuration (no stamp), another configuration's stamp, and one that loaded but still scrolls on clear.
-    for (const options of [{ 'scroll-on-clear': 'off' }, { ...VERIFIED_OPTIONS, '@bakin_config': 'another' }, { ...VERIFIED_OPTIONS, 'scroll-on-clear': 'on' }]) {
+    for (const [options, found] of [
+      [{ 'scroll-on-clear': 'off' }, '@bakin_config is unset'],
+      [{ ...VERIFIED_OPTIONS, '@bakin_config': 'another' }, "@bakin_config is 'another'"],
+      [{ ...VERIFIED_OPTIONS, 'scroll-on-clear': 'on' }, "scroll-on-clear is 'on'"],
+    ] as const) {
       serverOptions = options
-      await expect(service.install()).rejects.toThrow('did not become ready with its configuration')
+      // The error names what the last attempt found wrong.
+      await expect(service.install()).rejects.toThrow(`did not become ready with its configuration (${found})`)
       expect(existsSync(join(root, 'service.json'))).toBe(false)
       expect(await service.updateRequired()).toBe(true)
       running = false; loaded = false
