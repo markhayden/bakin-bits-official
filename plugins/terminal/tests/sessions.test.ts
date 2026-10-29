@@ -1052,6 +1052,25 @@ describe('final output (plan T35b)', () => {
     expect((await finishing).state).toBe('completed')
     await stopping
   })
+  it('queued work accepted before shutdown completes before the store closes; a call after it starts is refused', async () => {
+    const { manager, store } = fixture()
+    let installed = false
+    let finishInstall!: () => void
+    // Before the cutoff: a Set up service whose installer is still running.
+    const setup = manager.setupService(() => new Promise<void>((resolve) => { finishInstall = () => { installed = true; resolve() } }))
+    for (let tries = 0; tries < 100 && !finishInstall; tries++) await Bun.sleep(1)
+    let installedAtClose: boolean | undefined
+    const close = store.close.bind(store)
+    store.close = () => { installedAtClose ??= installed; close() }
+    const stopping = manager.shutdown()
+    // After the cutoff: refused at once.
+    await expect(manager.create({ title: 'Late', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })).rejects.toThrow('shutting down')
+    await Bun.sleep(5)
+    finishInstall()
+    await setup
+    await stopping
+    expect(installedAtClose).toBe(true)
+  })
   it('Set up service on a live server never removes a running session\'s bundle (a finish between its save and its kill)', async () => {
     const { manager, store } = fixture()
     const session = await manager.create({ title: 'Ending', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })

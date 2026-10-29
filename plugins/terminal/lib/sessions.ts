@@ -94,7 +94,13 @@ export class Sessions {
   /** Settles once everything queued so far has run. */
   idle(): Promise<void> { return this.pending.then(() => undefined) }
   private enabled(): string[] { return (this.options.settings().enabledAgents ?? []).map((agent) => agent.id) }
-  private run<T>(work: () => Promise<T>): Promise<T> {
+  /**
+   * The manager's queue. Once shutdown starts, a new submission is refused at once; `continuing` is
+   * for the next step of work already accepted (a finish's kill, a refresh's liveness pass), which
+   * shutdown drains.
+   */
+  private run<T>(work: () => Promise<T>, continuing = false): Promise<T> {
+    if (this.stopping && !continuing) return Promise.reject(new TerminalError('Terminal manager is shutting down', 503))
     const next = this.pending.then(() => { if (this.closed) throw new TerminalError('Terminal manager is shutting down', 503); return work() })
     this.pending = next.catch(() => {})
     return next
@@ -205,7 +211,7 @@ export class Sessions {
         }
       }
       return ids
-    })
+    }, true)
     // The pane stays (remain-on-exit): what the program printed last is in the replica.
     await Promise.all(exited.map((id) => this.saveFinal(id)))
   }
@@ -754,7 +760,7 @@ export class Sessions {
       this.save(session)
       await this.clean(session)
       return session
-    })
+    }, true)
   }
   /**
    * Persist an ending session's final output (plan T35b): the replica's
@@ -941,7 +947,8 @@ export class Sessions {
     this.stopping = true
     const drain = async () => {
       for (;;) {
-        await this.pending
+        // Until the queue's tail stops moving: work accepted before the cutoff may still queue its next step.
+        for (let tail = this.pending; ; tail = this.pending) { await tail; if (tail === this.pending) break }
         const outstanding = [this.refreshing, ...this.refreshes, ...[...this.finishing.values()].flatMap((all) => [...all]), ...this.ending.values()].filter((work) => work !== undefined)
         if (!outstanding.length) return
         await Promise.allSettled(outstanding)
