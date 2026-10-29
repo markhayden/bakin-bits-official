@@ -115,9 +115,13 @@ scrolling into the history or selecting text pauses that until **↓ Live**
 itself does not. Both controls sit small in the pane's top-right corner,
 never over the bottom rows where the program's input line is, and tapping
 them keeps the keyboard where it is. Scrolling and panning never open the
-keyboard or send input: a full-screen program never sees a wheel as mouse
-clicks or arrow keys, and a tap never reaches a program as a mouse click
-(a mouse click on a desktop still does, as in any terminal).
+keyboard or send input, with one exception that matches native terminals: a
+full-screen program that asked for the mouse (Claude Code, vim with mouse on)
+scrolls itself, so the wheel and vertical drags reach it as scroll events
+once the grid has panned to its edge. A full-screen program that did not ask
+for the mouse gets no arrow keys from scrolling, and a tap never reaches a
+program as a mouse click (a mouse click on a desktop still does, as in any
+terminal).
 
 Session actions › **Use this size as the default** saves the current grid as
 the Default columns/rows for new sessions nobody's screen sized yet (agent

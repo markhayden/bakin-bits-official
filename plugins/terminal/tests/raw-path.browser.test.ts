@@ -603,7 +603,7 @@ rawTest('native scrolling (plan T36): dragging xterm\'s own scrollbar into the h
   }
 }, 60_000)
 
-rawTest('native scrolling (plan T36): a mouse-reporting program, or the alternate screen without one, gets no input from the wheel; the alternate screen has no history to scroll', async () => {
+rawTest('native scrolling (plan T36, as native terminals): a full-screen program that asked for the mouse gets the wheel as scroll reports (and never a click); without the mouse it gets nothing and its screen does not scroll', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-scroll-test-02'
   const page = await browser.newPage({ viewport })
@@ -612,7 +612,7 @@ rawTest('native scrolling (plan T36): a mouse-reporting program, or the alternat
   const socket = new TerminalService(process.env.TERMINAL_PREVIEW_ROOT!).socket
   try {
     await open(page, id)
-    // A grid that fits the pane (nothing to pan): the wheel would otherwise be xterm's to turn into reports or arrow keys.
+    // A grid that fits the pane (nothing to pan first).
     Bun.spawnSync([tmux, '-S', socket, 'resize-window', '-t', id, '-x', '60', '-y', '15'])
     await page.waitForFunction(() => { const pane = document.querySelector('.terminal-pane')!; return pane.scrollHeight <= pane.clientHeight + 1 && pane.scrollWidth <= pane.clientWidth + 1 }, null, { timeout: 10_000 })
     await typeLine(page, 'seq -f "before-%g" 1 100')
@@ -625,9 +625,17 @@ rawTest('native scrolling (plan T36): a mouse-reporting program, or the alternat
       await wheelOver(page, -600, 5)
       await wheelOver(page, 600, 5)
       await page.waitForTimeout(1500)
-      // No mouse report, no arrow key reached the program; the alternate screen did not scroll.
-      expect((await rows(page)).join('\n')).not.toContain('^[')
-      expect(await rows(page)).toEqual(before)
+      const received = (await rows(page)).join('\n')
+      if (mouse) {
+        // Wheel up (64) and down (65) reports, SGR; never a button press (0) — the wheel is not a click.
+        expect(received).toMatch(/\^\[\[<64;\d+;\d+M/)
+        expect(received).toMatch(/\^\[\[<65;\d+;\d+M/)
+        expect(received).not.toMatch(/\^\[\[<0;/)
+      } else {
+        // No arrow keys, no reports; the alternate screen did not scroll.
+        expect(received).not.toContain('^[')
+        expect(await rows(page)).toEqual(before)
+      }
       await page.keyboard.press('Control+C')
       await typeLine(page, `stty sane; printf '\\033[?1000;1006l\\033[?1049l'`)
     }
@@ -636,6 +644,7 @@ rawTest('native scrolling (plan T36): a mouse-reporting program, or the alternat
     await browser.close()
   }
 }, 60_000)
+
 
 // Touch is dispatched through Chromium's DevTools protocol.
 const touchTest = process.env.TERMINAL_BROWSER === 'webkit' ? test.skip : rawTest
@@ -1167,3 +1176,31 @@ rawTest('Copy text: more than 2,000 lines shows the newest and copies every one 
     await browser.close()
   }
 }, 90_000)
+
+touchTest('native scrolling on a phone (as native terminals): a vertical drag in a full-screen program that asked for the mouse reaches it as scroll reports; a tap still never does', async () => {
+  const client = 'raw-browser-scroll-test-10'
+  const { browser, page, id, drag, tap } = await phone(client)
+  const tmux = process.env.TERMINAL_PREVIEW_TMUX!
+  const socket = new TerminalService(process.env.TERMINAL_PREVIEW_ROOT!).socket
+  try {
+    await open(page, id)
+    // A grid that fits the phone's pane: the drag has nothing to pan first.
+    Bun.spawnSync([tmux, '-S', socket, 'resize-window', '-t', id, '-x', '40', '-y', '12'])
+    await page.waitForFunction(() => { const pane = document.querySelector('.terminal-pane')!; return pane.scrollHeight <= pane.clientHeight + 1 }, null, { timeout: 10_000 })
+    await typeLine(page, `clear; printf '\\033[?1049h\\033[?1003;1006h%s%s\\n' READ Y; stty -echo -icanon; cat -v`)
+    await waitForRow(page, '^READY$')
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+    await tap({ x: 120, y: 60 })
+    await drag({ x: 150, y: 80 }, { x: 150, y: 240 })
+    await page.waitForTimeout(1500)
+    const received = (await rows(page)).join('\n')
+    // Finger down shows what is above: wheel-up reports. No click from the tap.
+    expect(received).toMatch(/\^\[\[<64;\d+;\d+M/)
+    expect(received).not.toMatch(/\^\[\[<0;/)
+    expect(received).not.toMatch(/\^\[\[<35;/)
+    await page.keyboard.press('Control+C')
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 60_000)

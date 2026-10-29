@@ -546,6 +546,9 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   // phase, before xterm can turn them into mouse reports or (in full-screen
   // programs) arrow keys; history is scrolled here, never by xterm; and a
   // touch never becomes a mouse report (a mouse is the operator's own input).
+  // The exception: a full-screen program that asked for the mouse scrolls
+  // itself (it has no terminal history), so vertical scrolling reaches it as
+  // wheel reports, once the grid has panned to its edge — as a native terminal does.
   useEffect(() => {
     const el = pane.current
     if (!el) return
@@ -569,6 +572,32 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       else if (route.pan) pause()
       return Boolean(route.pan || route.lines || route.carry)
     }
+    /**
+     * A full-screen program that asked for the mouse (Claude Code, vim with
+     * mouse on) scrolls itself: it has no terminal history, and a native
+     * terminal sends it the wheel. Then vertical scrolling is its input (a
+     * wheel report); everything else stays the view's.
+     */
+    const programScrolls = () => {
+      const term = terminal.current
+      return Boolean(term && term.buffer.active.type === 'alternate' && term.modes.mouseTrackingMode !== 'none')
+    }
+    /** Whether the pane can still pan that way (an overflowing grid pans to its edge before the program scrolls). */
+    const canPan = (dy: number) => dy < 0 ? el.scrollTop > 0 : el.scrollTop < el.scrollHeight - el.clientHeight - 1
+    /** One wheel step to the program per row dragged (xterm turns it into the report), at the finger. */
+    let programCarry = 0
+    const dragProgram = (dy: number, x: number, y: number) => {
+      const term = terminal.current
+      const rendered = screen()
+      if (!term?.element || !rendered?.clientHeight) return
+      const cell = rendered.clientHeight / term.rows
+      programCarry += dy
+      while (Math.abs(programCarry) >= cell) {
+        const step = Math.sign(programCarry) * cell
+        programCarry -= step
+        term.element.dispatchEvent(new WheelEvent('wheel', { deltaY: step, deltaMode: 0, clientX: x, clientY: y, bubbles: true, cancelable: true }))
+      }
+    }
     const hasHistory = () => {
       const buffer = terminal.current?.buffer.active
       return Boolean(buffer && buffer.type !== 'alternate' && buffer.baseY > 0)
@@ -579,7 +608,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
      * the end. A vertical drag with history is ours (history, then the pan,
      * in one motion, with a fling); anything else is the browser's native pan.
      */
-    let drag: { x: number; y: number; owner?: 'ours' | 'native' | 'ended'; samples: { at: number; dy: number }[] } | undefined
+    let drag: { x: number; y: number; owner?: 'ours' | 'native' | 'program' | 'ended'; samples: { at: number; dy: number }[] } | undefined
     let fling = 0
     const stopFling = () => { cancelAnimationFrame(fling); fling = 0 }
     const startFling = (samples: { at: number; dy: number }[]) => {
@@ -624,12 +653,19 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       drag.y = y
       if (!drag.owner) {
         if (!dx && !dy) return
-        drag.owner = Math.abs(dy) >= Math.abs(dx) && hasHistory() ? 'ours' : 'native'
+        const vertical = Math.abs(dy) >= Math.abs(dx)
+        drag.owner = vertical && programScrolls() ? 'program' : vertical && hasHistory() ? 'ours' : 'native'
+        programCarry = 0
       }
       if (drag.owner === 'native') { pause(); return }
       // The browser's scroll was cancelled from the first move: an ended drag stays still.
       event.preventDefault()
       if (drag.owner === 'ended') return
+      if (drag.owner === 'program') {
+        if (dx) { el.scrollBy(dx, 0); pause() }
+        if (dy && canPan(dy)) { el.scrollBy(0, dy); pause() } else if (dy) dragProgram(dy, x, y)
+        return
+      }
       if (dx) { el.scrollBy(dx, 0); pause() }
       if (dy) scrollVertical(dy)
       drag.samples.push({ at: performance.now(), dy })
@@ -651,7 +687,9 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     const wheel = (event: WheelEvent) => {
       stopFling()
       if (!event.ctrlKey) {
-        // Always ours: xterm never sees a wheel (no mouse reports, no arrow keys, no history it scrolls itself).
+        // A program that scrolls itself gets a mostly vertical wheel (xterm reports it); a drag's steps are ours to pass on too.
+        if (programScrolls() && Math.abs(event.deltaY) >= Math.abs(event.deltaX) && !canPan(event.deltaY)) return
+        // Otherwise ours: xterm never sees a wheel (no arrow keys, no history it scrolls itself).
         event.preventDefault()
         event.stopPropagation()
         const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? el.clientHeight : 1
