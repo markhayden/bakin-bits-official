@@ -130,7 +130,7 @@ describe('terminal service managed binary', () => {
       if (args.includes('show-options') && commands.some(c => c[1] === 'bootstrap')) { commands.push(args); return { stdout: new Response('').body, stderr: new Response('').body, exited: Promise.resolve(1) } }
       return original(args)
     })
-    await expect(service.install()).rejects.toThrow('did not become ready')
+    await expect(service.install()).rejects.toThrow('did not become ready with its configuration (it did not answer); no fingerprint was recorded.')
     expect(existsSync(join(root, 'service.json'))).toBe(false)
     expect(await service.updateRequired()).toBe(true)
   })
