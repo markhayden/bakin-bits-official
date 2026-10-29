@@ -49,6 +49,10 @@ describe('the replica against tmux (plan T37)', () => {
   it('autowrap off past the last column: xterm holds the cursor at cols, tmux at the last column — the same place', () => {
     const at = (x: number, wrap: boolean) => ({ x, y: 0, cols: 40, rows: 10, alternate: false, wrap })
     expect(cursorCategory(at(39, false), at(40, false))).toBeUndefined()
+    // Autowrap turned off after a pending wrap: both still at cols, equal.
+    expect(cursorCategory(at(40, false), at(40, false))).toBeUndefined()
+    // A real difference with autowrap off is still one.
+    expect(cursorCategory(at(38, false), at(40, false))).toBe('cursor column')
     // With autowrap on, both say cols for a pending wrap; a real difference is still one.
     expect(cursorCategory(at(40, true), at(40, true))).toBeUndefined()
     expect(cursorCategory(at(39, true), at(40, true))).toBe('cursor column')

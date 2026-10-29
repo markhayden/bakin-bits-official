@@ -165,9 +165,10 @@ export function cursorCategory(tmux: CursorView, replica: CursorView): string | 
   if (tmux.cols !== replica.cols || tmux.rows !== replica.rows) return 'size'
   if (tmux.alternate !== replica.alternate) return 'screen'
   if (tmux.y !== replica.y) return 'cursor row'
-  // Autowrap off, past the last column: xterm holds the cursor at cols, tmux at the last column — the same place.
-  const x = !tmux.wrap && !replica.wrap && replica.x === replica.cols ? replica.cols - 1 : replica.x
-  if (tmux.x !== x) return 'cursor column'
+  // Autowrap off, past the last column: xterm holds the cursor at cols, tmux at the last column — the same
+  // place. Only that pair: equal positions are equal whatever the modes (autowrap turned off after a pending wrap).
+  const margin = !tmux.wrap && !replica.wrap && replica.x === replica.cols && tmux.x === tmux.cols - 1
+  if (tmux.x !== replica.x && !margin) return 'cursor column'
   return undefined
 }
 
