@@ -23,7 +23,7 @@ export function installFixtureSocket(picture: { session: Record<string, unknown>
       const { cols, rows } = picture.session as { cols: number; rows: number }
       const frames: unknown[] = [
         JSON.stringify({ type: 'join', epoch: 1, session: picture.session, sizeFrozen: false, nativeClients: 0, fidelity: picture.fidelity, history: 'complete',
-          checkpoint: { cols, rows, joinState: 0, penHasExtended: false, altEnteredCols: null, altEntry: null }, bytes: text.length, baseSeq: 1, throughSeq: 1 }),
+          checkpoint: { format: 1, cols, rows, scrollback: 10_000, joinState: 0, penHasExtended: false, altEnteredCols: null, altEntry: null }, bytes: text.length, baseSeq: 1, throughSeq: 1 }),
         text.buffer,
         JSON.stringify({ type: 'barrier', epoch: 1, throughSeq: 1 }),
       ]

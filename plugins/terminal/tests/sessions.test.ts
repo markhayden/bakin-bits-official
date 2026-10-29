@@ -721,8 +721,9 @@ test('raw path: a join recovers a lost replica (none, ended, or its control clie
     // neither a join nor an agent's raw read reattaches (the bridge path's read does).
     bridgeLost.add(session.id)
     await manager.ensureReplica(session.id, human)
-    await manager.readScreen(session.id, human).catch(() => undefined)
-    expect(attaches).toHaveLength(raw ? 2 : 2)
+    if (raw) expect(await manager.readScreen(session.id, human)).toMatchObject({ cols: 64, rows: 20 })
+    else await expect(manager.readScreen(session.id, human)).resolves.toBeDefined()
+    expect(attaches).toHaveLength(2)
     if (!raw) { replica.close(); continue }
     bridgeLost.delete(session.id)
     // The control client closed with the bridge still up: a replica loss too.
