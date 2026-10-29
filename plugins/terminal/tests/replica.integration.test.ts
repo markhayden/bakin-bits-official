@@ -431,3 +431,33 @@ processTest('final output (plan T35b): a terminate right after the last output, 
     rmSync(root, { recursive: true, force: true })
   }
 }, 60_000)
+
+processTest('final output (plan T35b): a terminate during an overload rebuild ends within its bound, and what was recorded survives a reopen consistently', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bakin-replica-final-flood-'))
+  const h = await harness(root)
+  let closed = false
+  try {
+    await until(() => Boolean(h.driver.replica(h.session.id)?.cut()), 'seeded')
+    const replica = h.driver.replica(h.session.id)!
+    await h.type('yes "flood line with some width to it, as programs print"\r')
+    await until(() => replica.rebuildCause === 'overload', 'rebuilding under the flood', 20_000)
+    const taken = await h.manager.control(h.session.id, human, 'take')
+    const started = performance.now()
+    const ended = await h.manager.finish(h.session.id, human, taken.generation, true)
+    // The save is bounded (FINAL_CUT_MS), then the kill: never held by the flood.
+    expect(performance.now() - started).toBeLessThan(6000)
+    expect(ended.state).toBe('completed')
+    const saved = ended.outputSaved
+    expect(typeof saved).toBe('boolean')
+    await h.close()
+    closed = true
+    // Reopened: the record and the bundle agree (a saved one is readable; an unsaved one has none).
+    const reopened = new Store(join(root, 'terminal.db'))
+    expect(reopened.session(h.session.id)?.outputSaved).toBe(saved)
+    expect(Boolean(await reopened.bundle(h.session.id))).toBe(saved === true)
+    reopened.close()
+  } finally {
+    if (!closed) await h.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 60_000)

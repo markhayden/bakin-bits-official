@@ -19,7 +19,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS sizes (session TEXT PRIMARY KEY, bytes INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS bundles (session TEXT PRIMARY KEY, generation INTEGER NOT NULL, header TEXT NOT NULL, bytes INTEGER NOT NULL, saved_at INTEGER NOT NULL, parts INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS bundle_parts (session TEXT NOT NULL, generation INTEGER NOT NULL, idx INTEGER NOT NULL, kind TEXT NOT NULL, meta TEXT, data BLOB, PRIMARY KEY (session, generation, idx));
-      CREATE TABLE IF NOT EXISTS bundle_generations (id INTEGER PRIMARY KEY AUTOINCREMENT);`)
+      CREATE TABLE IF NOT EXISTS bundle_generations (id INTEGER PRIMARY KEY AUTOINCREMENT);
+      CREATE TABLE IF NOT EXISTS session_marks (session TEXT PRIMARY KEY, revision INTEGER NOT NULL);`)
     // The generation counter starts above every generation already stored (rows written before it existed).
     const highest = (this.db.query('SELECT MAX(g) AS g FROM (SELECT MAX(generation) AS g FROM bundles UNION ALL SELECT MAX(generation) FROM bundle_parts UNION ALL SELECT MAX(id) FROM bundle_generations)').get() as { g: number | null }).g
     if (highest) this.db.query('INSERT OR IGNORE INTO bundle_generations(id) VALUES (?)').run(highest)
@@ -30,6 +31,17 @@ export class Store {
         OR session IN (SELECT id FROM sessions WHERE json_extract(value, '$.historyDeleted') = 1)`)
       // Parts no committed bundle names: a write interrupted before its commit, or a replaced one.
       this.db.exec('DELETE FROM bundle_parts WHERE NOT EXISTS (SELECT 1 FROM bundles WHERE bundles.session = bundle_parts.session AND bundles.generation = bundle_parts.generation)')
+      // A session another version wrote since this one last did (its revision moved without this
+      // version's mark: a rollback that continued, ended or completed it) has its final output from that
+      // version — the legacy output — so its bundle and output flags are dropped. Every session is then
+      // marked at its revision now.
+      const touched = `SELECT id FROM sessions LEFT JOIN session_marks ON session_marks.session = sessions.id
+        WHERE session_marks.revision IS NULL OR session_marks.revision <> COALESCE(json_extract(value, '$.revision'), 0)`
+      this.db.exec(`DELETE FROM bundle_parts WHERE session IN (${touched})`)
+      this.db.exec(`DELETE FROM bundles WHERE session IN (${touched})`)
+      this.db.exec(`UPDATE sessions SET value = json_remove(value, '$.outputSaved', '$.outputEvicted') WHERE id IN (${touched})`)
+      this.db.exec('DELETE FROM session_marks')
+      this.db.exec(`INSERT INTO session_marks SELECT id, COALESCE(json_extract(value, '$.revision'), 0) FROM sessions`)
     })()
     // Retained bytes are kept as running totals (summing the output on every
     // append made a busy session at its limit scan everything it retained);
@@ -56,7 +68,14 @@ export class Store {
       if (stored.outputSaved === undefined) delete session.outputSaved; else session.outputSaved = stored.outputSaved
       if (stored.outputEvicted === undefined) delete session.outputEvicted; else session.outputEvicted = stored.outputEvicted
     }
-    this.db.query('INSERT OR REPLACE INTO sessions VALUES (?, ?)').run(session.id, JSON.stringify(session))
+    this.db.transaction(() => {
+      this.db.query('INSERT OR REPLACE INTO sessions VALUES (?, ?)').run(session.id, JSON.stringify(session))
+      this.mark(session.id)
+    })()
+  }
+  /** This version wrote the session at its current revision (see the open-time rule). */
+  private mark(session: string): void {
+    this.db.query(`INSERT OR REPLACE INTO session_marks SELECT id, COALESCE(json_extract(value, '$.revision'), 0) FROM sessions WHERE id=?`).run(session)
   }
   append(session: string, data: Uint8Array): void {
     this.db.transaction(() => {
@@ -183,6 +202,7 @@ export class Store {
   /** The flags, with the record's revision moved (viewers drop a record no newer than one they have). */
   private setOutputFlags(session: string, saved: boolean, evicted: boolean): void {
     this.db.query(`UPDATE sessions SET value = json_set(json_remove(value, '$.outputEvicted'), '$.outputSaved', json(?), '$.revision', COALESCE(json_extract(value, '$.revision'), 0) + 1${evicted ? `, '$.outputEvicted', json('true')` : ''}) WHERE id=?`).run(String(saved), session)
+    this.mark(session)
   }
   hasBundle(session: string): boolean {
     return Boolean(this.db.query('SELECT 1 FROM bundles WHERE session=?').get(session))
@@ -252,6 +272,7 @@ export class Store {
       this.db.query('DELETE FROM sizes WHERE session=?').run(session)
       this.db.query('DELETE FROM cursors WHERE session=?').run(session)
       this.deleteBundleUnlocked(session)
+      this.db.query('DELETE FROM session_marks WHERE session=?').run(session)
       this.db.query('DELETE FROM sessions WHERE id=?').run(session)
     })()
   }
