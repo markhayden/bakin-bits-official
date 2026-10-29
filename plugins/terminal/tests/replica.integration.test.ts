@@ -12,7 +12,7 @@ import { tmuxConfig, VERIFIED_OPTIONS } from '../lib/tmux-config'
 import headless from '@xterm/headless'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from '../lib/terminal-profile'
 import type { Term } from '../lib/terminal-state'
-import { decodeBundle, type Bundle } from '../lib/bundle'
+import type { Bundle } from '../lib/bundle'
 
 // Spec D13 / T32c against the managed tmux: the shadow replica beside the
 // bridge. Run with TERMINAL_PROCESS_TEST=1 TERMINAL_TMUX=~/.bakin/bin/tmux.
@@ -407,7 +407,7 @@ processTest('final output (plan T35b): a terminate right after the last output, 
     await h.service.command(['detach-client', '-t', control])
     await h.manager.refreshStates()
     expect(h.manager.get(h.session.id, human)).toMatchObject({ state: 'running', outputSaved: false })
-    expect(store.bundle(h.session.id)).toBeUndefined()
+    expect(await store.bundle(h.session.id)).toBeUndefined()
     await until(async () => { try { await h.manager.readScreen(h.session.id, human); return true } catch { return false } }, 'recovered')
     // The last output, then terminate at once: the drain to a control reply takes it into the bundle.
     await h.type("printf '%s-%s\\n' last before-kill; sleep 30\r")
@@ -415,7 +415,7 @@ processTest('final output (plan T35b): a terminate right after the last output, 
     const taken = await h.manager.control(h.session.id, human, 'take')
     const ended = await h.manager.finish(h.session.id, human, taken.generation, true)
     expect(ended).toMatchObject({ state: 'completed', outputSaved: true })
-    const bundle = decodeBundle(store.bundle(h.session.id)!)!
+    const bundle = (await store.bundle(h.session.id))!
     expect(bundle).toMatchObject({ cols: 100, rows: 30, fidelity: { recoveries: 1 } })
     expect(await bundleText(bundle)).toContain('last-before-kill')
     // A second session whose program exits right after its last output.
@@ -425,7 +425,7 @@ processTest('final output (plan T35b): a terminate right after the last output, 
     await h.manager.write(other.id, human, other.generation, ++sequence, "printf '%s-%s\\n' last before-exit; exit\r")
     await until(async () => { await h.manager.refreshStates(); return h.manager.get(other.id, human).state === 'exited' }, 'exited')
     expect(h.manager.get(other.id, human).outputSaved).toBe(true)
-    expect(await bundleText(decodeBundle(store.bundle(other.id)!)!)).toContain('last-before-exit')
+    expect(await bundleText((await store.bundle(other.id))!)).toContain('last-before-exit')
   } finally {
     await h.close()
     rmSync(root, { recursive: true, force: true })

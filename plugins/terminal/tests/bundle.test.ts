@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'bun:test'
-import { BUNDLE_FORMAT, PROFILE, bundleSource, decodeBundle, encodeBundle, finalSize, makeBundle } from '../lib/bundle'
+import { BUNDLE_FORMAT, PROFILE, assembleBundle, bundleHeader, bundleParts, bundleSource, finalSize, makeBundle, type Bundle } from '../lib/bundle'
+
+const roundTrip = (bundle: Bundle, header = bundleHeader(bundle)) => assembleBundle(header, [...bundleParts(bundle)])
+/** Equal as pictures: the checkpoint's text may come back in other pieces. */
+const comparable = (bundle: Bundle) => ({ ...bundle, cut: { ...bundle.cut, checkpoint: { ...bundle.cut.checkpoint, data: [bundle.cut.checkpoint.data.join('')] } } })
 import { Replica } from '../lib/replica'
 
 const encode = (text: string) => new TextEncoder().encode(text)
@@ -25,20 +29,24 @@ describe('bundle (plan T35b)', () => {
     const bundle = makeBundle(picture, { rebuilds: { overload: 1 }, recoveries: 1 }, 1234)
     expect(bundle).toMatchObject({ format: BUNDLE_FORMAT, profile: PROFILE, cols: 90, rows: 30, savedAt: 1234 })
     expect(PROFILE).toBe('xterm 6.0.0')
-    expect(decodeBundle(encodeBundle(bundle))).toEqual(bundle)
+    expect(comparable(roundTrip(bundle)!)).toEqual(comparable(bundle))
+    // Tail bytes come back as bytes.
+    expect(roundTrip(bundle)!.cut.tail[0]).toEqual(picture.tail[0])
   })
   it('the final size follows every layout and geometry in the tail', async () => {
     const picture = await cut()
     expect(finalSize({ ...picture, tail: [] })).toEqual({ cols: picture.checkpoint.cols, rows: picture.checkpoint.rows })
     expect(finalSize(picture)).toEqual({ cols: 90, rows: 30 })
   })
-  it('another bundle format, profile or checkpoint format is never decoded', async () => {
+  it('another bundle format, profile or checkpoint format, or a malformed header, is never decoded', async () => {
     const bundle = makeBundle(await cut(), { rebuilds: {} }, 1)
     const altered = (change: (stored: Record<string, any>) => void) => {
-      const stored = JSON.parse(new TextDecoder().decode(encodeBundle(bundle)))
+      const stored = JSON.parse(bundleHeader(bundle))
       change(stored)
-      return decodeBundle(new TextEncoder().encode(JSON.stringify(stored)))
+      return roundTrip(bundle, JSON.stringify(stored))
     }
+    expect(roundTrip(bundle, '{not json')).toBeUndefined()
+    expect(roundTrip(bundle, '{}')).toBeUndefined()
     expect(altered((stored) => { stored.format = 2 })).toBeUndefined()
     expect(altered((stored) => { stored.profile = 'xterm 5.5.0' })).toBeUndefined()
     expect(altered((stored) => { stored.cut.checkpoint.format = 2 })).toBeUndefined()

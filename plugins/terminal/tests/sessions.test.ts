@@ -4,7 +4,6 @@ import { Store } from '../lib/store'
 import { DAY, type Session } from '../lib/contracts'
 import type { NativeClient, ProcessDriver } from '../lib/processes'
 import { Replica, type Cut } from '../lib/replica'
-import { decodeBundle } from '../lib/bundle'
 
 const managers: Sessions[] = []
 afterEach(async () => { for (const manager of managers.splice(0)) await manager.shutdown() })
@@ -809,7 +808,8 @@ describe('final output (plan T35b)', () => {
     const ended = await manager.finish(session.id, human, taken.generation, true)
     expect(finals).toEqual([`final ${session.id} boundary=true`, `terminate ${session.id}`])
     expect(ended).toMatchObject({ state: 'completed', outputSaved: true })
-    expect(decodeBundle(store.bundle(session.id)!)?.cut).toEqual(cut)
+    expect((await store.bundle(session.id))?.cut.tail).toEqual(cut.tail)
+    expect((await store.bundle(session.id))?.cut.checkpoint.data.join('')).toBe(cut.checkpoint.data.join(''))
   })
   it('no picture in time, or a failed save, records output not saved and never blocks the termination', async () => {
     for (const next of [async () => undefined, async () => { throw new Error('disk full') }]) {
@@ -820,7 +820,7 @@ describe('final output (plan T35b)', () => {
       const ended = await manager.finish(session.id, human, taken.generation, true)
       expect(finals.at(-1)).toBe(`terminate ${session.id}`)
       expect(ended).toMatchObject({ state: 'completed', outputSaved: false })
-      expect(store.bundle(session.id)).toBeUndefined()
+      expect(await store.bundle(session.id)).toBeUndefined()
     }
   })
   it("the program's exit saves it once (the pane stays), and completing the session later saves nothing more", async () => {
@@ -831,7 +831,8 @@ describe('final output (plan T35b)', () => {
     live.delete(session.id)
     await manager.refreshStates()
     expect(manager.get(session.id, human)).toMatchObject({ state: 'exited', outputSaved: true })
-    expect(decodeBundle(store.bundle(session.id)!)?.cut).toEqual(cut)
+    expect((await store.bundle(session.id))?.cut.tail).toEqual(cut.tail)
+    expect((await store.bundle(session.id))?.cut.checkpoint.data.join('')).toBe(cut.checkpoint.data.join(''))
     await manager.finish(session.id, human, manager.get(session.id, human).generation, false)
     expect(finals.filter((entry) => entry.startsWith('final'))).toHaveLength(1)
   })

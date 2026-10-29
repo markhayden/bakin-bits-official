@@ -3,6 +3,8 @@ import { rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Store } from '../lib/store'
+import { makeBundle, type Bundle } from '../lib/bundle'
+import { Replica } from '../lib/replica'
 const stores: Store[] = []
 afterEach(() => { for (const store of stores.splice(0)) store.close() })
 test('output rolls at session and global byte limits and reports gaps', () => {
@@ -58,39 +60,95 @@ test('retained totals survive a reopen: they are rebuilt from the output', () =>
   expect(second.bytes()).toBe(30)
   for (const file of [path, `${path}-wal`, `${path}-shm`]) rmSync(file, { force: true })
 })
-test('bundles (plan T35b): one row per session, replaced whole, deleted with its history or its session', () => {
+
+/** A bundle whose checkpoint text is about `chars` long (a picture as big as the test needs). */
+async function bundle(text: string, savedAt = 1, chars = 0): Promise<Bundle> {
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode(`\x1bc${text}`), cols: 80, rows: 24, reason: 'test', history: true })
+  await replica.event({ seq: 2, kind: 'output', offset: 0, bytes: new TextEncoder().encode(' tail') })
+  const cut = replica.cut()!
+  replica.close()
+  const data = chars ? [...cut.checkpoint.data, 'x'.repeat(chars)] : cut.checkpoint.data
+  return makeBundle({ ...cut, checkpoint: { ...cut.checkpoint, data } }, { rebuilds: {} }, savedAt)
+}
+const sessionRow = (id: string, extra: Record<string, unknown> = {}) => ({ id, title: id, cwd: '/tmp', program: 'shell', owner: { kind: 'human', id: 'h' }, generation: 1, inputSequence: 0, cols: 80, rows: 24, sizeEpoch: 0, sizeRevision: 0, state: 'completed', createdAt: 1, lastActivityAt: 1, ...extra }) as never
+const text = (saved: Bundle | undefined) => saved?.cut.checkpoint.data.join('')
+
+test('bundles (plan T35b): one per session, replaced whole, deleted with its history or its session', async () => {
   const store = new Store(':memory:')
   stores.push(store)
-  const session = (id: string) => ({ id, title: id, cwd: '/tmp', program: 'shell', owner: { kind: 'human', id: 'h' }, generation: 1, inputSequence: 0, cols: 80, rows: 24, sizeEpoch: 0, sizeRevision: 0, state: 'completed', createdAt: 1, lastActivityAt: 1 }) as const
-  store.save(session('a'))
-  store.save(session('b'))
-  store.saveBundle('a', Buffer.from('first'))
-  store.saveBundle('a', Buffer.from('second'))
-  store.saveBundle('b', Buffer.from('other'))
-  expect(Buffer.from(store.bundle('a')!).toString()).toBe('second')
+  store.save(sessionRow('a'))
+  store.save(sessionRow('b'))
+  expect(await store.saveBundle('a', await bundle('first'))).toEqual({ saved: true, evicted: [] })
+  await store.saveBundle('a', await bundle('second'))
+  await store.saveBundle('b', await bundle('other'))
+  expect(text(await store.bundle('a'))).toContain('second')
+  expect(text(await store.bundle('a'))).not.toContain('first')
+  expect((await store.bundle('a'))!.cut.tail).toHaveLength(1)
   store.deleteOutput('a')
-  expect(store.bundle('a')).toBeUndefined()
+  expect(await store.bundle('a')).toBeUndefined()
   store.deleteSession('b')
-  expect(store.bundle('b')).toBeUndefined()
+  expect(await store.bundle('b')).toBeUndefined()
+  expect(store.bundleBytes()).toBe(0)
 })
-test('on open, a bundle whose session or history a version without bundles deleted is removed (a rollback reconciled)', () => {
+test('bundles fit their own limit: whole ones go, oldest first; one that cannot fit alone is not kept', async () => {
+  const store = new Store(':memory:', 10 * 1024 * 1024, 250 * 1024 * 1024, 300_000)
+  stores.push(store)
+  for (const id of ['old', 'mid', 'new', 'huge']) store.save(sessionRow(id))
+  await store.saveBundle('old', await bundle('old', 1, 50_000))
+  await store.saveBundle('mid', await bundle('mid', 2, 50_000))
+  // Each is about 100 kB (stored text counted at two bytes a character): the third pushes the oldest out.
+  expect(await store.saveBundle('new', await bundle('new', 3, 60_000))).toEqual({ saved: true, evicted: ['old'] })
+  expect(await store.bundle('old')).toBeUndefined()
+  expect(text(await store.bundle('mid'))).toContain('mid')
+  expect(store.bundleBytes()).toBeLessThanOrEqual(300_000)
+  // Larger than the whole limit: refused, and nothing else is removed for it.
+  expect(await store.saveBundle('huge', await bundle('huge', 4, 200_000))).toEqual({ saved: false, evicted: [] })
+  expect(await store.bundle('huge')).toBeUndefined()
+  expect(text(await store.bundle('new'))).toContain('new')
+})
+test('a large bundle is written and read in slices: the event loop is never held long', async () => {
+  const store = new Store(':memory:')
+  stores.push(store)
+  store.save(sessionRow('big'))
+  // About 64 MB of checkpoint text (the documented worst case, 84M characters, is the same order).
+  const big = await bundle('big', 1, 64 * 1024 * 1024)
+  let worst = 0
+  let last = performance.now()
+  let probing = true
+  const probe = () => { const now = performance.now(); worst = Math.max(worst, now - last); last = now; if (probing) setImmediate(probe) }
+  setImmediate(probe)
+  expect((await store.saveBundle('big', big)).saved).toBe(true)
+  const read = await store.bundle('big')
+  probing = false
+  expect(text(read)!.length).toBe(text(big)!.length)
+  expect(worst).toBeLessThan(12)
+})
+test('on open: a rollback\'s deletions are reconciled, an interrupted write is dropped, and a committed bundle marks its session saved', async () => {
   const path = join(tmpdir(), `terminal-bundles-${crypto.randomUUID()}.db`)
   try {
-    const session = (id: string, extra: Record<string, unknown> = {}) => ({ id, title: id, cwd: '/tmp', program: 'shell', owner: { kind: 'human', id: 'h' }, generation: 1, inputSequence: 0, cols: 80, rows: 24, sizeEpoch: 0, sizeRevision: 0, state: 'completed', createdAt: 1, lastActivityAt: 1, ...extra }) as never
     const first = new Store(path)
-    for (const id of ['kept', 'gone', 'erased']) { first.save(session(id)); first.saveBundle(id, Buffer.from(id)) }
+    for (const id of ['kept', 'gone', 'erased', 'crashed']) { first.save(sessionRow(id, { outputSaved: false })); await first.saveBundle(id, await bundle(id)) }
     first.close()
-    // What a rolled-back version does: it removes the session row and the history, never the bundle.
     const { Database } = require('bun:sqlite') as typeof import('bun:sqlite')
     const old = new Database(path)
+    // What a rolled-back version does: it removes the session row and the history, never the bundle.
     old.query('DELETE FROM sessions WHERE id=?').run('gone')
-    old.query('UPDATE sessions SET value=? WHERE id=?').run(JSON.stringify({ ...(session('erased') as object), historyDeleted: true }), 'erased')
+    old.query('UPDATE sessions SET value=? WHERE id=?').run(JSON.stringify({ ...(sessionRow('erased') as object), historyDeleted: true }), 'erased')
+    // A write that never committed: parts of a generation no bundle names.
+    old.query("INSERT INTO bundle_parts VALUES ('kept', 1, 0, 'piece', NULL, 'orphan')").run()
     old.close()
     const reopened = new Store(path)
     stores.push(reopened)
-    expect(Buffer.from(reopened.bundle('kept')!).toString()).toBe('kept')
-    expect(reopened.bundle('gone')).toBeUndefined()
-    expect(reopened.bundle('erased')).toBeUndefined()
+    expect(text(await reopened.bundle('kept'))).toContain('kept')
+    expect(await reopened.bundle('gone')).toBeUndefined()
+    expect(await reopened.bundle('erased')).toBeUndefined()
+    const leftover = new Database(path)
+    expect(leftover.query("SELECT COUNT(*) AS n FROM bundle_parts WHERE generation=1").get()).toEqual({ n: 0 })
+    expect(leftover.query("SELECT COUNT(*) AS n FROM bundle_parts WHERE session IN ('gone','erased')").get()).toEqual({ n: 0 })
+    leftover.close()
+    // Every bundle was committed while its record still said false (as a crash before the record leaves it).
+    expect(reopened.sessions().find((session) => session.id === 'crashed')?.outputSaved).toBe(true)
   } finally {
     for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true })
   }

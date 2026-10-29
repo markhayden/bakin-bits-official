@@ -48,6 +48,8 @@ export interface Session {
    * raw path, which show their legacy retained output.
    */
   outputSaved?: boolean
+  /** Its saved bundle was removed to keep every bundle within the store's limit (oldest first). */
+  outputEvicted?: boolean
 }
 export interface TerminalSettings {
   enabledAgents?: Array<{ id: string }>

@@ -8,7 +8,7 @@ import type { Fidelity, RawSource } from './raw-display'
 import { Screen } from './screen'
 import { screenView, shadowDiff } from './shadow'
 import { Store } from './store'
-import { encodeBundle, makeBundle } from './bundle'
+import { makeBundle } from './bundle'
 import { visibleText } from './terminal-state'
 
 interface WorktreeResult { ok: boolean; error?: string; worktreePath?: string }
@@ -693,7 +693,7 @@ export class Sessions {
   /**
    * Persist an ending session's final output (plan T35b): the replica's
    * picture after a drain (to a control reply while the control client is
-   * connected), bounded by FINAL_CUT_MS, as one atomic bundle row. Never
+   * connected), bounded by FINAL_CUT_MS, committed atomically (lib/store.ts). Never
    * throws: no picture in time, or a failed write, is `outputSaved: false`.
    * The caller saves the session record.
    */
@@ -701,8 +701,13 @@ export class Sessions {
     if (session.outputSaved) return
     try {
       const cut = await this.driver.finalCut?.(session.id, { boundary: this.driver.controlConnected?.(session.id) ?? false, timeoutMs: FINAL_CUT_MS })
-      if (cut) this.store.saveBundle(session.id, encodeBundle(makeBundle(cut, this.fidelity(session.id), this.now())))
-      session.outputSaved = Boolean(cut)
+      const { saved, evicted } = cut ? await this.store.saveBundle(session.id, makeBundle(cut, this.fidelity(session.id), this.now())) : { saved: false, evicted: [] }
+      session.outputSaved = saved
+      // Older bundles removed for room: their sessions say so (never "not saved").
+      for (const id of evicted) {
+        const other = this.store.sessions().find((candidate) => candidate.id === id)
+        if (other) { other.outputSaved = false; other.outputEvicted = true; this.save(other) }
+      }
     } catch (error) {
       this.options.log?.info('Terminal final output was not saved', { sessionId: session.id, error: error instanceof Error ? error.message : String(error) })
       session.outputSaved = false
