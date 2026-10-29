@@ -139,7 +139,7 @@ export class TerminalService {
       const states = panes.trim() ? panes.trim().split('\n').map(line => line.split(' ')) : []
       if ((names.trim() && !states.length) || states.some(([, dead]) => dead !== '0' && dead !== '1')) throw new TerminalError('Terminal process state is unknown; no changes were made.', 503)
       const live = [...new Set(states.filter(([, dead]) => dead === '0').map(([name]) => name!))]
-      if (live.length) throw new TerminalError(`Terminal still has ${live.length} live terminal session${live.length === 1 ? '' : 's'} (${live.join(', ')}). Open Terminal and choose Apply update: it lists them and ends them first.`, 409)
+      if (live.length) throw new TerminalError(`Terminal still has ${live.length} live terminal session${live.length === 1 ? '' : 's'} (${live.join(', ')}). Sessions Terminal started end from Terminal's Apply update; end any other tmux session on Terminal's server in the app that started it.`, 409)
       const stopped = Bun.spawn(['launchctl', 'bootout', `gui/${process.getuid!()}/${this.label}`], { stdout: 'ignore', stderr: 'ignore' })
       if (await stopped.exited) throw new TerminalError('Could not stop the old Terminal service; no configuration was changed.', 503)
     } else if (program) {

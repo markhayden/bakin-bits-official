@@ -523,7 +523,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
       }} />
     <ConfirmDialog open={updating} busy={busy} error={updateError || undefined} onCancel={() => setUpdating(false)}
       title="Apply the Terminal service update?"
-      finalFocus={() => updated.current ? document.querySelector<HTMLElement>('[data-terminal-new]') : applyTrigger.current}
+      finalFocus={() => !updated.current && applyTrigger.current?.isConnected ? applyTrigger.current : document.querySelector<HTMLElement>('[data-terminal-new]')}
       description={`Terminal restarts its tmux with the current configuration${liveSessions.length ? '. Setup needs every session ended first: these end now, stopping their programs and disconnecting any terminal app attached to them' : ''}. tmux's own scrollback for ended sessions is dropped; the output Bakin saved and retained worktrees are kept.`}
       confirmLabel={liveSessions.length ? `End ${liveSessions.length} ${liveSessions.length === 1 ? 'session' : 'sessions'} and update` : 'Apply update'}
       busyLabel="Updating…" confirmTone={liveSessions.length ? 'danger' : 'primary'}

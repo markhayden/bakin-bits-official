@@ -46,10 +46,12 @@ function fixture(options: { raw?: boolean; storePath?: string; setting?: { raw: 
   const replicas = new Map<string, Replica>()
   /** Sessions whose kill fails (the program runs on). */
   const unkillable = new Set<string>()
+  /** While set, tmux's new-session waits on it (a creation held in the manager's queue). */
+  const createHold: { until?: Promise<void> } = {}
   const driver: ProcessDriver = {
     // Like TmuxProcesses.replica: an ended replica is no source.
     replica: (id) => { const replica = replicas.get(id); return replica?.ended ? undefined : replica },
-    create: async (s) => { live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, output, changed, died) { attaches.push(s.id); controlLost.delete(s.id); attached.add(s.id); outputs.set(s.id, output); clientsChanged.set(s.id, changed); if (died) paneDied.set(s.id, died) }, connected: (id) => attached.has(id) && !bridgeLost.has(id), controlConnected: (id) => attached.has(id) && !controlLost.has(id),
+    create: async (s) => { await createHold.until; live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, output, changed, died) { attaches.push(s.id); controlLost.delete(s.id); attached.add(s.id); outputs.set(s.id, output); clientsChanged.set(s.id, changed); if (died) paneDied.set(s.id, died) }, connected: (id) => attached.has(id) && !bridgeLost.has(id), controlConnected: (id) => attached.has(id) && !controlLost.has(id),
     write: async (_id, data) => { if (writeFailure) throw writeFailure; writes.push(data) },
     resize: async (id, cols, rows) => { if (resizeFailure) { tmuxSizes.set(id, { cols: 77, rows: 22 }); throw resizeFailure } tmuxSizes.set(id, { cols, rows }) },
     windowSize: async (id) => { if (readBackFailure) throw readBackFailure; return tmuxSizes.get(id)! },
@@ -84,7 +86,7 @@ function fixture(options: { raw?: boolean; storePath?: string; setting?: { raw: 
   })
   managers.push(manager)
   return {
-    manager, store, writes, live, attached, terminated, unkillable, forgotten, bridgeLost, controlLost, attaches, finals, finalCut, paneDied, releases, outputs, natives, detachedClients, vanishing, replicas,
+    manager, store, writes, live, attached, terminated, unkillable, createHold, forgotten, bridgeLost, controlLost, attaches, finals, finalCut, paneDied, releases, outputs, natives, detachedClients, vanishing, replicas,
     /** A terminal app attaches (or resizes) in tmux; the control client notices. */
     nativeAttach: async (id: string, client: NativeClient) => {
       natives.set(id, [...(natives.get(id) ?? []).filter((entry) => entry.pid !== client.pid), client])
@@ -1297,6 +1299,47 @@ describe('the confirmed service update (applyServiceUpdate)', () => {
     await expect(manager.applyServiceUpdate([one.id, 'not-a-session', 'other'], human, install, async () => true)).rejects.toThrow('changed since you confirmed')
     expect(terminated).toEqual([])
     expect(ran).toEqual([])
+  })
+  test('a creation in flight is seen before anything ends; one asked for during the update is refused', async () => {
+    const { manager, terminated, createHold } = fixture()
+    const one = await manager.create({ title: 'One', cwd: '/tmp', program: 'shell' }, human)
+    let release = () => {}
+    createHold.until = new Promise<void>((resolve) => { release = resolve })
+    const starting = manager.create({ title: 'Starting', cwd: '/tmp', program: 'shell' }, human)
+    const { ran, install } = setups()
+    const confirmed = manager.applyServiceUpdate([one.id], human, install, async () => true)
+    release()
+    createHold.until = undefined
+    await starting
+    await expect(confirmed).rejects.toThrow('changed since you confirmed; no sessions were ended')
+    expect(terminated).toEqual([])
+    expect(ran).toEqual([])
+    // Confirmed again with both. A session asked for while the update runs never starts in between: it is
+    // refused while sessions end, and waits behind setup (which holds the queue) once that has begun.
+    let installed = () => {}
+    let installing = false
+    const holding = manager.applyServiceUpdate(manager.store.sessions().filter((session) => session.state === 'running').map((session) => session.id), human,
+      () => new Promise<void>((resolve) => { installing = true; installed = resolve }), async () => true)
+    for (let tries = 0; tries < 200 && !installing; tries++) await Bun.sleep(1)
+    const late = manager.create({ title: 'Late', cwd: '/tmp', program: 'shell' }, human).then(() => 'started', (error: Error) => error.message)
+    installed()
+    expect((await holding).ended.sort()).toEqual(['One', 'Starting'])
+    const outcome = await late
+    expect(outcome === 'started' || outcome.includes('applying its service update')).toBe(true)
+    // Done: sessions start again.
+    await manager.create({ title: 'After', cwd: '/tmp', program: 'shell' }, human)
+  })
+  test('a session asked for while confirmed sessions are ending is refused', async () => {
+    const { manager, createHold, terminated } = fixture()
+    const one = await manager.create({ title: 'One', cwd: '/tmp', program: 'shell' }, human)
+    void createHold
+    const { install } = setups()
+    const updating = manager.applyServiceUpdate([one.id], human, install, async () => true)
+    // Queued right behind the update's check: it runs before the first kill's step.
+    const refused = manager.create({ title: 'Too soon', cwd: '/tmp', program: 'shell' }, human)
+    await expect(refused).rejects.toThrow('applying its service update')
+    await updating
+    expect(terminated).toEqual([one.id])
   })
   test('a session that cannot be ended stops it before setup, naming what did end', async () => {
     const { manager, unkillable } = fixture()

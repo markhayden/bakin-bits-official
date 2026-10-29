@@ -342,6 +342,8 @@ export class Sessions {
    */
   create(raw: unknown, principal: Principal, size?: StartSize): Promise<Session> {
     return this.run(async () => {
+      // A confirmed service update owns the live set from its check to its setup.
+      if (this.updatingService) throw new TerminalError('Terminal is applying its service update; start the session again in a moment.', 409)
       const input = createSchema.parse(raw)
       this.list(principal)
       const agentId = principal.kind === 'agent' ? principal.id : input.agentId
@@ -965,12 +967,27 @@ export class Sessions {
    * stops it there (no setup), and the error names what did end.
    */
   async applyServiceUpdate(confirmed: string[], principal: Principal, install: () => Promise<void>, required: () => Promise<boolean>): Promise<{ ended: string[] }> {
-    if (!await required()) throw new TerminalError('The Terminal service is already up to date; no sessions were ended.', 409)
-    const live = this.store.sessions().filter((session) => session.state === 'running')
-    const asked = new Set(confirmed)
-    if (live.length !== asked.size || live.some((session) => !asked.has(session.id))) {
-      throw new TerminalError('The live sessions changed since you confirmed; no sessions were ended. Review the list and confirm again.', 409)
+    // Checked in the queue (a creation in flight has landed by then), and reserved until setup is done:
+    // no session starts in between.
+    const live = await this.run(async () => {
+      if (this.updatingService) throw new TerminalError('The Terminal service update is already being applied.', 409)
+      if (!await required()) throw new TerminalError('The Terminal service is already up to date; no sessions were ended.', 409)
+      const running = this.store.sessions().filter((session) => session.state === 'running')
+      const asked = new Set(confirmed)
+      if (running.length !== asked.size || running.some((session) => !asked.has(session.id))) {
+        throw new TerminalError('The live sessions changed since you confirmed; no sessions were ended. Review the list and confirm again.', 409)
+      }
+      this.updatingService = true
+      return running
+    })
+    try {
+      return await this.endAndSetUp(live, principal, install)
+    } finally {
+      this.updatingService = false
     }
+  }
+  private updatingService = false
+  private async endAndSetUp(live: Session[], principal: Principal, install: () => Promise<void>): Promise<{ ended: string[] }> {
     const ended: string[] = []
     const so = () => ended.length ? `Ended ${ended.join(', ')}; ` : ''
     for (const session of live) {

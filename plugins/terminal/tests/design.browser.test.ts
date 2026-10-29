@@ -258,6 +258,8 @@ browserTest('service update: an attention banner whose confirm dialog names the 
     await dialog.waitFor()
     state.required = false
     await dialog.waitFor({ state: 'detached', timeout: 10_000 })
+    // Its trigger went with the banner: focus lands on New terminal, not the page.
+    await page.waitForFunction(() => document.activeElement?.hasAttribute('data-terminal-new') ?? false)
     expect(calls).toHaveLength(2)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   } finally { await browser.close() }
