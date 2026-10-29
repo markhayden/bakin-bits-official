@@ -51,6 +51,26 @@ describe('bundle (plan T35b)', () => {
     expect(altered((stored) => { stored.profile = 'xterm 5.5.0' })).toBeUndefined()
     expect(altered((stored) => { stored.cut.checkpoint.format = 2 })).toBeUndefined()
   })
+  it('a damaged part or header is never decoded: every event a replay reads is checked', async () => {
+    const bundle = makeBundle(await cut(), { rebuilds: {} }, 1)
+    const parts = [...bundleParts(bundle)]
+    const header = bundleHeader(bundle)
+    const damaged = (index: number, change: (part: any) => void) => {
+      const copy = parts.map((part) => ({ ...part, ...(part.kind === 'event' ? { event: { ...part.event } } : {}) }))
+      change(copy[index])
+      return assembleBundle(header, copy as never)
+    }
+    const output = parts.findIndex((part) => part.kind === 'event' && part.event.kind === 'output')
+    const layout = parts.findIndex((part) => part.kind === 'event' && part.event.kind === 'layout')
+    expect(damaged(output, (part) => { delete part.bytes })).toBeUndefined()
+    expect(damaged(layout, (part) => { part.event.cols = 0 })).toBeUndefined()
+    expect(damaged(layout, (part) => { part.event.kind = 'unknown' })).toBeUndefined()
+    expect(damaged(0, (part) => { part.text = 42 })).toBeUndefined()
+    const stored = JSON.parse(header)
+    delete stored.cut.baseSeq
+    expect(assembleBundle(JSON.stringify(stored), parts)).toBeUndefined()
+    expect(assembleBundle(header, parts)).toBeDefined()
+  })
   it('as a source, it is always the same live cut and tells nothing more', async () => {
     const bundle = makeBundle(await cut(), { rebuilds: {} }, 1)
     const source = bundleSource(bundle)

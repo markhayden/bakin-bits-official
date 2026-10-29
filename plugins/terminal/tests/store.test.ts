@@ -249,3 +249,21 @@ test('the generation counter starts above generations already stored (rows from 
     for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true })
   }
 })
+test('a stored bundle damaged on disk reads as none (an output event that lost its bytes)', async () => {
+  const path = join(tmpdir(), `terminal-bundles-${crypto.randomUUID()}.db`)
+  try {
+    const first = new Store(path)
+    first.save(sessionRow('damaged'))
+    await first.saveBundle('damaged', await bundle('damaged'))
+    first.close()
+    const { Database } = require('bun:sqlite') as typeof import('bun:sqlite')
+    const old = new Database(path)
+    old.exec("UPDATE bundle_parts SET data = NULL WHERE kind = 'event'")
+    old.close()
+    const reopened = new Store(path)
+    stores.push(reopened)
+    expect(await reopened.bundle('damaged')).toBeUndefined()
+  } finally {
+    for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true })
+  }
+})

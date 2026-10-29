@@ -11,6 +11,7 @@
  * are sliced work, never one encode of a whole picture that can be a
  * hundred megabytes (lib/store.ts).
  */
+import { z } from 'zod'
 import packageJson from '../package.json'
 import { CHECKPOINT_FORMAT, pieces, type Checkpoint } from './checkpoint'
 import type { LogEvent } from './output-log'
@@ -68,21 +69,46 @@ export function* bundleParts(bundle: Bundle): Generator<BundlePart> {
   }
 }
 
+const size = z.number().int().positive()
+const seq = z.number().int().nonnegative()
+const bytes = z.instanceof(Uint8Array)
+/** Every tail event a replay can meet, checked before one is streamed (a stored row can be damaged). */
+const eventSchema = z.discriminatedUnion('kind', [
+  z.object({ seq, kind: z.literal('output'), offset: z.number().int().nonnegative(), bytes }),
+  z.object({ seq, kind: z.literal('layout'), cols: size, rows: size }),
+  z.object({ seq, kind: z.literal('seed'), bytes, cols: size, rows: size, reason: z.string(), history: z.boolean() }),
+  z.object({ seq, kind: z.literal('geometry'), bytes, cols: size, rows: size, generation: z.number().int(), history: z.boolean() }),
+])
+const headerSchema = z.object({
+  format: z.literal(BUNDLE_FORMAT),
+  profile: z.string(),
+  cols: size, rows: size, savedAt: z.number(),
+  fidelity: z.object({ rebuilds: z.record(z.string(), z.number()), lastCause: z.string().optional(), history: z.enum(['incomplete', 'reloaded']).optional(), recoveries: z.number().optional() }),
+  cut: z.object({
+    baseSeq: seq, throughSeq: seq, history: z.boolean(),
+    checkpoint: z.object({ format: z.literal(CHECKPOINT_FORMAT), cols: size, rows: size, scrollback: z.number().int().nonnegative() }).passthrough(),
+  }),
+})
+
 /**
  * The bundle from its header and parts, or undefined when it is another
- * format, profile or checkpoint format, or malformed (nothing is guessed at).
+ * format, profile or checkpoint format, or malformed in any field a replay
+ * reads (nothing is guessed at).
  */
 export function assembleBundle(header: string, parts: Iterable<BundlePart>): Bundle | undefined {
   try {
-    const stored = JSON.parse(header) as Omit<Bundle, 'cut'> & { cut: Omit<Cut, 'tail' | 'checkpoint'> & { checkpoint: Omit<Checkpoint, 'data'> } }
-    if (stored.format !== BUNDLE_FORMAT || stored.profile !== PROFILE || stored.cut?.checkpoint?.format !== CHECKPOINT_FORMAT) return undefined
+    const stored = headerSchema.safeParse(JSON.parse(header))
+    if (!stored.success || stored.data.profile !== PROFILE) return undefined
     const data: string[] = []
     const tail: LogEvent[] = []
     for (const part of parts) {
-      if (part.kind === 'piece') data.push(part.text)
-      else tail.push((part.bytes ? { ...part.event, bytes: part.bytes } : part.event) as LogEvent)
+      if (part.kind === 'piece') { if (typeof part.text !== 'string') return undefined; data.push(part.text); continue }
+      const event = eventSchema.safeParse(part.bytes ? { ...part.event, bytes: part.bytes } : part.event)
+      if (!event.success) return undefined
+      tail.push(event.data as LogEvent)
     }
-    return { ...stored, cut: { ...stored.cut, checkpoint: { ...stored.cut.checkpoint, data } as Checkpoint, tail } }
+    const { cut, ...rest } = stored.data
+    return { ...rest, fidelity: rest.fidelity as Fidelity, cut: { ...cut, checkpoint: { ...cut.checkpoint, data } as unknown as Checkpoint, tail } }
   } catch {
     // A malformed row reads as no bundle: the session shows its output as unavailable.
     return undefined

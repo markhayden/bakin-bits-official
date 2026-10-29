@@ -56,6 +56,8 @@ function fakeManager(initial = session(), raw: { replica?: RawSource; bundle?: B
     onNatives: (_id, listener) => { nativeListeners.add(listener); return () => nativeListeners.delete(listener) },
     writeNext: async (_id, principal, _generation, data, options) => {
       if (writeError) throw writeError
+      // Like Sessions: a session that is not running takes no input.
+      if (current.state !== 'running') throw new TerminalError('Session has exited')
       writes.push({ principal, data, paste: options?.paste ?? false, enter: options?.enter ?? false })
       current = { ...current, inputSequence: current.inputSequence + 1 }
       return current
@@ -420,6 +422,29 @@ describe('TerminalViewer on the raw path', () => {
     expect(peer.of('join')[0]).toMatchObject({ epoch: 1, session: { state: 'completed' }, fidelity: { rebuilds: { overload: 1 } } })
     expect(peer.binary.map((bytes) => Buffer.from(bytes).toString()).join('')).toContain('last words')
     expect(peer.of('sync')).toEqual([])
+    // No input: the session is not running.
+    peer.client({ type: 'replay-applied', epoch: 1 })
+    peer.client({ type: 'input', generation: 1, viewerSeq: 1, data: 'ls\r' })
+    await until(() => peer.of('result').length === 1, 'refused')
+    expect(peer.of('result')[0]).toMatchObject({ status: 'rejected' })
+  })
+  it('a bundle that cannot be read, or whose replay fails, closes 4005 unreadable: never a stuck join or a resync loop', async () => {
+    const replica = await seeded()
+    const cut = replica.cut()!
+    replica.close()
+    // A replay that throws: an output event without its bytes (past the store's checks, as a stand-in for any replay failure).
+    const broken = makeBundle({ ...cut, tail: [{ seq: 2, kind: 'output', offset: 0 } as never] }, { rebuilds: {} }, 1)
+    for (const manager of [
+      fakeManager(session({ state: 'completed', outputSaved: true }), { bundle: broken }).manager,
+      { ...fakeManager(session({ state: 'completed', outputSaved: true }), {}).manager, bundle: async () => { throw new Error('disk error') } },
+    ]) {
+      const peer = fakeSocket()
+      new TerminalViewer(manager, peer.socket, 's1', options)
+      peer.client({ type: 'hello', clientId: CLIENT })
+      await until(() => peer.state.closed !== null, 'closed')
+      expect(peer.state.closed).toEqual({ code: 4005, reason: 'unreadable' })
+      expect(peer.of('barrier')).toEqual([])
+    }
   })
   it('an ended raw-path session without its output closes 4005 with why: not saved, removed for room, or unreadable', async () => {
     for (const [fields, reason] of [[{ outputSaved: false }, 'not-saved'], [{ outputSaved: false, outputEvicted: true }, 'evicted'], [{ outputSaved: true }, 'unreadable']] as const) {

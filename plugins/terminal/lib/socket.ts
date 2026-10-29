@@ -143,7 +143,7 @@ export class TerminalViewer {
     private options: { now?: () => number; ackWindow?: number; pauseEvictMs?: number; heartbeatMs?: number; silenceCloseMs?: number; replicaWaitMs?: number } = {},
   ) {
     this.lastHeard = this.now()
-    socket.onMessage((data) => { void this.receive(data) })
+    socket.onMessage((data) => { this.receive(data).catch((error: unknown) => this.failed(error)) })
     socket.onClose(() => this.dispose())
     this.heartbeat = setInterval(() => {
       if (this.now() - this.lastHeard > (this.options.silenceCloseMs ?? SILENCE_CLOSE_MS)) this.close(SOCKET_CLOSE.silent, 'No heartbeat')
@@ -322,13 +322,19 @@ export class TerminalViewer {
 
   /** An ended session's final picture, joined like a live one; the session's own fidelity travels in the bundle. */
   private async joinEnded(session: Session): Promise<void> {
-    const bundle = session.outputSaved ? await this.manager.bundle(this.sessionId) : undefined
+    // A bundle that cannot be read, or whose replay fails, is unreadable: final, never a resync loop.
+    const bundle = session.outputSaved ? await this.manager.bundle(this.sessionId).catch(() => undefined) : undefined
     if (this.closed) return
     if (!bundle) {
       const reason: UnavailableReason = session.outputEvicted ? 'evicted' : session.outputSaved ? 'unreadable' : 'not-saved'
       this.close(SOCKET_CLOSE.unavailable, reason)
       return
     }
+    try { this.startEnded(bundle) } catch {
+      if (!this.closed) this.close(SOCKET_CLOSE.unavailable, 'unreadable')
+    }
+  }
+  private startEnded(bundle: Bundle): void {
     this.raw = new RawDisplay(bundleSource(bundle), {
       text: (json) => this.socket.send(json),
       binary: (bytes) => this.socket.send(bytes),
@@ -345,6 +351,7 @@ export class TerminalViewer {
         }
       },
       fidelity: () => bundle.fidelity,
+      // A stalled viewer is evicted to reconnect: it meets the same finished picture again.
       resync: (reason) => this.close(SOCKET_CLOSE.resync, reason),
       deadline: this.now() + (this.options.replicaWaitMs ?? REPLICA_WAIT_MS),
       window: this.window(),
