@@ -42,11 +42,15 @@
   top: var(--bakin-layout-space-2);
   right: var(--bakin-layout-space-2);
   display: flex;
+  /* Never wider than the pane: on a small phone the offer wraps to its own row below the buttons. */
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: calc(100% - 2 * var(--bakin-layout-space-2));
   gap: var(--bakin-layout-gap-dense);
 }
 
 /* A program's clipboard offer: its first line, cut to fit the corner (the whole text is copied). */
-[data-bakin-plugin="terminal"] .terminal-view-offer { max-width: min(20rem, calc(100vw - 6rem)); }
+[data-bakin-plugin="terminal"] .terminal-view-offer { order: 1; max-width: min(20rem, 100%); }
 [data-bakin-plugin="terminal"] .terminal-view-offer > code { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; word-break: normal; }
 
 /* 32 px to look at, 44 px to hit on touch. */

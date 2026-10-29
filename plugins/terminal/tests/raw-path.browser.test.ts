@@ -809,57 +809,168 @@ rawTest('native scrolling (plan T36): a selection pauses following, and ↓ Live
   }
 }, 60_000)
 
-rawTest('clipboard offers (plan T36b): a program\'s OSC 52 offer copies only on the tap, exactly; the latest replaces the last; a join or reload never replays one', async () => {
+/**
+ * A recording clipboard (both browsers): every write the page makes, and how
+ * the next one answers — `ok`, `refuse` (both the async API and the legacy
+ * fallback fail), or `hold` (pending until `window.__clipboard.release()`).
+ */
+const RECORDING_CLIPBOARD = () => {
+  const state = { writes: [] as string[], mode: 'ok' as 'ok' | 'refuse' | 'hold', release: () => {} }
+  Object.assign(window, { __clipboard: state })
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+    writeText: (text: string) => {
+      state.writes.push(text)
+      if (state.mode === 'refuse') return Promise.reject(new Error('refused'))
+      if (state.mode === 'hold') return new Promise<void>((resolve) => { state.release = resolve })
+      return Promise.resolve()
+    },
+  } })
+  const exec = document.execCommand.bind(document)
+  document.execCommand = (command: string, ...rest: unknown[]) => command === 'copy' && state.mode === 'refuse' ? false : exec(command, ...(rest as []))
+}
+type Recorded = { writes: string[]; mode: 'ok' | 'refuse' | 'hold'; release(): void }
+const clipboard = {
+  writes: (page: Page) => page.evaluate(() => (window as unknown as { __clipboard: Recorded }).__clipboard.writes),
+  mode: (page: Page, mode: Recorded['mode']) => page.evaluate((next) => { (window as unknown as { __clipboard: Recorded }).__clipboard.mode = next }, mode),
+  release: (page: Page) => page.evaluate(() => (window as unknown as { __clipboard: Recorded }).__clipboard.release()),
+}
+const copyOffer = (on: Page) => on.getByRole('button', { name: 'Copy offered text' })
+const offerLine = (text: string) => `printf '\\033]52;c;%s\\a' ${Buffer.from(text).toString('base64')}`
+/** Absence cannot be polled for: give each page a moment after it went live, so an offer it would replay has landed. */
+async function settleFor(...pages: Page[]): Promise<void> {
+  for (const page of pages) await page.waitForTimeout(1_000)
+}
+async function recordingPage(browser: Browser, options: Parameters<Browser['newContext']>[0] = { viewport }) {
+  const context = await browser.newContext(options)
+  await context.addInitScript(RECORDING_CLIPBOARD)
+  return { context, page: await context.newPage() }
+}
+
+rawTest('clipboard offers (plan T36b): copied only on the tap, exactly, with the check; the latest replaces the last; a join, a reload, a reconnect or a recovery never replays one', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-offer-test-01'
-  // Chromium reads the clipboard back; WebKit cannot grant that, so there the copy is seen by the offer clearing.
-  const chromium = process.env.TERMINAL_BROWSER !== 'webkit'
-  const context = await browser.newContext({ viewport, ...(chromium ? { permissions: ['clipboard-read', 'clipboard-write'] } : {}) })
-  const page = await context.newPage()
-  const other = await (await browser.newContext({ viewport })).newPage()
+  const { page } = await recordingPage(browser)
+  const { page: other } = await recordingPage(browser)
   const { id } = await createSession(page, client)
-  const copy = (on: Page) => on.getByRole('button', { name: 'Copy offered text' })
+  const tmux = process.env.TERMINAL_PREVIEW_TMUX!
+  const socket = new TerminalService(process.env.TERMINAL_PREVIEW_ROOT!).socket
   const offered = 'línea uno ✓\nline two\ttabbed'
-  const offerLine = (text: string) => `printf '\\033]52;c;%s\\a' ${Buffer.from(text).toString('base64')}`
   try {
     await open(page, id)
     await open(other, id)
-    if (chromium) await page.evaluate(() => navigator.clipboard.writeText('sentinel'))
-    expect(await copy(page).count()).toBe(0)
+    expect(await copyOffer(page).count()).toBe(0)
     await typeLine(page, `${offerLine('first offer')}; ${offerLine(offered)}`)
+    // A viewer that joins at once (the offers still in the join's tail, not yet in a checkpoint) is not offered them.
+    const { page: late } = await recordingPage(browser)
+    await open(late, id)
     // Every live viewer is offered it; only the latest, shown by its first line.
-    await copy(page).waitFor()
-    await copy(other).waitFor()
-    expect(await copy(page).count()).toBe(1)
+    await copyOffer(page).waitFor()
+    await copyOffer(other).waitFor()
+    expect(await copyOffer(page).count()).toBe(1)
     expect(await page.locator('.terminal-view-offer code').textContent()).toBe('línea uno ✓')
     // Nothing wrote the clipboard on its own.
-    if (chromium) expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('sentinel')
-    // A viewer that joins now, and one that reloads, are not offered it again.
-    const late = await (await browser.newContext({ viewport })).newPage()
-    await open(late, id)
+    expect(await clipboard.writes(page)).toEqual([])
+    expect(await clipboard.writes(other)).toEqual([])
+    // A reload is not offered it again.
     await other.reload()
     await other.waitForFunction(() => document.querySelector('[data-display]')?.getAttribute('data-display') === 'live', null, { timeout: 15_000 })
     await settleFor(late, other)
-    expect(await copy(late).count()).toBe(0)
-    expect(await copy(other).count()).toBe(0)
-    // The tap copies the whole text, exactly, and the offer is done.
-    await copy(page).click()
+    expect(await copyOffer(late).count()).toBe(0)
+    expect(await copyOffer(other).count()).toBe(0)
+    // The tap copies the whole text, exactly; the kit's check shows, then the offer is done.
+    await copyOffer(page).click()
+    await page.getByRole('button', { name: 'Copy offered text complete' }).waitFor({ timeout: 2_000 })
     await page.locator('.terminal-view-offer').waitFor({ state: 'detached', timeout: 5_000 })
-    if (chromium) expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(offered)
+    expect(await clipboard.writes(page)).toEqual([offered])
+    // A reconnect and a recovery (Bakin's control client lost: the viewers rejoin a rebuilt replica) replay nothing.
+    const control = Bun.spawnSync([tmux, '-S', socket, 'list-clients', '-t', id, '-F', '#{client_control_mode} #{client_name}']).stdout.toString()
+      .split('\n').filter((line) => line.startsWith('1 ')).map((line) => line.slice(2))
+    Bun.spawnSync([tmux, '-S', socket, 'detach-client', '-t', control[0]!])
+    await page.getByRole('status', { name: 'Terminal view recovered with limitations' }).waitFor({ timeout: 20_000 })
+    await settleFor(page)
+    expect(await copyOffer(page).count()).toBe(0)
+    expect(await clipboard.writes(page)).toEqual([offered])
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 90_000)
+
+rawTest('clipboard offers (plan T36b): a refused write keeps the offer; a copy that settles after a newer offer neither clears nor confirms it', async () => {
+  const browser = await launchChromium()
+  const client = 'raw-browser-offer-test-02'
+  const { page } = await recordingPage(browser)
+  const { id } = await createSession(page, client)
+  try {
+    await open(page, id)
+    await typeLine(page, offerLine('refused one'))
+    await copyOffer(page).waitFor()
+    await clipboard.mode(page, 'refuse')
+    await copyOffer(page).click()
+    await settleFor(page)
+    expect(await copyOffer(page).count()).toBe(1)
+    expect(await page.locator('.terminal-view-offer code').textContent()).toBe('refused one')
+    // A copy held pending; a newer offer arrives; then the first write lands.
+    await clipboard.mode(page, 'hold')
+    await copyOffer(page).click()
+    await typeLine(page, offerLine('the newer one'))
+    await page.locator('.terminal-view-offer code', { hasText: 'the newer one' }).waitFor()
+    await clipboard.release(page)
+    // The kit's check would show at once (and clear after 1.5 s): look while it would be up.
+    await page.waitForTimeout(300)
+    expect(await page.getByRole('button', { name: 'Copy offered text complete' }).count()).toBe(0)
+    // And the newer offer stays past when a copied one would have gone.
+    await page.waitForTimeout(2_000)
+    expect(await page.locator('.terminal-view-offer code').textContent()).toBe('the newer one')
+    expect(await clipboard.writes(page)).toEqual(['refused one', 'refused one'])
   } finally {
     await endSession(page, client, id)
     await browser.close()
   }
 }, 60_000)
 
-/** Absence cannot be polled for: give each page a moment after it went live, so an offer it would replay has landed. */
-async function settleFor(...pages: Page[]): Promise<void> {
-  for (const page of pages) await page.waitForTimeout(1_000)
-}
+touchTest('clipboard offers on a 320 px phone (plan T36b): the offer, ↓ Live, Reset view and Show keyboard all fit the corner, none over another', async () => {
+  const browser = await launchChromium()
+  const client = 'raw-browser-offer-test-03'
+  const { context, page } = await recordingPage(browser, { viewport: { width: 320, height: 640 }, hasTouch: true, isMobile: true })
+  // A pinched font remembered on this device: Reset view shows.
+  await context.addInitScript(() => { try { localStorage.setItem('bakin-terminal-font', '14') } catch { /* storage blocked: the test fails visibly below */ } })
+  const { id } = await createSession(page, client)
+  const cdp = await context.newCDPSession(page)
+  try {
+    await open(page, id)
+    await typeLine(page, `clear; seq -f "line-%g" 1 200; ${offerLine('a long offered line that cannot fit the corner of a small phone')}`)
+    await copyOffer(page).waitFor()
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+    // Into the history: ↓ Live shows.
+    const box = (await page.locator('.terminal-pane').boundingBox())!
+    // (Below the corner: a drag that starts on the controls is not the pane's.)
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: box.x + 160, y: box.y + 200 }] })
+    for (let step = 1; step <= 10; step++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: box.x + 160, y: box.y + 200 + step * 30 }] })
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    const controls = [copyOffer(page), page.getByRole('button', { name: 'Follow cursor' }), page.getByRole('button', { name: 'Reset view' }), page.getByRole('button', { name: 'Show keyboard' })]
+    for (const control of controls) await control.waitFor({ timeout: 5_000 })
+    const boxes = await Promise.all([page.locator('.terminal-view-offer'), ...controls.slice(1)].map(async (control) => (await control.boundingBox())!))
+    for (const { x, width } of boxes) {
+      expect(x).toBeGreaterThanOrEqual(0)
+      expect(x + width).toBeLessThanOrEqual(320)
+    }
+    for (let a = 0; a < boxes.length; a++) for (let b = a + 1; b < boxes.length; b++) {
+      const [one, two] = [boxes[a]!, boxes[b]!]
+      const overlap = one.x < two.x + two.width && two.x < one.x + one.width && one.y < two.y + two.height && two.y < one.y + one.height
+      expect(overlap).toBe(false)
+    }
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 60_000)
 
-touchTest('on a phone (plan T36b) the persistent recovery notice folds to its title; Details shows the rest', async () => {
+rawTest('on a phone (plan T36b) the persistent recovery notice folds to its title; Show details shows the rest', async () => {
+  const browser = await launchChromium()
   const client = 'raw-browser-recovery-test-02'
-  const { browser, page, id } = await phone(client)
+  const page = await (await browser.newContext({ viewport: { width: 390, height: 760 }, hasTouch: true, isMobile: true })).newPage()
+  const { id } = await createSession(page, client)
   const tmux = process.env.TERMINAL_PREVIEW_TMUX!
   const socket = new TerminalService(process.env.TERMINAL_PREVIEW_ROOT!).socket
   const notice = page.getByRole('status', { name: 'Terminal view recovered with limitations' })
@@ -870,8 +981,11 @@ touchTest('on a phone (plan T36b) the persistent recovery notice folds to its ti
     Bun.spawnSync([tmux, '-S', socket, 'detach-client', '-t', control[0]!])
     await notice.waitFor({ timeout: 20_000 })
     expect(await notice.textContent()).not.toContain('Cause:')
-    await notice.getByRole('button', { name: 'Details' }).click()
+    const toggle = notice.getByRole('button', { name: 'Show details' })
+    expect((await toggle.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+    await toggle.click()
     await expect(notice.textContent()).resolves.toContain("Cause: the view's connection to tmux was replaced.")
+    expect(await notice.getByRole('button', { name: 'Hide details' }).getAttribute('aria-expanded')).toBe('true')
     await notice.getByRole('button', { name: 'Hide details' }).click()
     expect(await notice.textContent()).not.toContain('Cause:')
   } finally {

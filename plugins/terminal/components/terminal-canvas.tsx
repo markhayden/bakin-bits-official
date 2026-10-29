@@ -28,6 +28,9 @@ import '@xterm/xterm/css/xterm.css'
 /** What the page asks of the canvas: "Fit to this device" claims the size; refit applies a new smallest-text choice. */
 export interface TerminalViewHandle { fitToDevice(): boolean; refit(): void }
 
+/** How long a copied offer shows its check before it goes (the kit CopyButton's own acknowledgement time). */
+const OFFER_DONE_MS = 1500
+
 /**
  * Links the profile keeps (http, https, mailto) — OSC 8 hyperlinks, and
  * plain-text URLs through the web-links addon (spec D9 item 4) — open as
@@ -69,8 +72,14 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   const [zoom, setZoom] = useState(() => storedFont())
   // Manual pans, selections (and History) stop the view chasing the cursor.
   const [paused, setPaused] = useState(false)
-  /** The program's latest clipboard offer (OSC 52), live only. */
-  const [offer, setOffer] = useState<string>()
+  /**
+   * The program's latest clipboard offer (OSC 52), live only; `rev` tells
+   * offers apart (even the same text twice), so a copy that settles after a
+   * newer offer arrived neither clears nor confirms it.
+   */
+  const [offer, setOffer] = useState<{ text: string; rev: number }>()
+  const offerRev = useRef(0)
+  const offerPanel = useRef<HTMLDivElement>(null)
   const callbacks = useRef({ onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity, onUnavailable, writable, authority, inputEnabled, onModifiersChange, captureTab: false, sizeEpoch: session.sizeEpoch, zoom, paused })
   callbacks.current = { onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity, onUnavailable, writable, authority, inputEnabled, onModifiersChange, captureTab, sizeEpoch: session.sizeEpoch, zoom, paused }
   const [status, setStatus] = useState('Connecting')
@@ -229,7 +238,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       // replies would be typed into the pane), links and clipboard are policed,
       // and the xterm 6.0.0 workarounds apply.
       // OSC 52: the latest offer replaces any earlier one (one pending per session); only a tap copies it.
-      const profile = applyTerminalProfile(term, { clipboardOffer: (text) => setOffer(text) })
+      // The raw path only: its replays are silent (setLive), the bridge path's syncs and ended-session output are not.
+      const profile = applyTerminalProfile(term, { clipboardOffer: (text) => { if (rawPath.current) setOffer({ text, rev: ++offerRev.current }) } })
       // Shown, or replaying to be shown next (a failure of either counts).
       let active = true
       // A parser exception would wedge every later write: the screen is
@@ -684,6 +694,15 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     return () => { disposed = true; clearTimeout(timer); observer.disconnect(); replan.current = () => {} }
   }, [session.id, authority, session.sizeEpoch, attempt])
 
+  /** The offer was copied: its check shows for a moment (the kit's acknowledgement), then it goes — unless a newer one replaced it. */
+  function offerCopied(rev: number) {
+    setTimeout(() => {
+      if (offerRev.current !== rev) return
+      // A keyboard user's focus was on the button: give it to the terminal output, not the page.
+      if (offerPanel.current?.contains(document.activeElement)) pane.current?.focus({ preventScroll: true })
+      setOffer((current) => current?.rev === rev ? undefined : current)
+    }, OFFER_DONE_MS)
+  }
   function resumeFollow() {
     callbacks.current.paused = false
     setPaused(false)
@@ -707,9 +726,9 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       {zoom !== undefined && <Button size="icon-sm" variant="secondary" aria-label="Reset view" title="Reset view" onClick={() => zoomTo(undefined)}><ZoomOut /></Button>}
       {paused && <Button size="sm" variant="secondary" aria-label="Follow cursor" title="Follow cursor" onClick={resumeFollow}><ArrowDown />Live</Button>}
       {/* A program's clipboard offer (OSC 52): written only on this tap, and kept until it is (a refused write leaves it). */}
-      {offer !== undefined && <Panel variant="code" padding="compact" className="terminal-view-offer flex min-w-0 items-center gap-bakin-2">
-        <code className="min-w-0 flex-1 break-all text-bakin-text-primary">{offer.split('\n', 1)[0]}</code>
-        <CopyButton size="touch" text={offer} label="Copy offered text" onCopied={() => setOffer((current) => current === offer ? undefined : current)} />
+      {offer !== undefined && <Panel ref={offerPanel} variant="code" padding="compact" className="terminal-view-offer flex min-w-0 items-center gap-bakin-2">
+        <code className="min-w-0 flex-1 break-all text-bakin-text-primary">{offer.text.split('\n', 1)[0]}</code>
+        <CopyButton key={offer.rev} size="touch" text={offer.text} label="Copy offered text" onCopied={() => offerCopied(offer.rev)} />
       </Panel>}
     </div>}
   </div>
