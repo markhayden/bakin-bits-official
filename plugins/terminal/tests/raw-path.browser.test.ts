@@ -399,7 +399,7 @@ rawTest('an ended session whose output was not saved (plan T35b): the page shows
   const client = 'raw-browser-unsaved-test-01'
   const page = await browser.newPage({ viewport })
   const lost = await createSession(page, client)
-  const other = await createSession(page, client)
+  const other = await (await page.request.post(endpoint('/sessions'), { headers: { 'X-Bakin-Terminal-Client': client }, data: { title: 'Opened after', cwd: '/tmp' } })).json() as { id: string }
   const tmux = process.env.TERMINAL_PREVIEW_TMUX!
   const socket = new TerminalService(process.env.TERMINAL_PREVIEW_ROOT!).socket
   const connections = { count: 0 }
@@ -419,7 +419,12 @@ rawTest('an ended session whose output was not saved (plan T35b): the page shows
     await page.waitForTimeout(1500)
     expect(connections.count).toBe(seen)
     expect(await page.locator('.xterm').count()).toBe(0)
-    await open(page, other.id)
+    // In-app navigation (no reload): back to the list, then the other session; the state belongs to that session only.
+    await page.evaluate(() => { (window as unknown as { __loaded?: boolean }).__loaded = true })
+    await page.getByRole('link', { name: 'Back to terminals' }).click()
+    await page.getByText('Opened after', { exact: true }).first().click()
+    await page.waitForFunction(() => document.querySelector('[data-display]')?.getAttribute('data-display') === 'live', null, { timeout: 15_000 })
+    expect(await page.evaluate(() => (window as unknown as { __loaded?: boolean }).__loaded)).toBe(true)
     expect(await page.getByRole('heading', { name: 'Output not saved' }).count()).toBe(0)
   } finally {
     await endSession(page, client, other.id).catch(() => undefined)
