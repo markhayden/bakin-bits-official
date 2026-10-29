@@ -36,7 +36,7 @@ const until = async (check: () => boolean | Promise<boolean>, label: string, ms 
 }
 const percentile = (values: number[], p: number) => [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.floor(values.length * p))]!
 
-async function harness(root: string, options: { raw?: boolean } = {}) {
+async function harness(root: string, options: { raw?: boolean; processes?: ConstructorParameters<typeof TmuxProcesses>[2] } = {}) {
   const service = new TerminalService(root)
   // The generated configuration: no status line, manual window sizes, deep history.
   const config = join(root, 'tmux.conf')
@@ -44,7 +44,7 @@ async function harness(root: string, options: { raw?: boolean } = {}) {
   const server = Bun.spawn([service.tmux!, '-D', '-S', service.socket, '-f', config], { env: terminalEnvironment(), stdout: 'ignore', stderr: 'ignore' })
   await until(() => service.ready(), 'service')
   const logs: { message: string; data?: Record<string, unknown> }[] = []
-  const driver = new TmuxProcesses(service, { info: (message, data) => logs.push({ message, data }) })
+  const driver = new TmuxProcesses(service, { info: (message, data) => logs.push({ message, data }) }, options.processes)
   const manager = new Sessions(new Store(join(root, 'terminal.db')), driver, {
     settings: () => ({}), prepare: async () => undefined, release: async () => undefined,
     log: { info: (message, data) => logs.push({ message, data }) }, shadowQuietMs: 300, rawPath: () => options.raw ?? false,
@@ -463,27 +463,34 @@ processTest('final output (plan T35b): a terminate during an overload rebuild en
   }
 }, 60_000)
 
-processTest('the replica against tmux (plan T37): an injected width difference is caught at a quiet point, rebuilt from tmux once, and logged without contents', async () => {
+processTest('the replica against tmux (plan T37): an injected width difference is caught at a quiet point and rebuilt from tmux, logged without contents; another within the window is left alone, and one after it is rebuilt', async () => {
   const root = mkdtempSync(join(tmpdir(), 'bakin-replica-cursor-'))
-  const h = await harness(root)
+  let clock = 0
+  const h = await harness(root, { processes: { now: () => clock, cursorCheckMs: 200 } })
   try {
     await until(() => Boolean(h.driver.replica(h.session.id)?.cut()), 'seeded')
     const replica = h.driver.replica(h.session.id)!
+    const rebuilt = (count: number) => (replica.stats.rebuilds.divergence ?? 0) === count && !replica.rebuildCause && Boolean(replica.cut())
     // A test-only table entry: the replica takes é as two cells, tmux as one.
     TEST_WIDTH_ENTRIES.set(0xe9, 2)
-    await h.type("printf 'caf\\303\\251 %s%s' sec ret; sleep 30\r")
-    await until(() => (replica.stats.rebuilds.divergence ?? 0) > 0, 'caught and rebuilt', 20_000)
+    await h.type("printf 'caf\\303\\251 %s%s' sec ret; sleep 60\r")
+    // Caught, and the rebuild's seed committed (a joinable picture again).
+    await until(() => rebuilt(1), 'caught and rebuilt', 20_000)
     const entry = h.logs.find((log) => log.message === 'Terminal replica differs from tmux; rebuilding')!
     expect(entry.data).toMatchObject({ category: 'cursor column' })
     // Positions and sizes only: nothing printed travels in the log.
     expect(JSON.stringify(entry.data)).not.toContain('secret')
     expect(JSON.stringify(entry.data)).not.toContain('caf')
-    // Bounded: the rebuilt replica still disagrees (the entry is still there), but is not rebuilt again within the window.
-    await Bun.sleep(7000)
+    // Another disagreement within the window (the rebuilt replica parses tmux's é again, then one more): left alone.
+    await h.service.command(['send-keys', '-t', h.session.id, '-l', 'é'])
+    await Bun.sleep(1500)
     expect(replica.stats.rebuilds.divergence).toBe(1)
+    // Past the window: rebuilt again.
+    clock += 10 * 60 * 1000 + 1
+    await until(() => rebuilt(2), 'rebuilt after the window', 20_000)
   } finally {
     TEST_WIDTH_ENTRIES.clear()
     await h.close()
     rmSync(root, { recursive: true, force: true })
   }
-}, 60_000)
+}, 90_000)
