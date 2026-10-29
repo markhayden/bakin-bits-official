@@ -12,6 +12,7 @@ import { tmuxConfig, VERIFIED_OPTIONS } from '../lib/tmux-config'
 import headless from '@xterm/headless'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from '../lib/terminal-profile'
 import type { Term } from '../lib/terminal-state'
+import { decodeBundle, type Bundle } from '../lib/bundle'
 
 // Spec D13 / T32c against the managed tmux: the shadow replica beside the
 // bridge. Run with TERMINAL_PROCESS_TEST=1 TERMINAL_TMUX=~/.bakin/bin/tmux.
@@ -376,3 +377,57 @@ processTest("width changes install tmux's geometry: rapid resizes converge, the 
     rmSync(root, { recursive: true, force: true })
   }
 }, 40_000)
+
+/** A bundle's picture as text: its checkpoint, then its tail, in a fresh profile terminal. */
+async function bundleText(bundle: Bundle): Promise<string> {
+  const { checkpoint, tail } = bundle.cut
+  const term = new headless.Terminal({ cols: checkpoint.cols, rows: checkpoint.rows, ...TERMINAL_OPTIONS, scrollback: checkpoint.scrollback })
+  applyTerminalProfile(term).setLive(false)
+  const write = (data: string | Uint8Array) => new Promise<void>((resolve) => term.write(data, resolve))
+  for (const piece of checkpoint.data) await write(piece)
+  for (const event of tail) {
+    if (event.kind === 'output') await write(event.bytes)
+    if (event.kind === 'layout') term.resize(event.cols, event.rows)
+  }
+  let text = ''
+  for (let y = 0; y < term.buffer.active.length; y++) text += term.buffer.active.getLine(y)!.translateToString(true) + '\n'
+  term.dispose()
+  return text
+}
+
+processTest('final output (plan T35b): a terminate right after the last output, and a natural exit, save it; a lost control client with the pane alive is a recovery, not an end', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bakin-replica-final-'))
+  const h = await harness(root)
+  const store = (h.manager as unknown as { store: Store }).store
+  const capture = () => h.service.command(['capture-pane', '-p', '-t', h.session.id])
+  try {
+    await until(() => Boolean(h.driver.replica(h.session.id)?.cut()), 'seeded')
+    // A lost control client: the session runs on, nothing is saved (D4).
+    const control = (await h.service.command(['list-clients', '-t', h.session.id, '-F', '#{client_control_mode} #{client_name}'])).split('\n').find((line) => line.startsWith('1 '))!.slice(2)
+    await h.service.command(['detach-client', '-t', control])
+    await h.manager.refreshStates()
+    expect(h.manager.get(h.session.id, human)).toMatchObject({ state: 'running', outputSaved: false })
+    expect(store.bundle(h.session.id)).toBeUndefined()
+    await until(async () => { try { await h.manager.readScreen(h.session.id, human); return true } catch { return false } }, 'recovered')
+    // The last output, then terminate at once: the drain to a control reply takes it into the bundle.
+    await h.type("printf '%s-%s\\n' last before-kill; sleep 30\r")
+    await until(async () => (await capture()).includes('last-before-kill'), 'printed')
+    const taken = await h.manager.control(h.session.id, human, 'take')
+    const ended = await h.manager.finish(h.session.id, human, taken.generation, true)
+    expect(ended).toMatchObject({ state: 'completed', outputSaved: true })
+    const bundle = decodeBundle(store.bundle(h.session.id)!)!
+    expect(bundle).toMatchObject({ cols: 100, rows: 30, fidelity: { recoveries: 1 } })
+    expect(await bundleText(bundle)).toContain('last-before-kill')
+    // A second session whose program exits right after its last output.
+    let sequence = 0
+    const other = await h.manager.create({ title: 'Exits', cwd: root }, human, { cols: 100, rows: 30, kind: 'browser', device: 'desktop' })
+    await until(() => Boolean(h.driver.replica(other.id)?.cut()), 'other seeded')
+    await h.manager.write(other.id, human, other.generation, ++sequence, "printf '%s-%s\\n' last before-exit; exit\r")
+    await until(async () => { await h.manager.refreshStates(); return h.manager.get(other.id, human).state === 'exited' }, 'exited')
+    expect(h.manager.get(other.id, human).outputSaved).toBe(true)
+    expect(await bundleText(decodeBundle(store.bundle(other.id)!)!)).toContain('last-before-exit')
+  } finally {
+    await h.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 60_000)

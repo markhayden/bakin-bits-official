@@ -1,9 +1,10 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, describe, expect, it, test } from 'bun:test'
 import { Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
 import { DAY, type Session } from '../lib/contracts'
 import type { NativeClient, ProcessDriver } from '../lib/processes'
-import { Replica } from '../lib/replica'
+import { Replica, type Cut } from '../lib/replica'
+import { decodeBundle } from '../lib/bundle'
 
 const managers: Sessions[] = []
 afterEach(async () => { for (const manager of managers.splice(0)) await manager.shutdown() })
@@ -20,6 +21,9 @@ function fixture(options: { raw?: boolean } = {}) {
   /** Sessions whose control client closed while the bridge stays; every attach, in order. */
   const controlLost = new Set<string>()
   const attaches: string[] = []
+  /** Each final picture asked for, in order with terminations; what the next one gives (a cut, none, or a throw). */
+  const finals: string[] = []
+  const finalCut: { next: () => Promise<Cut | undefined> } = { next: async () => undefined }
   let releasable = false
   let writeFailure: Error | undefined
   let resizeFailure: Error | undefined
@@ -41,7 +45,8 @@ function fixture(options: { raw?: boolean } = {}) {
     resize: async (id, cols, rows) => { if (resizeFailure) { tmuxSizes.set(id, { cols: 77, rows: 22 }); throw resizeFailure } tmuxSizes.set(id, { cols, rows }) },
     windowSize: async (id) => { if (readBackFailure) throw readBackFailure; return tmuxSizes.get(id)! },
     title: async () => {}, alive: async (id) => live.has(id), screen: async () => '',
-    terminate: async (id) => { terminated.push(id); live.delete(id) }, inUse: async () => false, detach: async (id) => { if (id) attached.delete(id); else attached.clear() },
+    terminate: async (id) => { terminated.push(id); finals.push(`terminate ${id}`); live.delete(id) },
+    finalCut: async (id, options) => { finals.push(`final ${id} boundary=${options.boundary}`); return finalCut.next() }, inUse: async () => false, detach: async (id) => { if (id) attached.delete(id); else attached.clear() },
     // Like tmux: a client in `vanishing` is listed once, then gone before anyone acts on it.
     clients: async (id) => {
       const listed = natives.get(id) ?? []
@@ -61,7 +66,8 @@ function fixture(options: { raw?: boolean } = {}) {
     forget: (id) => { forgotten.push(id) },
   }
   const releases: Array<{ sessionId: string; worktreePath: string; teardown?: boolean }> = []
-  const manager = new Sessions(new Store(':memory:'), driver, {
+  const store = new Store(':memory:')
+  const manager = new Sessions(store, driver, {
     settings: () => ({ enabledAgents: enabled }), now: () => now,
     prepare: async () => ({ ok: false }),
     release: async (input) => { releases.push(input); return releasable ? { ok: true } : { ok: false, error: 'Unmerged work' } },
@@ -69,7 +75,7 @@ function fixture(options: { raw?: boolean } = {}) {
   })
   managers.push(manager)
   return {
-    manager, writes, live, attached, terminated, forgotten, bridgeLost, controlLost, attaches, releases, outputs, natives, detachedClients, vanishing, replicas,
+    manager, store, writes, live, attached, terminated, forgotten, bridgeLost, controlLost, attaches, finals, finalCut, releases, outputs, natives, detachedClients, vanishing, replicas,
     /** A terminal app attaches (or resizes) in tmux; the control client notices. */
     nativeAttach: async (id: string, client: NativeClient) => {
       natives.set(id, [...(natives.get(id) ?? []).filter((entry) => entry.pid !== client.pid), client])
@@ -783,4 +789,50 @@ test('raw path: readScreen takes the screen, the grid and the size revision from
   await replica.event({ seq: seq + 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 90, rows: 30, reason: 'test', history: true })
   expect(await manager.readScreen(session.id, human)).toMatchObject({ cols: 90, rows: 30, sizeRevision: 2 })
   replica.close()
+})
+
+describe('final output (plan T35b)', () => {
+  const picture = async () => {
+    const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+    await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bclast words'), cols: 64, rows: 20, reason: 'test', history: true })
+    const cut = replica.cut()!
+    replica.close()
+    return cut
+  }
+  it('a new session expects a bundle; terminate saves it before the kill, from a drain to a control reply', async () => {
+    const { manager, finals, finalCut, store } = fixture()
+    const session = await manager.create({ title: 'Ends', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    expect(session.outputSaved).toBe(false)
+    const cut = await picture()
+    finalCut.next = async () => cut
+    const taken = await manager.control(session.id, human, 'take')
+    const ended = await manager.finish(session.id, human, taken.generation, true)
+    expect(finals).toEqual([`final ${session.id} boundary=true`, `terminate ${session.id}`])
+    expect(ended).toMatchObject({ state: 'completed', outputSaved: true })
+    expect(decodeBundle(store.bundle(session.id)!)?.cut).toEqual(cut)
+  })
+  it('no picture in time, or a failed save, records output not saved and never blocks the termination', async () => {
+    for (const next of [async () => undefined, async () => { throw new Error('disk full') }]) {
+      const { manager, finals, finalCut, store } = fixture()
+      const session = await manager.create({ title: 'Ends', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+      finalCut.next = next
+      const taken = await manager.control(session.id, human, 'take')
+      const ended = await manager.finish(session.id, human, taken.generation, true)
+      expect(finals.at(-1)).toBe(`terminate ${session.id}`)
+      expect(ended).toMatchObject({ state: 'completed', outputSaved: false })
+      expect(store.bundle(session.id)).toBeUndefined()
+    }
+  })
+  it("the program's exit saves it once (the pane stays), and completing the session later saves nothing more", async () => {
+    const { manager, finals, finalCut, live, store } = fixture()
+    const session = await manager.create({ title: 'Exits', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    const cut = await picture()
+    finalCut.next = async () => cut
+    live.delete(session.id)
+    await manager.refreshStates()
+    expect(manager.get(session.id, human)).toMatchObject({ state: 'exited', outputSaved: true })
+    expect(decodeBundle(store.bundle(session.id)!)?.cut).toEqual(cut)
+    await manager.finish(session.id, human, manager.get(session.id, human).generation, false)
+    expect(finals.filter((entry) => entry.startsWith('final'))).toHaveLength(1)
+  })
 })

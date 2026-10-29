@@ -8,6 +8,7 @@ import type { Fidelity, RawSource } from './raw-display'
 import { Screen } from './screen'
 import { screenView, shadowDiff } from './shadow'
 import { Store } from './store'
+import { encodeBundle, makeBundle } from './bundle'
 import { visibleText } from './terminal-state'
 
 interface WorktreeResult { ok: boolean; error?: string; worktreePath?: string }
@@ -47,6 +48,8 @@ export interface SessionOptions {
 
 /** Bridge output quiet for this long is a point where the shadow replica and the bridge should agree. */
 export const SHADOW_QUIET_MS = 1000
+/** How long an ending session's final picture may take (a drain, or a rebuild's seed) before its output is recorded as not saved. */
+export const FINAL_CUT_MS = 3000
 /** Mismatches are logged at most once per session in this window (each is counted). */
 export const SHADOW_LOG_MS = 10 * 60 * 1000
 /** What shadow mode has seen for a session. */
@@ -153,6 +156,8 @@ export class Sessions {
         if (session.state === 'running' && !await this.driver.alive(session.id)) {
           session.state = 'exited'
           this.forgetNatives(session.id)
+          // The pane stays (remain-on-exit): what the program printed last is in the replica.
+          await this.saveFinal(session)
           this.save(session)
         }
       }
@@ -294,6 +299,8 @@ export class Sessions {
         generation: 1, inputSequence: 0, state: 'running',
         ...this.startSize(principal, size),
         createdAt: this.now(), lastActivityAt: this.now(),
+        // Its final output is a bundle once it ends (plan T35b); a crash before that leaves this false.
+        outputSaved: false,
       }
       if ((input.checkout ?? (input.program === 'shell' ? 'existing' : 'isolated')) === 'isolated') {
         await this.sweepUnlocked()
@@ -671,6 +678,8 @@ export class Sessions {
       if (session.state === 'completed') return session
       const alive = await this.driver.alive(id)
       if (alive && !terminate) throw new TerminalError('The process is still running; exit it or explicitly terminate it first')
+      // The final output before the kill; a failed save never blocks it (a retained pane leaks).
+      await this.saveFinal(session)
       await this.driver.terminate(id)
       await this.stopScreen(id)
       this.forgetNatives(id)
@@ -680,6 +689,24 @@ export class Sessions {
       await this.clean(session)
       return session
     })
+  }
+  /**
+   * Persist an ending session's final output (plan T35b): the replica's
+   * picture after a drain (to a control reply while the control client is
+   * connected), bounded by FINAL_CUT_MS, as one atomic bundle row. Never
+   * throws: no picture in time, or a failed write, is `outputSaved: false`.
+   * The caller saves the session record.
+   */
+  private async saveFinal(session: Session): Promise<void> {
+    if (session.outputSaved) return
+    try {
+      const cut = await this.driver.finalCut?.(session.id, { boundary: this.driver.controlConnected?.(session.id) ?? false, timeoutMs: FINAL_CUT_MS })
+      if (cut) this.store.saveBundle(session.id, encodeBundle(makeBundle(cut, this.fidelity(session.id), this.now())))
+      session.outputSaved = Boolean(cut)
+    } catch (error) {
+      this.options.log?.info('Terminal final output was not saved', { sessionId: session.id, error: error instanceof Error ? error.message : String(error) })
+      session.outputSaved = false
+    }
   }
   async screen(id: string, principal: Principal): Promise<{ session: Session; data: string; cursor: number }> {
     const screen = await this.ensureScreen(id, principal)

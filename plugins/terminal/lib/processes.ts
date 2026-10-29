@@ -7,7 +7,7 @@ import { ControlClient } from './control'
 import { EVENT_OVERHEAD_BYTES } from './memory'
 import { OutputLog, parseLayoutChange } from './output-log'
 import type { Fidelity } from './raw-display'
-import { Replica, type SizeRevision } from './replica'
+import { Replica, type Cut, type SizeRevision } from './replica'
 import { reseed } from './reseed'
 import { stripPasteMarkers } from './paste'
 import { TerminalService, terminalEnvironment } from './service'
@@ -53,6 +53,14 @@ export interface ProcessDriver {
   replica?(id: string): Replica | undefined
   /** The rebuilds the session's output has been through (outlives replica replacement, kept until `forget`). */
   fidelity?(id: string): Fidelity
+  /**
+   * The replica's picture as the session ends (plan T35b): with `boundary`,
+   * every output tmux sent before a control reply (the control client must be
+   * connected); then every event already received parsed; a replica rebuilding
+   * meanwhile is given until `timeoutMs` for its seed. Undefined when there is
+   * none in time (no replica, ended, still rebuilding).
+   */
+  finalCut?(id: string, options: { boundary: boolean; timeoutMs: number }): Promise<Cut | undefined>
   /** The session record is gone: drop what the driver kept for it. */
   forget?(id: string): void
   /** What the attached sessions' replicas and event logs hold (lib/memory.ts). Steps: run it sliced. */
@@ -189,6 +197,31 @@ export class TmuxProcesses implements ProcessDriver {
   outputLog(id: string): OutputLog | undefined { return this.logs.get(id) }
   fidelity(id: string): Fidelity { return this.fidelities.get(id) ?? { rebuilds: {} } }
   forget(id: string): void { this.fidelities.delete(id); this.revisions.delete(id); this.fresh.delete(id) }
+  async finalCut(id: string, options: { boundary: boolean; timeoutMs: number }): Promise<Cut | undefined> {
+    const deadline = performance.now() + options.timeoutMs
+    const replica = this.replicas.get(id)
+    const log = this.logs.get(id)
+    if (!replica || replica.ended || !log) return undefined
+    const control = this.controls.get(id)
+    if (options.boundary && control && !control.isClosed) {
+      // A reply comes after every %output tmux sent before it: the log then holds all of it.
+      const boundary = control.command(['display-message', '-p', '']).then(() => true, () => false)
+      const late = new Promise<false>((resolve) => setTimeout(() => resolve(false), Math.max(0, deadline - performance.now())))
+      if (!await Promise.race([boundary, late])) return undefined
+    }
+    log.flush()
+    // Every event received is parsed (a rebuild meanwhile lands its seed, or the deadline passes).
+    while (performance.now() < deadline) {
+      if (replica.ended) return undefined
+      if (log.pendingEvents === 0) {
+        await replica.idle()
+        const cut = replica.cut()
+        if (cut && log.pendingEvents === 0) return cut
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    return undefined
+  }
   replica(id: string): Replica | undefined {
     const replica = this.replicas.get(id)
     return replica?.ended ? undefined : replica
