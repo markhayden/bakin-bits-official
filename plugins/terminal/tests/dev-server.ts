@@ -102,7 +102,7 @@ const server = Bun.serve<ViewerData>({
         const path = url.pathname.slice('/api/plugins/terminal'.length)
         if (path === '/options') return Response.json({ agents: [{ id: 'patch', name: 'Patch', enabled: true, workspace: '/tmp' }, { id: 'chef', name: 'Chef', enabled: false }], tasks: [{ id: 'task-1', title: 'Terminal development', agentId: 'patch', projectId: 'project-1' }], defaults: { cwd: process.cwd(), agentId: 'patch' } })
         if (path === '/directories') {
-          const listing = listDirectories(url.searchParams.get('path') ?? undefined, { hidden: url.searchParams.get('hidden') === '1' })
+          const listing = await listDirectories(url.searchParams.get('path') ?? undefined, { hidden: url.searchParams.get('hidden') === '1', filter: url.searchParams.get('filter') ?? undefined })
           return Response.json({ ...listing, recent: recentDirectories(manager.list(principal)) })
         }
         if (path === '/sessions' && request.method === 'GET') {

@@ -14,33 +14,41 @@ symlinkSync(join(root, 'nowhere'), join(root, 'dangling'))
 chmodSync(join(root, 'locked'), 0o000)
 
 describe('listDirectories (the New terminal folder picker)', () => {
-  it('lists only folders (and links to folders), sorted without regard to case, hidden ones only when asked', () => {
-    const listed = listDirectories(root)
+  it('lists only folders (and links to folders), sorted without regard to case, hidden ones only when asked', async () => {
+    const listed = await listDirectories(root)
     expect(listed.path).toBe(root)
     expect(listed.entries.map((entry) => entry.name)).toEqual(['Alpha', 'beta', 'gamma', 'linked', 'locked'])
-    expect(listDirectories(root, { hidden: true }).entries.map((entry) => entry.name)).toContain('.hidden')
+    expect((await listDirectories(root, { hidden: true })).entries.map((entry) => entry.name)).toContain('.hidden')
     expect(listed.parent).toBe(join(root, '..').replace(/\/$/, '') === root ? undefined : realpathSync(join(root, '..')))
   })
-  it('resolves the path it was given (a link, a trailing slash, ..) and defaults to home', () => {
-    expect(listDirectories(join(root, 'linked/')).path).toBe(join(root, 'gamma'))
-    expect(listDirectories(join(root, 'beta', '..')).path).toBe(root)
+  it('resolves the path it was given (a link, a trailing slash, ..) and defaults to home', async () => {
+    expect((await listDirectories(join(root, 'linked/'))).path).toBe(join(root, 'gamma'))
+    expect((await listDirectories(join(root, 'beta', '..'))).path).toBe(root)
     // No path: home (given here; a test harness's own home may not exist).
-    expect(listDirectories(undefined, { home: join(root, 'beta') }).path).toBe(join(root, 'beta'))
-    expect(listDirectories('  ', { home: join(root, 'beta') }).path).toBe(join(root, 'beta'))
-    expect(listDirectories('/').parent).toBeUndefined()
+    expect((await listDirectories(undefined, { home: join(root, 'beta') })).path).toBe(join(root, 'beta'))
+    expect((await listDirectories('  ', { home: join(root, 'beta') })).path).toBe(join(root, 'beta'))
+    expect((await listDirectories('/')).parent).toBeUndefined()
   })
-  it('refuses a relative path, a file, a missing folder and an unreadable one, by name', () => {
-    expect(() => listDirectories('relative/path')).toThrow('must be absolute')
-    expect(() => listDirectories(join(root, 'a-file.txt'))).toThrow('is not a folder')
-    expect(() => listDirectories(join(root, 'missing'))).toThrow('does not exist')
-    expect(() => listDirectories(join(root, 'locked'))).toThrow('cannot be read')
+  it('refuses a relative path, a file, a missing folder and an unreadable one, by name', async () => {
+    await expect(listDirectories('relative/path')).rejects.toThrow('must be absolute')
+    await expect(listDirectories(join(root, 'a-file.txt'))).rejects.toThrow('is not a folder')
+    await expect(listDirectories(join(root, 'missing'))).rejects.toThrow('does not exist')
+    await expect(listDirectories(join(root, 'locked'))).rejects.toThrow('cannot be read')
   })
-  it('is bounded: a huge folder lists the first DIRECTORY_LIMIT and says it was cut', () => {
+  it('is bounded: a huge folder lists the first DIRECTORY_LIMIT and says it was cut', async () => {
     const big = join(root, 'big')
     mkdirSync(big)
     for (let n = 0; n < DIRECTORY_LIMIT + 5; n++) mkdirSync(join(big, `d${String(n).padStart(4, '0')}`))
-    const listed = listDirectories(big)
+    const listed = await listDirectories(big)
     expect(listed.entries).toHaveLength(DIRECTORY_LIMIT)
+    expect(listed.truncated).toBe(true)
+    // The filter runs before the cap: the last folder is still reachable.
+    const last = `d${String(DIRECTORY_LIMIT + 4).padStart(4, '0')}`
+    expect((await listDirectories(big, { filter: last })).entries.map((entry) => entry.name)).toEqual([last])
+  })
+  it('reads at most its scan budget of entries, and says the listing was cut', async () => {
+    const listed = await listDirectories(join(root, 'big'), { scanLimit: 10 })
+    expect(listed.entries.length).toBeLessThanOrEqual(10)
     expect(listed.truncated).toBe(true)
   })
 })

@@ -75,7 +75,10 @@ agent/project links. Manually edited titles and directories are preserved.
 **Browse…** beside the working directory lists this Mac's folders (a browser's
 own picker can only name files on the device it runs on): open folders, go up,
 filter, show hidden ones, and pick from recent session folders; **Use this
-folder** fills the field. It lists folder names only, for the operator only.
+folder** fills the field (it waits while a folder is still loading). It lists
+folder names only (never files), filters on the server before its 500-folder
+cap, and is guarded like Terminal's other browser routes (same origin, a
+Terminal client id): not a barrier against other programs running as you.
 
 Task/project links are optional. Task IDs are checked against the task service;
 project IDs are navigation metadata, not ownership or cleanup authority. A

@@ -72,7 +72,8 @@ browserTest('the folder picker browses this machine\'s folders and fills the wor
     await dialog.getByRole('switch', { name: 'Show hidden folders' }).click()
     await folders.getByRole('button', { name: 'Open .secret' }).waitFor()
     await dialog.getByRole('textbox', { name: 'Filter folders' }).fill('bet')
-    await dialog.getByRole('list', { name: 'Folders' }).getByRole('button', { name: 'Open beta' }).waitFor()
+    // The server filters (after a short pause in typing): wait for the narrowed list.
+    await dialog.getByRole('button', { name: 'Open alpha' }).waitFor({ state: 'detached' })
     expect(await dialog.getByRole('list', { name: 'Folders' }).getByRole('button').count()).toBe(1)
     // In, up, in again, and use it.
     await dialog.getByRole('button', { name: 'Open beta' }).click()
@@ -93,6 +94,60 @@ browserTest('the folder picker browses this machine\'s folders and fills the wor
     await dialog.getByRole('button', { name: 'Back', exact: true }).click()
     expect(await directory.inputValue()).toBe(join(root, 'missing'))
   } finally {
+    await browser.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 40000)
+
+browserTest('the folder picker: no choice while a folder loads, a failed folder can be retried, and the filter reaches past the first 500', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'bakin-terminal-picker-')))
+  mkdirSync(join(root, 'slow'))
+  mkdirSync(join(root, 'flaky'))
+  for (let n = 0; n < 505; n++) mkdirSync(join(root, 'many', `d${String(n).padStart(4, '0')}`), { recursive: true })
+  const browser = await launchChromium()
+  const page = await browser.newPage({ viewport: { width: 1100, height: 800 } })
+  const held: { release?: () => void } = {}
+  const state = { flakyFails: 1 }
+  try {
+    await page.route('**/api/plugins/terminal/options', (route) => route.fulfill({ json: { agents: [], tasks: [], defaults: { cwd: root, agentId: '' } } }))
+    await page.route('**/api/plugins/projects/', (route) => route.fulfill({ json: { projects: [] } }))
+    await page.route('**/api/plugins/terminal/directories?*', async (route) => {
+      const path = new URL(route.request().url()).searchParams.get('path')
+      if (path === join(root, 'slow')) await new Promise<void>((resolve) => { held.release = resolve })
+      if (path === join(root, 'flaky') && state.flakyFails-- > 0) return route.fulfill({ status: 503, json: { error: 'The disk is busy.' } })
+      await route.continue()
+    })
+    await page.goto(process.env.TERMINAL_PREVIEW_URL!)
+    await page.getByRole('button', { name: 'New terminal' }).first().click()
+    const dialog = page.getByRole('dialog')
+    await page.waitForFunction((value) => [...document.querySelectorAll('input')].some((input) => input.value === value), root)
+    await dialog.getByRole('button', { name: 'Browse…' }).click()
+    const use = dialog.getByRole('button', { name: 'Use this folder' })
+    // While "slow" loads, the folder shown is not choosable (it is not the one asked for).
+    await dialog.getByRole('button', { name: 'Open slow' }).click()
+    await page.waitForFunction(() => [...document.querySelectorAll('button')].find((button) => button.textContent === 'Use this folder')?.disabled === true)
+    expect(await dialog.getByText(`Uses ${root}`).count()).toBe(0)
+    held.release?.()
+    await dialog.getByText(`Uses ${join(root, 'slow')}`).waitFor()
+    expect(await use.isEnabled()).toBe(true)
+    // A failed folder says why and can be retried (the same place, asked again).
+    await dialog.getByRole('button', { name: 'Up to the parent folder' }).click()
+    await dialog.getByText(`Uses ${root}`).waitFor()
+    await dialog.getByRole('button', { name: 'Open flaky' }).click()
+    await dialog.getByText('The disk is busy.').waitFor()
+    await dialog.getByRole('button', { name: 'Retry' }).click()
+    await dialog.getByText(`Uses ${join(root, 'flaky')}`).waitFor()
+    expect(await dialog.getByText('The disk is busy.').count()).toBe(0)
+    // Past the first 500: the server filters before its cap.
+    await dialog.getByRole('button', { name: 'Up to the parent folder' }).click()
+    await dialog.getByRole('button', { name: 'Open many' }).click()
+    await dialog.getByText('Showing the first 500 folders; filter to narrow them.').waitFor()
+    await dialog.getByRole('textbox', { name: 'Filter folders' }).fill('d0504')
+    await dialog.getByRole('button', { name: 'Open d0504' }).waitFor()
+    await dialog.getByRole('button', { name: 'Open d0000' }).waitFor({ state: 'detached' })
+    expect(await dialog.getByRole('list', { name: 'Folders' }).getByRole('button').count()).toBe(1)
+  } finally {
+    held.release?.()
     await browser.close()
     rmSync(root, { recursive: true, force: true })
   }

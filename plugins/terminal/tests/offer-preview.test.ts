@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { offerCaption, offerPreview } from '../components/terminal-canvas'
+import { offerCaption, offerPreview } from '../lib/offer-preview'
 
 describe('a clipboard offer, said plainly', () => {
   it('previews its first line with text, never a blank one', () => {

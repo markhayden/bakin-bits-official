@@ -49,7 +49,7 @@ export default definePlugin({
     route('/directories', 'GET', "List one folder's subfolders for the New terminal folder picker", async (request) => {
       const principal = human(request)
       const url = new URL(request.url)
-      const listing = listDirectories(url.searchParams.get('path') ?? undefined, { hidden: url.searchParams.get('hidden') === '1' })
+      const listing = await listDirectories(url.searchParams.get('path') ?? undefined, { hidden: url.searchParams.get('hidden') === '1', filter: url.searchParams.get('filter') ?? undefined })
       return Response.json({ ...listing, recent: recentDirectories(sessions().list(principal)) })
     }),
     route('/sessions', 'GET', 'List terminal sessions', async (request) => {

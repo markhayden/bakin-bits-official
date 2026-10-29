@@ -11,6 +11,7 @@ import type { Fidelity } from '../lib/raw-display'
 import type { UnavailableReason } from '../lib/socket'
 import { installGeometry } from '../lib/geometry'
 import { routeScroll } from './scroll-route'
+import { offerCaption, offerPreview } from '../lib/offer-preview'
 import { screenDigest } from '../lib/digest'
 import { clampSize } from '../lib/sizing'
 import { trackCursorVisibility } from '../lib/cursor-visibility'
@@ -27,16 +28,6 @@ import '@xterm/xterm/css/xterm.css'
 
 /** What the page asks of the canvas: "Fit to this device" claims the size; refit applies a new smallest-text choice. */
 export interface TerminalViewHandle { fitToDevice(): boolean; refit(): void }
-
-/** A program's clipboard offer, said plainly (it may be many lines, or begin with blank ones). */
-export function offerCaption(text: string): string {
-  const lines = text.split('\n').length
-  return lines > 1 ? `Text to copy · ${lines} lines` : 'Text to copy'
-}
-/** Its first line that has anything on it (blank lines would show nothing). */
-export function offerPreview(text: string): string {
-  return text.split('\n').find((line) => line.trim())?.trim() ?? '(blank)'
-}
 
 /** How long a copied offer shows its check before it goes (the kit CopyButton's own acknowledgement time). */
 const OFFER_DONE_MS = 1500
