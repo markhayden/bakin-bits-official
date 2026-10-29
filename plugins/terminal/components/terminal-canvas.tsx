@@ -80,6 +80,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   const rawPath = useRef(false)
   // Re-plan the sizing screen's grid (pane changes and acknowledged sizes both ask).
   const replan = useRef<() => void>(() => {})
+  /** Stops a touch fling and drops the scroll remainder (a deliberate return to Live). */
+  const gestureReset = useRef<() => void>(() => {})
 
   function screen(): HTMLElement | null { return element.current?.querySelector('.xterm-screen') ?? null }
   function paneBox(): { width: number; height: number } | undefined {
@@ -269,10 +271,12 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
           // Focusing the terminal to type goes back to the cursor (like ↓ Live).
           const typing = () => resumeFollow()
           textarea.addEventListener('focus', typing)
+          // However the view got into the history (xterm's scrollbar too), it stays paused there.
+          const scrolled = term.onScroll(() => { if (term.buffer.active.viewportY < term.buffer.active.baseY) pause(true) })
           terminal.current = term
           fit.current = fitAddon
           cursorVisibility.current = cursor
-          detach = () => { textarea.removeEventListener('focus', typing); disposeRenderer() }
+          detach = () => { textarea.removeEventListener('focus', typing); scrolled.dispose(); disposeRenderer() }
         },
         dispose() {
           active = false
@@ -473,12 +477,13 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   useEffect(() => { sentSize.current = '' }, [authority, session.sizeEpoch])
 
   // Pinch (two fingers, or Ctrl+wheel on a trackpad) sets this device's font.
-  // A vertical wheel or one-finger drag pans the grid where it overflows and
-  // scrolls xterm's history where there is history (components/scroll-route.ts,
+  // A vertical wheel or one-finger drag scrolls xterm's history when there is
+  // history to scroll, and pans the grid otherwise (components/scroll-route.ts,
   // plan T36); horizontal ones pan. Every one pauses cursor-follow. None of it
   // focuses the keyboard or sends input: wheels are always taken in the capture
   // phase, before xterm can turn them into mouse reports or (in full-screen
-  // programs) arrow keys, and history is scrolled here, never by xterm.
+  // programs) arrow keys; history is scrolled here, never by xterm; and a
+  // touch never becomes a mouse report (a mouse is the operator's own input).
   useEffect(() => {
     const el = pane.current
     if (!el) return
@@ -486,7 +491,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     let frame = 0
     let commit: ReturnType<typeof setTimeout> | undefined
     const distance = (touches: TouchList) => Math.hypot(touches[0]!.clientX - touches[1]!.clientX, touches[0]!.clientY - touches[1]!.clientY)
-    /** A vertical scroll of `delta` px, routed to the pane or the history; true when the history took part. */
+    /** A vertical scroll of `delta` px, routed to the history or the pane; false when nothing could move. */
     let carry = 0
     const scrollVertical = (delta: number): boolean => {
       const term = terminal.current
@@ -497,43 +502,77 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       carry = route.carry
       if (route.pan) el.scrollBy(0, route.pan)
       if (route.lines) term.scrollLines(route.lines)
-      // Anywhere above the live screen the view stays put (↓ Live comes back).
+      // Above the live screen the view stays put until a deliberate return (↓ Live).
       if (term.buffer.active.viewportY < term.buffer.active.baseY) pause(true)
       else if (route.pan) pause()
-      return route.lines !== 0
+      return Boolean(route.pan || route.lines || route.carry)
     }
-    /** Whether a one-finger vertical drag of `delta` belongs to the history (the native pan is left the rest). */
-    const historyTakes = (delta: number): boolean => {
+    const hasHistory = () => {
       const buffer = terminal.current?.buffer.active
-      if (!buffer || buffer.type === 'alternate') return false
-      const inHistory = buffer.viewportY < buffer.baseY
-      return inHistory || (delta < 0 && el.scrollTop <= 0 && buffer.viewportY > 0)
+      return Boolean(buffer && buffer.type !== 'alternate' && buffer.baseY > 0)
     }
-    let lastY: number | undefined
+    /**
+     * A one-finger drag: who owns it is decided on its first move (the only
+     * one whose cancel reliably stops the browser's own scroll) and kept to
+     * the end. A vertical drag with history is ours (history, then the pan,
+     * in one motion, with a fling); anything else is the browser's native pan.
+     */
+    let drag: { x: number; y: number; owner?: 'ours' | 'native'; samples: { at: number; dy: number }[] } | undefined
+    let fling = 0
+    const stopFling = () => { cancelAnimationFrame(fling); fling = 0 }
+    const startFling = (samples: { at: number; dy: number }[]) => {
+      const recent = samples.filter((sample) => sample.at >= performance.now() - 100)
+      if (recent.length < 2) return
+      let velocity = recent.reduce((sum, sample) => sum + sample.dy, 0) / Math.max(16, recent[recent.length - 1]!.at - recent[0]!.at)
+      let last = performance.now()
+      const step = (now: number) => {
+        const elapsed = now - last
+        last = now
+        velocity *= Math.pow(0.95, elapsed / 16)
+        fling = Math.abs(velocity) > 0.02 && scrollVertical(velocity * elapsed) ? requestAnimationFrame(step) : 0
+      }
+      if (Math.abs(velocity) > 0.2) fling = requestAnimationFrame(step)
+    }
+    gestureReset.current = () => { stopFling(); carry = 0 }
     const preview = (size: number) => {
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(() => setFont(size))
     }
     const start = (event: TouchEvent) => {
-      if (event.touches.length === 2) pinch = { distance: distance(event.touches), font: terminal.current?.options.fontSize ?? BASE_FONT }
-      lastY = event.touches.length === 1 ? event.touches[0]!.clientY : undefined
+      stopFling()
       carry = 0
+      drag = undefined
+      if (event.touches.length === 2) pinch = { distance: distance(event.touches), font: terminal.current?.options.fontSize ?? BASE_FONT }
+      else if (event.touches.length === 1) drag = { x: event.touches[0]!.clientX, y: event.touches[0]!.clientY, samples: [] }
     }
     const move = (event: TouchEvent) => {
       if (pinch && event.touches.length === 2) {
         event.preventDefault()
         pinch.next = pinchFont(pinch.font, pinch.distance, distance(event.touches), minFont())
         preview(pinch.next)
-      } else if (event.touches.length === 1) {
-        const y = event.touches[0]!.clientY
-        // The finger moving down shows what is above: a negative scroll.
-        const delta = lastY === undefined ? 0 : lastY - y
-        lastY = y
-        if (delta && historyTakes(delta)) { event.preventDefault(); scrollVertical(delta); return }
-        pause()
+        return
       }
+      if (!drag || event.touches.length !== 1) return
+      const { clientX: x, clientY: y } = event.touches[0]!
+      // The finger moving down shows what is above: a negative scroll.
+      const dx = drag.x - x
+      const dy = drag.y - y
+      drag.x = x
+      drag.y = y
+      if (!drag.owner) {
+        if (!dx && !dy) return
+        drag.owner = Math.abs(dy) >= Math.abs(dx) && hasHistory() ? 'ours' : 'native'
+      }
+      if (drag.owner === 'native') { pause(); return }
+      event.preventDefault()
+      if (dx) { el.scrollBy(dx, 0); pause() }
+      if (dy) scrollVertical(dy)
+      drag.samples.push({ at: performance.now(), dy })
+      if (drag.samples.length > 20) drag.samples.shift()
     }
     const end = (event: TouchEvent) => {
+      if (event.touches.length === 0 && drag?.owner === 'ours') startFling(drag.samples)
+      if (event.touches.length === 0) drag = undefined
       if (!pinch || event.touches.length >= 2) return
       // The last move may still be waiting for its frame: commit what it asked for.
       const size = pinch.next
@@ -544,6 +583,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       zoomTo(size)
     }
     const wheel = (event: WheelEvent) => {
+      stopFling()
       if (!event.ctrlKey) {
         // Always ours: xterm never sees a wheel (no mouse reports, no arrow keys, no history it scrolls itself).
         event.preventDefault()
@@ -562,24 +602,44 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     }
     const key = (event: KeyboardEvent) => { if (event.target === el && /^(Arrow|Page|Home|End)/.test(event.key)) pause() }
     // Pressing the pane itself (not the terminal) is a scrollbar drag.
-    const press = (event: PointerEvent) => { if (event.target === el) pause() }
+    let pointer = 'mouse'
+    const press = (event: PointerEvent) => {
+      pointer = event.pointerType
+      stopFling()
+      if (event.target === el) pause()
+    }
+    const hover = (event: PointerEvent) => { pointer = event.pointerType }
+    // The mouse events a browser makes from a tap reach a mouse-reporting
+    // program as clicks: they stop here (a tap still focuses the terminal).
+    const touchMouse = (event: MouseEvent) => {
+      const term = terminal.current
+      if (pointer !== 'touch' || !term || term.modes.mouseTrackingMode === 'none') return
+      event.stopPropagation()
+      if (event.type === 'mousedown') { event.preventDefault(); term.focus() }
+    }
     el.addEventListener('touchstart', start, { passive: true })
     el.addEventListener('touchmove', move, { passive: false })
     el.addEventListener('touchend', end)
     el.addEventListener('touchcancel', end)
     el.addEventListener('wheel', wheel, { passive: false, capture: true })
     el.addEventListener('keydown', key)
-    el.addEventListener('pointerdown', press)
+    el.addEventListener('pointerdown', press, { capture: true })
+    el.addEventListener('pointermove', hover, { capture: true })
+    for (const type of ['mousedown', 'mousemove', 'mouseup'] as const) el.addEventListener(type, touchMouse, { capture: true })
     return () => {
       cancelAnimationFrame(frame)
+      stopFling()
       clearTimeout(commit)
+      gestureReset.current = () => {}
       el.removeEventListener('touchstart', start)
       el.removeEventListener('touchmove', move)
       el.removeEventListener('touchend', end)
       el.removeEventListener('touchcancel', end)
       el.removeEventListener('wheel', wheel, { capture: true })
       el.removeEventListener('keydown', key)
-      el.removeEventListener('pointerdown', press)
+      el.removeEventListener('pointerdown', press, { capture: true })
+      el.removeEventListener('pointermove', hover, { capture: true })
+      for (const type of ['mousedown', 'mousemove', 'mouseup'] as const) el.removeEventListener(type, touchMouse, { capture: true })
     }
   }, [session.id, attempt])
 
@@ -615,7 +675,10 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   function resumeFollow() {
     callbacks.current.paused = false
     setPaused(false)
-    // Out of the history to the live screen (D10), then to the cursor.
+    // Out of the history to the live screen (D10), then to the cursor; a
+    // selection would inhibit following, so the deliberate return clears it.
+    gestureReset.current()
+    terminal.current?.clearSelection()
     terminal.current?.scrollToBottom()
     // After the browser has applied any layout change (the keyboard opening).
     requestAnimationFrame(followCursor)
