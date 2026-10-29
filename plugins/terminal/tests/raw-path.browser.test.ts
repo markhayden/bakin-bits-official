@@ -1074,3 +1074,37 @@ rawTest('clipboard offers (plan T36b): labelled and previewed by their first lin
     await browser.close()
   }
 }, 60_000)
+
+rawTest('Copy text: the session menu opens the terminal\'s text as page text (history and screen, wrapped lines whole); Copy all copies it exactly', async () => {
+  const browser = await launchChromium()
+  const client = 'raw-browser-copy-text-01'
+  const { page } = await recordingPage(browser, { viewport: { width: 390, height: 760 }, hasTouch: true, isMobile: true })
+  const { id } = await createSession(page, client)
+  try {
+    await open(page, id)
+    await typeLine(page, `clear; seq -f "row-%g" 1 300; printf '%s%s\\n' "$(printf 'w%.0s' $(seq 1 150))" END`)
+    await waitForRow(page, 'END$')
+    await page.getByRole('button', { name: 'Session actions' }).click()
+    await page.getByRole('menuitem', { name: 'Copy text…' }).click()
+    const sheet = page.getByRole('dialog', { name: 'Copy text' })
+    await sheet.waitFor()
+    await page.waitForFunction(() => { const panel = document.querySelector('[role=dialog]'); return Boolean(panel) && getComputedStyle(panel!).opacity === '1' && !panel!.hasAttribute('data-starting-style') })
+    await page.waitForTimeout(500)
+    await page.screenshot({ path: join(import.meta.dir, '../test-results/raw/copy-text-phone.png') })
+    const text = await sheet.locator('[data-slot="code-block"] code, [data-slot="code-block"] pre').first().textContent() ?? ''
+    // History back to the first row, and the long line whole (it wrapped on screen).
+    expect(text).toContain('row-1\nrow-2\n')
+    expect(text).toContain(`${'w'.repeat(150)}END`)
+    // Plain page text: the system's own selection works on it.
+    expect(await sheet.evaluate((element) => getComputedStyle(element.querySelector('[data-slot="code-block"]')!).userSelect)).not.toBe('none')
+    await sheet.getByRole('button', { name: 'Copy all terminal text' }).click()
+    const written = (await clipboard.writes(page))[0] ?? ''
+    expect(written.split('\n').filter((line) => line.startsWith('row-'))).toHaveLength(300)
+    expect(written).toContain(`${'w'.repeat(150)}END`)
+    await sheet.getByRole('button', { name: 'Close' }).first().click()
+    await sheet.waitFor({ state: 'detached' })
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 60_000)

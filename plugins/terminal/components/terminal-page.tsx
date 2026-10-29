@@ -5,7 +5,7 @@ import { Alert, AlertDescription, Badge, Banner, Button, Select, SelectContent, 
 import { PluginLink, useQueryState, useRouter } from '@makinbakin/sdk/navigation'
 import { formatAge } from '@makinbakin/sdk/utils'
 import { toast } from '@makinbakin/sdk/hooks'
-import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Terminal, RotateCw, Keyboard, Ruler, AppWindow } from 'lucide-react'
+import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Terminal, RotateCw, Keyboard, Ruler, AppWindow, ClipboardCopy } from 'lucide-react'
 import { attachCommand, shortId, type Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
 import { fidelityNotice, unavailableNotice } from '../lib/fidelity-notice'
@@ -19,6 +19,7 @@ import { INPUT_LIMIT_BYTES, NO_MODIFIERS, type ModifierState, type TerminalInput
 import { readDraft, writeDraft } from './compose-drafts'
 import type { PasteOutcome } from './compose-sheet'
 import { TerminalCanvas, type TerminalViewHandle } from './terminal-canvas'
+import { CopyTextSheet } from './copy-text-sheet'
 import { SizeControl } from './size-control'
 import { estimateTerminalSize } from './terminal-size'
 import type { InputResult, Presence } from './terminal-socket'
@@ -45,6 +46,9 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const [serviceUpdateRequired, setServiceUpdateRequired] = useState(false)
   // The service update's confirm dialog (the whole flow lives in it) and its own error.
   const [updating, setUpdating] = useState(false)
+  // Copy text: the terminal's text as it was when the sheet opened.
+  const [copying, setCopying] = useState(false)
+  const [copyText, setCopyText] = useState<{ text: string; lines: number }>()
   const [updateError, setUpdateError] = useState('')
   const applyTrigger = useRef<HTMLButtonElement>(null)
   /** Set by a successful update: its trigger goes with the banner, so focus goes to New terminal. */
@@ -419,6 +423,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
               </>}
             <SessionActions session={session} busy={busy} onOperate={(operation, id) => void operate(operation, {}, id)} onConfirm={setConfirm}>
                 <DropdownMenuSwitchItem checked={captureTab} onCheckedChange={setCaptureTab} disabled={session.historyDeleted}><Keyboard size={16} />Capture Tab</DropdownMenuSwitchItem>
+                <DropdownMenuItem disabled={session.historyDeleted || Boolean(missing)} onClick={() => { setCopyText(viewHandle.current?.text()); setCopying(true) }}><ClipboardCopy size={16} />Copy text…</DropdownMenuItem>
                 <DropdownMenuItem disabled={session.historyDeleted} onClick={() => setAttempt((value) => value + 1)}><RotateCw size={16} />Reconnect terminal</DropdownMenuItem>
                 <DropdownMenuItem disabled={busy} onClick={() => void saveDefaultSize(session)}><Ruler size={16} />Use this size as the default</DropdownMenuItem>
                 <DropdownMenuSeparator />
@@ -509,6 +514,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
       </Stack>
     </WorkspacePageBody>
   </WorkspacePage>}
+    <CopyTextSheet open={copying} text={copyText} onOpenChange={setCopying} />
     <NewSession open={creating} onOpenChange={setCreating} onCreated={(created) => { update(created); router.push(`/terminal/${encodeURIComponent(created.id)}`) }} />
     <ConfirmDialog open={confirm !== null} busy={busy} error={error || undefined} onCancel={() => setConfirm(null)}
       title={confirm?.operation === 'terminate' ? 'Terminate this session?' : confirm?.operation === 'delete' ? 'Delete this session?' : 'Delete output history?'}

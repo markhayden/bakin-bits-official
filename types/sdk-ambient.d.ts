@@ -1084,6 +1084,11 @@ declare module '@makinbakin/sdk/ui' {
   export const SelectValue: UIComponent
   export const Separator: UIComponent
   export const Sheet: UIComponent
+  export const SheetContent: UIComponent
+  export const SheetHeader: UIComponent
+  export const SheetTitle: UIComponent
+  export const SheetDescription: UIComponent
+  export const SheetFooter: UIComponent
   export const Skeleton: UIComponent
   export const Switch: UIComponent
   export const Table: UIComponent
@@ -1768,6 +1773,16 @@ declare module '@makinbakin/sdk/content' {
     renderInternalLink?: (props: MarkdownInternalLinkProps) => ReactNode
   }
   export const MarkdownContent: ComponentType<MarkdownContentProps>
+  export interface CodeBlockProps {
+    code: string
+    language?: 'json' | 'text' | string
+    label?: string
+    copyable?: boolean
+    onCopied?: () => void
+    wrap?: boolean
+    className?: string
+  }
+  export const CodeBlock: ComponentType<CodeBlockProps>
 
   export type MarkdownEditorFormat = 'markdown' | 'yaml' | 'json' | 'text'
   export type MarkdownEditorHeight = 'compact' | 'document' | 'viewport' | 'fill'

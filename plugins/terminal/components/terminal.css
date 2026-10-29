@@ -207,3 +207,15 @@
   [data-bakin-plugin="terminal"] .terminal-key-grid:not(.terminal-key-grid-labelled) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
+
+/* Copy text: the terminal's text scrolls between the sheet's fixed header and footer. */
+[data-bakin-plugin="terminal"] .terminal-copy-text-body,
+.terminal-copy-text-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-inline: var(--bakin-layout-space-6);
+  display: grid;
+  align-content: start;
+  gap: var(--bakin-layout-gap-dense);
+}

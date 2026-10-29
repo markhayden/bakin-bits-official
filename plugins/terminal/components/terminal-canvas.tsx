@@ -12,6 +12,7 @@ import type { UnavailableReason } from '../lib/socket'
 import { installGeometry } from '../lib/geometry'
 import { routeScroll } from './scroll-route'
 import { offerCaption, offerPreview } from '../lib/offer-preview'
+import { bufferText } from '../lib/buffer-text'
 import { screenDigest } from '../lib/digest'
 import { clampSize } from '../lib/sizing'
 import { trackCursorVisibility } from '../lib/cursor-visibility'
@@ -27,7 +28,12 @@ import { BASE_FONT, clampFont, fitWidthFont, minFont, pinchFont, resizePlan, rev
 import '@xterm/xterm/css/xterm.css'
 
 /** What the page asks of the canvas: "Fit to this device" claims the size; refit applies a new smallest-text choice. */
-export interface TerminalViewHandle { fitToDevice(): boolean; refit(): void }
+export interface TerminalViewHandle {
+  fitToDevice(): boolean
+  refit(): void
+  /** The terminal's text now (Copy text): history and screen, plain. */
+  text(): { text: string; lines: number }
+}
 
 /** How long a copied offer shows its check before it goes (the kit CopyButton's own acknowledgement time). */
 const OFFER_DONE_MS = 1500
@@ -356,6 +362,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       },
     }
     viewHandle.current = {
+      text: () => bufferText(bundle.term.buffer.active),
       fitToDevice() {
         const term = bundle.term
         const box = paneBox()
