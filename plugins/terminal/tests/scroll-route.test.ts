@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { routeScroll } from '../components/scroll-route'
+import { programSteps, routeScroll } from '../components/scroll-route'
 
 const fits = { scrollTop: 0, scrollHeight: 400, clientHeight: 400 }
 const tall = (scrollTop: number) => ({ scrollTop, scrollHeight: 1000, clientHeight: 400 })
@@ -41,5 +41,28 @@ describe('routeScroll (plan T36)', () => {
   it('the alternate screen has no history: it only pans', () => {
     expect(routeScroll(-100, tall(60), { viewportY: 0, baseY: 0, alternate: true }, cell)).toEqual({ pan: -60, lines: 0, carry: 0 })
     expect(routeScroll(-100, fits, { viewportY: 50, baseY: 50, alternate: true }, cell)).toEqual({ pan: 0, lines: 0, carry: 0 })
+  })
+})
+
+describe('programSteps (a program that scrolls itself: one report per row)', () => {
+  it('fractional rows lose no report (400 px over 15 rows, three lines at a time)', () => {
+    const cell = 400 / 15
+    let carry = 0
+    let total = 0
+    for (let n = 0; n < 5; n++) { const step = programSteps(-3 * cell, cell, carry); total += step.steps; carry = step.carry }
+    expect(total).toBe(-15)
+    expect(carry).toBe(0)
+  })
+  it('reversing keeps nothing of the other direction, and loses nothing either', () => {
+    const cell = 400 / 15
+    let carry = 0
+    let total = 0
+    for (let n = 0; n < 10; n++) { const step = programSteps((n % 2 ? 3 : -3) * cell, cell, carry); total += Math.abs(step.steps); carry = step.carry }
+    expect(total).toBe(30)
+  })
+  it('a partial row carries to the next event in the same direction', () => {
+    expect(programSteps(-15, 20)).toEqual({ steps: 0, carry: -0.75 })
+    expect(programSteps(-10, 20, -0.75)).toEqual({ steps: -1, carry: -0.25 })
+    expect(programSteps(10, 20, -0.75)).toEqual({ steps: 0, carry: 0.5 })
   })
 })

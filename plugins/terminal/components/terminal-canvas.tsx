@@ -10,7 +10,7 @@ import type { Session } from '../lib/contracts'
 import type { Fidelity } from '../lib/raw-display'
 import type { UnavailableReason } from '../lib/socket'
 import { installGeometry } from '../lib/geometry'
-import { routeScroll } from './scroll-route'
+import { programSteps, routeScroll } from './scroll-route'
 import { offerCaption, offerPreview } from '../lib/offer-preview'
 import { bufferText } from '../lib/buffer-text'
 import { screenDigest } from '../lib/digest'
@@ -601,11 +601,10 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       const rendered = screen()
       if (!term?.element || !rendered?.clientHeight) return
       pause()
-      const cell = rendered.clientHeight / term.rows
-      programCarry = Math.sign(programCarry) === Math.sign(pixels) ? programCarry + pixels : pixels
-      while (Math.abs(programCarry) >= cell) {
-        const step = Math.sign(programCarry)
-        programCarry -= step * cell
+      const counted = programSteps(pixels, rendered.clientHeight / term.rows, programCarry)
+      programCarry = counted.carry
+      for (let n = 0; n < Math.abs(counted.steps); n++) {
+        const step = Math.sign(counted.steps)
         // A desktop wheel's Alt (Meta) rides along: programs bind modified scrolling.
         const report = new WheelEvent('wheel', { deltaY: step, deltaMode: WheelEvent.DOM_DELTA_LINE, clientX: x, clientY: y, altKey: modifiers.altKey, metaKey: modifiers.metaKey, bubbles: true, cancelable: true })
         passing.add(report)
