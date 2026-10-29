@@ -13,6 +13,7 @@ import headless from '@xterm/headless'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from '../lib/terminal-profile'
 import type { Term } from '../lib/terminal-state'
 import type { Bundle } from '../lib/bundle'
+import { TEST_WIDTH_ENTRIES } from '../lib/unicode-widths'
 
 // Spec D13 / T32c against the managed tmux: the shadow replica beside the
 // bridge. Run with TERMINAL_PROCESS_TEST=1 TERMINAL_TMUX=~/.bakin/bin/tmux.
@@ -458,6 +459,31 @@ processTest('final output (plan T35b): a terminate during an overload rebuild en
     reopened.close()
   } finally {
     if (!closed) await h.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 60_000)
+
+processTest('the replica against tmux (plan T37): an injected width difference is caught at a quiet point, rebuilt from tmux once, and logged without contents', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bakin-replica-cursor-'))
+  const h = await harness(root)
+  try {
+    await until(() => Boolean(h.driver.replica(h.session.id)?.cut()), 'seeded')
+    const replica = h.driver.replica(h.session.id)!
+    // A test-only table entry: the replica takes é as two cells, tmux as one.
+    TEST_WIDTH_ENTRIES.set(0xe9, 2)
+    await h.type("printf 'caf\\303\\251 %s%s' sec ret; sleep 30\r")
+    await until(() => (replica.stats.rebuilds.divergence ?? 0) > 0, 'caught and rebuilt', 20_000)
+    const entry = h.logs.find((log) => log.message === 'Terminal replica differs from tmux; rebuilding')!
+    expect(entry.data).toMatchObject({ category: 'cursor column' })
+    // Positions and sizes only: nothing printed travels in the log.
+    expect(JSON.stringify(entry.data)).not.toContain('secret')
+    expect(JSON.stringify(entry.data)).not.toContain('caf')
+    // Bounded: the rebuilt replica still disagrees (the entry is still there), but is not rebuilt again within the window.
+    await Bun.sleep(7000)
+    expect(replica.stats.rebuilds.divergence).toBe(1)
+  } finally {
+    TEST_WIDTH_ENTRIES.clear()
+    await h.close()
     rmSync(root, { recursive: true, force: true })
   }
 }, 60_000)

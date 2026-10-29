@@ -124,6 +124,50 @@ export async function drainFinal(replica: Replica, log: OutputLog, boundary: (()
   }
 }
 
+/** How often a quiet replica's cursor is compared with tmux's (plan T37). */
+export const CURSOR_CHECK_MS = 5000
+/** Output quiet this long before the comparison. */
+export const CURSOR_QUIET_MS = 1000
+/** At most one cursor-driven rebuild per session in this long. */
+export const CURSOR_REBUILD_WINDOW_MS = 10 * 60 * 1000
+
+/** What tmux and the replica say at one position (no contents: positions and sizes only). */
+export interface CursorView { x: number; y: number; cols: number; rows: number; alternate: boolean }
+
+/**
+ * The replica against tmux at a quiet point (plan T37): tmux's cursor,
+ * size and screen, read in a control reply that follows every earlier
+ * %output (a position barrier), against the replica's once its cut is at
+ * exactly that position. Undefined when the position cannot be compared:
+ * no picture, a rebuild or width change pending, output arriving meanwhile.
+ */
+export async function compareCursor(replica: Replica, log: OutputLog, query: () => Promise<string>, timeoutMs = 1000): Promise<{ tmux: CursorView; replica: CursorView } | undefined> {
+  if (!replica.cut() || replica.geometryOwed) return undefined
+  const [x, y, cols, rows, alternate] = (await query()).trim().split(' ').map(Number) as [number, number, number, number, number]
+  log.flush()
+  const target = log.lastSeq
+  for (const deadline = performance.now() + timeoutMs; performance.now() < deadline; await new Promise((resolve) => setTimeout(resolve, 10))) {
+    const cut = replica.cut()
+    if (!cut || replica.ended || replica.geometryOwed) return undefined
+    // More output came after the reply: this position is gone.
+    if (cut.throughSeq > target) return undefined
+    if (cut.throughSeq < target) continue
+    const view = await replica.read((term) => ({ x: term.buffer.active.cursorX, y: term.buffer.active.cursorY, cols: term.cols, rows: term.rows, alternate: term.buffer.active.type === 'alternate' }))
+    if (!view || replica.cut()?.throughSeq !== target) return undefined
+    return { tmux: { x, y, cols, rows, alternate: alternate === 1 }, replica: view }
+  }
+  return undefined
+}
+
+/** The diagnostic category of a disagreement (never the line's contents). */
+export function cursorCategory(tmux: CursorView, replica: CursorView): string | undefined {
+  if (tmux.cols !== replica.cols || tmux.rows !== replica.rows) return 'size'
+  if (tmux.alternate !== replica.alternate) return 'screen'
+  if (tmux.y !== replica.y) return 'cursor row'
+  if (tmux.x !== replica.x) return 'cursor column'
+  return undefined
+}
+
 export class TmuxProcesses implements ProcessDriver {
   private bridges = new Map<string, ReturnType<typeof Bun.spawn>>()
   private pastesSwept = false
@@ -133,6 +177,9 @@ export class TmuxProcesses implements ProcessDriver {
   /** A detached session's size revision, for the replica its next attachment makes (until it is forgotten). */
   private revisions = new Map<string, SizeRevision>()
   private fidelities = new Map<string, Fidelity>()
+  /** Each attached session's cursor check (plan T37), and when one last rebuilt it. */
+  private cursorChecks = new Map<string, ReturnType<typeof setInterval>>()
+  private cursorRebuiltAt = new Map<string, number>()
   /** Sessions made by this process and not attached yet: their first replica starts with the pane, losing nothing. */
   private fresh = new Set<string>()
   constructor(private service: TerminalService, private log?: { info(message: string, data?: Record<string, unknown>): void }) {}
@@ -213,6 +260,7 @@ export class TmuxProcesses implements ProcessDriver {
     })
     log.attach(replica)
     this.replicas.set(session.id, replica)
+    this.watchCursor(session.id, replica, log, control)
     void control.ready.then(async () => {
       await control.command(['refresh-client', '-B', 'bakin-client::#{@bakin_client}'])
       await control.command(['refresh-client', '-B', 'bakin-dead::#{pane_dead}'])
@@ -231,7 +279,27 @@ export class TmuxProcesses implements ProcessDriver {
   /** The session's ordered event log, while its control connection is attached. */
   outputLog(id: string): OutputLog | undefined { return this.logs.get(id) }
   fidelity(id: string): Fidelity { return this.fidelities.get(id) ?? { rebuilds: {} } }
-  forget(id: string): void { this.fidelities.delete(id); this.revisions.delete(id); this.fresh.delete(id) }
+  forget(id: string): void { this.fidelities.delete(id); this.revisions.delete(id); this.fresh.delete(id); this.cursorRebuiltAt.delete(id) }
+  /** At quiet points, the replica's cursor against tmux's; a disagreement rebuilds it (bounded) and is logged without contents. */
+  private watchCursor(id: string, replica: Replica, log: OutputLog, control: ControlClient): void {
+    clearInterval(this.cursorChecks.get(id))
+    let checking = false
+    this.cursorChecks.set(id, setInterval(() => {
+      if (checking || replica.ended || control.isClosed || replica.quietMs < CURSOR_QUIET_MS) return
+      checking = true
+      const query = () => control.command(['display-message', '-p', '-t', id, '#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{alternate_on}']).then((lines) => lines.join('\n'))
+      void compareCursor(replica, log, query).then((views) => {
+        if (!views) return
+        const category = cursorCategory(views.tmux, views.replica)
+        if (!category) return
+        const now = performance.now()
+        if (now - (this.cursorRebuiltAt.get(id) ?? -Infinity) < CURSOR_REBUILD_WINDOW_MS) return
+        this.cursorRebuiltAt.set(id, now)
+        this.log?.info('Terminal replica differs from tmux; rebuilding', { sessionId: id, category, tmux: views.tmux, replica: views.replica })
+        return replica.diverged()
+      }).catch(() => undefined).finally(() => { checking = false })
+    }, CURSOR_CHECK_MS))
+  }
   finalCut(id: string, options: { boundary: boolean; timeoutMs: number }): Promise<Cut | undefined> {
     const replica = this.replicas.get(id)
     const log = this.logs.get(id)
@@ -390,7 +458,13 @@ export class TmuxProcesses implements ProcessDriver {
       const replica = this.replicas.get(id)
       if (replica) this.revisions.set(id, replica.revisionState)
       this.replicas.delete(id)
-    } else this.replicas.clear()
+      clearInterval(this.cursorChecks.get(id))
+      this.cursorChecks.delete(id)
+    } else {
+      this.replicas.clear()
+      for (const check of this.cursorChecks.values()) clearInterval(check)
+      this.cursorChecks.clear()
+    }
     const clients = id ? [this.bridges.get(id)].filter((client) => client !== undefined) : [...this.bridges.values()]
     if (id) this.bridges.delete(id); else this.bridges.clear()
     for (const client of clients) { client.kill(); client.terminal?.close() }
