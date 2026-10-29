@@ -162,7 +162,6 @@ browserTest('the folder picker: no choice while a folder loads, a failed folder 
     await dialog.getByRole('button', { name: 'Browse…' }).click()
     await dialog.getByText(`Uses ${root}`).waitFor()
     // Past the first 500: the server filters before its cap.
-    await dialog.getByRole('button', { name: 'Up to the parent folder' }).click()
     await dialog.getByRole('button', { name: 'Open many' }).click()
     await dialog.getByText('Showing the first 500 folders; filter to narrow them.').waitFor()
     await dialog.getByRole('textbox', { name: 'Filter folders' }).fill('d0504')
