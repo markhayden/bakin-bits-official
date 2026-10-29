@@ -645,6 +645,28 @@ rawTest('native scrolling (plan T36, as native terminals): a full-screen program
     expect(up).toBeLessThanOrEqual(Math.ceil(600 / cell) + 1)
     expect(Math.abs(up - 2 * down)).toBeLessThanOrEqual(2)
     expect(reports(input, 0)).toBe(0)
+    // A line-mode wheel (a mouse with notches): exactly one report per line, whatever the row height.
+    // Chromium only: WebKit does not deliver the reports the canvas dispatches while handling a wheel a script
+    // dispatched (observed; real wheels — the part above — reach the program on WebKit too).
+    const lineMode = process.env.TERMINAL_BROWSER !== 'webkit'
+    const wheelLines = (lines: number, times: number, modifiers: { altKey?: boolean; shiftKey?: boolean } = {}) => page.evaluate(({ lines, times, modifiers }) => {
+      const target = document.querySelector('.xterm-screen')!
+      const box = target.getBoundingClientRect()
+      for (let n = 0; n < times; n++) target.dispatchEvent(new WheelEvent('wheel', { deltaY: lines, deltaMode: WheelEvent.DOM_DELTA_LINE, clientX: box.left + box.width / 2, clientY: box.top + box.height / 2, bubbles: true, cancelable: true, ...modifiers }))
+    }, { lines, times, modifiers })
+    if (lineMode) {
+      done = await receiving(page, '\\033[?1000;1006h', file)
+      await wheelLines(-3, 5)
+      input = await done()
+      expect(reports(input, 64)).toBe(15)
+      // Alt rides along (64 + 8 = 72 up); Shift keeps the wheel from the program.
+      done = await receiving(page, '\\033[?1000;1006h', file)
+      await wheelLines(-2, 2, { altKey: true })
+      await wheelLines(-2, 2, { shiftKey: true })
+      input = await done()
+      expect(reports(input, 72)).toBe(4)
+      expect(reports(input, 64)).toBe(0)
+    }
     // X10 has no wheel (xterm would send arrow keys), and no mouse at all: nothing reaches the program.
     for (const modes of ['\\033[?9h', '']) {
       done = await receiving(page, modes, file)

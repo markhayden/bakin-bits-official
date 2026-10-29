@@ -596,7 +596,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
      */
     let programCarry = 0
     const passing = new WeakSet<Event>()
-    const scrollProgram = (pixels: number, x: number, y: number) => {
+    const scrollProgram = (pixels: number, x: number, y: number, modifiers: { altKey?: boolean; metaKey?: boolean } = {}) => {
       const term = terminal.current
       const rendered = screen()
       if (!term?.element || !rendered?.clientHeight) return
@@ -606,17 +606,24 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       while (Math.abs(programCarry) >= cell) {
         const step = Math.sign(programCarry)
         programCarry -= step * cell
-        const report = new WheelEvent('wheel', { deltaY: step, deltaMode: WheelEvent.DOM_DELTA_LINE, clientX: x, clientY: y, bubbles: true, cancelable: true })
+        // A desktop wheel's Alt (Meta) rides along: programs bind modified scrolling.
+        const report = new WheelEvent('wheel', { deltaY: step, deltaMode: WheelEvent.DOM_DELTA_LINE, clientX: x, clientY: y, altKey: modifiers.altKey, metaKey: modifiers.metaKey, bubbles: true, cancelable: true })
         passing.add(report)
         term.element.dispatchEvent(report)
       }
     }
     /** A vertical move for a program that scrolls itself: what the pane can pan, then the rest to the program. */
-    const programMove = (dy: number, x: number, y: number) => {
+    const programMove = (dy: number, x: number, y: number, modifiers?: { altKey?: boolean; metaKey?: boolean }) => {
       const room = panRoom(dy)
       const pan = dy < 0 ? Math.max(dy, room) : Math.min(dy, room)
       if (pan) { el.scrollBy(0, pan); pause() }
-      if (dy - pan) scrollProgram(dy - pan, x, y)
+      if (dy - pan) scrollProgram(dy - pan, x, y, modifiers)
+    }
+    /** The rendered row height: a line-mode wheel moves this far per line. */
+    const rowHeight = () => {
+      const term = terminal.current
+      const rendered = screen()
+      return term && rendered?.clientHeight ? rendered.clientHeight / term.rows : 16
     }
     const hasHistory = () => {
       const buffer = terminal.current?.buffer.active
@@ -715,10 +722,11 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
         // Never xterm's own: no arrow keys, no history it scrolls itself, no report it would scale.
         event.preventDefault()
         event.stopPropagation()
-        const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? el.clientHeight : 1
-        if (programScrolls() && Math.abs(event.deltaY) >= Math.abs(event.deltaX)) {
+        const unit = event.deltaMode === 1 ? rowHeight() : event.deltaMode === 2 ? el.clientHeight : 1
+        // Shift+wheel stays the view's (as xterm keeps it from the program); Ctrl+wheel is zoom, below.
+        if (programScrolls() && !event.shiftKey && Math.abs(event.deltaY) >= Math.abs(event.deltaX)) {
           if (event.deltaX) { el.scrollBy(event.deltaX * unit, 0); pause() }
-          programMove(event.deltaY * unit, event.clientX, event.clientY)
+          programMove(event.deltaY * unit, event.clientX, event.clientY, { altKey: event.altKey, metaKey: event.metaKey })
           return
         }
         if (event.deltaX) { el.scrollBy(event.deltaX * unit, 0); pause() }
