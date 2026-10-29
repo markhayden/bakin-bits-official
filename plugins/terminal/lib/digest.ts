@@ -2,26 +2,31 @@
  * The digest a raw-path viewer and the server's replica compare at the same
  * `{epoch, seq}` (spec D13 digest safety net, plan T37): the visible screen
  * (every cell's characters, width and attributes, and each row's wrap), the
- * cursor, the active buffer and the modes that change what input or output
- * does. Browser-safe: only xterm's public buffer API, shared by the headless
- * replica and the browser terminal (both pinned to one release). Detection,
- * not a guarantee: the replica and its viewers share one layout.
+ * cursor (position, visibility, style), the active buffer, mouse reporting
+ * and the modes that change what input or output does. Browser-safe: xterm's
+ * buffer API plus a few pinned internals, identical in the headless replica
+ * and the browser terminal (one release). Detection, not a guarantee: the
+ * replica and its viewers share one layout.
  */
 
-/** The xterm surface the digest reads (both packages' `Terminal`). */
-export interface DigestTerminal {
-  rows: number
-  cols: number
-  buffer: { active: { type: string; baseY: number; cursorX: number; cursorY: number; getLine(y: number): DigestLine | undefined; getNullCell(): DigestCell } }
-  modes: Record<string, unknown>
+import type { IBufferCell, Terminal as HeadlessTerminal } from '@xterm/headless'
+import type { Terminal as BrowserTerminal } from '@xterm/xterm'
+
+/**
+ * Program-controlled state the public API does not expose, read from the
+ * pinned 6.0.0 internals (identical in both packages; the architecture test
+ * pins the release): cursor visibility and DECSCUSR style, mouse reporting.
+ * Renderer-only state (blink phase, focus, theme, the viewer's configured
+ * cursor style) is never read.
+ */
+interface Internals {
+  coreService: { isCursorHidden: boolean; decPrivateModes: { cursorStyle?: string; cursorBlink?: boolean } }
+  coreMouseService: { activeProtocol: string; activeEncoding: string }
 }
-interface DigestLine { isWrapped: boolean; getCell(x: number, cell: DigestCell): DigestCell | undefined }
-interface DigestCell {
-  getChars(): string; getWidth(): number
-  getFgColorMode(): number; getFgColor(): number; getBgColorMode(): number; getBgColor(): number
-  isBold(): number; isItalic(): number; isDim(): number; isUnderline(): number; isBlink(): number
-  isInverse(): number; isInvisible(): number; isStrikethrough(): number; isOverline(): number
-}
+/** A cell's extended attributes, when it has them (underline style and colour; never a link's id, which differs per terminal). */
+interface ExtendedCell { hasExtendedAttrs(): number; extended: { underlineStyle: number; underlineColor: number } }
+
+const extendedOf = (cell: ExtendedCell) => cell.hasExtendedAttrs() ? `u${cell.extended.underlineStyle}.${cell.extended.underlineColor}` : ''
 
 /** Modes that change what the program sees or how output lands (named in xterm's public `modes`). */
 const MODES = [
@@ -38,11 +43,16 @@ function fnv(hash: number, text: string): number {
   return hash
 }
 
-export function screenDigest(terminal: DigestTerminal): string {
+export function screenDigest(of: HeadlessTerminal | BrowserTerminal): string {
+  // One implementation in both packages (6.0.0): read through the headless types.
+  const terminal = of as HeadlessTerminal
   const buffer = terminal.buffer.active
+  const core = (terminal as unknown as { _core: Internals })._core
   let hash = fnv(0x811c9dc5, `${terminal.cols}x${terminal.rows} ${buffer.type} ${buffer.cursorX},${buffer.cursorY}`)
   hash = fnv(hash, MODES.map((mode) => `${mode}=${String(terminal.modes[mode])}`).join(' '))
-  const cell = buffer.getNullCell()
+  const { decPrivateModes, isCursorHidden } = core.coreService
+  hash = fnv(hash, `cursor ${isCursorHidden ? 'hidden' : 'shown'} ${decPrivateModes.cursorStyle ?? '-'} ${decPrivateModes.cursorBlink ?? '-'} mouse ${core.coreMouseService.activeProtocol} ${core.coreMouseService.activeEncoding}`)
+  const cell: IBufferCell = buffer.getNullCell()
   for (let y = 0; y < terminal.rows; y++) {
     const line = buffer.getLine(buffer.baseY + y)
     if (!line) { hash = fnv(hash, '\n-'); continue }
@@ -50,7 +60,8 @@ export function screenDigest(terminal: DigestTerminal): string {
     for (let x = 0; x < terminal.cols; x++) {
       line.getCell(x, cell)
       hash = fnv(hash, `${cell.getChars()}\u0000${cell.getWidth()}${cell.getFgColorMode()}.${cell.getFgColor()}.${cell.getBgColorMode()}.${cell.getBgColor()}.`
-        + `${cell.isBold()}${cell.isItalic()}${cell.isDim()}${cell.isUnderline()}${cell.isBlink()}${cell.isInverse()}${cell.isInvisible()}${cell.isStrikethrough()}${cell.isOverline()}`)
+        + `${cell.isBold()}${cell.isItalic()}${cell.isDim()}${cell.isUnderline()}${cell.isBlink()}${cell.isInverse()}${cell.isInvisible()}${cell.isStrikethrough()}${cell.isOverline()}`
+        + extendedOf(cell as unknown as ExtendedCell))
     }
   }
   return hash.toString(16).padStart(8, '0')

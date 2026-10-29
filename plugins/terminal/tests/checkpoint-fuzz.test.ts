@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'bun:test'
 import { fullState, internals, stateDiff } from '../lib/terminal-state'
-import { screenDigest, type DigestTerminal } from '../lib/digest'
+import { screenDigest } from '../lib/digest'
 import {
   apply, emulator, FuzzReplica, generate, joinCategory, missingBranches, missingCategories, prng, settled, thinDeciles,
 } from './helpers/terminal-fuzz'
 
 /** Plan T37: wherever a joiner's full state equals the replica's, so does its digest (no false mismatch). */
-const digestOf = (terminal: unknown) => screenDigest(terminal as DigestTerminal)
+const digestOf = (terminal: Parameters<typeof screenDigest>[0]) => screenDigest(terminal)
 
 // Plan T32b: seeds × sizes; every joiner equals the replica at the join,
 // every 25 events after, and at the end; the replica equals a one-shot
