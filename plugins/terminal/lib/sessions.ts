@@ -67,8 +67,8 @@ export class Sessions {
   private reconciling = new Set<string>()
   /** Final-output saves in progress, one per session (plan T35b). */
   private ending = new Map<string, Promise<void>>()
-  /** Sessions a finish holds from its reservation to its kill: input is refused, startup's bundle rule skips them. */
-  private finishing = new Map<string, Promise<unknown>>()
+  /** Every finish outstanding, by session, from its reservation to its kill: input is refused, startup's bundle rule skips them. */
+  private finishing = new Map<string, Set<Promise<void>>>()
   private timers = new Set<ReturnType<typeof setTimeout>>()
   private shadowTimers = new Map<string, ReturnType<typeof setTimeout>>()
   /** Bridge chunks parsed per session: a comparison spanning a new one is not a quiet point. */
@@ -693,13 +693,13 @@ export class Sessions {
   }
   finish(id: string, principal: Principal, generation: number, terminate: boolean): Promise<Session> {
     const operation = this.finishOnce(id, principal, generation, terminate)
-    // Held from before the reservation (set synchronously) until the kill is done: nothing reaches the
-    // program between its final picture and its end, and shutdown waits for it.
+    // Held from before the reservation (set synchronously) until the kill is done, and until every
+    // finish of the session settles: nothing reaches the program between its final picture and its end.
     const held = operation.then(() => undefined, () => undefined)
-    if (!this.finishing.has(id)) {
-      this.finishing.set(id, held)
-      void held.then(() => { if (this.finishing.get(id) === held) this.finishing.delete(id) })
-    }
+    const all = this.finishing.get(id) ?? new Set<Promise<void>>()
+    this.finishing.set(id, all)
+    all.add(held)
+    void held.then(() => { all.delete(held); if (!all.size && this.finishing.get(id) === all) this.finishing.delete(id) })
     return operation
   }
   private async finishOnce(id: string, principal: Principal, _generation: number, terminate: boolean): Promise<Session> {
@@ -904,12 +904,17 @@ export class Sessions {
     for (const timer of this.shadowTimers.values()) clearTimeout(timer)
     this.shadowTimers.clear()
     for (const token of [...this.reservations.keys()]) this.dropReservation(token, 'Terminal is shutting down')
-    // Lifecycle work outside the queue settles before replicas and the store go: a coalesced refresh
-    // (and the one more it owes), every finish (save, then kill), every final save.
-    while (this.refreshing) await this.refreshing
-    await Promise.allSettled([...this.finishing.values()])
+    // Lifecycle work outside the queue settles before replicas and the store go, until none is left (one
+    // can start another): a coalesced refresh (and the one more it owes), every finish (save, then kill),
+    // the queue, every final save.
+    for (;;) {
+      const outstanding = [this.refreshing, ...[...this.finishing.values()].flatMap((all) => [...all]), ...this.ending.values()].filter((work) => work !== undefined)
+      if (!outstanding.length && !this.refreshAgain) break
+      if (!outstanding.length && this.refreshAgain) { this.refreshAgain = false; this.paneDied(); continue }
+      await Promise.allSettled(outstanding)
+      await this.pending
+    }
     await this.pending
-    await Promise.allSettled([...this.ending.values()])
     this.closed = true
     await this.driver.detach()
     for (const screen of this.screens.values()) { await screen.drain(); screen.close() }

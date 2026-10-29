@@ -944,6 +944,60 @@ describe('final output (plan T35b)', () => {
     await stopping
     expect(states).toEqual(['exited'])
   })
+  it('two finishes at once: one refused early never releases the other\'s reservation', async () => {
+    const { manager, finalCut, writes } = fixture()
+    const session = await manager.create({ title: 'Ending', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    const other = await manager.create({ title: 'Other', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    let release!: (cut: Cut | undefined) => void
+    finalCut.next = () => new Promise((resolve) => { release = resolve })
+    const taken = await manager.control(session.id, human, 'take')
+    const otherTaken = await manager.control(other.id, human, 'take')
+    const refused = manager.finish(session.id, human, taken.generation, false)
+    const finishing = manager.finish(session.id, human, taken.generation, true)
+    await expect(refused).rejects.toThrow('still running')
+    for (let tries = 0; tries < 100 && !release; tries++) await Bun.sleep(1)
+    // Input queued behind another session's, while the save settles before the kill's turn.
+    let unblock!: () => void
+    const original = manager['driver'].write
+    manager['driver'].write = async (id: string, data: string) => { if (id === other.id) await new Promise<void>((resolve) => { unblock = resolve }); return original(id, data) }
+    const blocked = manager.write(other.id, human, otherTaken.generation, otherTaken.inputSequence + 1, 'other\r')
+    const late = manager.write(session.id, human, taken.generation, taken.inputSequence + 1, 'POST-CUT\r')
+    for (let tries = 0; tries < 100 && !unblock; tries++) await Bun.sleep(1)
+    release(await picture())
+    await Bun.sleep(5)
+    unblock()
+    await blocked
+    await expect(late).rejects.toThrow('Session is ending')
+    expect(writes).toEqual(['other\r'])
+    expect((await finishing).state).toBe('completed')
+  })
+  it('shutdown drains until nothing is left: deaths heard while it waits for a finish are saved too', async () => {
+    const { manager, finalCut, live, paneDied, store } = fixture()
+    const ending = await manager.create({ title: 'Ending', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    const a = await manager.create({ title: 'A', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    const b = await manager.create({ title: 'B', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    const releases: Array<(cut: Cut | undefined) => void> = []
+    finalCut.next = () => new Promise((resolve) => { releases.push(resolve) })
+    const taken = await manager.control(ending.id, human, 'take')
+    const finishing = manager.finish(ending.id, human, taken.generation, true)
+    for (let tries = 0; tries < 100 && !releases.length; tries++) await Bun.sleep(1)
+    let states: Record<string, string> = {}
+    const original = store.close.bind(store)
+    store.close = () => { if (!Object.keys(states).length) states = Object.fromEntries(store.sessions().map((session) => [session.title, session.state])); original() }
+    const stopping = manager.shutdown()
+    await Bun.sleep(5)
+    // While shutdown waits for the finish: A dies (its refresh holds on A's save), then B (a rerun owed).
+    live.delete(a.id)
+    paneDied.get(a.id)!()
+    for (let tries = 0; tries < 100 && releases.length < 2; tries++) await Bun.sleep(1)
+    live.delete(b.id)
+    paneDied.get(b.id)!()
+    finalCut.next = picture
+    for (const release of releases.splice(0)) release(await picture())
+    await finishing
+    await stopping
+    expect(states).toMatchObject({ Ending: 'completed', A: 'exited', B: 'exited' })
+  })
   it('Set up service on a live server never removes a running session\'s bundle (a finish between its save and its kill)', async () => {
     const { manager, store } = fixture()
     const session = await manager.create({ title: 'Ending', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
