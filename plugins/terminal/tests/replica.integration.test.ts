@@ -31,7 +31,7 @@ const until = async (check: () => boolean | Promise<boolean>, label: string, ms 
 }
 const percentile = (values: number[], p: number) => [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.floor(values.length * p))]!
 
-async function harness(root: string) {
+async function harness(root: string, options: { raw?: boolean } = {}) {
   const service = new TerminalService(root)
   // The generated configuration: no status line, manual window sizes, deep history.
   const config = join(root, 'tmux.conf')
@@ -42,7 +42,7 @@ async function harness(root: string) {
   const driver = new TmuxProcesses(service, { info: (message, data) => logs.push({ message, data }) })
   const manager = new Sessions(new Store(join(root, 'terminal.db')), driver, {
     settings: () => ({}), prepare: async () => undefined, release: async () => undefined,
-    log: { info: (message, data) => logs.push({ message, data }) }, shadowQuietMs: 300,
+    log: { info: (message, data) => logs.push({ message, data }) }, shadowQuietMs: 300, rawPath: () => options.raw ?? false,
   })
   let sequence = 0
   const session = await manager.create({ title: 'Replica', cwd: root }, human, { cols: 100, rows: 30, kind: 'browser', device: 'desktop' })
@@ -74,6 +74,35 @@ processTest('the shadow replica agrees with the bridge at quiet points', async (
     const stats = h.manager.shadow.get(h.session.id)!
     expect({ mismatched: stats.mismatched, last: stats.last }).toEqual({ mismatched: 0, last: undefined })
     expect(h.logs).toEqual([])
+  } finally {
+    await h.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 40_000)
+
+processTest('raw path: the size revision continues across a reattachment, and the new attachment\'s other size moves it once', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bakin-replica-revision-'))
+  const h = await harness(root, { raw: true })
+  // Ready once the attachment's replica has its seed (readScreen answers 503 until then).
+  const ready = async () => { try { return await h.manager.readScreen(h.session.id, human) } catch { return undefined } }
+  try {
+    await until(async () => (await ready())?.cols === 100, 'seeded')
+    const tmuxSize = async () => (await h.service.command(['display-message', '-p', '-t', h.session.id, '#{window_width} #{window_height}'])).trim()
+    await h.service.command(['resize-window', '-t', h.session.id, '-x', '80', '-y', '30'])
+    await until(async () => (await ready())?.cols === 80, 'the first width change')
+    const before = (await ready())!
+    expect(before.sizeRevision).toBe(1)
+    // The attachment is lost; tmux's window changes while nothing is attached.
+    await h.driver.detach(h.session.id)
+    await h.service.command(['resize-window', '-t', h.session.id, '-x', '90', '-y', '30'])
+    expect(await tmuxSize()).toBe('90 30')
+    // The next read reattaches: a fresh replica, whose seed at another size is one more change, never a restart at 0.
+    await until(async () => (await ready())?.cols === 90, 'reattached')
+    expect(await ready()).toMatchObject({ cols: 90, rows: 30, sizeRevision: 2 })
+    // A reattachment at the same size moves nothing.
+    await h.driver.detach(h.session.id)
+    await until(async () => (await ready()) !== undefined && h.driver.replica(h.session.id) !== undefined, 'reattached again')
+    expect(await ready()).toMatchObject({ cols: 90, rows: 30, sizeRevision: 2 })
   } finally {
     await h.close()
     rmSync(root, { recursive: true, force: true })

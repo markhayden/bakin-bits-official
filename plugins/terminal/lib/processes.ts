@@ -7,7 +7,7 @@ import { ControlClient } from './control'
 import { EVENT_OVERHEAD_BYTES } from './memory'
 import { OutputLog, parseLayoutChange } from './output-log'
 import type { Fidelity } from './raw-display'
-import { Replica } from './replica'
+import { Replica, type SizeRevision } from './replica'
 import { reseed } from './reseed'
 import { stripPasteMarkers } from './paste'
 import { TerminalService, terminalEnvironment } from './service'
@@ -90,6 +90,8 @@ export class TmuxProcesses implements ProcessDriver {
   private controls = new Map<string, ControlClient>()
   private logs = new Map<string, OutputLog>()
   private replicas = new Map<string, Replica>()
+  /** A detached session's size revision, for the replica its next attachment makes (until it is forgotten). */
+  private revisions = new Map<string, SizeRevision>()
   private fidelities = new Map<string, Fidelity>()
   constructor(private service: TerminalService, private log?: { info(message: string, data?: Record<string, unknown>): void }) {}
   async create(session: Session): Promise<void> {
@@ -134,7 +136,11 @@ export class TmuxProcesses implements ProcessDriver {
     this.controls.set(session.id, control)
     this.logs.set(session.id, log)
     // The replica starts from a seed; a failed reseed invalidates the log, which ends it.
+    // The size revision continues across attachments: an agent compares it between reads.
+    const revision = this.replicas.get(session.id)?.revisionState ?? this.revisions.get(session.id)
+    this.revisions.delete(session.id)
     const replica = new Replica({
+      revision,
       reseed: (reason, turn, scope) => reseed(control, log, session.id, reason, { attempt: turn, scope }),
       geometry: (generation, turn, scope) => reseed(control, log, session.id, 'width', { attempt: turn, scope, geometry: generation }),
       // The replica's lifecycle is logged, never its contents; rebuilds are the session's fidelity.
@@ -170,7 +176,7 @@ export class TmuxProcesses implements ProcessDriver {
   /** The session's ordered event log, while its control connection is attached. */
   outputLog(id: string): OutputLog | undefined { return this.logs.get(id) }
   fidelity(id: string): Fidelity { return this.fidelities.get(id) ?? { rebuilds: {} } }
-  forget(id: string): void { this.fidelities.delete(id) }
+  forget(id: string): void { this.fidelities.delete(id); this.revisions.delete(id) }
   replica(id: string): Replica | undefined {
     const replica = this.replicas.get(id)
     return replica?.ended ? undefined : replica
@@ -318,7 +324,11 @@ export class TmuxProcesses implements ProcessDriver {
     if (id) this.logs.delete(id); else this.logs.clear()
     for (const control of controls) control.close('detached')
     for (const log of logs) log.invalidate('detached')
-    if (id) this.replicas.delete(id); else this.replicas.clear()
+    if (id) {
+      const replica = this.replicas.get(id)
+      if (replica) this.revisions.set(id, replica.revisionState)
+      this.replicas.delete(id)
+    } else this.replicas.clear()
     const clients = id ? [this.bridges.get(id)].filter((client) => client !== undefined) : [...this.bridges.values()]
     if (id) this.bridges.delete(id); else this.bridges.clear()
     for (const client of clients) { client.kill(); client.terminal?.close() }

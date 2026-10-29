@@ -703,10 +703,11 @@ test('raw-path input needs only the control client; the bridge path needs its br
 test('raw path: readScreen takes the screen, the grid and the size revision from the replica in one step (adoptSize never moves it)', async () => {
   const { manager, replicas, tmuxSizes } = fixture({ raw: true })
   const session = await manager.create({ title: 'Raw', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
-  // No replica, or none seeded yet: not ready, never the bridge's screen.
+  // No replica, or one not seeded yet: not ready, never the bridge's screen.
   await expect(manager.readScreen(session.id, human)).rejects.toThrow('not ready')
   const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
   replicas.set(session.id, replica)
+  await expect(manager.readScreen(session.id, human)).rejects.toThrow('not ready')
   let seq = 0
   await replica.event({ seq: ++seq, kind: 'seed', bytes: new TextEncoder().encode('\x1bcfrom the replica'), cols: 64, rows: 20, reason: 'test', history: true })
   expect(await manager.readScreen(session.id, human)).toMatchObject({ cols: 64, rows: 20, sizeRevision: 0 })

@@ -92,6 +92,13 @@ export type ReplicaDiagnostic =
   /** A width change's geometry: installed, or refused (a `width` rebuild follows). */
   | { kind: 'geometry'; generation: number; installed: boolean; ms: number }
 
+/**
+ * A session's size revision as a replica leaves it (spec D3): the count, and
+ * the size it was last at (none if it never had a picture). A replacement
+ * replica continues from it, so the count never repeats for one session.
+ */
+export interface SizeRevision { count: number; cols?: number; rows?: number }
+
 /** Runs one capture in the heavy-work queue (lib/reseed.ts ReseedOptions.attempt). */
 export type CaptureTurn = <T>(capture: () => Promise<T>) => Promise<T>
 
@@ -108,6 +115,8 @@ export interface ReplicaOptions {
    */
   geometry(generation: number, turn: CaptureTurn, scope: SeedScope): Promise<unknown>
   diagnostic?(event: ReplicaDiagnostic): void
+  /** The size revision of the replica this one replaces (its first seed at another size moves it). */
+  revision?: SizeRevision
   /** Quiet time before a checkpoint is tried (CHECKPOINT_IDLE_MS). */
   idleMs?: number
   /** Quiet time before an overload's history is restored (HISTORY_QUIET_MS). */
@@ -273,10 +282,15 @@ export class Replica implements LogConsumer {
   private widthOwed = 0
   private widthAsked = 0
   /** Dimension changes applied (a layout, or a seed at another size), in the log's order (spec D3). */
-  private revision = 0
+  private revision: number
+  /** The size last applied (a seed or a layout): before the first seed, the replaced replica's; kept after the end. */
+  private size: { cols?: number; rows?: number }
   readonly stats: ReplicaStats = { accepted: 0, rejected: {}, abandoned: 0, rebuilds: {}, seeds: {}, geometries: 0, skippedBytes: 0 }
 
-  constructor(private options: ReplicaOptions) {}
+  constructor(private options: ReplicaOptions) {
+    this.revision = options.revision?.count ?? 0
+    this.size = { cols: options.revision?.cols, rows: options.revision?.rows }
+  }
 
   /** The emulator, once a seed arrived (read it between events only: see `read`). */
   get terminal(): Term | undefined { return this.term }
@@ -304,6 +318,10 @@ export class Replica implements LogConsumer {
    * screen). Its own count: the session record's (`adoptSize`) never moves it.
    */
   get sizeRevision(): number { return this.revision }
+  /** Where a replacement replica continues from (`ReplicaOptions.revision`). */
+  get revisionState(): SizeRevision {
+    return { count: this.revision, ...this.size }
+  }
   /** A width change still waits for its geometry. */
   get geometryOwed(): boolean { return this.widthOwed !== 0 }
   /** Why the replica is waiting for a seed, while it is. */
@@ -412,6 +430,7 @@ export class Replica implements LogConsumer {
       const width = event.cols !== this.term.cols
       if (width || event.rows !== this.term.rows) this.revision++
       this.term.resize(event.cols, event.rows)
+      this.size = { cols: event.cols, rows: event.rows }
       this.push(event, 0)
       if (this.tail.length > MAX_TAIL_EVENTS) { this.rebuild('tail bound', 0); return }
       if (width) { this.widthOwed = ++this.widthGeneration; this.askGeometry() }
@@ -491,8 +510,9 @@ export class Replica implements LogConsumer {
   }
 
   private async applySeed(event: Extract<LogEvent, { kind: 'seed' }>): Promise<void> {
-    // At another size than the picture it replaces (layouts a rebuild skipped): a dimension change too.
-    if (this.term && (this.term.cols !== event.cols || this.term.rows !== event.rows)) this.revision++
+    // At another size than the picture it replaces (layouts a rebuild skipped, or the replaced replica's): a dimension change too.
+    if (this.size.cols !== undefined && (this.size.cols !== event.cols || this.size.rows !== event.rows)) this.revision++
+    this.size = { cols: event.cols, rows: event.rows }
     this.term?.dispose()
     clearTimeout(this.idleTimer)
     const { terminal, links } = profileTerminal(event.cols, event.rows)

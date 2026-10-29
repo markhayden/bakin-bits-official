@@ -828,6 +828,20 @@ describe('Replica width changes (plan T34a)', () => {
     expect(r.geometryOwed).toBe(true)
     r.close()
   })
+  it('a UTF-8 character split across the width change completes after the geometry', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 80, 10))
+    const thumbs = new TextEncoder().encode('👍')
+    await r.event(s.output(thumbs.subarray(0, 2)))
+    await r.event(s.layout(60, 10))
+    await r.event(s.geometry(tmuxPicture, 60, 10, 1))
+    await r.event(s.output(thumbs.subarray(2)))
+    const cell = r.terminal!.buffer.active.getLine(1)!.getCell(4)!
+    expect([cell.getChars(), cell.getWidth()]).toEqual(['👍', 2])
+    await expectJoinable(r)
+    r.close()
+  })
   it('a width change moves the size revision once, at its layout (its geometry does not)', async () => {
     const s = stream()
     const { r } = replica({ idleMs: 1e9 })
@@ -837,6 +851,55 @@ describe('Replica width changes (plan T34a)', () => {
     expect(r.sizeRevision).toBe(1)
     await r.event(s.geometry(tmuxPicture, 60, 10, 1))
     expect(r.sizeRevision).toBe(1)
+    r.close()
+  })
+  it('layouts a rebuild skipped move the revision only by the size the seed lands at', async () => {
+    const s = stream()
+    const flooded = async (r: Replica) => {
+      await r.event(s.output('\x1b]0;'))
+      const payload = 'x'.repeat(65536)
+      for (let sent = 0; sent <= MAX_TAIL_BYTES; sent += payload.length) await r.event(s.output(payload))
+      expect(r.cut()).toBeUndefined()
+    }
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 80, 24))
+    // A→B→A while rebuilding, then a seed at A: nothing applied changed size.
+    await flooded(r)
+    await r.event(s.layout(60, 24))
+    await r.event(s.layout(80, 24))
+    await r.event(s.seed('\x1bc', 80, 24))
+    expect(r.sizeRevision).toBe(0)
+    // Skipped layouts and a seed at another size: one change.
+    await flooded(r)
+    await r.event(s.layout(60, 24))
+    await r.event(s.layout(70, 20))
+    await r.event(s.seed('\x1bc', 70, 20))
+    expect(r.sizeRevision).toBe(1)
+    r.close()
+  })
+  it('an ended replica keeps its revision and size for its replacement, and moves no more', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 80, 24))
+    await r.event(s.layout(60, 24))
+    r.close()
+    await r.event(s.layout(90, 30))
+    expect(r.revisionState).toEqual({ count: 1, cols: 60, rows: 24 })
+  })
+  it('a replacement continues the count: its first seed at the old size moves nothing, at another size once', async () => {
+    for (const [cols, rows, count] of [[60, 24, 3], [90, 30, 4]] as const) {
+      const s = stream()
+      const { r } = replica({ idleMs: 1e9, revision: { count: 3, cols: 60, rows: 24 } })
+      expect(r.sizeRevision).toBe(3)
+      await r.event(s.seed('\x1bc', cols, rows))
+      expect(r.sizeRevision).toBe(count)
+      r.close()
+    }
+    // One that replaces a replica that never had a picture starts its count without a change.
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9, revision: { count: 2 } })
+    await r.event(s.seed('\x1bc', 90, 30))
+    expect(r.sizeRevision).toBe(2)
     r.close()
   })
   it('a checkpoint after a geometry is accepted and compacts the tail', async () => {
