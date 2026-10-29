@@ -423,8 +423,8 @@ processTest('final output (plan T35b): a terminate right after the last output, 
     const other = await h.manager.create({ title: 'Exits', cwd: root }, human, { cols: 100, rows: 30, kind: 'browser', device: 'desktop' })
     await until(() => Boolean(h.driver.replica(other.id)?.cut()), 'other seeded')
     await h.manager.write(other.id, human, other.generation, ++sequence, "printf '%s-%s\\n' last before-exit; exit\r")
-    await until(async () => { await h.manager.refreshStates(); return h.manager.get(other.id, human).state === 'exited' }, 'exited')
-    expect(h.manager.get(other.id, human).outputSaved).toBe(true)
+    // No poll: tmux's pane_dead subscription tells the manager, which confirms and saves.
+    await until(() => h.manager.get(other.id, human).state === 'exited' && h.manager.get(other.id, human).outputSaved === true, 'exited and saved', 10_000)
     expect(await bundleText((await store.bundle(other.id))!)).toContain('last-before-exit')
   } finally {
     await h.close()

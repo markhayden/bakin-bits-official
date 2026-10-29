@@ -64,6 +64,8 @@ export class OutputLog {
   private attachment: Attachment | undefined
   private failure: string | undefined
 
+  /** The newest event's sequence number (0 before any). */
+  get lastSeq(): number { return this.seq }
   /** Why the log is invalid, once it is. */
   get invalidReason(): string | undefined { return this.failure }
   get pendingBytes(): number { return (this.attachment?.queuedBytes ?? 0) + this.batchBytes }

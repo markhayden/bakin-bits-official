@@ -65,6 +65,8 @@ export class Sessions {
   private natives = new Map<string, Map<number, NativeClient>>()
   private nativeListeners = new Map<string, Set<() => void>>()
   private reconciling = new Set<string>()
+  /** Final-output saves in progress, one per session (plan T35b). */
+  private ending = new Map<string, Promise<void>>()
   private timers = new Set<ReturnType<typeof setTimeout>>()
   private shadowTimers = new Map<string, ReturnType<typeof setTimeout>>()
   /** Bridge chunks parsed per session: a comparison spanning a new one is not a quiet point. */
@@ -150,18 +152,21 @@ export class Sessions {
       if (!listeners.size) this.outputListeners.delete(id)
     }
   }
-  refreshStates(): Promise<void> {
-    return this.run(async () => {
+  async refreshStates(): Promise<void> {
+    const exited = await this.run(async () => {
+      const ids: string[] = []
       for (const session of this.store.sessions()) {
         if (session.state === 'running' && !await this.driver.alive(session.id)) {
           session.state = 'exited'
           this.forgetNatives(session.id)
-          // The pane stays (remain-on-exit): what the program printed last is in the replica.
-          await this.saveFinal(session)
           this.save(session)
+          ids.push(session.id)
         }
       }
+      return ids
     })
+    // The pane stays (remain-on-exit): what the program printed last is in the replica.
+    await Promise.all(exited.map((id) => this.saveFinal(id)))
   }
   /**
    * Attach and adopt tmux's actual window before anything reads or writes
@@ -200,7 +205,7 @@ export class Sessions {
           this.shadowSoon(session.id)
         }).catch(() => undefined)
       }
-    }, () => this.clientsChanged(session.id))
+    }, () => this.clientsChanged(session.id), () => { void this.refreshStates().catch(() => undefined) })
   }
   /** Compare the shadow replica with the bridge once the bridge has been quiet (spec D13, R1). */
   private shadowSoon(id: string): void {
@@ -668,18 +673,24 @@ export class Sessions {
     this.natives.delete(id)
     if (had) notify(this.nativeListeners.get(id), (listener) => listener())
   }
-  finish(id: string, principal: Principal, _generation: number, terminate: boolean): Promise<Session> {
-    return this.run(async () => {
-      // Lifecycle, not input: get() already gates access (a human is the
-      // operator; an agent sees only its own session). Ending a session never
-      // needed to be the live input owner, so the operator can stop an agent's
-      // runaway session without seizing keyboard control first.
+  async finish(id: string, principal: Principal, _generation: number, terminate: boolean): Promise<Session> {
+    // Lifecycle, not input: get() already gates access (a human is the
+    // operator; an agent sees only its own session). Ending a session never
+    // needed to be the live input owner, so the operator can stop an agent's
+    // runaway session without seizing keyboard control first.
+    const done = await this.run(async () => {
       const session = this.get(id, principal)
       if (session.state === 'completed') return session
-      const alive = await this.driver.alive(id)
-      if (alive && !terminate) throw new TerminalError('The process is still running; exit it or explicitly terminate it first')
-      // The final output before the kill; a failed save never blocks it (a retained pane leaks).
-      await this.saveFinal(session)
+      if (await this.driver.alive(id) && !terminate) throw new TerminalError('The process is still running; exit it or explicitly terminate it first')
+      return undefined
+    })
+    if (done) return done
+    // The final output before the kill, outside the queue (bounded by FINAL_CUT_MS); a failed save
+    // never blocks the kill (a retained pane leaks).
+    await this.saveFinal(id)
+    return this.run(async () => {
+      const session = this.get(id, principal)
+      if (session.state === 'completed') return session
       await this.driver.terminate(id)
       await this.stopScreen(id)
       this.forgetNatives(id)
@@ -693,24 +704,33 @@ export class Sessions {
   /**
    * Persist an ending session's final output (plan T35b): the replica's
    * picture after a drain (to a control reply while the control client is
-   * connected), bounded by FINAL_CUT_MS, committed atomically (lib/store.ts). Never
-   * throws: no picture in time, or a failed write, is `outputSaved: false`.
-   * The caller saves the session record.
+   * connected), bounded by FINAL_CUT_MS, committed with the session's flag
+   * and any evictions in one transaction (lib/store.ts). Outside the manager
+   * queue, one at a time per session. Never throws: no picture in time, or a
+   * failed write, is `outputSaved: false`.
    */
-  private async saveFinal(session: Session): Promise<void> {
-    if (session.outputSaved) return
+  private saveFinal(id: string): Promise<void> {
+    const running = this.ending.get(id)
+    if (running) return running
+    const work = this.saveFinalOnce(id).finally(() => this.ending.delete(id))
+    this.ending.set(id, work)
+    return work
+  }
+  private async saveFinalOnce(id: string): Promise<void> {
+    if (this.store.session(id)?.outputSaved) return
+    let evicted: string[] = []
     try {
-      const cut = await this.driver.finalCut?.(session.id, { boundary: this.driver.controlConnected?.(session.id) ?? false, timeoutMs: FINAL_CUT_MS })
-      const { saved, evicted } = cut ? await this.store.saveBundle(session.id, makeBundle(cut, this.fidelity(session.id), this.now())) : { saved: false, evicted: [] }
-      session.outputSaved = saved
-      // Older bundles removed for room: their sessions say so (never "not saved").
-      for (const id of evicted) {
-        const other = this.store.sessions().find((candidate) => candidate.id === id)
-        if (other) { other.outputSaved = false; other.outputEvicted = true; this.save(other) }
-      }
+      const cut = await this.driver.finalCut?.(id, { boundary: this.driver.controlConnected?.(id) ?? false, timeoutMs: FINAL_CUT_MS })
+      if (cut) ({ evicted } = await this.store.saveBundle(id, makeBundle(cut, this.fidelity(id), this.now())))
+      else this.store.markOutput(id, false)
     } catch (error) {
-      this.options.log?.info('Terminal final output was not saved', { sessionId: session.id, error: error instanceof Error ? error.message : String(error) })
-      session.outputSaved = false
+      this.options.log?.info('Terminal final output was not saved', { sessionId: id, error: error instanceof Error ? error.message : String(error) })
+      this.store.markOutput(id, false)
+    }
+    // The store set the flags; viewers hear the records as they are now (evicted ones included).
+    for (const changed of [id, ...evicted]) {
+      const session = this.store.session(changed)
+      if (session) notify(this.sessionListeners.get(changed), (listener) => listener(session))
     }
   }
   async screen(id: string, principal: Principal): Promise<{ session: Session; data: string; cursor: number }> {
@@ -806,7 +826,12 @@ export class Sessions {
       if (session.completedAt !== undefined && this.now() - session.completedAt >= 30 * DAY && !session.historyDeleted) await this.deleteHistoryUnlocked(session.id, { kind: 'human', id: 'maintenance' })
     }
   }
-  sweep(): Promise<void> { return this.run(() => this.sweepUnlocked()) }
+  async sweep(): Promise<void> {
+    // An exited session whose final output is not saved yet (a failed save) tries again before
+    // maintenance may complete it, outside the queue.
+    for (const session of this.store.sessions()) if (session.state === 'exited' && session.outputSaved === false) await this.saveFinal(session.id)
+    return this.run(() => this.sweepUnlocked())
+  }
   /**
    * Set up (or update) the tmux service in the manager's queue, so it can
    * never land in the middle of a session's creation, then reattach.

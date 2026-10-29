@@ -25,8 +25,12 @@ export interface NativeClient {
 
 export interface ProcessDriver {
   create(session: Session): Promise<void>
-  /** `clientsChanged` fires when a tmux client attaches to, resizes on, or detaches from the session. */
-  attach(session: Session, output: (data: Uint8Array) => void, clientsChanged: () => void): void
+  /**
+   * `clientsChanged` fires when a tmux client attaches to, resizes on, or
+   * detaches from the session; `died` when tmux reports its pane dead (a hint:
+   * the caller confirms with `alive`).
+   */
+  attach(session: Session, output: (data: Uint8Array) => void, clientsChanged: () => void, died?: () => void): void
   /** The bridge path's health: the bridge PTY and the control client. */
   connected(id: string): boolean
   /** The raw path's health (spec D13): the control client alone (input and output both go through it). */
@@ -92,6 +96,34 @@ const PASTE_BUFFER_PREFIX = 'bakin-paste-'
  * (spec D13; consumed by the replica). Both attach `ignore-size`: only
  * Bakin's explicit `resize-window` sizes a session (window-size manual).
  */
+/**
+ * The replica's picture once it holds every output tmux sent before a
+ * control reply (`boundary`; a reply follows all earlier %output), or, with
+ * none, every event already received: its cut's `throughSeq` reaches the
+ * log's newest event (a rebuild meanwhile reaches past it with its seed).
+ * Bounded as a whole by `timeoutMs`; undefined when it is not reached in
+ * time, or the replica ends (plan T35b).
+ */
+export async function drainFinal(replica: Replica, log: OutputLog, boundary: (() => Promise<unknown>) | undefined, timeoutMs: number): Promise<Cut | undefined> {
+  const deadline = performance.now() + timeoutMs
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), timeoutMs) })
+  try {
+    if (boundary && await Promise.race([boundary().then(() => 'ok', () => 'late'), late]) === 'late') return undefined
+    log.flush()
+    const target = log.lastSeq
+    while (performance.now() < deadline) {
+      if (replica.ended || log.invalidReason) return undefined
+      const cut = replica.cut()
+      if (cut && cut.throughSeq >= target) return cut
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    return undefined
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export class TmuxProcesses implements ProcessDriver {
   private bridges = new Map<string, ReturnType<typeof Bun.spawn>>()
   private pastesSwept = false
@@ -118,7 +150,7 @@ export class TmuxProcesses implements ProcessDriver {
   async title(session: Session): Promise<void> {
     await this.service.command(['set-option', '-t', session.id, '@bakin_title', session.title])
   }
-  attach(session: Session, output: (data: Uint8Array) => void, clientsChanged: () => void): void {
+  attach(session: Session, output: (data: Uint8Array) => void, clientsChanged: () => void, died?: () => void): void {
     if (this.bridges.has(session.id)) return
     const process = Bun.spawn([this.service.tmux!, '-S', this.service.socket, 'attach-session', '-f', 'ignore-size', '-t', session.id], {
       env: terminalEnvironment(),
@@ -137,6 +169,8 @@ export class TmuxProcesses implements ProcessDriver {
       notification: (line) => {
         const [kind, , , name] = line.split(' ')
         if ((kind === '%client-session-changed' && name === session.id) || kind === '%client-detached' || line.startsWith('%subscription-changed bakin-client ')) clientsChanged()
+        // The program exited (the pane stays: remain-on-exit); its value follows ' : '.
+        if (line.startsWith('%subscription-changed bakin-dead ') && line.slice(line.indexOf(' : ') + 3).trim() === '1') died?.()
         const layout = parseLayoutChange(line)
         if (layout) log.layout(layout.cols, layout.rows)
       },
@@ -181,6 +215,7 @@ export class TmuxProcesses implements ProcessDriver {
     this.replicas.set(session.id, replica)
     void control.ready.then(async () => {
       await control.command(['refresh-client', '-B', 'bakin-client::#{@bakin_client}'])
+      await control.command(['refresh-client', '-B', 'bakin-dead::#{pane_dead}'])
       replica.start()
     }).catch(() => undefined)
   }
@@ -197,30 +232,12 @@ export class TmuxProcesses implements ProcessDriver {
   outputLog(id: string): OutputLog | undefined { return this.logs.get(id) }
   fidelity(id: string): Fidelity { return this.fidelities.get(id) ?? { rebuilds: {} } }
   forget(id: string): void { this.fidelities.delete(id); this.revisions.delete(id); this.fresh.delete(id) }
-  async finalCut(id: string, options: { boundary: boolean; timeoutMs: number }): Promise<Cut | undefined> {
-    const deadline = performance.now() + options.timeoutMs
+  finalCut(id: string, options: { boundary: boolean; timeoutMs: number }): Promise<Cut | undefined> {
     const replica = this.replicas.get(id)
     const log = this.logs.get(id)
-    if (!replica || replica.ended || !log) return undefined
+    if (!replica || !log) return Promise.resolve(undefined)
     const control = this.controls.get(id)
-    if (options.boundary && control && !control.isClosed) {
-      // A reply comes after every %output tmux sent before it: the log then holds all of it.
-      const boundary = control.command(['display-message', '-p', '']).then(() => true, () => false)
-      const late = new Promise<false>((resolve) => setTimeout(() => resolve(false), Math.max(0, deadline - performance.now())))
-      if (!await Promise.race([boundary, late])) return undefined
-    }
-    log.flush()
-    // Every event received is parsed (a rebuild meanwhile lands its seed, or the deadline passes).
-    while (performance.now() < deadline) {
-      if (replica.ended) return undefined
-      if (log.pendingEvents === 0) {
-        await replica.idle()
-        const cut = replica.cut()
-        if (cut && log.pendingEvents === 0) return cut
-      }
-      await new Promise((resolve) => setTimeout(resolve, 10))
-    }
-    return undefined
+    return drainFinal(replica, log, options.boundary && control && !control.isClosed ? () => control.command(['display-message', '-p', '']) : undefined, options.timeoutMs)
   }
   replica(id: string): Replica | undefined {
     const replica = this.replicas.get(id)

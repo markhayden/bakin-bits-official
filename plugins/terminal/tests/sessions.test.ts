@@ -23,6 +23,8 @@ function fixture(options: { raw?: boolean } = {}) {
   /** Each final picture asked for, in order with terminations; what the next one gives (a cut, none, or a throw). */
   const finals: string[] = []
   const finalCut: { next: () => Promise<Cut | undefined> } = { next: async () => undefined }
+  /** Each session's pane-died hint, as the driver gives it. */
+  const paneDied = new Map<string, () => void>()
   let releasable = false
   let writeFailure: Error | undefined
   let resizeFailure: Error | undefined
@@ -39,7 +41,7 @@ function fixture(options: { raw?: boolean } = {}) {
   const driver: ProcessDriver = {
     // Like TmuxProcesses.replica: an ended replica is no source.
     replica: (id) => { const replica = replicas.get(id); return replica?.ended ? undefined : replica },
-    create: async (s) => { live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, output, changed) { attaches.push(s.id); controlLost.delete(s.id); attached.add(s.id); outputs.set(s.id, output); clientsChanged.set(s.id, changed) }, connected: (id) => attached.has(id) && !bridgeLost.has(id), controlConnected: (id) => attached.has(id) && !controlLost.has(id),
+    create: async (s) => { live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, output, changed, died) { attaches.push(s.id); controlLost.delete(s.id); attached.add(s.id); outputs.set(s.id, output); clientsChanged.set(s.id, changed); if (died) paneDied.set(s.id, died) }, connected: (id) => attached.has(id) && !bridgeLost.has(id), controlConnected: (id) => attached.has(id) && !controlLost.has(id),
     write: async (_id, data) => { if (writeFailure) throw writeFailure; writes.push(data) },
     resize: async (id, cols, rows) => { if (resizeFailure) { tmuxSizes.set(id, { cols: 77, rows: 22 }); throw resizeFailure } tmuxSizes.set(id, { cols, rows }) },
     windowSize: async (id) => { if (readBackFailure) throw readBackFailure; return tmuxSizes.get(id)! },
@@ -74,7 +76,7 @@ function fixture(options: { raw?: boolean } = {}) {
   })
   managers.push(manager)
   return {
-    manager, store, writes, live, attached, terminated, forgotten, bridgeLost, controlLost, attaches, finals, finalCut, releases, outputs, natives, detachedClients, vanishing, replicas,
+    manager, store, writes, live, attached, terminated, forgotten, bridgeLost, controlLost, attaches, finals, finalCut, paneDied, releases, outputs, natives, detachedClients, vanishing, replicas,
     /** A terminal app attaches (or resizes) in tmux; the control client notices. */
     nativeAttach: async (id: string, client: NativeClient) => {
       natives.set(id, [...(natives.get(id) ?? []).filter((entry) => entry.pid !== client.pid), client])
@@ -811,11 +813,13 @@ describe('final output (plan T35b)', () => {
     expect((await store.bundle(session.id))?.cut.tail).toEqual(cut.tail)
     expect((await store.bundle(session.id))?.cut.checkpoint.data.join('')).toBe(cut.checkpoint.data.join(''))
   })
-  it('no picture in time, or a failed save, records output not saved and never blocks the termination', async () => {
-    for (const next of [async () => undefined, async () => { throw new Error('disk full') }]) {
+  it('no picture in time, a failed drain, or a failed bundle write records output not saved and never blocks the termination', async () => {
+    for (const failure of ['no picture', 'drain throws', 'write throws'] as const) {
       const { manager, finals, finalCut, store } = fixture()
       const session = await manager.create({ title: 'Ends', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
-      finalCut.next = next
+      const cut = await picture()
+      finalCut.next = failure === 'no picture' ? async () => undefined : failure === 'drain throws' ? async () => { throw new Error('control lost') } : async () => cut
+      if (failure === 'write throws') store.saveBundle = async () => { throw new Error('disk full') }
       const taken = await manager.control(session.id, human, 'take')
       const ended = await manager.finish(session.id, human, taken.generation, true)
       expect(finals.at(-1)).toBe(`terminate ${session.id}`)
@@ -835,5 +839,41 @@ describe('final output (plan T35b)', () => {
     expect((await store.bundle(session.id))?.cut.checkpoint.data.join('')).toBe(cut.checkpoint.data.join(''))
     await manager.finish(session.id, human, manager.get(session.id, human).generation, false)
     expect(finals.filter((entry) => entry.startsWith('final'))).toHaveLength(1)
+  })
+  it("tmux's pane-died hint saves it without waiting for a poll", async () => {
+    const { manager, finals, finalCut, live, paneDied } = fixture()
+    const session = await manager.create({ title: 'Exits', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    finalCut.next = picture
+    live.delete(session.id)
+    paneDied.get(session.id)!()
+    for (let tries = 0; tries < 100 && manager.get(session.id, human).outputSaved !== true; tries++) await Bun.sleep(5)
+    expect(manager.get(session.id, human)).toMatchObject({ state: 'exited', outputSaved: true })
+    expect(finals).toEqual([`final ${session.id} boundary=true`])
+  })
+  it('a save that failed at the exit is tried again before maintenance completes the session', async () => {
+    const { manager, finals, finalCut, live } = fixture()
+    const session = await manager.create({ title: 'Idle', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    live.delete(session.id)
+    await manager.refreshStates()
+    expect(manager.get(session.id, human).outputSaved).toBe(false)
+    finalCut.next = picture
+    await manager.sweep()
+    expect(manager.get(session.id, human).outputSaved).toBe(true)
+    expect(finals.filter((entry) => entry.startsWith('final'))).toHaveLength(2)
+  })
+  it('the save runs outside the manager queue: input to another session is not held behind it', async () => {
+    const { manager, finalCut, writes } = fixture()
+    const ending = await manager.create({ title: 'Ending', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    const other = await manager.create({ title: 'Other', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    let release!: (cut: Cut | undefined) => void
+    finalCut.next = () => new Promise((resolve) => { release = resolve })
+    const taken = await manager.control(ending.id, human, 'take')
+    const finishing = manager.finish(ending.id, human, taken.generation, true)
+    for (let tries = 0; tries < 100 && !release; tries++) await Bun.sleep(1)
+    const otherTaken = await manager.control(other.id, human, 'take')
+    await manager.write(other.id, human, otherTaken.generation, otherTaken.inputSequence + 1, 'ls\r')
+    expect(writes).toEqual(['ls\r'])
+    release(await picture())
+    expect((await finishing).state).toBe('completed')
   })
 })

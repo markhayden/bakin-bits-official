@@ -80,6 +80,8 @@ test('bundles (plan T35b): one per session, replaced whole, deleted with its his
   store.save(sessionRow('a'))
   store.save(sessionRow('b'))
   expect(await store.saveBundle('a', await bundle('first'))).toEqual({ saved: true, evicted: [] })
+  // The commit sets the session's flag with it.
+  expect(store.session('a')?.outputSaved).toBe(true)
   await store.saveBundle('a', await bundle('second'))
   await store.saveBundle('b', await bundle('other'))
   expect(text(await store.bundle('a'))).toContain('second')
@@ -95,17 +97,58 @@ test('bundles fit their own limit: whole ones go, oldest first; one that cannot 
   const store = new Store(':memory:', 10 * 1024 * 1024, 250 * 1024 * 1024, 300_000)
   stores.push(store)
   for (const id of ['old', 'mid', 'new', 'huge']) store.save(sessionRow(id))
-  await store.saveBundle('old', await bundle('old', 1, 50_000))
-  await store.saveBundle('mid', await bundle('mid', 2, 50_000))
-  // Each is about 100 kB (stored text counted at two bytes a character): the third pushes the oldest out.
-  expect(await store.saveBundle('new', await bundle('new', 3, 60_000))).toEqual({ saved: true, evicted: ['old'] })
+  await store.saveBundle('old', await bundle('old', 1, 120_000))
+  await store.saveBundle('mid', await bundle('mid', 2, 120_000))
+  // About 120 kB each (ASCII text, a byte a character): the third pushes the oldest out.
+  expect(await store.saveBundle('new', await bundle('new', 3, 130_000))).toEqual({ saved: true, evicted: ['old'] })
   expect(await store.bundle('old')).toBeUndefined()
+  // In the same commit: the evicted session says so.
+  expect(store.session('old')).toMatchObject({ outputSaved: false, outputEvicted: true })
   expect(text(await store.bundle('mid'))).toContain('mid')
   expect(store.bundleBytes()).toBeLessThanOrEqual(300_000)
   // Larger than the whole limit: refused, and nothing else is removed for it.
-  expect(await store.saveBundle('huge', await bundle('huge', 4, 200_000))).toEqual({ saved: false, evicted: [] })
+  expect(await store.saveBundle('huge', await bundle('huge', 4, 400_000))).toEqual({ saved: false, evicted: [] })
   expect(await store.bundle('huge')).toBeUndefined()
+  expect(store.session('huge')?.outputSaved).toBe(false)
   expect(text(await store.bundle('new'))).toContain('new')
+})
+test('bundle bytes are what SQLite stores: UTF-8 text and every part\'s metadata', async () => {
+  const store = new Store(':memory:', 10 * 1024 * 1024, 250 * 1024 * 1024, 25_000)
+  stores.push(store)
+  store.save(sessionRow('wide'))
+  // 10,000 three-byte characters: 30 kB stored, though only 10,000 JavaScript characters.
+  const wide = await bundle('wide', 1)
+  const result = await store.saveBundle('wide', { ...wide, cut: { ...wide.cut, checkpoint: { ...wide.cut.checkpoint, data: ['界'.repeat(10_000)] } } })
+  expect(result.saved).toBe(false)
+})
+test('a bundle replaced or deleted while it is read is never returned incomplete', async () => {
+  const store = new Store(':memory:')
+  stores.push(store)
+  store.save(sessionRow('moving'))
+  await store.saveBundle('moving', await bundle('moving', 1, 8 * 1024 * 1024))
+  const reading = store.bundle('moving')
+  // At the read's first yield, the history is deleted.
+  store.deleteOutput('moving')
+  expect(await reading).toBeUndefined()
+  const again = await bundle('again', 2, 8 * 1024 * 1024)
+  const third = await bundle('third', 3, 9 * 1024 * 1024)
+  await store.saveBundle('moving', again)
+  const replaced = store.bundle('moving')
+  await store.saveBundle('moving', third)
+  // Replaced during the read: whichever it returns is whole (the one it began, or the replacement read again).
+  const length = text(await replaced)!.length
+  expect([text(again)!.length, text(third)!.length]).toContain(length)
+})
+test("the output flags are the store's once a session exists: a record read before a commit never writes them back", async () => {
+  const store = new Store(':memory:')
+  stores.push(store)
+  store.save(sessionRow('owned', { state: 'exited', outputSaved: false }))
+  const stale = store.session('owned')!
+  await store.saveBundle('owned', await bundle('owned'))
+  stale.lastActivityAt = 2
+  store.save(stale)
+  expect(store.session('owned')).toMatchObject({ lastActivityAt: 2, outputSaved: true })
+  expect(stale.outputSaved).toBe(true)
 })
 test('a large bundle is written and read in slices: the event loop is never held long', async () => {
   const store = new Store(':memory:')
@@ -120,15 +163,20 @@ test('a large bundle is written and read in slices: the event loop is never held
   setImmediate(probe)
   expect((await store.saveBundle('big', big)).saved).toBe(true)
   const read = await store.bundle('big')
+  // The probe's last turn measures the stretch up to now (a write that never yields is one long stretch).
+  await new Promise((resolve) => setImmediate(resolve))
   probing = false
   expect(text(read)!.length).toBe(text(big)!.length)
   expect(worst).toBeLessThan(12)
 })
-test('on open: a rollback\'s deletions are reconciled, an interrupted write is dropped, and a committed bundle marks its session saved', async () => {
+test('on open: a rollback\'s deletions are reconciled, an interrupted write is dropped, and a running session\'s provisional bundle goes', async () => {
   const path = join(tmpdir(), `terminal-bundles-${crypto.randomUUID()}.db`)
   try {
     const first = new Store(path)
-    for (const id of ['kept', 'gone', 'erased', 'crashed']) { first.save(sessionRow(id, { outputSaved: false })); await first.saveBundle(id, await bundle(id)) }
+    for (const id of ['kept', 'gone', 'erased']) { first.save(sessionRow(id, { outputSaved: false })); await first.saveBundle(id, await bundle(id)) }
+    // Saved, then a crash before the kill: the session is still running.
+    first.save(sessionRow('resumed', { state: 'running', outputSaved: false }))
+    await first.saveBundle('resumed', await bundle('resumed'))
     first.close()
     const { Database } = require('bun:sqlite') as typeof import('bun:sqlite')
     const old = new Database(path)
@@ -136,7 +184,7 @@ test('on open: a rollback\'s deletions are reconciled, an interrupted write is d
     old.query('DELETE FROM sessions WHERE id=?').run('gone')
     old.query('UPDATE sessions SET value=? WHERE id=?').run(JSON.stringify({ ...(sessionRow('erased') as object), historyDeleted: true }), 'erased')
     // A write that never committed: parts of a generation no bundle names.
-    old.query("INSERT INTO bundle_parts VALUES ('kept', 1, 0, 'piece', NULL, 'orphan')").run()
+    old.query("INSERT INTO bundle_parts VALUES ('kept', 99, 0, 'piece', NULL, 'orphan')").run()
     old.close()
     const reopened = new Store(path)
     stores.push(reopened)
@@ -144,11 +192,13 @@ test('on open: a rollback\'s deletions are reconciled, an interrupted write is d
     expect(await reopened.bundle('gone')).toBeUndefined()
     expect(await reopened.bundle('erased')).toBeUndefined()
     const leftover = new Database(path)
-    expect(leftover.query("SELECT COUNT(*) AS n FROM bundle_parts WHERE generation=1").get()).toEqual({ n: 0 })
+    expect(leftover.query("SELECT COUNT(*) AS n FROM bundle_parts WHERE generation=99").get()).toEqual({ n: 0 })
     expect(leftover.query("SELECT COUNT(*) AS n FROM bundle_parts WHERE session IN ('gone','erased')").get()).toEqual({ n: 0 })
     leftover.close()
-    // Every bundle was committed while its record still said false (as a crash before the record leaves it).
-    expect(reopened.sessions().find((session) => session.id === 'crashed')?.outputSaved).toBe(true)
+    // A running session's bundle was provisional: gone, and its output is saved again when it ends.
+    expect(await reopened.bundle('resumed')).toBeUndefined()
+    expect(reopened.session('resumed')?.outputSaved).toBe(false)
+    expect(reopened.session('kept')?.outputSaved).toBe(true)
   } finally {
     for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true })
   }
