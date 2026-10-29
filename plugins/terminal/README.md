@@ -90,13 +90,20 @@ until someone fits it again.
 
 Every other screen renders the real grid locally. Its font is fitted to the
 pane's width (never below 10px on touch screens, 8px elsewhere) and the pane
-pans natively in both directions. Pinch (or Ctrl+scroll on a trackpad) sets a
-font for this device, remembered in this browser; **Reset view** returns to
-the fitted font. The view follows the cursor after each update; panning or
-selecting text pauses that until **↓ Live** (Follow cursor). Both controls
-sit small in the pane's top-right corner, never over the bottom rows where
-the program's input line is, and tapping them keeps the keyboard where it
-is. Panning never opens the keyboard or sends input.
+pans natively in both directions. Scrolling up or down (a wheel, a trackpad,
+one finger) moves through the terminal's history while there is history that
+way, and pans the grid otherwise; sideways scrolling pans. A finger drag
+keeps going after it lifts. Pinch (or Ctrl+scroll on a trackpad) sets a font
+for this device, remembered in this browser; **Reset view** returns to the
+fitted font. The view follows the cursor after each update; panning,
+scrolling into the history or selecting text pauses that until **↓ Live**
+(Follow cursor) or focusing the terminal to type — reaching the bottom by
+itself does not. Both controls sit small in the pane's top-right corner,
+never over the bottom rows where the program's input line is, and tapping
+them keeps the keyboard where it is. Scrolling and panning never open the
+keyboard or send input: a full-screen program never sees a wheel as mouse
+clicks or arrow keys, and a tap never reaches a program as a mouse click
+(a mouse click on a desktop still does, as in any terminal).
 
 Session actions › **Use this size as the default** saves the current grid as
 the Default columns/rows for new sessions nobody's screen sized yet (agent
