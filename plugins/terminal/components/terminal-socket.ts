@@ -199,6 +199,7 @@ export class TerminalSocketClient {
       case 'layout':
       case 'geometry':
       case 'barrier':
+      case 'digest-point':
         this.raw?.message(message, text)
         return
       // A rebuild can be told before the first picture (the join waits for the seed): still counted.
@@ -261,6 +262,7 @@ export class TerminalSocketClient {
       display: (state, detail) => this.options.onDisplay?.(state, detail),
       // A fresh connection joins with a fresh picture.
       failed: () => this.reconnect(),
+      report: (epoch, seq, digest) => { this.socket?.send(JSON.stringify({ type: 'digest', epoch, seq, digest })) },
     })
     return this.raw
   }

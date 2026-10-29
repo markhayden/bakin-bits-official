@@ -46,6 +46,7 @@ import { checkpointSteps, type Checkpoint, CHECKPOINT_FORMAT, type CheckpointRes
 import { EVENT_OVERHEAD_BYTES, terminalSteps, textSteps } from './memory'
 import type { LogConsumer, LogEvent } from './output-log'
 import { SeedDeferred, type SeedScope } from './reseed'
+import { screenDigest } from './digest'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
 import { internals, HAS_EXTENDED, type Term } from './terminal-state'
 import { altEnteredCols, altEntry, guardParser, type patchLinkLifetime } from './xterm-fixes'
@@ -79,7 +80,8 @@ export const HISTORY_QUIET_MS = 1000
 /** Output quiet this long while waiting: rebuild at once (the flood is over). */
 export const REBUILD_QUIET_MS = 100
 
-export type RebuildCause = 'overload' | 'tail bound' | 'width'
+/** `divergence`: a viewer's picture, or tmux's cursor, disagreed with the replica's (plan T37). */
+export type RebuildCause = 'overload' | 'tail bound' | 'width' | 'divergence'
 
 /** Lifecycle facts for logs: never terminal contents. */
 export type ReplicaDiagnostic =
@@ -393,6 +395,25 @@ export class Replica implements LogConsumer {
 
   /** Settles once every event delivered so far is applied (and any checkpoint it started ran). */
   idle(): Promise<void> { return this.serial(async () => undefined) }
+
+  /**
+   * The picture's digest at its newest event (lib/digest.ts, plan T37),
+   * read between events and kept for that event: every viewer's point at
+   * one position costs one digest. Undefined while there is no picture.
+   */
+  digest(): Promise<{ seq: number; digest: string } | undefined> {
+    return this.serial(async () => {
+      const cut = this.cut()
+      if (!cut || !this.term) return undefined
+      if (this.digestMemo?.seq !== cut.throughSeq) this.digestMemo = { seq: cut.throughSeq, digest: screenDigest(this.term) }
+      return this.digestMemo
+    })
+  }
+  private digestMemo: { seq: number; digest: string } | undefined
+  /** The picture disagreed with what it should be (plan T37): rebuilt from tmux, between events. */
+  diverged(): Promise<void> {
+    return this.serial(async () => { if (this.base) this.rebuild('divergence', 0) })
+  }
 
   /** Read the emulator between events (undefined while there is none). */
   read<T>(view: (terminal: Term) => T): Promise<T | undefined> {

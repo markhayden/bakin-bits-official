@@ -13,6 +13,7 @@ function harness() {
   const applied: number[] = []
   const states: string[] = []
   const failures: string[] = []
+  const reports: string[] = []
   let made = 0
   let sinks = 0
   /** What the next geometry's install answers. */
@@ -27,6 +28,7 @@ function harness() {
         finish: () => log.push(`finish ${id}`),
         live: () => log.push(`live ${id}`),
         discard: () => log.push(`discard ${id}`),
+        digest: () => `digest-of-${id}`,
         geometry: (cols, rows) => {
           const sink = ++sinks
           log.push(`geometry ${id}.${sink} ${cols}x${rows}`)
@@ -43,11 +45,12 @@ function harness() {
     applied: (epoch) => applied.push(epoch),
     display: (state) => states.push(state),
     failed: (reason) => failures.push(reason),
+    report: (epoch, seq, digest) => reports.push(`${epoch} ${seq} ${digest}`),
   })
   const send = (message: Record<string, unknown> & { type: string }) => picture.message(message, JSON.stringify(message))
   /** Call back the writes submitted so far (not ones they cause). */
   const flush = () => { for (const done of pending.splice(0)) done() }
-  return { picture, log, retired, applied, states, failures, installs, send, flush, pending }
+  return { picture, log, retired, applied, states, failures, reports, installs, send, flush, pending }
 }
 
 describe('RawPicture', () => {
@@ -205,5 +208,20 @@ describe('RawPicture', () => {
     h.flush()
     expect(h.failures).toEqual(['geometry'])
     expect(h.log.filter((line) => line.startsWith('write 1 next'))).toEqual([])
+  })
+  it('a digest point is answered after every write before it, with the picture\'s digest; another picture\'s is not (plan T37)', () => {
+    const h = harness()
+    h.send(header('join', 1, '') as never)
+    h.send({ type: 'barrier', epoch: 1, throughSeq: 1 })
+    h.picture.binary(encode('out'))
+    const point = { type: 'digest-point', epoch: 1, seq: 2 }
+    h.send(point)
+    expect(h.reports).toEqual([])
+    h.flush()
+    expect(h.reports).toEqual(['1 2 digest-of-1'])
+    // Retired like any display frame.
+    expect(h.retired.at(-1)).toBe([header('join', 1, ''), { type: 'barrier', epoch: 1, throughSeq: 1 }, point].reduce((sum, frame) => sum + JSON.stringify(frame).length, 0) + 3)
+    h.send({ type: 'digest-point', epoch: 7, seq: 3 })
+    expect(h.reports).toEqual(['1 2 digest-of-1'])
   })
 })

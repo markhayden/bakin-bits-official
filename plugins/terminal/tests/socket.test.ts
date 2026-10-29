@@ -6,7 +6,7 @@ import type { PluginSocket } from '@makinbakin/sdk/types'
 import { DeliveryUncertainError, TerminalError, type Principal, type Session } from '../lib/contracts'
 import type { NativeClient } from '../lib/processes'
 import { Store } from '../lib/store'
-import { SOCKET_CLOSE, TerminalViewer, type ViewerManager } from '../lib/socket'
+import { DIGEST_WINDOW_MS, digestMismatch, SOCKET_CLOSE, TerminalViewer, type ViewerManager } from '../lib/socket'
 import type { RawSource } from '../lib/raw-display'
 import { makeBundle, type Bundle } from '../lib/bundle'
 import { Replica } from '../lib/replica'
@@ -32,6 +32,7 @@ function fakeManager(initial = session(), raw: { replica?: RawSource; bundle?: B
   let writeError: Error | undefined
   /** Raw joins' recovery calls, and what the next one throws. */
   const ensured: string[] = []
+  const divergences: string[] = []
   let ensureError: Error | undefined
   let ensureStall: Promise<void> = Promise.resolve()
   const manager: ViewerManager = {
@@ -71,11 +72,12 @@ function fakeManager(initial = session(), raw: { replica?: RawSource; bundle?: B
     rawPath: () => raw !== undefined,
     replica: () => raw?.replica,
     bundle: async () => raw?.bundle,
+    diverged: (id, detail) => { divergences.push(`${id} ${detail.category} ${detail.mismatches}`) },
     ensureReplica: async (id) => { ensured.push(id); if (ensureError) throw ensureError; await ensureStall },
     fidelity: () => ({ rebuilds: {} }),
   }
   return {
-    manager, writes, ensured,
+    manager, writes, ensured, divergences,
     failEnsure: (error: Error) => { ensureError = error },
     stallEnsure: (until: Promise<void>) => { ensureStall = until },
     push: (data: string | Buffer) => { chunks.push(Buffer.from(data)); for (const wake of [...outputWaiters]) wake() },
@@ -507,6 +509,39 @@ describe('TerminalViewer on the raw path', () => {
     peer.client({ type: 'hello', clientId: CLIENT })
     await until(() => peer.of('sync').length === 1, 'sync')
     expect(peer.of('join')).toEqual([])
+  })
+  it('the safety net (plan T37): a quiet live picture gets a digest point; a matching report is left alone, a mismatching one rejoins the viewer', async () => {
+    const replica = await seeded()
+    for (const honest of [true, false]) {
+      const { manager } = fakeManager(session(), { replica })
+      const peer = fakeSocket()
+      new TerminalViewer(manager, peer.socket, `s1`, { ...options, digestTickMs: 10, digestQuietMs: 0 })
+      peer.client({ type: 'hello', clientId: CLIENT })
+      await until(() => peer.of('barrier').length === 1, 'barrier')
+      await until(() => peer.of('digest-point').length === 1, 'a digest point')
+      const point = peer.of('digest-point')[0] as { epoch: number; seq: number }
+      expect(point).toMatchObject({ epoch: 1, seq: 1 })
+      const truth = (await replica.digest())!.digest
+      peer.client({ type: 'digest', epoch: point.epoch, seq: point.seq, digest: honest ? truth : 'deadbeef' })
+      if (honest) {
+        await Bun.sleep(30)
+        expect(peer.state.closed).toBeNull()
+        // The same position is not asked again.
+        expect(peer.of('digest-point')).toHaveLength(1)
+        peer.socket.close?.(1000, '')
+      } else {
+        await until(() => peer.state.closed !== null, 'rejoin')
+        expect(peer.state.closed).toEqual({ code: 4000, reason: 'Display differed from the terminal; rejoin' })
+      }
+    }
+    replica.close()
+  })
+  it('mismatches per session: each rejoins, the third escalates once (a replica rebuild), more within the window are left alone', () => {
+    const at = Date.now()
+    const id = `window-${at}`
+    expect([1, 2, 3, 4, 5].map((n) => digestMismatch(id, at + n))).toEqual(['rejoin', 'rejoin', 'escalate', 'bounded', 'bounded'])
+    // Past the window it starts over.
+    expect(digestMismatch(id, at + DIGEST_WINDOW_MS + 10)).toBe('rejoin')
   })
   it('a recovery slower than the join deadline closes for a reconnect at the deadline, nothing of a picture sent', async () => {
     const replica = await seeded()

@@ -8,6 +8,7 @@ import type { Session } from '../lib/contracts'
 import type { Fidelity } from '../lib/raw-display'
 import type { UnavailableReason } from '../lib/socket'
 import { installGeometry } from '../lib/geometry'
+import { screenDigest } from '../lib/digest'
 import { clampSize } from '../lib/sizing'
 import { trackCursorVisibility } from '../lib/cursor-visibility'
 import { applyTerminalProfile, isAllowedLink, TERMINAL_OPTIONS } from '../lib/terminal-profile'
@@ -368,6 +369,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
             if (pending !== next) requestAnimationFrame(applyView)
           },
           finish: (side) => { if (!discarded) restoreSideState(term, side) },
+          digest: () => screenDigest(term),
           // A width change (plan T34a): tmux's picture parsed off screen, its geometry installed into this terminal.
           geometry: (cols, rows) => {
             const scratch = new Terminal({ cols, rows, ...TERMINAL_OPTIONS })

@@ -917,3 +917,30 @@ describe('Replica width changes (plan T34a)', () => {
     r.close()
   })
 })
+
+describe('Replica safety net (plan T37)', () => {
+  it('its digest is read between events and kept for that event; none without a picture', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    expect(await r.digest()).toBeUndefined()
+    await r.event(s.seed('\x1bchello', 40, 10))
+    const first = (await r.digest())!
+    expect(await r.digest()).toBe(first)
+    await r.event(s.output(' world'))
+    const second = (await r.digest())!
+    expect(second.seq).toBeGreaterThan(first.seq)
+    expect(second.digest).not.toBe(first.digest)
+    r.close()
+  })
+  it('a divergence rebuilds it from tmux (counted, and asked for as a seed)', async () => {
+    const s = stream()
+    const { r, reseeds } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bchello', 40, 10))
+    await r.diverged()
+    expect(r.rebuildCause).toBe('divergence')
+    expect(r.stats.rebuilds).toEqual({ divergence: 1 })
+    for (let tries = 0; tries < 200 && reseeds.length === 0; tries++) await Bun.sleep(1)
+    expect(reseeds).toEqual(['divergence'])
+    r.close()
+  })
+})

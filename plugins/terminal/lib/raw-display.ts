@@ -11,7 +11,9 @@
  *   picture from tmux, plan T34a), then its `bytes` as binary frames: the
  *   viewer parses them into a scratch terminal and installs its geometry;
  * - `barrier { epoch, throughSeq }`: the replay is complete;
- * - `rebuilding { cause, fidelity }`: the picture is stale until a rebase.
+ * - `rebuilding { cause, fidelity }`: the picture is stale until a rebase;
+ * - `digest-point { epoch, seq }` (plan T37): in order after event `seq`; the
+ *   viewer answers with its picture's digest there (lib/digest.ts).
  * Once a header for an epoch is sent, nothing of an earlier epoch follows,
  * so binary frames need no epoch on the ordered socket.
  *
@@ -59,6 +61,9 @@ export interface Fidelity { rebuilds: Partial<Record<RebuildCause, number>>; las
 export interface RawSource {
   subscribe(listener: ReplicaListener): { state: ReplicaState; unsubscribe(): void }
   state(): ReplicaState
+  /** A live replica's digest at its newest event and how long it has been quiet (plan T37); a saved picture has neither. */
+  digest?(): Promise<{ seq: number; digest: string } | undefined>
+  readonly quietMs?: number
 }
 
 export interface DisplaySink {
@@ -121,9 +126,16 @@ function sideState(checkpoint: Checkpoint): Record<string, unknown> {
 }
 
 /** The bytes an event carries to a viewer (a layout none; a seed is never in a tail). */
-const payload = (event: LogEvent): number => event.kind === 'output' || event.kind === 'geometry' ? event.bytes.length : 0
+/** A point the viewer reports its digest at, queued in order with the events (plan T37). */
+interface DigestPoint { kind: 'digest-point'; seq: number }
+type Queued = LogEvent | DigestPoint
+/** Expected digests a display keeps for its epoch (older ones go first). */
+const DIGEST_POINTS_KEPT = 8
 
-function* eventFrames(event: LogEvent): Generator<Frame> {
+const payload = (event: Queued): number => event.kind === 'output' || event.kind === 'geometry' ? event.bytes.length : 0
+
+function* eventFrames(event: Queued, epoch: number): Generator<Frame> {
+  if (event.kind === 'digest-point') { yield { json: { type: 'digest-point', epoch, seq: event.seq } }; return }
   if (event.kind === 'layout') { yield { json: { type: 'layout', seq: event.seq, cols: event.cols, rows: event.rows } }; return }
   if (event.kind === 'geometry') yield { json: { type: 'geometry', seq: event.seq, cols: event.cols, rows: event.rows, generation: event.generation, bytes: event.bytes.length } }
   else if (event.kind !== 'output') return
@@ -143,9 +155,13 @@ export class RawDisplay implements ReplicaListener {
   /** The replica's latest published cut, kept until a replacement takes it (one at most). */
   private latest: Cut | undefined
   /** The live event being sent, while its frames are. */
-  private sending: LogEvent | undefined
+  private sending: Queued | undefined
   /** Live events after the current picture's cut, not yet sent. */
-  private backlog: LogEvent[] = []
+  private backlog: Queued[] = []
+  /** The digest the replica had at each point sent this epoch, by seq (plan T37). */
+  private expected = new Map<number, string>()
+  /** The newest event the replica told this display of (or the cut it joined at). */
+  private heardSeq = -1
   private backlogBytes = 0
   /** A newer picture is owed (an overflow or a rebuild); taken once the replay in progress is sent. */
   private replacement = false
@@ -216,6 +232,7 @@ export class RawDisplay implements ReplicaListener {
 
   // ReplicaListener: synchronous and bounded.
   event(event: LogEvent): void {
+    this.heardSeq = event.seq
     // A newer picture is owed: it will include this event.
     if (this.closed || this.waitingForSeed || this.replacement) return
     const bytes = payload(event)
@@ -289,8 +306,37 @@ export class RawDisplay implements ReplicaListener {
     this.control = []
     this.replaying = cut
     this.pinned = cut
+    this.heardSeq = Math.max(this.heardSeq, cut.throughSeq)
+    // Points of the old picture are moot: their reports are of a picture this viewer left.
+    this.expected.clear()
     this.replay = this.frames(cut, kind, this.epoch)
     this.pump()
+  }
+
+  /**
+   * Ask the viewer for its digest after event `seq`, whose replica digest is
+   * `digest` (plan T37). Only on a live picture that already has `seq`: not
+   * while a replay, a replacement or a rebuild is owed (no join point), and
+   * never for a position the viewer was not sent in order.
+   */
+  digestPoint(seq: number, digest: string): boolean {
+    if (this.closed || this.replaying || this.replacement || this.waitingForSeed || !this.barriers.has(this.epoch)) return false
+    // The digest was read between events, and more may have come since: a point after them would compare a later picture.
+    if (this.heardSeq !== seq) return false
+    this.expected.set(seq, digest)
+    for (const old of this.expected.keys()) { if (this.expected.size <= DIGEST_POINTS_KEPT) break; this.expected.delete(old) }
+    this.backlog.push({ kind: 'digest-point', seq })
+    this.pump()
+    return true
+  }
+
+  /** The viewer's digest at a point: 'match', 'mismatch', or 'stale' (another epoch, or a point no longer kept). */
+  digestReport(epoch: number, seq: number, digest: string): 'match' | 'mismatch' | 'stale' {
+    if (epoch !== this.epoch) return 'stale'
+    const expected = this.expected.get(seq)
+    if (expected === undefined) return 'stale'
+    this.expected.delete(seq)
+    return expected === digest ? 'match' : 'mismatch'
   }
 
   private *frames(cut: Cut, kind: 'join' | 'rebase', epoch: number): Generator<Frame> {
@@ -300,7 +346,7 @@ export class RawDisplay implements ReplicaListener {
     // `history` is this picture's own (the session's fidelity may have moved on while it waited for credit).
     yield { json: { type: kind, epoch, ...header, fidelity: this.options.fidelity(), history: cut.history ? 'complete' : 'incomplete', checkpoint: sideState(cut.checkpoint), bytes: checkpointBytes(cut.checkpoint.data), baseSeq: cut.baseSeq, throughSeq: cut.throughSeq } }
     for (const bytes of checkpointText(cut.checkpoint.data)) yield { bytes }
-    for (const event of cut.tail) yield* eventFrames(event)
+    for (const event of cut.tail) yield* eventFrames(event, epoch)
     yield { json: { type: 'barrier', epoch, throughSeq: cut.throughSeq } }
   }
 
@@ -332,7 +378,7 @@ export class RawDisplay implements ReplicaListener {
             const event = this.backlog.shift()
             if (!event) return
             this.backlogBytes -= payload(event)
-            this.live = eventFrames(event)
+            this.live = eventFrames(event, this.epoch)
             this.sending = event
           }
           const next = this.live.next()
@@ -364,7 +410,7 @@ export class RawDisplay implements ReplicaListener {
    */
   *retainedSteps(): Generator<void, number> {
     let bytes = this.backlogBytes + this.backlog.length * EVENT_OVERHEAD_BYTES + (this.sent - this.retired)
-    if (this.sending && this.sending.kind !== 'layout') bytes += payload(this.sending) + EVENT_OVERHEAD_BYTES
+    if (this.sending && this.sending.kind !== 'layout' && this.sending.kind !== 'digest-point') bytes += payload(this.sending) + EVENT_OVERHEAD_BYTES
     if (this.pinned) bytes += ENCODER_SCRATCH_BYTES
     const current = this.source.state()
     const base = current.kind === 'live' ? current.cut.checkpoint : undefined

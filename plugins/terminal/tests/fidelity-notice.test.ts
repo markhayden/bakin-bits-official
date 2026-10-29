@@ -32,6 +32,9 @@ describe('fidelityNotice (spec D13 recovery contract, decision 1)', () => {
     expect(notice.title).toBe('Terminal view recovered with limitations')
     expect(notice.description).toEndWith("Cause: the view's connection to tmux was replaced; output arrived faster than the view could follow; the view could not save a restorable copy of recent output in time; a width change could not be applied in place.")
   })
+  it('a divergence the safety net caught is a recovery, named', () => {
+    expect(fidelityNotice({ rebuilds: { divergence: 1 } })).toMatchObject({ title: 'Terminal view recovered with limitations', description: expect.stringContaining('Cause: the view was found to differ from the terminal.') })
+  })
   it('an ended session without its output says why', () => {
     expect(unavailableNotice('not-saved').title).toBe('Output not saved')
     expect(unavailableNotice('evicted')).toMatchObject({ title: 'Output removed', description: expect.stringContaining('storage limit') })

@@ -431,3 +431,56 @@ rawTest('an ended session whose output was not saved (plan T35b): the page shows
     await browser.close()
   }
 }, 60_000)
+
+rawTest('the safety net (plan T37): a viewer\'s digests match the replica\'s through real output; one made to differ rejoins and agrees again', async () => {
+  const browser = await launchChromium()
+  const client = 'raw-browser-digest-test-01'
+  const page = await browser.newPage({ viewport })
+  const { id } = await createSession(page, client)
+  const received: string[] = []
+  const reports: string[] = []
+  let connections = 0
+  let tamper = false
+  // Every socket goes through this route; while `tamper` is set, the viewer's next digest is altered on its way out.
+  await page.routeWebSocket(/\/socket/, (ws) => {
+    connections++
+    const server = ws.connectToServer()
+    ws.onMessage((message) => {
+      if (typeof message === 'string' && message.includes('"type":"digest"')) {
+        reports.push(message)
+        if (tamper) { tamper = false; server.send(message.replace(/"digest":"[0-9a-f]{8}"/, '"digest":"deadbeef"')); return }
+      }
+      server.send(message)
+    })
+    server.onMessage((message) => {
+      if (typeof message === 'string') received.push((JSON.parse(message) as { type: string }).type)
+      ws.send(message)
+    })
+  })
+  try {
+    await open(page, id)
+    await typeLine(page, `printf '\\033[1;32mgreen\\033[0m \\033[4:3mwavy\\033[0m\\n'; printf '\\033[?25l'; seq 1 30`)
+    await waitForRow(page, '^30$').catch(async (error) => {
+      await page.screenshot({ path: join(import.meta.dir, '../test-results/raw-path/digest-fail.png') })
+      throw new Error(`${error}; received ${JSON.stringify(received.filter((t) => t !== 'presence'))}, reports ${reports.length}, connections ${connections}, rows ${JSON.stringify(await rows(page))}`)
+    })
+    // Quiet: a point, answered, and the viewer keeps its connection.
+    for (const start = Date.now(); reports.length === 0; await Bun.sleep(100)) if (Date.now() - start > 10_000) throw new Error(`no digest report; received ${JSON.stringify([...new Set(received)])}, points ${received.filter((t) => t === 'digest-point').length}, connections ${connections}`)
+    await page.waitForTimeout(500)
+    expect(connections).toBe(1)
+    // The next report is made to differ: the server rejoins the viewer, and the new picture agrees.
+    tamper = true
+    await typeLine(page, 'echo after')
+    await waitForRow(page, '^after$')
+    for (const start = Date.now(); connections < 2; await Bun.sleep(100)) if (Date.now() - start > 15_000) throw new Error('no rejoin after the mismatch')
+    await page.waitForFunction(() => document.querySelector('[data-display]')?.getAttribute('data-display') === 'live', null, { timeout: 15_000 })
+    const before = reports.length
+    for (const start = Date.now(); reports.length === before; await Bun.sleep(100)) if (Date.now() - start > 10_000) throw new Error('no report after the rejoin')
+    await page.waitForTimeout(500)
+    expect(connections).toBe(2)
+    await waitForRow(page, '^after$')
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 90_000)

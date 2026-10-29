@@ -76,6 +76,8 @@ export interface ViewerManager {
   rawPath(id: string): boolean
   /** The session's replica, while attached (raw path). */
   replica(id: string): RawSource | undefined
+  /** A viewer's picture repeatedly differed from the replica's (plan T37): rebuild it from tmux, logged. */
+  diverged(id: string, detail: { category: string; seq: number; mismatches: number }): void
   /** Attach the session again if its replica was lost (raw path, before a join waits for it). */
   ensureReplica(id: string, principal: Principal): Promise<void>
   /** What the session's output has been through: rebuilds and recoveries (sticky). */
@@ -94,7 +96,28 @@ const message = z.discriminatedUnion('type', [
   z.object({ type: z.literal('pong') }),
   z.object({ type: z.literal('retired'), bytes: z.number().int().nonnegative() }),
   z.object({ type: z.literal('replay-applied'), epoch: z.number().int().positive() }),
+  z.object({ type: z.literal('digest'), epoch: z.number().int().positive(), seq: z.number().int().nonnegative(), digest: z.string().regex(/^[0-9a-f]{8}$/) }),
 ])
+
+/** How often a live raw viewer's next digest point is considered (plan T37). */
+export const DIGEST_TICK_MS = 1000
+/** Replica output quiet this long is a quiet point. */
+export const DIGEST_QUIET_MS = 1000
+/** During output, a point at most this often. */
+export const DIGEST_PERIOD_MS = 10_000
+/** Mismatches per session within the window: each rejoins its viewer; the third escalates (once); more are left alone. */
+export const DIGEST_WINDOW_MS = 10 * 60 * 1000
+export const DIGEST_ESCALATE_AT = 3
+/** Recent digest mismatches by session (a viewer's rejoin must not reset them). */
+const mismatches = new Map<string, number[]>()
+/** What a mismatch should do: rejoin the viewer, also escalate, or nothing more (bounded). */
+export function digestMismatch(sessionId: string, now: number): 'rejoin' | 'escalate' | 'bounded' {
+  const recent = (mismatches.get(sessionId) ?? []).filter((at) => now - at < DIGEST_WINDOW_MS)
+  recent.push(now)
+  mismatches.set(sessionId, recent)
+  if (recent.length < DIGEST_ESCALATE_AT) return 'rejoin'
+  return recent.length === DIGEST_ESCALATE_AT ? 'escalate' : 'bounded'
+}
 
 /** How long a raw join waits for the session's replica and its seed, from the hello (lib/raw-display.ts JOIN_WAIT_MS). */
 export const REPLICA_WAIT_MS = JOIN_WAIT_MS
@@ -126,6 +149,8 @@ export class TerminalViewer {
   private wake: (() => void) | undefined
   private evict: ReturnType<typeof setTimeout> | undefined
   private heartbeat: ReturnType<typeof setInterval> | undefined
+  private digestTimer: ReturnType<typeof setInterval> | undefined
+  private lastPoint = { seq: -1, at: 0 }
   private lastHeard: number
   private unsubscribe: (() => void) | undefined
   private unsubscribeNatives: (() => void) | undefined
@@ -140,7 +165,7 @@ export class TerminalViewer {
     private manager: ViewerManager,
     private socket: PluginSocket,
     private sessionId: string,
-    private options: { now?: () => number; ackWindow?: number; pauseEvictMs?: number; heartbeatMs?: number; silenceCloseMs?: number; replicaWaitMs?: number } = {},
+    private options: { now?: () => number; ackWindow?: number; pauseEvictMs?: number; heartbeatMs?: number; silenceCloseMs?: number; replicaWaitMs?: number; digestTickMs?: number; digestQuietMs?: number } = {},
   ) {
     this.lastHeard = this.now()
     socket.onMessage((data) => { this.receive(data).catch((error: unknown) => this.failed(error)) })
@@ -165,6 +190,7 @@ export class TerminalViewer {
     this.abort.abort()
     clearTimeout(this.evict)
     clearInterval(this.heartbeat)
+    clearInterval(this.digestTimer)
     this.unsubscribe?.()
     this.unsubscribeNatives?.()
     this.raw?.close()
@@ -212,6 +238,7 @@ export class TerminalViewer {
       case 'pong': return
       case 'retired': this.raw?.retire(parsed.bytes); return
       case 'replay-applied': this.raw?.replayApplied(parsed.epoch); return
+      case 'digest': this.digestReported(parsed.epoch, parsed.seq, parsed.digest); return
     }
   }
 
@@ -318,6 +345,28 @@ export class TerminalViewer {
       now: this.options.now,
     })
     this.raw.start()
+    // The safety net (plan T37): points at quiet times and periodically during output.
+    const replica = source
+    if (replica.digest) this.digestTimer = setInterval(() => { void this.digestTick(replica) }, this.options.digestTickMs ?? DIGEST_TICK_MS)
+  }
+
+  private async digestTick(source: RawSource): Promise<void> {
+    if (this.closed || !this.raw || !source.digest) return
+    const now = this.now()
+    const quiet = (source.quietMs ?? 0) >= (this.options.digestQuietMs ?? DIGEST_QUIET_MS)
+    if (!quiet && now - this.lastPoint.at < DIGEST_PERIOD_MS) return
+    const point = await source.digest()
+    if (!point || point.seq === this.lastPoint.seq || this.closed) return
+    if (this.raw.digestPoint(point.seq, point.digest)) this.lastPoint = { seq: point.seq, at: now }
+  }
+
+  private digestReported(epoch: number, seq: number, digest: string): void {
+    if (this.raw?.digestReport(epoch, seq, digest) !== 'mismatch') return
+    const action = digestMismatch(this.sessionId, this.now())
+    if (action === 'bounded') return
+    if (action === 'escalate') this.manager.diverged(this.sessionId, { category: 'viewer digest', seq, mismatches: DIGEST_ESCALATE_AT })
+    // A fresh join (the replica's picture, or the rebuild's once it lands).
+    this.close(SOCKET_CLOSE.resync, 'Display differed from the terminal; rejoin')
   }
 
   /** An ended session's final picture, joined like a live one; the session's own fidelity travels in the bundle. */

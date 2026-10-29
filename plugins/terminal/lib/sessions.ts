@@ -571,6 +571,15 @@ export class Sessions {
     if (this.get(id, principal).state === 'running' && this.replicaLive(id)) return Promise.resolve()
     return this.run(async () => { await this.ensureAttached(this.get(id, principal)) })
   }
+  /**
+   * A viewer's picture repeatedly differed from the replica's (plan T37): the
+   * replica is rebuilt from tmux, and that is logged with positions and
+   * counts — never the screen's contents (terminal output can hold secrets).
+   */
+  diverged(id: string, detail: { category: string; seq: number; mismatches: number }): void {
+    this.options.log?.info('Terminal display diverged; rebuilding from tmux', { sessionId: id, ...detail })
+    void this.driver.replica?.(id)?.diverged().catch(() => undefined)
+  }
   /** An ended session's saved final output, read across turns (undefined: none, or unreadable). */
   bundle(id: string): Promise<Bundle | undefined> { return this.store.bundle(id) }
   /** The rebuilds the session's output has been through. */

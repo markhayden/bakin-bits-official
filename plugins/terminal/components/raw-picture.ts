@@ -10,7 +10,8 @@
  * One ordered queue: writes go to xterm as they arrive (a geometry's to its
  * scratch terminal); the side state, a layout, a geometry's install and the
  * barrier each wait for every write before them, and nothing after them is
- * written until they ran. A new header cancels the queue.
+ * written until they ran; so does a `digest-point` (plan T37), answered with
+ * the picture's digest as of its event. A new header cancels the queue.
  *
  * Every display frame is retired exactly once — applied, or discarded when
  * its picture is cancelled — and the total retired is what the server's
@@ -39,6 +40,8 @@ export interface PictureTarget {
   live(): void
   /** Cancelled (a newer picture replaced it before it was shown). */
   discard(): void
+  /** The picture's digest now (lib/digest.ts, plan T37). */
+  digest(): string
 }
 
 export interface PictureHeader {
@@ -62,6 +65,8 @@ export interface RawPictureOptions {
   display(state: DisplayState, detail?: Record<string, unknown>): void
   /** The picture cannot follow the stream (a geometry it could not install): reconnect for a fresh one. */
   failed(reason: string): void
+  /** The picture's digest at a server's point (plan T37): send it. */
+  report(epoch: number, seq: number, digest: string): void
 }
 
 type Op =
@@ -72,6 +77,7 @@ type Op =
   | { kind: 'layout'; cols: number; rows: number; bytes: number; done: boolean }
   | { kind: 'barrier'; epoch: number; bytes: number; done: boolean }
   | { kind: 'notice'; detail: Record<string, unknown>; bytes: number; done: boolean }
+  | { kind: 'digest'; epoch: number; seq: number; bytes: number; done: boolean }
 
 const utf8Length = (text: string) => new TextEncoder().encode(text).length
 
@@ -126,6 +132,8 @@ export class RawPicture {
         if (this.geometry.bytes <= 0) this.installNext()
         return
       }
+      // After every write before it: the picture as of that event.
+      case 'digest-point': this.push({ kind: 'digest', epoch: Number(message.epoch), seq: Number(message.seq), bytes, done: false }); return
       // In order with the picture it is about: a barrier still waiting for its writes goes first.
       case 'rebuilding': this.push({ kind: 'notice', detail: { cause: message.cause, fidelity: message.fidelity }, bytes, done: false }); return
     }
@@ -222,6 +230,12 @@ export class RawPicture {
       // A notice needs no terminal (it can come before the first picture).
       if (op.kind === 'notice') { this.retire(op.bytes); this.setState('rebuilding', op.detail); continue }
       const target = this.target!
+      if (op.kind === 'digest') {
+        this.retire(op.bytes)
+        // A point of another picture (this one replaced it meanwhile) is not answered.
+        if (op.epoch === this.epoch) this.options.report(op.epoch, op.seq, target.digest())
+        continue
+      }
       if (op.kind === 'install') {
         this.sinks.delete(op.sink)
         const installed = op.sink.install()

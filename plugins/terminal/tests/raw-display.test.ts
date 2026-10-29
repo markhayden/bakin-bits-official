@@ -378,3 +378,44 @@ describe('RawDisplay replacement', () => {
     expect(displayBytes(h.display)).toBeLessThan(1024)
   })
 })
+
+describe('digest points (plan T37)', () => {
+  const live = (seq: number) => ({ kind: 'live', cut: cut(['base'], seq) }) as ReplicaState
+  const points = (h: ReturnType<typeof harness>) => h.sent.filter((frame) => 'json' in frame && frame.json.type === 'digest-point').map((frame) => (frame as { json: Record<string, unknown> }).json)
+  it('a point goes in order after its event, on a live picture, and a report compares with the replica digest', () => {
+    const h = harness(live(1))
+    h.display.start()
+    expect(h.display.digestPoint(1, 'aaaaaaaa')).toBe(true)
+    h.src.tell().event(output(2, 'more'))
+    expect(h.display.digestPoint(2, 'bbbbbbbb')).toBe(true)
+    expect(h.kinds().slice(-3)).toEqual(['digest-point', 'bytes 4', 'digest-point'])
+    expect(points(h)).toEqual([{ type: 'digest-point', epoch: 1, seq: 1 }, { type: 'digest-point', epoch: 1, seq: 2 }])
+    expect(h.display.digestReport(1, 1, 'aaaaaaaa')).toBe('match')
+    expect(h.display.digestReport(1, 2, 'cccccccc')).toBe('mismatch')
+    // Each point is answered once; another epoch's report is stale.
+    expect(h.display.digestReport(1, 1, 'aaaaaaaa')).toBe('stale')
+    expect(h.display.digestReport(2, 2, 'bbbbbbbb')).toBe('stale')
+  })
+  it('never for a position after which the display has heard more, nor while a replay, replacement or rebuild is owed', () => {
+    const h = harness(live(1))
+    h.display.start()
+    h.src.tell().event(output(2, 'x'))
+    // The digest was read at seq 1, but seq 2 came since.
+    expect(h.display.digestPoint(1, 'aaaaaaaa')).toBe(false)
+    h.src.tell().rebuilding('overload')
+    expect(h.display.digestPoint(2, 'aaaaaaaa')).toBe(false)
+    expect(points(h)).toEqual([])
+  })
+  it('a rebase makes the old picture\'s points stale', async () => {
+    const h = harness(live(1))
+    h.display.start()
+    h.display.digestPoint(1, 'aaaaaaaa')
+    h.src.set(live(5))
+    h.advance(RESYNC_INTERVAL_MS)
+    h.src.tell().rebuilding('overload')
+    h.src.tell().rebased()
+    await tick()
+    expect(h.kinds()).toContain('rebase')
+    expect(h.display.digestReport(1, 1, 'aaaaaaaa')).toBe('stale')
+  })
+})

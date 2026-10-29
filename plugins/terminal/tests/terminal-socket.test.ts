@@ -276,7 +276,7 @@ describe('TerminalSocketClient on the raw path', () => {
       onPicture: (header) => {
         pictures.push(`${header.type} ${header.epoch}`)
         return {
-          write: (_data, done) => { written.push(done) }, resize: () => undefined, finish: () => undefined, live: () => undefined, discard: () => undefined,
+          write: (_data, done) => { written.push(done) }, resize: () => undefined, finish: () => undefined, live: () => undefined, discard: () => undefined, digest: () => '00000000',
           geometry: () => ({ write: (_data, done) => { written.push(done) }, install: () => installs.ok, discard: () => undefined }),
         }
       },

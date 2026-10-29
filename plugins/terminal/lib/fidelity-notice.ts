@@ -24,6 +24,7 @@ function causes(fidelity: Fidelity): string[] {
   // The tail outgrew its bound before a checkpoint could be taken (by bytes, events or a state no checkpoint restores).
   if (tailBound) named.push('the view could not save a restorable copy of recent output in time')
   if (width) named.push('a width change could not be applied in place')
+  if (fidelity.rebuilds.divergence) named.push('the view was found to differ from the terminal')
   return named
 }
 
