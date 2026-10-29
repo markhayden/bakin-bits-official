@@ -18,7 +18,8 @@ export class Store {
       CREATE INDEX IF NOT EXISTS output_session ON output(session, cursor);
       CREATE TABLE IF NOT EXISTS sizes (session TEXT PRIMARY KEY, bytes INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS bundles (session TEXT PRIMARY KEY, generation INTEGER NOT NULL, header TEXT NOT NULL, bytes INTEGER NOT NULL, saved_at INTEGER NOT NULL, parts INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS bundle_parts (session TEXT NOT NULL, generation INTEGER NOT NULL, idx INTEGER NOT NULL, kind TEXT NOT NULL, meta TEXT, data BLOB, PRIMARY KEY (session, generation, idx));`)
+      CREATE TABLE IF NOT EXISTS bundle_parts (session TEXT NOT NULL, generation INTEGER NOT NULL, idx INTEGER NOT NULL, kind TEXT NOT NULL, meta TEXT, data BLOB, PRIMARY KEY (session, generation, idx));
+      CREATE TABLE IF NOT EXISTS bundle_generations (id INTEGER PRIMARY KEY AUTOINCREMENT);`)
     this.db.transaction(() => {
       // A version that knows no bundles (a rollback to B5) deletes sessions and histories without
       // them: a bundle whose session is gone, or whose history was deleted, goes on the next open.
@@ -26,12 +27,6 @@ export class Store {
         OR session IN (SELECT id FROM sessions WHERE json_extract(value, '$.historyDeleted') = 1)`)
       // Parts no committed bundle names: a write interrupted before its commit, or a replaced one.
       this.db.exec('DELETE FROM bundle_parts WHERE NOT EXISTS (SELECT 1 FROM bundles WHERE bundles.session = bundle_parts.session AND bundles.generation = bundle_parts.generation)')
-      // A bundle of a session still running was provisional (saved, then a crash before the kill):
-      // the session goes on, so its final output is saved again when it ends.
-      const running = `SELECT id FROM sessions WHERE json_extract(value, '$.state') = 'running'`
-      this.db.exec(`UPDATE sessions SET value = json_set(value, '$.outputSaved', json('false')) WHERE id IN (SELECT session FROM bundles) AND id IN (${running})`)
-      this.db.exec(`DELETE FROM bundle_parts WHERE session IN (${running})`)
-      this.db.exec(`DELETE FROM bundles WHERE session IN (${running})`)
     })()
     // Retained bytes are kept as running totals (summing the output on every
     // append made a busy session at its limit scan everything it retained);
@@ -131,8 +126,10 @@ export class Store {
   }
   private writing = new Map<string, Promise<void>>()
   private async writeBundle(session: string, bundle: Bundle): Promise<{ saved: boolean; evicted: string[] }> {
-    // A generation no row of this session has used (committed or staged).
-    const generation = 1 + (this.db.query('SELECT MAX(g) AS g FROM (SELECT MAX(generation) AS g FROM bundles WHERE session=?1 UNION ALL SELECT MAX(generation) FROM bundle_parts WHERE session=?1)').get(session) as { g: number | null }).g!
+    // A generation never used before, by any write (AUTOINCREMENT never reuses one, even after deletions):
+    // a reader that sees the same generation sees the same bundle.
+    const generation = Number(this.db.query('INSERT INTO bundle_generations DEFAULT VALUES').run().lastInsertRowid)
+    this.db.query('DELETE FROM bundle_generations WHERE id<?').run(generation)
     const insert = this.db.query('INSERT INTO bundle_parts VALUES (?, ?, ?, ?, ?, ?)')
     const header = bundleHeader(bundle)
     // What SQLite holds: UTF-8 text and the bytes themselves (meta included).
@@ -155,8 +152,12 @@ export class Store {
     }
     if (bytes > this.bundleLimit) { this.dropGeneration(session, generation); this.markOutput(session, false); return { saved: false, evicted: [] } }
     const evicted: string[] = []
+    let kept = true
     // The bundle, its session's flag, and every eviction with its session's flags: one commit.
     this.db.transaction(() => {
+      // The session was deleted, or its history, while the parts were written: nothing to keep.
+      const owner = this.session(session)
+      if (!owner || owner.historyDeleted) { kept = false; this.dropGeneration(session, generation); return }
       this.db.query('DELETE FROM bundle_parts WHERE session=? AND generation<>?').run(session, generation)
       this.db.query('INSERT OR REPLACE INTO bundles VALUES (?, ?, ?, ?, ?, ?)').run(session, generation, header, bytes, bundle.savedAt, idx)
       this.setOutputFlags(session, true, false)
@@ -170,14 +171,25 @@ export class Store {
         total -= oldest.bytes
       }
     })()
-    return { saved: true, evicted }
+    return { saved: kept, evicted }
   }
   /** Record that a session's final output was not saved (or, `true`, is: with its bundle only). */
   markOutput(session: string, saved: false): void {
     this.setOutputFlags(session, saved, false)
   }
+  /** The flags, with the record's revision moved (viewers drop a record no newer than one they have). */
   private setOutputFlags(session: string, saved: boolean, evicted: boolean): void {
-    this.db.query(`UPDATE sessions SET value = json_set(json_remove(value, '$.outputEvicted'), '$.outputSaved', json(?)${evicted ? `, '$.outputEvicted', json('true')` : ''}) WHERE id=?`).run(String(saved), session)
+    this.db.query(`UPDATE sessions SET value = json_set(json_remove(value, '$.outputEvicted'), '$.outputSaved', json(?), '$.revision', COALESCE(json_extract(value, '$.revision'), 0) + 1${evicted ? `, '$.outputEvicted', json('true')` : ''}) WHERE id=?`).run(String(saved), session)
+  }
+  hasBundle(session: string): boolean {
+    return Boolean(this.db.query('SELECT 1 FROM bundles WHERE session=?').get(session))
+  }
+  /** A running session's bundle was provisional (saved, then a crash before the kill): it goes, and the output is saved again at the end. */
+  discardProvisionalBundle(session: string): void {
+    this.db.transaction(() => {
+      this.deleteBundleUnlocked(session)
+      this.setOutputFlags(session, false, false)
+    })()
   }
   /** The saved bundle, read across turns; undefined when there is none or it cannot be read as this version's. */
   async bundle(session: string): Promise<Bundle | undefined> {

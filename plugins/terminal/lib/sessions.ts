@@ -152,6 +152,20 @@ export class Sessions {
       if (!listeners.size) this.outputListeners.delete(id)
     }
   }
+  /**
+   * tmux says a pane died: one refresh at a time, and one more after it when
+   * hints came meanwhile (a refresh that already checked a session may have
+   * missed its death), never one per hint.
+   */
+  private paneDied(): void {
+    if (this.refreshing) { this.refreshAgain = true; return }
+    this.refreshing = this.refreshStates().catch(() => undefined).finally(() => {
+      this.refreshing = undefined
+      if (this.refreshAgain && !this.closed) { this.refreshAgain = false; this.paneDied() }
+    })
+  }
+  private refreshing: Promise<void> | undefined
+  private refreshAgain = false
   async refreshStates(): Promise<void> {
     const exited = await this.run(async () => {
       const ids: string[] = []
@@ -205,7 +219,7 @@ export class Sessions {
           this.shadowSoon(session.id)
         }).catch(() => undefined)
       }
-    }, () => this.clientsChanged(session.id), () => { void this.refreshStates().catch(() => undefined) })
+    }, () => this.clientsChanged(session.id), () => this.paneDied())
   }
   /** Compare the shadow replica with the bridge once the bridge has been quiet (spec D13, R1). */
   private shadowSoon(id: string): void {
@@ -365,6 +379,8 @@ export class Sessions {
     const session = this.get(id, principal)
     authorize(session, principal, this.enabled(), true, generation)
     if (session.state !== 'running') throw new TerminalError('Session has exited')
+    // Its final picture is being taken: nothing typed now could be in it.
+    if (this.ending.has(id)) throw new TerminalError('Session is ending', 409)
     if (sequence !== session.inputSequence + 1) throw new TerminalError('Input sequence is stale or out of order; do not retry ambiguous input')
     // The Return of a Paste + Enter counts too.
     if (Buffer.byteLength(data) + (options.paste && options.enter ? 1 : 0) > 65536) throw new TerminalError('Input exceeds 64 KiB', 413)
@@ -678,16 +694,16 @@ export class Sessions {
     // operator; an agent sees only its own session). Ending a session never
     // needed to be the live input owner, so the operator can stop an agent's
     // runaway session without seizing keyboard control first.
-    const done = await this.run(async () => {
+    // Reserved in the queue (input to it is refused from here), saved outside it (bounded by
+    // FINAL_CUT_MS); a failed save never blocks the kill (a retained pane leaks).
+    const reserved = await this.run(async () => {
       const session = this.get(id, principal)
-      if (session.state === 'completed') return session
+      if (session.state === 'completed') return { done: session }
       if (await this.driver.alive(id) && !terminate) throw new TerminalError('The process is still running; exit it or explicitly terminate it first')
-      return undefined
+      return { saving: this.saveFinal(id) }
     })
-    if (done) return done
-    // The final output before the kill, outside the queue (bounded by FINAL_CUT_MS); a failed save
-    // never blocks the kill (a retained pane leaks).
-    await this.saveFinal(id)
+    if (reserved.done) return reserved.done
+    await reserved.saving
     return this.run(async () => {
       const session = this.get(id, principal)
       if (session.state === 'completed') return session
@@ -712,9 +728,16 @@ export class Sessions {
   private saveFinal(id: string): Promise<void> {
     const running = this.ending.get(id)
     if (running) return running
+    // Registered at once: a caller in the queue reserves the session before it leaves the queue.
     const work = this.saveFinalOnce(id).finally(() => this.ending.delete(id))
     this.ending.set(id, work)
     return work
+  }
+  /** Best effort: the failure is recorded when it can be, and never stops what follows (a kill). */
+  private markNotSaved(id: string): void {
+    try { this.store.markOutput(id, false) } catch (error) {
+      this.options.log?.info('Terminal could not record that output was not saved', { sessionId: id, error: error instanceof Error ? error.message : String(error) })
+    }
   }
   private async saveFinalOnce(id: string): Promise<void> {
     if (this.store.session(id)?.outputSaved) return
@@ -722,14 +745,14 @@ export class Sessions {
     try {
       const cut = await this.driver.finalCut?.(id, { boundary: this.driver.controlConnected?.(id) ?? false, timeoutMs: FINAL_CUT_MS })
       if (cut) ({ evicted } = await this.store.saveBundle(id, makeBundle(cut, this.fidelity(id), this.now())))
-      else this.store.markOutput(id, false)
+      else this.markNotSaved(id)
     } catch (error) {
       this.options.log?.info('Terminal final output was not saved', { sessionId: id, error: error instanceof Error ? error.message : String(error) })
-      this.store.markOutput(id, false)
+      this.markNotSaved(id)
     }
     // The store set the flags; viewers hear the records as they are now (evicted ones included).
     for (const changed of [id, ...evicted]) {
-      const session = this.store.session(changed)
+      const session = this.closed ? undefined : this.store.session(changed)
       if (session) notify(this.sessionListeners.get(changed), (listener) => listener(session))
     }
   }
@@ -814,7 +837,8 @@ export class Sessions {
   private async sweepUnlocked(): Promise<void> {
     for (const session of this.store.sessions()) {
       if (this.now() - session.lastActivityAt >= (this.options.settings().idleDays ?? 30) * DAY) {
-        if (session.state === 'exited') {
+        // Not while its final save is in flight (sweep() tries a failed one again first).
+        if (session.state === 'exited' && !this.ending.has(session.id)) {
           await this.driver.terminate(session.id)
           await this.stopScreen(session.id)
           session.state = 'completed'
@@ -842,6 +866,9 @@ export class Sessions {
       for (const session of this.store.sessions()) {
         if (session.state !== 'running') continue
         if (await this.driver.alive(session.id)) {
+          // Alive with a bundle: it was saved, then a crash came before the kill; the session goes on. (A
+          // pane that died meanwhile keeps its bundle: that was its final output.)
+          if (this.store.hasBundle(session.id)) this.store.discardProvisionalBundle(session.id)
           await this.driver.title(session)
           // Unreconciled, the session stays detached; the first viewer sync retries.
           await this.attach(session)
@@ -863,6 +890,8 @@ export class Sessions {
     this.shadowTimers.clear()
     for (const token of [...this.reservations.keys()]) this.dropReservation(token, 'Terminal is shutting down')
     await this.pending
+    // Final saves run outside the queue: they settle before their replicas and the store go.
+    await Promise.allSettled([...this.ending.values()])
     this.closed = true
     await this.driver.detach()
     for (const screen of this.screens.values()) { await screen.drain(); screen.close() }

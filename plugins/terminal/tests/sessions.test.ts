@@ -4,6 +4,7 @@ import { Store } from '../lib/store'
 import { DAY, type Session } from '../lib/contracts'
 import type { NativeClient, ProcessDriver } from '../lib/processes'
 import { Replica, type Cut } from '../lib/replica'
+import { makeBundle } from '../lib/bundle'
 
 const managers: Sessions[] = []
 afterEach(async () => { for (const manager of managers.splice(0)) await manager.shutdown() })
@@ -851,15 +852,100 @@ describe('final output (plan T35b)', () => {
     expect(finals).toEqual([`final ${session.id} boundary=true`])
   })
   it('a save that failed at the exit is tried again before maintenance completes the session', async () => {
-    const { manager, finals, finalCut, live } = fixture()
+    const { manager, finals, finalCut, live, advance, terminated } = fixture()
     const session = await manager.create({ title: 'Idle', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
     live.delete(session.id)
     await manager.refreshStates()
     expect(manager.get(session.id, human).outputSaved).toBe(false)
     finalCut.next = picture
+    advance()
     await manager.sweep()
-    expect(manager.get(session.id, human).outputSaved).toBe(true)
+    expect(manager.get(session.id, human)).toMatchObject({ state: 'completed', outputSaved: true })
     expect(finals.filter((entry) => entry.startsWith('final'))).toHaveLength(2)
+    // Saved first, then completed (terminated).
+    expect(finals.at(-1)).toBe(`terminate ${session.id}`)
+    expect(terminated).toEqual([session.id])
+  })
+  it('the ending session refuses input from its reservation on: nothing typed after its final picture is taken', async () => {
+    const { manager, finalCut, writes } = fixture()
+    const ending = await manager.create({ title: 'Ending', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    let release!: (cut: Cut | undefined) => void
+    finalCut.next = () => new Promise((resolve) => { release = resolve })
+    const taken = await manager.control(ending.id, human, 'take')
+    const finishing = manager.finish(ending.id, human, taken.generation, true)
+    for (let tries = 0; tries < 100 && !release; tries++) await Bun.sleep(1)
+    await expect(manager.write(ending.id, human, taken.generation, taken.inputSequence + 1, 'POST-CUT\r')).rejects.toThrow('Session is ending')
+    expect(writes).toEqual([])
+    release(await picture())
+    await finishing
+  })
+  it('shutdown waits for a final save in flight before it closes the store', async () => {
+    const { manager, finalCut, store, live } = fixture()
+    const session = await manager.create({ title: 'Exits', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    let release!: (cut: Cut | undefined) => void
+    finalCut.next = () => new Promise((resolve) => { release = resolve })
+    live.delete(session.id)
+    const refreshing = manager.refreshStates()
+    for (let tries = 0; tries < 100 && !release; tries++) await Bun.sleep(1)
+    let closed = false
+    const original = store.close.bind(store)
+    store.close = () => { closed = true; original() }
+    const stopping = manager.shutdown()
+    await Bun.sleep(20)
+    expect(closed).toBe(false)
+    release(await picture())
+    await refreshing
+    await stopping
+    expect(closed).toBe(true)
+  })
+  it('recording a failure that itself fails never stops the kill', async () => {
+    const { manager, finals, store } = fixture()
+    const session = await manager.create({ title: 'Ends', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    store.markOutput = () => { throw new Error('disk full') }
+    const taken = await manager.control(session.id, human, 'take')
+    expect((await manager.finish(session.id, human, taken.generation, true)).state).toBe('completed')
+    expect(finals.at(-1)).toBe(`terminate ${session.id}`)
+  })
+  it('maintenance never completes an exited session while its final save is in flight (isolated creation runs it too)', async () => {
+    const { manager, finalCut, live, terminated, advance } = fixture()
+    const session = await manager.create({ title: 'Idle', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    let release!: (cut: Cut | undefined) => void
+    finalCut.next = () => new Promise((resolve) => { release = resolve })
+    live.delete(session.id)
+    const refreshing = manager.refreshStates()
+    for (let tries = 0; tries < 100 && !release; tries++) await Bun.sleep(1)
+    advance()
+    await manager['run'](() => manager['sweepUnlocked']())
+    expect(terminated).toEqual([])
+    release(await picture())
+    await refreshing
+    await manager.sweep()
+    expect(terminated).toEqual([session.id])
+    expect(manager.get(session.id, human)).toMatchObject({ state: 'completed', outputSaved: true })
+  })
+  it('pane-died hints coalesce: one refresh, and one more if hints came during it', async () => {
+    const { manager, paneDied } = fixture()
+    const session = await manager.create({ title: 'Lives', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    // A hint is a hint: the pane is still alive, so every refresh checks it again.
+    let checks = 0
+    const original = manager['driver'].alive
+    manager['driver'].alive = async (id: string) => { checks++; await Bun.sleep(2); return original(id) }
+    for (let hint = 0; hint < 20; hint++) paneDied.get(session.id)!()
+    // Absence cannot be polled for: time for every refresh the hints could cause to run.
+    await Bun.sleep(60)
+    expect(checks).toBe(2)
+  })
+  it('at startup, a running session with a bundle: alive, the bundle was provisional and goes; its pane dead, it was the final output and stays', async () => {
+    for (const alive of [true, false]) {
+      const { manager, store, live } = fixture()
+      const session = await manager.create({ title: 'Crashed', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+      // Saved, then a crash before the kill (the record still says running).
+      await store.saveBundle(session.id, makeBundle(await picture(), { rebuilds: {} }, 1))
+      if (!alive) live.delete(session.id)
+      await manager.start()
+      expect(store.hasBundle(session.id)).toBe(!alive)
+      expect(manager.get(session.id, human)).toMatchObject({ state: alive ? 'running' : 'exited', outputSaved: !alive })
+    }
   })
   it('the save runs outside the manager queue: input to another session is not held behind it', async () => {
     const { manager, finalCut, writes } = fixture()

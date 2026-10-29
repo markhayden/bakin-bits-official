@@ -169,14 +169,11 @@ test('a large bundle is written and read in slices: the event loop is never held
   expect(text(read)!.length).toBe(text(big)!.length)
   expect(worst).toBeLessThan(12)
 })
-test('on open: a rollback\'s deletions are reconciled, an interrupted write is dropped, and a running session\'s provisional bundle goes', async () => {
+test('on open: a rollback\'s deletions are reconciled and an interrupted write is dropped', async () => {
   const path = join(tmpdir(), `terminal-bundles-${crypto.randomUUID()}.db`)
   try {
     const first = new Store(path)
     for (const id of ['kept', 'gone', 'erased']) { first.save(sessionRow(id, { outputSaved: false })); await first.saveBundle(id, await bundle(id)) }
-    // Saved, then a crash before the kill: the session is still running.
-    first.save(sessionRow('resumed', { state: 'running', outputSaved: false }))
-    await first.saveBundle('resumed', await bundle('resumed'))
     first.close()
     const { Database } = require('bun:sqlite') as typeof import('bun:sqlite')
     const old = new Database(path)
@@ -195,11 +192,40 @@ test('on open: a rollback\'s deletions are reconciled, an interrupted write is d
     expect(leftover.query("SELECT COUNT(*) AS n FROM bundle_parts WHERE generation=99").get()).toEqual({ n: 0 })
     expect(leftover.query("SELECT COUNT(*) AS n FROM bundle_parts WHERE session IN ('gone','erased')").get()).toEqual({ n: 0 })
     leftover.close()
-    // A running session's bundle was provisional: gone, and its output is saved again when it ends.
-    expect(await reopened.bundle('resumed')).toBeUndefined()
-    expect(reopened.session('resumed')?.outputSaved).toBe(false)
     expect(reopened.session('kept')?.outputSaved).toBe(true)
   } finally {
     for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true })
   }
+})
+test('a bundle is never committed for a session deleted, or whose history was deleted, while it was written; flag changes move the revision', async () => {
+  const store = new Store(':memory:')
+  stores.push(store)
+  for (const id of ['deleted', 'erased']) store.save(sessionRow(id))
+  const pictures = [await bundle('deleted', 1, 4 * 1024 * 1024), await bundle('erased', 1, 4 * 1024 * 1024)]
+  const deleted = store.saveBundle('deleted', pictures[0]!)
+  const erased = store.saveBundle('erased', pictures[1]!)
+  store.deleteSession('deleted')
+  store.save({ ...store.session('erased')!, historyDeleted: true })
+  expect((await deleted).saved).toBe(false)
+  expect((await erased).saved).toBe(false)
+  expect(store.hasBundle('deleted') || store.hasBundle('erased')).toBe(false)
+  store.save(sessionRow('flagged'))
+  const before = store.session('flagged')!.revision!
+  await store.saveBundle('flagged', await bundle('flagged'))
+  expect(store.session('flagged')!.revision).toBe(before + 1)
+  store.markOutput('flagged', false)
+  expect(store.session('flagged')!.revision).toBe(before + 2)
+})
+test('a generation is never used twice, even across deletion: a reader across a delete and a new bundle never mixes them', async () => {
+  const store = new Store(':memory:')
+  stores.push(store)
+  store.save(sessionRow('reused'))
+  const fresh = await bundle('new', 2, 8 * 1024 * 1024)
+  await store.saveBundle('reused', await bundle('old', 1, 8 * 1024 * 1024))
+  const reading = store.bundle('reused')
+  store.deleteOutput('reused')
+  await store.saveBundle('reused', fresh)
+  const read = await reading
+  // Whole: none, or the new one read again; never a mix of the two.
+  if (read) expect(text(read)).toBe(text(fresh))
 })
