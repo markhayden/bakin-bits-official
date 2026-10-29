@@ -148,7 +148,7 @@ describe('terminal service managed binary', () => {
     serverOptions = { ...VERIFIED_OPTIONS }
     await service.install()
     expect(await service.updateRequired()).toBe(false)
-  })
+  }, 15_000) // each refusal polls the restarted server for its full ~2 s window
   it('leaves the service and plist untouched when any live pane remains, naming the sessions', async () => {
     oldPlist(); panes = 'terminal-a 0\nterminal-b 1\nterminal-c 0\n'
     const before = readFileSync(plistPath(), 'utf8')
