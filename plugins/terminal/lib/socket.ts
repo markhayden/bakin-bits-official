@@ -268,9 +268,14 @@ export class TerminalViewer {
   private async joinRaw(): Promise<void> {
     // One deadline from the hello for the replica and its seed together.
     const deadline = this.now() + (this.options.replicaWaitMs ?? REPLICA_WAIT_MS)
-    // A lost replica (its control client closed, a failed reseed, a server restart) is attached again first.
-    try { await this.manager.ensureReplica(this.sessionId, this.principal!) }
-    catch (error) { this.failed(error); return }
+    // A lost replica (its control client closed, a failed reseed, a server restart) is attached again
+    // first, within the same deadline: a recovery that takes longer is the reconnect's to retry.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), Math.max(0, deadline - this.now())) })
+    try {
+      const outcome = await Promise.race([this.manager.ensureReplica(this.sessionId, this.principal!), late])
+      if (outcome === 'late') { if (!this.closed) this.close(SOCKET_CLOSE.resync, 'Terminal output not ready; reconnect'); return }
+    } catch (error) { this.failed(error); return } finally { clearTimeout(timer) }
     if (this.closed) return
     let source = this.manager.replica(this.sessionId)
     while (!source && !this.closed && this.now() < deadline) {

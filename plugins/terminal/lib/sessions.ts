@@ -260,10 +260,14 @@ export class Sessions {
   }
   private async ensureAttached(session: Session): Promise<void> {
     if (session.state !== 'running') throw new TerminalError('Live terminal screen unavailable', 503)
-    // The raw path's output is the replica's: its control client closed or its replica ended (a failed
-    // reseed) with the bridge still up is a replica loss too, recovered by attaching again (spec D13).
-    const replicaLost = this.options.rawPath?.(session) && (!(this.driver.controlConnected?.(session.id) ?? false) || !this.driver.replica?.(session.id))
-    if (!this.driver.connected(session.id) || this.screens.get(session.id)?.failed || !this.screens.has(session.id) || replicaLost) {
+    // Each path judges by its own source (spec D13 "Two paths"). The raw path's is the replica alone: its
+    // control client closed or its replica ended (a failed reseed) is a loss, recovered by attaching again;
+    // a failed legacy bridge (its queue overflows in a flood) never costs a live replica, and is not
+    // repaired from here (the bridge goes with T38b).
+    const lost = this.options.rawPath?.(session)
+      ? !this.replicaLive(session.id)
+      : !this.driver.connected(session.id) || this.screens.get(session.id)?.failed || !this.screens.has(session.id)
+    if (lost) {
       await this.stopScreen(session.id)
       if (!await this.driver.alive(session.id)) throw new TerminalError('Terminal process has exited', 409)
       if (!await this.attach(session)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
@@ -494,8 +498,16 @@ export class Sessions {
   }
   /** The session's replica while attached (the raw path's source). */
   replica(id: string): RawSource | undefined { return this.driver.replica?.(id) }
-  /** A raw join's first step: the session attached, its replica live (one lost is rebuilt from tmux: a recovery). */
+  private replicaLive(id: string): boolean {
+    return (this.driver.controlConnected?.(id) ?? false) && Boolean(this.driver.replica?.(id))
+  }
+  /**
+   * A raw join's first step: the session attached, its replica live (one lost is rebuilt from tmux: a
+   * recovery). A live one is the common case and waits for nothing; a recovery takes the manager's
+   * queue, as every attachment does (input to other sessions waits behind it meanwhile).
+   */
   ensureReplica(id: string, principal: Principal): Promise<void> {
+    if (this.get(id, principal).state === 'running' && this.replicaLive(id)) return Promise.resolve()
     return this.run(async () => { await this.ensureAttached(this.get(id, principal)) })
   }
   /** The rebuilds the session's output has been through. */

@@ -140,11 +140,9 @@ export class TmuxProcesses implements ProcessDriver {
     this.logs.set(session.id, log)
     // The replica starts from a seed; a failed reseed invalidates the log, which ends it.
     // Any other replica replaces a lost one (a reattachment, or the first since a server restart): its
-    // seed is tmux's reconstruction, with D13's measured degradations, so the session's fidelity says so.
-    if (!this.fresh.delete(session.id)) {
-      const fidelity = this.fidelity(session.id)
-      this.fidelities.set(session.id, { ...fidelity, recoveries: (fidelity.recoveries ?? 0) + 1 })
-    }
+    // seed is tmux's reconstruction, with D13's measured degradations, so its first seed applied is a
+    // recovery in the session's fidelity (an attempt that never seeds counts nothing).
+    let recovering = !this.fresh.delete(session.id)
     // The size revision continues across attachments: an agent compares it between reads.
     const revision = this.replicas.get(session.id)?.revisionState ?? this.revisions.get(session.id)
     this.revisions.delete(session.id)
@@ -154,6 +152,11 @@ export class TmuxProcesses implements ProcessDriver {
       geometry: (generation, turn, scope) => reseed(control, log, session.id, 'width', { attempt: turn, scope, geometry: generation }),
       // The replica's lifecycle is logged, never its contents; rebuilds are the session's fidelity.
       diagnostic: (event) => {
+        if (event.kind === 'seeded' && recovering) {
+          recovering = false
+          const before = this.fidelity(session.id)
+          this.fidelities.set(session.id, { ...before, recoveries: (before.recoveries ?? 0) + 1 })
+        }
         const fidelity = this.fidelity(session.id)
         if (event.kind === 'rebuilding') {
           this.fidelities.set(session.id, { ...fidelity, rebuilds: { ...fidelity.rebuilds, [event.cause]: (fidelity.rebuilds[event.cause] ?? 0) + 1 }, lastCause: event.cause })

@@ -28,6 +28,7 @@ function fakeManager(initial = session(), raw: { replica?: RawSource } | undefin
   /** Raw joins' recovery calls, and what the next one throws. */
   const ensured: string[] = []
   let ensureError: Error | undefined
+  let ensureStall: Promise<void> = Promise.resolve()
   const manager: ViewerManager = {
     get: (id) => { if (id !== current.id) throw new TerminalError('Session not found', 404); return current },
     screen: async () => ({ session: current, data: 'SNAPSHOT', cursor: chunks.length }),
@@ -62,12 +63,13 @@ function fakeManager(initial = session(), raw: { replica?: RawSource } | undefin
     resizeAs: async () => current,
     rawPath: () => raw !== undefined,
     replica: () => raw?.replica,
-    ensureReplica: async (id) => { ensured.push(id); if (ensureError) throw ensureError },
+    ensureReplica: async (id) => { ensured.push(id); if (ensureError) throw ensureError; await ensureStall },
     fidelity: () => ({ rebuilds: {} }),
   }
   return {
     manager, writes, ensured,
     failEnsure: (error: Error) => { ensureError = error },
+    stallEnsure: (until: Promise<void>) => { ensureStall = until },
     push: (data: string | Buffer) => { chunks.push(Buffer.from(data)); for (const wake of [...outputWaiters]) wake() },
     roll: (to: number) => { floor = to },
     change: (next: Partial<Session>) => { current = { ...current, ...next }; for (const listener of sessionListeners) listener(current) },
@@ -401,6 +403,20 @@ describe('TerminalViewer on the raw path', () => {
       expect(peer.of('join')).toEqual([])
       replica.close()
     }
+  })
+  it('a recovery slower than the join deadline closes for a reconnect at the deadline, nothing of a picture sent', async () => {
+    const replica = await seeded()
+    const { manager, stallEnsure } = fakeManager(session(), { replica })
+    stallEnsure(new Promise<void>(() => {}))
+    const peer = fakeSocket()
+    const started = performance.now()
+    new TerminalViewer(manager, peer.socket, 's1', { ...options, replicaWaitMs: 150 })
+    peer.client({ type: 'hello', clientId: CLIENT })
+    await until(() => peer.state.closed !== null, 'closed')
+    expect(performance.now() - started).toBeLessThan(1000)
+    expect(peer.state.closed).toEqual({ code: 4000, reason: 'Terminal output not ready; reconnect' })
+    expect(peer.of('join')).toEqual([])
+    replica.close()
   })
   it('joins from the replica, refuses input until the replay is applied, then accepts it', async () => {
     const replica = await seeded()

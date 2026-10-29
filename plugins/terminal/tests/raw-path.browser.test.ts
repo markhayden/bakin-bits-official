@@ -350,7 +350,7 @@ rawTest('a lost replica (plan T35a): the viewer recovers it from tmux and shows 
     Bun.spawnSync([tmux, '-S', socket, 'detach-client', '-t', control[0]!])
     // The viewer reconnects; the join attaches again and rebuilds the replica from tmux.
     await notice.waitFor({ timeout: 20_000 })
-    await expect(notice.textContent()).resolves.toContain("Cause: the view's connection to tmux was replaced (once).")
+    await expect(notice.textContent()).resolves.toContain("Cause: the view's connection to tmux was replaced.")
     await waitForRow(page, '^before-loss$')
     // Input still reaches the program, and its output shows.
     await typeLine(page, `printf '%s-%s\\n' after loss`)

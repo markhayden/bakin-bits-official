@@ -34,7 +34,8 @@ function fixture(options: { raw?: boolean } = {}) {
   /** Raw-path replicas, by session (none until a test makes one). */
   const replicas = new Map<string, Replica>()
   const driver: ProcessDriver = {
-    replica: (id) => replicas.get(id),
+    // Like TmuxProcesses.replica: an ended replica is no source.
+    replica: (id) => { const replica = replicas.get(id); return replica?.ended ? undefined : replica },
     create: async (s) => { live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, output, changed) { attaches.push(s.id); controlLost.delete(s.id); attached.add(s.id); outputs.set(s.id, output); clientsChanged.set(s.id, changed) }, connected: (id) => attached.has(id) && !bridgeLost.has(id), controlConnected: (id) => attached.has(id) && !controlLost.has(id),
     write: async (_id, data) => { if (writeFailure) throw writeFailure; writes.push(data) },
     resize: async (id, cols, rows) => { if (resizeFailure) { tmuxSizes.set(id, { cols: 77, rows: 22 }); throw resizeFailure } tmuxSizes.set(id, { cols, rows }) },
@@ -705,22 +706,55 @@ test('raw-path input needs only the control client; the bridge path needs its br
 
 test('raw path: a join recovers a lost replica (none, ended, or its control client closed) by attaching again; a live one, and the bridge path, are left alone', async () => {
   for (const raw of [true, false]) {
-    const { manager, attaches, replicas, controlLost } = fixture({ raw })
+    const { manager, attaches, replicas, controlLost, bridgeLost } = fixture({ raw })
     const session = await manager.create({ title: 'Raw', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
     expect(attaches).toEqual([session.id])
     // No replica (it ended, or a server restart left none): attached again on the raw path only.
     await manager.ensureReplica(session.id, human)
     expect(attaches).toHaveLength(raw ? 2 : 1)
     const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+    await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 64, rows: 20, reason: 'test', history: true })
     replicas.set(session.id, replica)
     await manager.ensureReplica(session.id, human)
     expect(attaches).toHaveLength(raw ? 2 : 1)
+    // A failed legacy bridge (its queue overflows in a flood) never costs a live replica on the raw path:
+    // neither a join nor an agent's raw read reattaches (the bridge path's read does).
+    bridgeLost.add(session.id)
+    await manager.ensureReplica(session.id, human)
+    await manager.readScreen(session.id, human).catch(() => undefined)
+    expect(attaches).toHaveLength(raw ? 2 : 2)
+    if (!raw) { replica.close(); continue }
+    bridgeLost.delete(session.id)
     // The control client closed with the bridge still up: a replica loss too.
     controlLost.add(session.id)
     await manager.ensureReplica(session.id, human)
-    expect(attaches).toHaveLength(raw ? 3 : 1)
+    expect(attaches).toHaveLength(3)
+    // An ended replica (a failed reseed) likewise.
     replica.close()
+    await manager.ensureReplica(session.id, human)
+    expect(attaches).toHaveLength(4)
   }
+})
+
+test("raw path: a join to a live replica waits for nothing, even while another session's attachment holds the queue", async () => {
+  const { manager, replicas, tmuxSizes } = fixture({ raw: true })
+  const live = await manager.create({ title: 'Live', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  replicas.set(live.id, replica)
+  const other = await manager.create({ title: 'Other', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+  // The other session's recovery is stuck reading tmux's window size, holding the queue.
+  let release!: () => void
+  const stuck = new Promise<void>((resolve) => { release = resolve })
+  const size = tmuxSizes.get(other.id)!
+  const original = manager['driver'].windowSize
+  manager['driver'].windowSize = async (id: string) => { if (id === other.id) { await stuck; return size } return original(id) }
+  const recovering = manager.ensureReplica(other.id, human)
+  let joined = false
+  await manager.ensureReplica(live.id, human).then(() => { joined = true })
+  expect(joined).toBe(true)
+  release()
+  await recovering
+  replica.close()
 })
 
 test('raw path: readScreen takes the screen, the grid and the size revision from the replica in one step (adoptSize never moves it)', async () => {

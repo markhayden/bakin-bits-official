@@ -3,7 +3,10 @@
  * rebuilt from tmux (spec D13 recovery contract, decision 1; plan T35a).
  * Pure and browser-safe: the page renders it with the kit Banner. Every
  * input is the session's server-held fidelity, so a reconnect or a later
- * checkpoint never clears it.
+ * checkpoint never clears it. The text names causes, never counts: the
+ * Banner announces its whole text when it changes, and a flood rebuilds
+ * every second, so it changes only when a new cause appears or the
+ * history's state moves.
  */
 import type { Fidelity } from './raw-display'
 
@@ -11,16 +14,15 @@ export interface FidelityNotice { title: string; description: string }
 
 const LIMITS = 'Formatting and terminal behavior may remain incorrect until the application resets or redraws.'
 
-const times = (count: number) => count === 1 ? 'once' : `${count} times`
-
-/** The causes, in words, with how often each happened. */
+/** The causes, in words. */
 function causes(fidelity: Fidelity): string[] {
   const named: string[] = []
   const { overload = 0, 'tail bound': tailBound = 0, width = 0 } = fidelity.rebuilds
-  if (fidelity.recoveries) named.push(`the view's connection to tmux was replaced (${times(fidelity.recoveries)})`)
-  if (overload) named.push(`output arrived faster than the view could follow (${times(overload)})`)
-  if (tailBound) named.push(`a control sequence stayed unfinished too long to keep the view current (${times(tailBound)})`)
-  if (width) named.push(`a width change could not be applied in place (${times(width)})`)
+  if (fidelity.recoveries) named.push("the view's connection to tmux was replaced")
+  if (overload) named.push('output arrived faster than the view could follow')
+  // The tail outgrew its bound before a checkpoint could be taken (by bytes, events or a state no checkpoint restores).
+  if (tailBound) named.push('the view could not save a restorable copy of recent output in time')
+  if (width) named.push('a width change could not be applied in place')
   return named
 }
 

@@ -456,7 +456,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
         </Stack>}
         {state ?? (!session ? <SystemState kind="initial-empty" scope="page" icon={<Terminal size={32} />} title="Terminal not found" description="This session is not available." action={<Button variant="outline" nativeButton={false} render={<PluginLink to="/terminal" />}>Back to terminals</Button>} /> : <>
           {(!serviceReady || session.cleanupReason || (idleReturn && drivingWithAgent) || notice) && <Stack gap="item" className="shrink-0 p-bakin-4">
-          {notice && <Banner headingLevel={3} tone="attention" announce="polite" title={notice.title} description={notice.description} />}
+          {notice && <Banner headingLevel={2} tone="attention" announce="polite" title={notice.title} description={notice.description} />}
           {!serviceReady && <SystemState kind="error" scope="inline" title="Terminal service unavailable" description="Existing sessions are retained." action={<Button disabled={busy} onClick={() => void setup()}>Set up service</Button>} />}
           {idleReturn && drivingWithAgent && <Alert tone="attention"><AlertDescription><Inline gap="dense" wrap className="items-center justify-between"><span>You've been idle — returning control to {ownerAgentName ?? 'the agent'} shortly.</span><Button size="sm" variant="outline" onClick={markActivity}>Keep driving</Button></Inline></AlertDescription></Alert>}
           {session.cleanupReason && <Alert tone="attention"><AlertDescription>{session.cleanupReason}</AlertDescription></Alert>}
