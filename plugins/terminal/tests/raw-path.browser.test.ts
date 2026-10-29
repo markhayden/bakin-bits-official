@@ -329,3 +329,38 @@ rawTest("a width change (plan T34a): the viewer installs tmux's geometry and sho
     rmSync(gates, { recursive: true, force: true })
   }
 }, 60_000)
+
+rawTest('a lost replica (plan T35a): the viewer recovers it from tmux and shows the persistent recovery notice, which a reload keeps', async () => {
+  const browser = await launchChromium()
+  const client = 'raw-browser-recovery-test-01'
+  const page = await browser.newPage({ viewport })
+  const { id } = await createSession(page, client)
+  const tmux = process.env.TERMINAL_PREVIEW_TMUX!
+  const socket = new TerminalService(process.env.TERMINAL_PREVIEW_ROOT!).socket
+  const notice = page.getByRole('status', { name: 'Terminal view recovered with limitations' })
+  try {
+    await open(page, id)
+    await typeLine(page, `printf '%s-%s\\n' before loss`)
+    await waitForRow(page, '^before-loss$')
+    expect(await notice.count()).toBe(0)
+    // Bakin's control client (the replica's source) is lost while the pane and the bridge stay.
+    const control = Bun.spawnSync([tmux, '-S', socket, 'list-clients', '-t', id, '-F', '#{client_control_mode} #{client_name}']).stdout.toString()
+      .split('\n').filter((line) => line.startsWith('1 ')).map((line) => line.slice(2))
+    expect(control).toHaveLength(1)
+    Bun.spawnSync([tmux, '-S', socket, 'detach-client', '-t', control[0]!])
+    // The viewer reconnects; the join attaches again and rebuilds the replica from tmux.
+    await notice.waitFor({ timeout: 20_000 })
+    await expect(notice.textContent()).resolves.toContain("Cause: the view's connection to tmux was replaced (once).")
+    await waitForRow(page, '^before-loss$')
+    // Input still reaches the program, and its output shows.
+    await typeLine(page, `printf '%s-%s\\n' after loss`)
+    await waitForRow(page, '^after-loss$')
+    // The fidelity is the server's: a reload (a new connection) shows the notice again.
+    await page.reload()
+    await page.waitForFunction(() => document.querySelector('[data-display]')?.getAttribute('data-display') === 'live', null, { timeout: 15_000 })
+    await notice.waitFor({ timeout: 5_000 })
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 60_000)

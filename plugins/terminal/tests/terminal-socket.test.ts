@@ -270,7 +270,9 @@ describe('TerminalSocketClient on the raw path', () => {
     const written: Array<() => void> = []
     /** What a geometry's install answers. */
     const installs = { ok: true }
+    const fidelities: unknown[] = []
     const rig = setup({
+      onFidelity: (fidelity) => { fidelities.push(fidelity) },
       onPicture: (header) => {
         pictures.push(`${header.type} ${header.epoch}`)
         return {
@@ -280,7 +282,7 @@ describe('TerminalSocketClient on the raw path', () => {
       },
       onDisplay: (state) => { displays.push(state) },
     })
-    return { ...rig, pictures, displays, installs, flush: () => { for (const done of written.splice(0)) done() } }
+    return { ...rig, pictures, displays, installs, fidelities, flush: () => { for (const done of written.splice(0)) done() } }
   }
   it('joins into a picture, accepts input only after the replay is applied, and says so', () => {
     const { client, socket, events, pictures, displays, flush } = raw()
@@ -327,6 +329,23 @@ describe('TerminalSocketClient on the raw path', () => {
     expect(displays.slice(-2)).toEqual(['rebuilding', 'replaying'])
     expect(client.input(1, '\x03')).toBe(1)
     expect(events.statuses.filter((status) => status === 'Connected')).toHaveLength(1)
+  })
+  it("passes the session's fidelity up from every picture header and rebuilding notice, a reconnect's join included", async () => {
+    const { client, socket, fidelities } = raw()
+    client.connect()
+    socket().open()
+    const recovered = { rebuilds: {}, recoveries: 1 }
+    socket().server({ type: 'join', epoch: 1, session, checkpoint, bytes: 0, baseSeq: 1, throughSeq: 1, fidelity: recovered })
+    const overloaded = { rebuilds: { overload: 1 }, recoveries: 1, lastCause: 'overload' }
+    socket().server({ type: 'rebuilding', cause: 'overload', fidelity: overloaded })
+    socket().server({ type: 'rebase', epoch: 2, session, checkpoint, bytes: 0, baseSeq: 2, throughSeq: 2, fidelity: overloaded })
+    expect(fidelities).toEqual([recovered, overloaded, overloaded])
+    // A new connection's join restates it: nothing a reconnect could clear lives in the browser.
+    socket().close(4000)
+    await until(() => FakeSocket.all.length === 2, 'reconnected')
+    socket().open()
+    socket().server({ type: 'join', epoch: 1, session, checkpoint, bytes: 0, baseSeq: 3, throughSeq: 3, fidelity: overloaded })
+    expect(fidelities.at(-1)).toEqual(overloaded)
   })
   it('reports the retired total, batched, and starts a new count with a new connection', async () => {
     const { client, socket, flush } = raw()

@@ -200,6 +200,18 @@ export function SystemState({ action, description, title, headingLevel = 2, prev
   )
 }
 
+// The kit Banner's shape: a section with a heading, its description and action; live only when announced.
+export function Banner({ action, description, title, tone = 'info', headingLevel = 2, announce = 'off', ...props }) {
+  const live = announce === 'off' ? {} : { role: announce === 'assertive' ? 'alert' : 'status', 'aria-live': announce }
+  return React.createElement(
+    'section',
+    { ...props, ...live, 'data-slot': 'banner', 'data-tone': tone },
+    React.createElement(`h${headingLevel}`, { 'data-slot': 'banner-title' }, title),
+    description ? React.createElement('p', null, description) : null,
+    action,
+  )
+}
+
 export function buttonVariants({ className = '' } = {}) {
   return className
 }

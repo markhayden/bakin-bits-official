@@ -70,7 +70,9 @@ export interface ViewerManager {
   rawPath(id: string): boolean
   /** The session's replica, while attached (raw path). */
   replica(id: string): RawSource | undefined
-  /** What the session's output has lost to overload rebuilds (sticky). */
+  /** Attach the session again if its replica was lost (raw path, before a join waits for it). */
+  ensureReplica(id: string, principal: Principal): Promise<void>
+  /** What the session's output has been through: rebuilds and recoveries (sticky). */
   fidelity(id: string): Fidelity
 }
 
@@ -266,6 +268,10 @@ export class TerminalViewer {
   private async joinRaw(): Promise<void> {
     // One deadline from the hello for the replica and its seed together.
     const deadline = this.now() + (this.options.replicaWaitMs ?? REPLICA_WAIT_MS)
+    // A lost replica (its control client closed, a failed reseed, a server restart) is attached again first.
+    try { await this.manager.ensureReplica(this.sessionId, this.principal!) }
+    catch (error) { this.failed(error); return }
+    if (this.closed) return
     let source = this.manager.replica(this.sessionId)
     while (!source && !this.closed && this.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 100))

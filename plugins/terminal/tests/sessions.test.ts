@@ -17,6 +17,9 @@ function fixture(options: { raw?: boolean } = {}) {
   const forgotten: string[] = []
   /** Sessions whose bridge PTY is gone while the control client stays. */
   const bridgeLost = new Set<string>()
+  /** Sessions whose control client closed while the bridge stays; every attach, in order. */
+  const controlLost = new Set<string>()
+  const attaches: string[] = []
   let releasable = false
   let writeFailure: Error | undefined
   let resizeFailure: Error | undefined
@@ -32,7 +35,7 @@ function fixture(options: { raw?: boolean } = {}) {
   const replicas = new Map<string, Replica>()
   const driver: ProcessDriver = {
     replica: (id) => replicas.get(id),
-    create: async (s) => { live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, output, changed) { attached.add(s.id); outputs.set(s.id, output); clientsChanged.set(s.id, changed) }, connected: (id) => attached.has(id) && !bridgeLost.has(id), controlConnected: (id) => attached.has(id),
+    create: async (s) => { live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, output, changed) { attaches.push(s.id); controlLost.delete(s.id); attached.add(s.id); outputs.set(s.id, output); clientsChanged.set(s.id, changed) }, connected: (id) => attached.has(id) && !bridgeLost.has(id), controlConnected: (id) => attached.has(id) && !controlLost.has(id),
     write: async (_id, data) => { if (writeFailure) throw writeFailure; writes.push(data) },
     resize: async (id, cols, rows) => { if (resizeFailure) { tmuxSizes.set(id, { cols: 77, rows: 22 }); throw resizeFailure } tmuxSizes.set(id, { cols, rows }) },
     windowSize: async (id) => { if (readBackFailure) throw readBackFailure; return tmuxSizes.get(id)! },
@@ -65,7 +68,7 @@ function fixture(options: { raw?: boolean } = {}) {
   })
   managers.push(manager)
   return {
-    manager, writes, live, attached, terminated, forgotten, bridgeLost, releases, outputs, natives, detachedClients, vanishing, replicas,
+    manager, writes, live, attached, terminated, forgotten, bridgeLost, controlLost, attaches, releases, outputs, natives, detachedClients, vanishing, replicas,
     /** A terminal app attaches (or resizes) in tmux; the control client notices. */
     nativeAttach: async (id: string, client: NativeClient) => {
       natives.set(id, [...(natives.get(id) ?? []).filter((entry) => entry.pid !== client.pid), client])
@@ -697,6 +700,26 @@ test('raw-path input needs only the control client; the bridge path needs its br
       await expect(typed).rejects.toThrow('reconnect required')
       expect(writes).toEqual([])
     }
+  }
+})
+
+test('raw path: a join recovers a lost replica (none, ended, or its control client closed) by attaching again; a live one, and the bridge path, are left alone', async () => {
+  for (const raw of [true, false]) {
+    const { manager, attaches, replicas, controlLost } = fixture({ raw })
+    const session = await manager.create({ title: 'Raw', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    expect(attaches).toEqual([session.id])
+    // No replica (it ended, or a server restart left none): attached again on the raw path only.
+    await manager.ensureReplica(session.id, human)
+    expect(attaches).toHaveLength(raw ? 2 : 1)
+    const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+    replicas.set(session.id, replica)
+    await manager.ensureReplica(session.id, human)
+    expect(attaches).toHaveLength(raw ? 2 : 1)
+    // The control client closed with the bridge still up: a replica loss too.
+    controlLost.add(session.id)
+    await manager.ensureReplica(session.id, human)
+    expect(attaches).toHaveLength(raw ? 3 : 1)
+    replica.close()
   }
 })
 

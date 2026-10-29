@@ -1100,6 +1100,8 @@ declare module '@makinbakin/sdk/ui' {
   export const Tooltip: UIComponent
   export const SubmitButton: UIComponent
   export const SystemState: UIComponent
+  /** Persistent surface-level context (storybook/public/feedback/banner.stories.tsx). */
+  export const Banner: ComponentType<{ tone?: 'info' | 'success' | 'attention' | 'danger'; title?: ReactNode; description?: ReactNode; action?: ReactNode; announce?: 'off' | 'polite' | 'assertive'; headingLevel?: 2 | 3 | 4; className?: string }>
   export function buttonVariants(options?: Record<string, unknown>): string
   // ── Pass-four conformance additions ───────────────────────────────────
   export type TextSize = 'body' | 'meta'

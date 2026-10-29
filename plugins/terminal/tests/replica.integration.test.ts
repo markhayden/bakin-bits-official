@@ -83,7 +83,7 @@ processTest('the shadow replica agrees with the bridge at quiet points', async (
   }
 }, 40_000)
 
-processTest('raw path: the size revision continues across a reattachment, and the new attachment\'s other size moves it once', async () => {
+processTest('raw path: the size revision continues across a reattachment, and the new attachment\'s other size moves it once; each replacement is a recovery', async () => {
   const root = mkdtempSync(join(tmpdir(), 'bakin-replica-revision-'))
   const h = await harness(root, { raw: true })
   // Ready once the attachment's replica has its seed (readScreen answers 503 until then).
@@ -95,6 +95,8 @@ processTest('raw path: the size revision continues across a reattachment, and th
     await until(async () => (await ready())?.cols === 80, 'the first width change')
     const before = (await ready())!
     expect(before.sizeRevision).toBe(1)
+    // The session's first replica started with its pane: nothing was lost.
+    expect(h.driver.fidelity(h.session.id).recoveries).toBeUndefined()
     // The attachment is lost; tmux's window changes while nothing is attached.
     await h.driver.detach(h.session.id)
     await h.service.command(['resize-window', '-t', h.session.id, '-x', '90', '-y', '30'])
@@ -102,10 +104,13 @@ processTest('raw path: the size revision continues across a reattachment, and th
     // The next read reattaches: a fresh replica, whose seed at another size is one more change, never a restart at 0.
     await until(async () => (await ready())?.cols === 90, 'reattached')
     expect(await ready()).toMatchObject({ cols: 90, rows: 30, sizeRevision: 2 })
+    // A replica that replaced a lost one is a recovery (the persistent notice's cause, plan T35a).
+    expect(h.driver.fidelity(h.session.id).recoveries).toBe(1)
     // A reattachment at the same size moves nothing.
     await h.driver.detach(h.session.id)
     await until(async () => (await ready()) !== undefined && h.driver.replica(h.session.id) !== undefined, 'reattached again')
     expect(await ready()).toMatchObject({ cols: 90, rows: 30, sizeRevision: 2 })
+    expect(h.driver.fidelity(h.session.id).recoveries).toBe(2)
   } finally {
     await h.close()
     rmSync(root, { recursive: true, force: true })

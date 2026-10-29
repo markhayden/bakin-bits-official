@@ -260,7 +260,10 @@ export class Sessions {
   }
   private async ensureAttached(session: Session): Promise<void> {
     if (session.state !== 'running') throw new TerminalError('Live terminal screen unavailable', 503)
-    if (!this.driver.connected(session.id) || this.screens.get(session.id)?.failed || !this.screens.has(session.id)) {
+    // The raw path's output is the replica's: its control client closed or its replica ended (a failed
+    // reseed) with the bridge still up is a replica loss too, recovered by attaching again (spec D13).
+    const replicaLost = this.options.rawPath?.(session) && (!(this.driver.controlConnected?.(session.id) ?? false) || !this.driver.replica?.(session.id))
+    if (!this.driver.connected(session.id) || this.screens.get(session.id)?.failed || !this.screens.has(session.id) || replicaLost) {
       await this.stopScreen(session.id)
       if (!await this.driver.alive(session.id)) throw new TerminalError('Terminal process has exited', 409)
       if (!await this.attach(session)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
@@ -491,6 +494,10 @@ export class Sessions {
   }
   /** The session's replica while attached (the raw path's source). */
   replica(id: string): RawSource | undefined { return this.driver.replica?.(id) }
+  /** A raw join's first step: the session attached, its replica live (one lost is rebuilt from tmux: a recovery). */
+  ensureReplica(id: string, principal: Principal): Promise<void> {
+    return this.run(async () => { await this.ensureAttached(this.get(id, principal)) })
+  }
   /** The rebuilds the session's output has been through. */
   fidelity(id: string): Fidelity { return this.driver.fidelity?.(id) ?? { rebuilds: {} } }
   /** The terminal apps admitted to a session right now. */

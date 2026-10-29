@@ -6,6 +6,7 @@
  * dropped is the caller's "may have been delivered".
  */
 import type { Session } from '../lib/contracts'
+import type { Fidelity } from '../lib/raw-display'
 import { RawPicture, type DisplayState, type PictureHeader, type PictureTarget } from './raw-picture'
 import type { ScreenDevice } from './terminal-view'
 
@@ -43,6 +44,8 @@ export interface TerminalSocketOptions {
   onPicture?(header: PictureHeader): PictureTarget
   /** The raw path's display state (a rebase or rebuild never changes the connection status). */
   onDisplay?(state: DisplayState, detail?: Record<string, unknown>): void
+  /** The raw path: the session's fidelity, as every picture header and rebuilding notice carries it (server-held, so a reconnect restates it). */
+  onFidelity?(fidelity: Fidelity): void
   createSocket?: (url: string) => SocketLike
   ackBytes?: number
   ackMs?: number
@@ -186,6 +189,7 @@ export class TerminalSocketClient {
       case 'join':
       case 'rebase':
         this.picture()?.message(message, text)
+        if (message.fidelity) this.options.onFidelity?.(message.fidelity as Fidelity)
         this.options.onSession(message.session as Session)
         this.options.onPresence(presenceOf(message))
         return
@@ -197,6 +201,7 @@ export class TerminalSocketClient {
       // A rebuild can be told before the first picture (the join waits for the seed): still counted.
       case 'rebuilding':
         this.picture()?.message(message, text)
+        if (message.fidelity) this.options.onFidelity?.(message.fidelity as Fidelity)
         return
       case 'sync':
         this.synced = true

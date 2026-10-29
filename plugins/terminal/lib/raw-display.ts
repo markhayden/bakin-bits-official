@@ -50,9 +50,11 @@ const FRAME_BYTES = 64 * 1024
  * The rebuilds a session's output has been through, by cause, and the last
  * (sticky for the session, spec D13 decision 1); `history` after an
  * overload: `incomplete` while the pictures are the screen alone,
- * `reloaded` once a full seed brought back what tmux kept.
+ * `reloaded` once a full seed brought back what tmux kept; `recoveries`:
+ * replicas rebuilt from tmux because the one before was lost (a
+ * reattachment, a server restart), spec D13 recovery contract.
  */
-export interface Fidelity { rebuilds: Partial<Record<RebuildCause, number>>; lastCause?: RebuildCause; history?: 'incomplete' | 'reloaded' }
+export interface Fidelity { rebuilds: Partial<Record<RebuildCause, number>>; lastCause?: RebuildCause; history?: 'incomplete' | 'reloaded'; recoveries?: number }
 
 export interface RawSource {
   subscribe(listener: ReplicaListener): { state: ReplicaState; unsubscribe(): void }

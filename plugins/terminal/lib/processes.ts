@@ -93,6 +93,8 @@ export class TmuxProcesses implements ProcessDriver {
   /** A detached session's size revision, for the replica its next attachment makes (until it is forgotten). */
   private revisions = new Map<string, SizeRevision>()
   private fidelities = new Map<string, Fidelity>()
+  /** Sessions made by this process and not attached yet: their first replica starts with the pane, losing nothing. */
+  private fresh = new Set<string>()
   constructor(private service: TerminalService, private log?: { info(message: string, data?: Record<string, unknown>): void }) {}
   async create(session: Session): Promise<void> {
     if (!await this.service.ready()) throw new TerminalError('Terminal service needs setup', 503)
@@ -101,6 +103,7 @@ export class TmuxProcesses implements ProcessDriver {
     if (!executable) throw new TerminalError(`${session.program} is not installed`, 503)
     await this.service.command(['new-session', '-d', '-s', session.id, '-x', String(session.cols), '-y', String(session.rows), '-c', session.cwd,
       '/usr/bin/env', '-i', ...Object.entries(env).map(([key, value]) => `${key}=${value}`), executable, ...(session.program === 'shell' ? ['-l'] : [])])
+    this.fresh.add(session.id)
     await this.title(session)
   }
   /** Native clients title their window from this (tmux.conf set-titles-string). */
@@ -136,6 +139,12 @@ export class TmuxProcesses implements ProcessDriver {
     this.controls.set(session.id, control)
     this.logs.set(session.id, log)
     // The replica starts from a seed; a failed reseed invalidates the log, which ends it.
+    // Any other replica replaces a lost one (a reattachment, or the first since a server restart): its
+    // seed is tmux's reconstruction, with D13's measured degradations, so the session's fidelity says so.
+    if (!this.fresh.delete(session.id)) {
+      const fidelity = this.fidelity(session.id)
+      this.fidelities.set(session.id, { ...fidelity, recoveries: (fidelity.recoveries ?? 0) + 1 })
+    }
     // The size revision continues across attachments: an agent compares it between reads.
     const revision = this.replicas.get(session.id)?.revisionState ?? this.revisions.get(session.id)
     this.revisions.delete(session.id)
@@ -176,7 +185,7 @@ export class TmuxProcesses implements ProcessDriver {
   /** The session's ordered event log, while its control connection is attached. */
   outputLog(id: string): OutputLog | undefined { return this.logs.get(id) }
   fidelity(id: string): Fidelity { return this.fidelities.get(id) ?? { rebuilds: {} } }
-  forget(id: string): void { this.fidelities.delete(id); this.revisions.delete(id) }
+  forget(id: string): void { this.fidelities.delete(id); this.revisions.delete(id); this.fresh.delete(id) }
   replica(id: string): Replica | undefined {
     const replica = this.replicas.get(id)
     return replica?.ended ? undefined : replica

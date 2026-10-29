@@ -25,6 +25,9 @@ function fakeManager(initial = session(), raw: { replica?: RawSource } | undefin
   const nativeListeners = new Set<() => void>()
   const writes: Array<{ principal: Principal; data: string; paste: boolean; enter: boolean }> = []
   let writeError: Error | undefined
+  /** Raw joins' recovery calls, and what the next one throws. */
+  const ensured: string[] = []
+  let ensureError: Error | undefined
   const manager: ViewerManager = {
     get: (id) => { if (id !== current.id) throw new TerminalError('Session not found', 404); return current },
     screen: async () => ({ session: current, data: 'SNAPSHOT', cursor: chunks.length }),
@@ -59,10 +62,12 @@ function fakeManager(initial = session(), raw: { replica?: RawSource } | undefin
     resizeAs: async () => current,
     rawPath: () => raw !== undefined,
     replica: () => raw?.replica,
+    ensureReplica: async (id) => { ensured.push(id); if (ensureError) throw ensureError },
     fidelity: () => ({ rebuilds: {} }),
   }
   return {
-    manager, writes,
+    manager, writes, ensured,
+    failEnsure: (error: Error) => { ensureError = error },
     push: (data: string | Buffer) => { chunks.push(Buffer.from(data)); for (const wake of [...outputWaiters]) wake() },
     roll: (to: number) => { floor = to },
     change: (next: Partial<Session>) => { current = { ...current, ...next }; for (const listener of sessionListeners) listener(current) },
@@ -382,13 +387,29 @@ describe('TerminalViewer on the raw path', () => {
   /** Display bytes as the client retires them: binary frames and text display frames (not results, pings or presence). */
   const retired = (peer: ReturnType<typeof fakeSocket>) => peer.bytes() + peer.text.filter((frame) => ['join', 'rebase', 'barrier', 'layout', 'rebuilding'].includes(String(frame.type))).reduce((n, frame) => n + Buffer.byteLength(JSON.stringify(frame)), 0)
 
+  it('a join first recovers a lost replica; one that cannot be recovered closes for a reconnect, or 4004 when the session is gone', async () => {
+    for (const [error, code] of [[new TerminalError('Terminal attachment is unavailable; reconnect required', 503), 4000], [new TerminalError('Session not found', 404), 4004]] as const) {
+      const replica = await seeded()
+      const { manager, ensured, failEnsure } = fakeManager(session(), { replica })
+      failEnsure(error)
+      const peer = fakeSocket()
+      new TerminalViewer(manager, peer.socket, 's1', options)
+      peer.client({ type: 'hello', clientId: CLIENT })
+      await until(() => peer.state.closed !== null, 'closed')
+      expect(ensured).toEqual(['s1'])
+      expect(peer.state.closed?.code).toBe(code)
+      expect(peer.of('join')).toEqual([])
+      replica.close()
+    }
+  })
   it('joins from the replica, refuses input until the replay is applied, then accepts it', async () => {
     const replica = await seeded()
-    const { manager, writes } = fakeManager(session(), { replica })
+    const { manager, writes, ensured } = fakeManager(session(), { replica })
     const peer = fakeSocket()
     new TerminalViewer(manager, peer.socket, 's1', options)
     peer.client({ type: 'hello', clientId: CLIENT })
     await until(() => peer.of('barrier').length === 1, 'barrier')
+    expect(ensured).toEqual(['s1'])
     expect(peer.of('sync')).toEqual([])
     expect(peer.of('join')[0]).toMatchObject({ epoch: 1, bytes: 7, baseSeq: 1, throughSeq: 1, session: { id: 's1' }, sizeFrozen: false, fidelity: { rebuilds: {} } })
     expect(Buffer.from(peer.binary[0]!).toString()).toBe('\x1bcready')
