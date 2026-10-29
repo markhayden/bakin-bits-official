@@ -65,7 +65,9 @@ export function FolderPicker({ start, onChoose, onCancel }: { start: string; onC
   }, [request, hidden, query])
   const recent = listing?.recent.filter((path) => path !== listing.path) ?? []
   const choosable = listing && !loading
-  return <Stack gap="item">
+  // Fixed regions: what and where at the top, the folders scrolling between, the choice at the bottom (terminal.css).
+  return <div className="terminal-folder-picker">
+    <Stack gap="item">
     {notice && <Alert tone="neutral"><AlertDescription>{notice}</AlertDescription></Alert>}
     {error && <Alert tone="attention"><AlertDescription>
       <Inline gap="dense" wrap className="items-center justify-between"><span>{error}</span>
@@ -77,6 +79,8 @@ export function FolderPicker({ start, onChoose, onCancel }: { start: string; onC
       <Text size="meta" mono className="min-w-0 break-all" aria-live="polite">{loading ? 'Loading…' : listing?.path ?? ''}</Text>
     </Inline>
     <Input aria-label="Filter folders" placeholder="Filter folders" value={filter} disabled={!listing} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setFilter(event.target.value)} />
+    </Stack>
+    <div className="terminal-folder-list" role="region" aria-label="Folder list" tabIndex={0}>
     {!listing ? loading && <Stack gap="dense" aria-label="Loading folders"><Skeleton className="h-bakin-8" /><Skeleton className="h-bakin-8" /><Skeleton className="h-bakin-8" /></Stack> : <>
       {recent.length > 0 && !query && <ListRowGroup label="Recent">
         <ListRows variant="separated" size="sm" aria-label="Recent">
@@ -91,6 +95,8 @@ export function FolderPicker({ start, onChoose, onCancel }: { start: string; onC
       {listing.truncated === 'limit' && <Text size="meta" tone="muted">Showing the first {listing.entries.length} folders; filter to narrow them.</Text>}
       {listing.truncated === 'scan' && <Text size="meta" tone="muted">This folder is too large to list completely; type the path you want in the working directory instead.</Text>}
     </>}
+    </div>
+    <Stack gap="item">
     <label className="flex items-center gap-bakin-2"><Switch checked={hidden} onCheckedChange={(on: boolean) => setHidden(on)} aria-label="Show hidden folders" /><Text size="meta">Show hidden folders</Text></label>
     {/* The choice repeated beside its action: a long list scrolls the path out of view. */}
     {choosable && <Text size="meta" tone="muted" mono className="break-all">Uses {listing.path}</Text>}
@@ -98,5 +104,6 @@ export function FolderPicker({ start, onChoose, onCancel }: { start: string; onC
       <Button type="button" variant="outline" onClick={onCancel}>Back</Button>
       <Button type="button" disabled={!choosable} onClick={() => { if (listing && !loading) onChoose(listing.path) }}>Use this folder</Button>
     </FormActions>
-  </Stack>
+    </Stack>
+  </div>
 }

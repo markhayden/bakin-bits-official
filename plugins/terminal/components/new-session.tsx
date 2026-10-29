@@ -80,7 +80,7 @@ export function NewSession({ open, onOpenChange, onCreated }: { open: boolean; o
     finally { setBusy(false) }
   }
   return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent>{browsing ? <>
+    <DialogContent className={browsing ? 'terminal-folder-dialog' : undefined}>{browsing ? <>
       <DialogHeader><DialogTitle>Choose a folder</DialogTitle><DialogDescription>Folders on this Mac. Open one, then use it as the working directory.</DialogDescription></DialogHeader>
       <FolderPicker start={cwd} onCancel={() => { returning.current = true; setBrowsing(false) }} onChoose={(path) => { setCwd(path); setCwdEdited(true); returning.current = true; setBrowsing(false) }} />
     </> : <><DialogHeader><DialogTitle>New terminal</DialogTitle><DialogDescription>Commands run with your host account permissions.</DialogDescription></DialogHeader>

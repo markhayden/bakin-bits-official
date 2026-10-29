@@ -68,6 +68,14 @@ browserTest('the folder picker browses this machine\'s folders and fills the wor
     expect(await folders.getByRole('button', { name: 'Open .secret' }).count()).toBe(0)
     await page.screenshot({ path: join(screenshots, 'folder-picker-mobile.png') })
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    // One steady size while browsing: navigating never resizes the dialog, and the list scrolls inside it.
+    const sized = async () => { const box = (await page.getByRole('dialog').boundingBox())!; return [Math.round(box.width), Math.round(box.height)] }
+    const before = await sized()
+    await dialog.getByRole('button', { name: 'Open beta' }).click()
+    await dialog.getByText(`Uses ${join(root, 'beta')}`).waitFor()
+    expect(await sized()).toEqual(before)
+    await dialog.getByRole('button', { name: 'Up to the parent folder' }).click()
+    await dialog.getByText(`Uses ${root}`).waitFor()
     // Hidden folders only when asked; the filter narrows.
     await dialog.getByRole('switch', { name: 'Show hidden folders' }).click()
     await folders.getByRole('button', { name: 'Open .secret' }).waitFor()
@@ -164,6 +172,14 @@ browserTest('the folder picker: no choice while a folder loads, a failed folder 
     // Past the first 500: the server filters before its cap.
     await dialog.getByRole('button', { name: 'Open many' }).click()
     await dialog.getByText('Showing the first 500 folders; filter to narrow them.').waitFor()
+    // Hundreds of folders: the list scrolls; the filter above it and the choice below stay in view.
+    const list = dialog.getByRole('region', { name: 'Folder list' })
+    expect(await list.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
+    expect(await dialog.getByRole('button', { name: 'Use this folder' }).isVisible()).toBe(true)
+    const dialogBox = (await page.getByRole('dialog').boundingBox())!
+    const useBox = (await dialog.getByRole('button', { name: 'Use this folder' }).boundingBox())!
+    expect(useBox.y + useBox.height).toBeLessThanOrEqual(dialogBox.y + dialogBox.height + 1)
+    await page.screenshot({ path: join(import.meta.dir, '../test-results/live/folder-picker-desktop.png') })
     await dialog.getByRole('textbox', { name: 'Filter folders' }).fill('d0504')
     await dialog.getByRole('button', { name: 'Open d0504' }).waitFor()
     await dialog.getByRole('button', { name: 'Open d0000' }).waitFor({ state: 'detached' })
