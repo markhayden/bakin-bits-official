@@ -484,3 +484,33 @@ rawTest('the safety net (plan T37): a viewer\'s digests match the replica\'s thr
     await browser.close()
   }
 }, 90_000)
+
+rawTest('two viewers and a terminal app on one session (plan T38a): a program\'s query is answered exactly once, by tmux', async () => {
+  const browser = await launchChromium()
+  const client = 'raw-browser-query-test-01'
+  const first = await browser.newPage({ viewport })
+  const second = await (await browser.newContext()).newPage({ viewport })
+  const { id } = await createSession(first, client)
+  const tmux = process.env.TERMINAL_PREVIEW_TMUX!
+  const operator = { 'Content-Type': 'application/json', 'X-Bakin-Operator': 'declared', 'X-Bakin-Origin': 'cli' }
+  let app: ReturnType<typeof Bun.spawn> | undefined
+  try {
+    await open(first, id)
+    await open(second, id)
+    // A terminal app attached the way `bakin terminal attach` does it.
+    const prepared = await (await Bun.fetch(new URL('/api/plugins/terminal/cli/attach', base()), { method: 'POST', headers: operator, body: JSON.stringify({ params: { ref: id }, caller: { cwd: '/tmp', cols: 100, rows: 30 } }) })).json() as { args: string[]; confirm: { path: string; token: string } }
+    app = Bun.spawn([tmux, ...prepared.args], { terminal: { cols: 100, rows: 30, data: () => {} } })
+    expect((await Bun.fetch(new URL(`/api/plugins/terminal${prepared.confirm.path}`, base()), { method: 'POST', headers: operator, body: JSON.stringify({ token: prepared.confirm.token, pid: app.pid }) })).status).toBe(200)
+    // Device attributes asked once; every reply that reaches the program within a second is counted.
+    // (A raw read that returns what has arrived: macOS's bash 3.2 drops a timed-out `read`'s input.)
+    await typeLine(first, `sh -c 'stty -echo -icanon min 0 time 10; printf "\\033[c"; sleep 1; got=$(dd bs=4096 count=1 2>/dev/null); stty sane; n=$(printf %s "$got" | grep -o "\\[?[0-9;]*c" | wc -l); echo "answers=$((n))"'`)
+    await waitForRow(first, '^answers=\\d+$', 15_000)
+    const counted = (await rows(first)).find((row) => /^answers=\d+$/.test(row))
+    expect(counted).toBe('answers=1')
+    await waitForRow(second, '^answers=1$')
+  } finally {
+    app?.kill()
+    await endSession(first, client, id)
+    await browser.close()
+  }
+}, 60_000)

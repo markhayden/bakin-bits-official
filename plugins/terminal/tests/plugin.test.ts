@@ -135,3 +135,8 @@ test('agents cannot resize, screen reads carry the grid, and the operator can sa
   } finally { await plugin.onShutdown?.(); rmSync(root, { recursive: true, force: true }) }
 })
 
+
+test('the new viewer (plan T38a) is a declared setting, off by default', () => {
+  const field = plugin.settingsSchema!.fields.find((entry) => entry.key === 'rawPath')
+  expect(field).toMatchObject({ type: 'boolean', default: false })
+})

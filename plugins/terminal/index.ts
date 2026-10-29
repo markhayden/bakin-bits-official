@@ -106,6 +106,7 @@ export default definePlugin({
     { key: 'maxSessions', label: 'Maximum live sessions', type: 'number', default: 10 },
     { key: 'maxWorktrees', label: 'Maximum retained worktrees', type: 'number', default: 10 },
     { key: 'idleDays', label: 'Idle worktree review age (days)', type: 'number', default: 30 },
+    { key: 'rawPath', label: 'Use the new terminal viewer (preview)', description: 'Shows each session from Bakin\'s own copy of it instead of a separate tmux client: the same picture on every device, a notice when the view had to be refreshed, and an ended session\'s last screen kept. Off by default; switch it off to go back to the current viewer. Open viewers switch when they reconnect.', type: 'boolean', default: false },
   ] },
   async activate(ctx: PluginContext) {
     context = ctx
@@ -121,6 +122,8 @@ export default definePlugin({
         if (input.taskId && !await ctx.tasks.get(input.taskId)) throw new TerminalError('Linked task was not found', 400)
       },
       log: ctx.log,
+      // Read per join (spec D13, plan T38a): viewers switch as they reconnect.
+      rawPath: () => terminalSettings(ctx.getSettings<Record<string, unknown>>()).rawPath === true,
     })
     if (await service.ready()) await manager.start()
     const maintain = async () => {

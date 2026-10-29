@@ -58,6 +58,12 @@ export interface TerminalSettings {
   maxSessions?: number
   maxWorktrees?: number
   idleDays?: number
+  /**
+   * Viewers render the server replica's stream (spec D13's raw path, plan
+   * T38a) instead of the bridge; off by default, the bridge is the
+   * rollback path until T38b.
+   */
+  rawPath?: boolean
 }
 export function terminalSettings(raw: Record<string, unknown>): TerminalSettings {
   const bounded = (value: unknown, fallback: number, max: number) => Number.isInteger(value) && (value as number) >= 1 && (value as number) <= max ? (value as number) : fallback
@@ -75,6 +81,7 @@ export function terminalSettings(raw: Record<string, unknown>): TerminalSettings
     maxSessions: bounded(raw.maxSessions, 10, 100),
     maxWorktrees: bounded(raw.maxWorktrees, 10, 100),
     idleDays: bounded(raw.idleDays, 30, 365),
+    rawPath: raw.rawPath === true,
   }
 }
 /** The eight characters after `terminal-`: enough to tell sessions apart, short enough to type. */
