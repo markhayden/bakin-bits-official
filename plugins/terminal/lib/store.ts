@@ -20,6 +20,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS bundles (session TEXT PRIMARY KEY, generation INTEGER NOT NULL, header TEXT NOT NULL, bytes INTEGER NOT NULL, saved_at INTEGER NOT NULL, parts INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS bundle_parts (session TEXT NOT NULL, generation INTEGER NOT NULL, idx INTEGER NOT NULL, kind TEXT NOT NULL, meta TEXT, data BLOB, PRIMARY KEY (session, generation, idx));
       CREATE TABLE IF NOT EXISTS bundle_generations (id INTEGER PRIMARY KEY AUTOINCREMENT);`)
+    // The generation counter starts above every generation already stored (rows written before it existed).
+    const highest = (this.db.query('SELECT MAX(g) AS g FROM (SELECT MAX(generation) AS g FROM bundles UNION ALL SELECT MAX(generation) FROM bundle_parts UNION ALL SELECT MAX(id) FROM bundle_generations)').get() as { g: number | null }).g
+    if (highest) this.db.query('INSERT OR IGNORE INTO bundle_generations(id) VALUES (?)').run(highest)
     this.db.transaction(() => {
       // A version that knows no bundles (a rollback to B5) deletes sessions and histories without
       // them: a bundle whose session is gone, or whose history was deleted, goes on the next open.

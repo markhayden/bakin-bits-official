@@ -229,3 +229,23 @@ test('a generation is never used twice, even across deletion: a reader across a 
   // Whole: none, or the new one read again; never a mix of the two.
   if (read) expect(text(read)).toBe(text(fresh))
 })
+test('the generation counter starts above generations already stored (rows from before it existed)', async () => {
+  const path = join(tmpdir(), `terminal-bundles-${crypto.randomUUID()}.db`)
+  try {
+    const first = new Store(path)
+    first.save(sessionRow('older'))
+    await first.saveBundle('older', await bundle('older'))
+    first.close()
+    const { Database } = require('bun:sqlite') as typeof import('bun:sqlite')
+    const old = new Database(path)
+    // As a database written before the counter: generations stored, the counter empty.
+    old.exec('DELETE FROM bundle_generations; DELETE FROM sqlite_sequence')
+    old.close()
+    const reopened = new Store(path)
+    stores.push(reopened)
+    expect((await reopened.saveBundle('older', await bundle('newer'))).saved).toBe(true)
+    expect(text(await reopened.bundle('older'))).toContain('newer')
+  } finally {
+    for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true })
+  }
+})

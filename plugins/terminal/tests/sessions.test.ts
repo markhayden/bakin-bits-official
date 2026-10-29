@@ -879,6 +879,78 @@ describe('final output (plan T35b)', () => {
     release(await picture())
     await finishing
   })
+  it('the reservation holds until the kill: input queued while the save finishes is refused, not delivered', async () => {
+    const { manager, finalCut, writes } = fixture()
+    const ending = await manager.create({ title: 'Ending', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    const other = await manager.create({ title: 'Other', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    let release!: (cut: Cut | undefined) => void
+    finalCut.next = () => new Promise((resolve) => { release = resolve })
+    const taken = await manager.control(ending.id, human, 'take')
+    const otherTaken = await manager.control(other.id, human, 'take')
+    const finishing = manager.finish(ending.id, human, taken.generation, true)
+    for (let tries = 0; tries < 100 && !release; tries++) await Bun.sleep(1)
+    // Another session's input holds the queue; the ending session's input waits behind it.
+    let unblock!: () => void
+    const original = manager['driver'].write
+    manager['driver'].write = async (id: string, data: string) => { if (id === other.id) await new Promise<void>((resolve) => { unblock = resolve }); return original(id, data) }
+    const blocked = manager.write(other.id, human, otherTaken.generation, otherTaken.inputSequence + 1, 'other\r')
+    const late = manager.write(ending.id, human, taken.generation, taken.inputSequence + 1, 'POST-CUT\r')
+    for (let tries = 0; tries < 100 && !unblock; tries++) await Bun.sleep(1)
+    // The save settles now, before the kill's turn in the queue.
+    release(await picture())
+    await Bun.sleep(5)
+    unblock()
+    await blocked
+    await expect(late).rejects.toThrow('Session is ending')
+    expect(writes).toEqual(['other\r'])
+    await finishing
+  })
+  it('shutdown waits for a finish to complete its kill, and for the refresh hints still owed', async () => {
+    const { manager, finalCut, terminated, store } = fixture()
+    const session = await manager.create({ title: 'Ending', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    let release!: (cut: Cut | undefined) => void
+    finalCut.next = () => new Promise((resolve) => { release = resolve })
+    const taken = await manager.control(session.id, human, 'take')
+    const finishing = manager.finish(session.id, human, taken.generation, true)
+    for (let tries = 0; tries < 100 && !release; tries++) await Bun.sleep(1)
+    let closed = false
+    const original = store.close.bind(store)
+    store.close = () => { if (!closed) expect(terminated).toEqual([session.id]); closed = true; original() }
+    const stopping = manager.shutdown()
+    await Bun.sleep(10)
+    release(await picture())
+    await finishing
+    await stopping
+    expect(closed).toBe(true)
+  })
+  it('shutdown runs the refresh still owed to a hint that came during one (a second death is not dropped)', async () => {
+    const { manager, finalCut, live, paneDied, store } = fixture()
+    const first = await manager.create({ title: 'First', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    const second = await manager.create({ title: 'Second', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    let release!: (cut: Cut | undefined) => void
+    finalCut.next = () => new Promise((resolve) => { release = resolve })
+    live.delete(first.id)
+    paneDied.get(first.id)!()
+    for (let tries = 0; tries < 100 && !release; tries++) await Bun.sleep(1)
+    // The second dies while the first's save holds that refresh open.
+    live.delete(second.id)
+    paneDied.get(second.id)!()
+    let states: string[] = []
+    const original = store.close.bind(store)
+    store.close = () => { if (!states.length) states = store.sessions().filter((session) => session.id === second.id).map((session) => session.state); original() }
+    const stopping = manager.shutdown()
+    finalCut.next = picture
+    release(await picture())
+    await stopping
+    expect(states).toEqual(['exited'])
+  })
+  it('Set up service on a live server never removes a running session\'s bundle (a finish between its save and its kill)', async () => {
+    const { manager, store } = fixture()
+    const session = await manager.create({ title: 'Ending', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    await store.saveBundle(session.id, makeBundle(await picture(), { rebuilds: {} }, 1))
+    await manager.setupService(async () => {})
+    expect(store.hasBundle(session.id)).toBe(true)
+  })
   it('shutdown waits for a final save in flight before it closes the store', async () => {
     const { manager, finalCut, store, live } = fixture()
     const session = await manager.create({ title: 'Exits', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })

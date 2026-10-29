@@ -67,6 +67,8 @@ export class Sessions {
   private reconciling = new Set<string>()
   /** Final-output saves in progress, one per session (plan T35b). */
   private ending = new Map<string, Promise<void>>()
+  /** Sessions a finish holds from its reservation to its kill: input is refused, startup's bundle rule skips them. */
+  private finishing = new Map<string, Promise<unknown>>()
   private timers = new Set<ReturnType<typeof setTimeout>>()
   private shadowTimers = new Map<string, ReturnType<typeof setTimeout>>()
   /** Bridge chunks parsed per session: a comparison spanning a new one is not a quiet point. */
@@ -118,7 +120,7 @@ export class Sessions {
     return session
   }
   /** Boot: reattach live sessions (a restarted service may have lost titles). */
-  start(): Promise<void> { return this.setupService(async () => {}) }
+  start(): Promise<void> { return this.setupService(async () => {}, { startup: true }) }
   /** The newest stored output cursor for a session (0 when none). */
   latestCursor(id: string): number {
     return this.store.output(id, Number.MAX_SAFE_INTEGER).cursor
@@ -380,7 +382,7 @@ export class Sessions {
     authorize(session, principal, this.enabled(), true, generation)
     if (session.state !== 'running') throw new TerminalError('Session has exited')
     // Its final picture is being taken: nothing typed now could be in it.
-    if (this.ending.has(id)) throw new TerminalError('Session is ending', 409)
+    if (this.ending.has(id) || this.finishing.has(id)) throw new TerminalError('Session is ending', 409)
     if (sequence !== session.inputSequence + 1) throw new TerminalError('Input sequence is stale or out of order; do not retry ambiguous input')
     // The Return of a Paste + Enter counts too.
     if (Buffer.byteLength(data) + (options.paste && options.enter ? 1 : 0) > 65536) throw new TerminalError('Input exceeds 64 KiB', 413)
@@ -689,7 +691,18 @@ export class Sessions {
     this.natives.delete(id)
     if (had) notify(this.nativeListeners.get(id), (listener) => listener())
   }
-  async finish(id: string, principal: Principal, _generation: number, terminate: boolean): Promise<Session> {
+  finish(id: string, principal: Principal, generation: number, terminate: boolean): Promise<Session> {
+    const operation = this.finishOnce(id, principal, generation, terminate)
+    // Held from before the reservation (set synchronously) until the kill is done: nothing reaches the
+    // program between its final picture and its end, and shutdown waits for it.
+    const held = operation.then(() => undefined, () => undefined)
+    if (!this.finishing.has(id)) {
+      this.finishing.set(id, held)
+      void held.then(() => { if (this.finishing.get(id) === held) this.finishing.delete(id) })
+    }
+    return operation
+  }
+  private async finishOnce(id: string, principal: Principal, _generation: number, terminate: boolean): Promise<Session> {
     // Lifecycle, not input: get() already gates access (a human is the
     // operator; an agent sees only its own session). Ending a session never
     // needed to be the live input owner, so the operator can stop an agent's
@@ -860,7 +873,7 @@ export class Sessions {
    * Set up (or update) the tmux service in the manager's queue, so it can
    * never land in the middle of a session's creation, then reattach.
    */
-  setupService(install: () => Promise<void>): Promise<void> {
+  setupService(install: () => Promise<void>, options: { startup?: boolean } = {}): Promise<void> {
     return this.run(async () => {
       await install()
       for (const session of this.store.sessions()) {
@@ -868,7 +881,9 @@ export class Sessions {
         if (await this.driver.alive(session.id)) {
           // Alive with a bundle: it was saved, then a crash came before the kill; the session goes on. (A
           // pane that died meanwhile keeps its bundle: that was its final output.)
-          if (this.store.hasBundle(session.id)) this.store.discardProvisionalBundle(session.id)
+          // Only at startup: on a live server, a running session with a bundle is a finish between its save
+          // and its kill.
+          if (options.startup && !this.finishing.has(session.id) && this.store.hasBundle(session.id)) this.store.discardProvisionalBundle(session.id)
           await this.driver.title(session)
           // Unreconciled, the session stays detached; the first viewer sync retries.
           await this.attach(session)
@@ -889,8 +904,11 @@ export class Sessions {
     for (const timer of this.shadowTimers.values()) clearTimeout(timer)
     this.shadowTimers.clear()
     for (const token of [...this.reservations.keys()]) this.dropReservation(token, 'Terminal is shutting down')
+    // Lifecycle work outside the queue settles before replicas and the store go: a coalesced refresh
+    // (and the one more it owes), every finish (save, then kill), every final save.
+    while (this.refreshing) await this.refreshing
+    await Promise.allSettled([...this.finishing.values()])
     await this.pending
-    // Final saves run outside the queue: they settle before their replicas and the store go.
     await Promise.allSettled([...this.ending.values()])
     this.closed = true
     await this.driver.detach()
