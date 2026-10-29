@@ -12,6 +12,7 @@ import { runSliced } from './lib/replica'
 import { TerminalError, terminalSettings, type Principal } from './lib/contracts'
 import { agentCommand, command, creatingScreen, failure, human } from './lib/http'
 import { sessionOptions } from './lib/session-options'
+import { listDirectories, recentDirectories } from './lib/directories'
 import { TerminalViewer, viewersRetainedSteps } from './lib/socket'
 import { attachBody, confirmBody, createAndLaunch, launch, newBody, operator, resolveRef, sessionTable } from './lib/cli'
 
@@ -38,12 +39,18 @@ const route = (path: string, method: 'GET' | 'POST', summary: string, handler: (
 })
 
 export default definePlugin({
-  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.11',
+  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.12',
   routes: [
     route('/options', 'GET', 'Get terminal form defaults and available agents and tasks', async (request) => {
       const principal = human(request)
       if (!context) throw new TerminalError('Terminal is unavailable', 503)
       return Response.json(await sessionOptions(context, sessions().list(principal)))
+    }),
+    route('/directories', 'GET', "List one folder's subfolders for the New terminal folder picker", async (request) => {
+      const principal = human(request)
+      const url = new URL(request.url)
+      const listing = listDirectories(url.searchParams.get('path') ?? undefined, { hidden: url.searchParams.get('hidden') === '1' })
+      return Response.json({ ...listing, recent: recentDirectories(sessions().list(principal)) })
     }),
     route('/sessions', 'GET', 'List terminal sessions', async (request) => {
       const principal = human(request)

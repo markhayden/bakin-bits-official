@@ -2,10 +2,10 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 're
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
-import { Button } from '@makinbakin/sdk/ui'
+import { Button, Text } from '@makinbakin/sdk/ui'
 import { Panel } from '@makinbakin/sdk/layout'
 import { CopyButton } from '@makinbakin/sdk/patterns'
-import { ArrowDown, Keyboard, ZoomOut } from 'lucide-react'
+import { ArrowDown, Keyboard, X, ZoomOut } from 'lucide-react'
 import type { Session } from '../lib/contracts'
 import type { Fidelity } from '../lib/raw-display'
 import type { UnavailableReason } from '../lib/socket'
@@ -27,6 +27,16 @@ import '@xterm/xterm/css/xterm.css'
 
 /** What the page asks of the canvas: "Fit to this device" claims the size; refit applies a new smallest-text choice. */
 export interface TerminalViewHandle { fitToDevice(): boolean; refit(): void }
+
+/** A program's clipboard offer, said plainly (it may be many lines, or begin with blank ones). */
+export function offerCaption(text: string): string {
+  const lines = text.split('\n').length
+  return lines > 1 ? `Text to copy · ${lines} lines` : 'Text to copy'
+}
+/** Its first line that has anything on it (blank lines would show nothing). */
+export function offerPreview(text: string): string {
+  return text.split('\n').find((line) => line.trim())?.trim() ?? '(blank)'
+}
 
 /** How long a copied offer shows its check before it goes (the kit CopyButton's own acknowledgement time). */
 const OFFER_DONE_MS = 1500
@@ -719,6 +729,11 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     return () => { disposed = true; clearTimeout(timer); observer.disconnect(); replan.current = () => {} }
   }, [session.id, authority, session.sizeEpoch, attempt])
 
+  /** Not wanted: the offer goes (focus to the pane if it was on the offer), unless a newer one replaced it. */
+  function dismissOffer(rev: number) {
+    if (offerPanel.current?.contains(document.activeElement)) pane.current?.focus({ preventScroll: true })
+    setOffer((current) => current?.rev === rev ? undefined : current)
+  }
   /** The offer was copied: its check shows for a moment (the kit's acknowledgement), then it goes — unless a newer one replaced it. */
   function offerCopied(rev: number) {
     setTimeout(() => {
@@ -752,8 +767,13 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       {paused && <Button size="sm" variant="secondary" aria-label="Follow cursor" title="Follow cursor" onClick={resumeFollow}><ArrowDown />Live</Button>}
       {/* A program's clipboard offer (OSC 52): written only on this tap, and kept until it is (a refused write leaves it). */}
       {offer !== undefined && <Panel ref={offerPanel} variant="code" padding="compact" className="terminal-view-offer flex min-w-0 items-center gap-bakin-2">
-        <code className="min-w-0 flex-1 break-all text-bakin-text-primary">{offer.text.split('\n', 1)[0]}</code>
+        {/* What it is, then its first line with text (the whole text is copied). */}
+        <span className="min-w-0 flex-1">
+          <Text size="meta" tone="muted" className="block">{offerCaption(offer.text)}</Text>
+          <code className="block min-w-0 text-bakin-text-primary">{offerPreview(offer.text)}</code>
+        </span>
         <CopyButton key={offer.rev} size="touch" text={offer.text} label="Copy offered text" onCopied={() => offerCopied(offer.rev)} />
+        <Button size="icon-sm" variant="ghost" aria-label="Dismiss the offered text" title="Dismiss" onClick={() => dismissOffer(offer.rev)}><X /></Button>
       </Panel>}
     </div>}
   </div>

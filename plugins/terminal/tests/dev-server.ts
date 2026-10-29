@@ -1,3 +1,4 @@
+import { listDirectories, recentDirectories } from '../lib/directories'
 import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -100,6 +101,10 @@ const server = Bun.serve<ViewerData>({
         const principal = human(request)
         const path = url.pathname.slice('/api/plugins/terminal'.length)
         if (path === '/options') return Response.json({ agents: [{ id: 'patch', name: 'Patch', enabled: true, workspace: '/tmp' }, { id: 'chef', name: 'Chef', enabled: false }], tasks: [{ id: 'task-1', title: 'Terminal development', agentId: 'patch', projectId: 'project-1' }], defaults: { cwd: process.cwd(), agentId: 'patch' } })
+        if (path === '/directories') {
+          const listing = listDirectories(url.searchParams.get('path') ?? undefined, { hidden: url.searchParams.get('hidden') === '1' })
+          return Response.json({ ...listing, recent: recentDirectories(manager.list(principal)) })
+        }
         if (path === '/sessions' && request.method === 'GET') {
           await manager.refreshStates()
           return Response.json({ sessions: manager.list(principal).map((session) => ({ ...session, nativeClients: manager.nativeClients(session.id).length })), serviceReady: true })

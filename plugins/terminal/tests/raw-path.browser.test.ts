@@ -1053,3 +1053,24 @@ rawTest('clipboard offers (plan T36b): focus — a replaced offer keeps a keyboa
     await browser.close()
   }
 }, 90_000)
+
+rawTest('clipboard offers (plan T36b): labelled and previewed by their first line with text; Dismiss clears one without writing anything', async () => {
+  const browser = await launchChromium()
+  const client = 'raw-browser-offer-test-05'
+  const { page } = await recordingPage(browser)
+  const { id } = await createSession(page, client)
+  try {
+    await open(page, id)
+    await typeLine(page, offerLine('\n\n  the real first line\nand a second'))
+    await copyOffer(page).waitFor()
+    const panel = page.locator('.terminal-view-offer')
+    expect(await panel.locator('code').textContent()).toBe('the real first line')
+    expect(await panel.textContent()).toContain('Text to copy · 4 lines')
+    await panel.getByRole('button', { name: 'Dismiss the offered text' }).click()
+    await panel.waitFor({ state: 'detached' })
+    expect(await clipboard.writes(page)).toEqual([])
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 60_000)

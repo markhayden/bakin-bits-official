@@ -72,6 +72,10 @@ be assigned. It defaults to the most recent valid non-worktree directory or the
 host working directory, and the recent enabled agent or sole enabled agent.
 Selecting an agent suggests its workspace; selecting a task fills available
 agent/project links. Manually edited titles and directories are preserved.
+**Browse…** beside the working directory lists this Mac's folders (a browser's
+own picker can only name files on the device it runs on): open folders, go up,
+filter, show hidden ones, and pick from recent session folders; **Use this
+folder** fills the field. It lists folder names only, for the operator only.
 
 Task/project links are optional. Task IDs are checked against the task service;
 project IDs are navigation metadata, not ownership or cleanup authority. A
@@ -127,12 +131,14 @@ naming why (on a phone it folds to its title; **Show details** opens the
 rest). When a session ends its last screen is kept, so an ended session
 opens to what it showed.
 
-When a program offers text for the clipboard (OSC 52 — tmux's copy mode,
-Neovim, and other programs that copy), this viewer shows its first line in
-the pane's corner with a **Copy** button. Nothing writes your clipboard
-until you tap it; a newer offer replaces the last, a copied one goes after
-its check, and a refused copy keeps it to try again. Opening, reloading or
-reconnecting never brings an old offer back.
+When a program in the session offers text for the clipboard (OSC 52 —
+Neovim with OSC 52 clipboard, or `… | base64 | xargs -0 printf
+'\033]52;c;%s\a'`), this viewer shows **Text to copy** in the pane's corner
+with its first line that has text and a **Copy** button. Nothing writes your
+clipboard until you tap it; a newer offer replaces the last, a copied one goes
+after its check, a refused copy keeps it to try again, and **×** dismisses it.
+Opening, reloading or reconnecting never brings an old offer back. tmux's own
+copy mode sends its copies to attached terminal apps, not to this viewer.
 
 A session keeps the viewer it started with until it ends: turning the
 setting off starts new sessions with the current viewer, and open ones are

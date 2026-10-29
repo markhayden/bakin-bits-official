@@ -51,7 +51,7 @@
 
 /* A program's clipboard offer: its first line, cut to fit the corner (the whole text is copied). */
 [data-bakin-plugin="terminal"] .terminal-view-offer { order: 1; max-width: min(20rem, 100%); }
-[data-bakin-plugin="terminal"] .terminal-view-offer > code { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; word-break: normal; }
+[data-bakin-plugin="terminal"] .terminal-view-offer code { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 
 /* 32 px to look at, 44 px to hit on touch. */
 @media (pointer: coarse) {
