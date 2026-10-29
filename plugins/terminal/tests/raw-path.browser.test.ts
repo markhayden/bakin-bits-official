@@ -489,7 +489,7 @@ rawTest('two viewers and a terminal app on one session (plan T38a): a program\'s
   const browser = await launchChromium()
   const client = 'raw-browser-query-test-01'
   const first = await browser.newPage({ viewport })
-  const second = await (await browser.newContext()).newPage({ viewport })
+  const second = await (await browser.newContext({ viewport })).newPage()
   const { id } = await createSession(first, client)
   const tmux = process.env.TERMINAL_PREVIEW_TMUX!
   const operator = { 'Content-Type': 'application/json', 'X-Bakin-Operator': 'declared', 'X-Bakin-Origin': 'cli' }
