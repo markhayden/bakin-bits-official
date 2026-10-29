@@ -30,14 +30,16 @@ const FILTER_WAIT_MS = 200
  */
 export function FolderPicker({ start, onChoose, onCancel }: { start: string; onChoose(path: string): void; onCancel(): void }) {
   const [listing, setListing] = useState<Listing>()
+  // `error`: the request shown failed (Retry asks it again). `notice`: why the picker is not where it was asked to start.
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [filter, setFilter] = useState('')
   const [query, setQuery] = useState('')
   const [hidden, setHidden] = useState(false)
   const [request, setRequest] = useState<Request>({ path: start.trim() || undefined, attempt: 0 })
   const [loading, setLoading] = useState(true)
   const loaded = useRef(false)
-  const navigate = (path: string | undefined) => { setFilter(''); setQuery(''); setRequest((last) => ({ path, attempt: last.attempt + 1 })) }
+  const navigate = (path: string | undefined) => { setNotice(''); setFilter(''); setQuery(''); setRequest((last) => ({ path, attempt: last.attempt + 1 })) }
   useEffect(() => {
     const timer = setTimeout(() => setQuery(filter), FILTER_WAIT_MS)
     return () => clearTimeout(timer)
@@ -47,16 +49,16 @@ export function FolderPicker({ start, onChoose, onCancel }: { start: string; onC
     setLoading(true)
     list(request.path, hidden, query).then((next) => {
       if (cancelled) return
-      // The fallback from a typed path keeps saying why it is somewhere else.
-      if (loaded.current) setError('')
+      setError('')
       loaded.current = true
       setListing(next)
       setLoading(false)
     }, (reason: unknown) => {
       if (cancelled) return
-      setError(reason instanceof Error ? reason.message : String(reason))
-      // A typed path that is not a folder yet: start from home instead, saying why.
-      if (!loaded.current && request.path) { setRequest((last) => ({ path: undefined, attempt: last.attempt + 1 })); return }
+      const message = reason instanceof Error ? reason.message : String(reason)
+      // A typed path that is not a folder yet: start from home instead, saying why (that is not this request's error).
+      if (!loaded.current && request.path) { setNotice(`${message} Showing your home folder.`); setRequest((last) => ({ path: undefined, attempt: last.attempt + 1 })); return }
+      setError(message)
       setLoading(false)
     })
     return () => { cancelled = true }
@@ -64,6 +66,7 @@ export function FolderPicker({ start, onChoose, onCancel }: { start: string; onC
   const recent = listing?.recent.filter((path) => path !== listing.path) ?? []
   const choosable = listing && !loading
   return <Stack gap="item">
+    {notice && <Alert tone="info"><AlertDescription>{notice}</AlertDescription></Alert>}
     {error && <Alert tone="attention"><AlertDescription>
       <Inline gap="dense" wrap className="items-center justify-between"><span>{error}</span>
         {!loading && <Button type="button" size="sm" variant="outline" onClick={() => setRequest((last) => ({ ...last, attempt: last.attempt + 1 }))}><RotateCw size={16} />Retry</Button>}
@@ -85,7 +88,8 @@ export function FolderPicker({ start, onChoose, onCancel }: { start: string; onC
           {listing.entries.map((entry) => <ListRow key={entry.path} interactive={{ label: `Open ${entry.name}`, onActivate: () => navigate(entry.path) }} className="flex min-w-0 items-center gap-bakin-2"><Folder size={16} aria-hidden /><span className="min-w-0 truncate">{entry.name}</span></ListRow>)}
         </ListRows> : <Text size="meta" tone="muted">{query ? 'No folder here matches.' : 'No folders here.'}</Text>}
       </ListRowGroup>
-      {listing.truncated && <Text size="meta" tone="muted">Showing the first {listing.entries.length} folders; filter to narrow them.</Text>}
+      {listing.truncated === 'limit' && <Text size="meta" tone="muted">Showing the first {listing.entries.length} folders; filter to narrow them.</Text>}
+      {listing.truncated === 'scan' && <Text size="meta" tone="muted">This folder is too large to list completely; type the path you want in the working directory instead.</Text>}
     </>}
     <label className="flex items-center gap-bakin-2"><Switch checked={hidden} onCheckedChange={(on: boolean) => setHidden(on)} aria-label="Show hidden folders" /><Text size="meta">Show hidden folders</Text></label>
     {/* The choice repeated beside its action: a long list scrolls the path out of view. */}

@@ -24,7 +24,8 @@ export interface DirectoryListing {
   /** Its parent, unless it is the root. */
   parent?: string
   entries: Array<{ name: string; path: string }>
-  truncated?: true
+  /** `limit`: more folders matched than DIRECTORY_LIMIT (a filter narrows them); `scan`: the folder is bigger than SCAN_LIMIT entries and was not read to its end. */
+  truncated?: 'limit' | 'scan'
 }
 
 const isFolder = async (path: string): Promise<boolean> => { try { return (await stat(path)).isDirectory() } catch { return false } }
@@ -71,7 +72,7 @@ export async function listDirectories(raw: string | undefined, options: { hidden
     path,
     ...(parent !== path ? { parent } : {}),
     entries: folders.slice(0, DIRECTORY_LIMIT).map((name) => ({ name, path: join(path, name) })),
-    ...(cut || folders.length > DIRECTORY_LIMIT ? { truncated: true as const } : {}),
+    ...(cut ? { truncated: 'scan' as const } : folders.length > DIRECTORY_LIMIT ? { truncated: 'limit' as const } : {}),
   }
 }
 

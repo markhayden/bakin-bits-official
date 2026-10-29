@@ -41,7 +41,7 @@ describe('listDirectories (the New terminal folder picker)', () => {
     for (let n = 0; n < DIRECTORY_LIMIT + 5; n++) mkdirSync(join(big, `d${String(n).padStart(4, '0')}`))
     const listed = await listDirectories(big)
     expect(listed.entries).toHaveLength(DIRECTORY_LIMIT)
-    expect(listed.truncated).toBe(true)
+    expect(listed.truncated).toBe('limit')
     // The filter runs before the cap: the last folder is still reachable.
     const last = `d${String(DIRECTORY_LIMIT + 4).padStart(4, '0')}`
     expect((await listDirectories(big, { filter: last })).entries.map((entry) => entry.name)).toEqual([last])
@@ -49,7 +49,7 @@ describe('listDirectories (the New terminal folder picker)', () => {
   it('reads at most its scan budget of entries, and says the listing was cut', async () => {
     const listed = await listDirectories(join(root, 'big'), { scanLimit: 10 })
     expect(listed.entries.length).toBeLessThanOrEqual(10)
-    expect(listed.truncated).toBe(true)
+    expect(listed.truncated).toBe('scan')
   })
 })
 

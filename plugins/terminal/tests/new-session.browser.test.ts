@@ -89,10 +89,14 @@ browserTest('the folder picker browses this machine\'s folders and fills the wor
     // A typed path that is not a folder: the picker says so and starts from home; Back keeps the typing.
     await directory.fill(join(root, 'missing'))
     await dialog.getByRole('button', { name: 'Browse…' }).click()
-    await dialog.getByText(/missing does not exist/).waitFor()
+    await dialog.getByText(/missing does not exist\. Showing your home folder\./).waitFor()
     await dialog.getByRole('list', { name: 'Folders' }).waitFor()
+    // A notice, not this listing's error: nothing to retry.
+    expect(await dialog.getByRole('button', { name: 'Retry' }).count()).toBe(0)
     await dialog.getByRole('button', { name: 'Back', exact: true }).click()
     expect(await directory.inputValue()).toBe(join(root, 'missing'))
+    // Focus returns to Browse… (the picker's view replaced the form's).
+    await page.waitForFunction(() => document.activeElement?.textContent === 'Browse…')
   } finally {
     await browser.close()
     rmSync(root, { recursive: true, force: true })
@@ -107,7 +111,7 @@ browserTest('the folder picker: no choice while a folder loads, a failed folder 
   const browser = await launchChromium()
   const page = await browser.newPage({ viewport: { width: 1100, height: 800 } })
   const held: { release?: () => void } = {}
-  const state = { flakyFails: 1 }
+  const state = { flakyFails: 1, homeFails: 0 }
   try {
     await page.route('**/api/plugins/terminal/options', (route) => route.fulfill({ json: { agents: [], tasks: [], defaults: { cwd: root, agentId: '' } } }))
     await page.route('**/api/plugins/projects/', (route) => route.fulfill({ json: { projects: [] } }))
@@ -115,6 +119,7 @@ browserTest('the folder picker: no choice while a folder loads, a failed folder 
       const path = new URL(route.request().url()).searchParams.get('path')
       if (path === join(root, 'slow')) await new Promise<void>((resolve) => { held.release = resolve })
       if (path === join(root, 'flaky') && state.flakyFails-- > 0) return route.fulfill({ status: 503, json: { error: 'The disk is busy.' } })
+      if (!path && state.homeFails-- > 0) return route.fulfill({ status: 503, json: { error: 'The home folder is busy.' } })
       await route.continue()
     })
     await page.goto(process.env.TERMINAL_PREVIEW_URL!)
@@ -138,6 +143,24 @@ browserTest('the folder picker: no choice while a folder loads, a failed folder 
     await dialog.getByRole('button', { name: 'Retry' }).click()
     await dialog.getByText(`Uses ${join(root, 'flaky')}`).waitFor()
     expect(await dialog.getByText('The disk is busy.').count()).toBe(0)
+    // A typed path that fails, then home failing too: Retry asks for home again, and its error clears once it loads
+    // while the notice about the typed path stays.
+    await dialog.getByRole('button', { name: 'Back', exact: true }).click()
+    await dialog.getByRole('textbox', { name: 'Working directory' }).fill(join(root, 'gone'))
+    state.homeFails = 1
+    await dialog.getByRole('button', { name: 'Browse…' }).click()
+    await dialog.getByText('The home folder is busy.').waitFor()
+    await dialog.getByText(/gone does not exist\. Showing your home folder\./).waitFor()
+    await dialog.getByRole('button', { name: 'Retry' }).click()
+    await dialog.getByRole('list', { name: 'Folders' }).waitFor()
+    expect(await dialog.getByText('The home folder is busy.').count()).toBe(0)
+    expect(await dialog.getByText(/gone does not exist/).count()).toBe(1)
+    await dialog.getByRole('textbox', { name: 'Filter folders' }).waitFor()
+    // Back into the tree for the last check.
+    await dialog.getByRole('button', { name: 'Back', exact: true }).click()
+    await dialog.getByRole('textbox', { name: 'Working directory' }).fill(root)
+    await dialog.getByRole('button', { name: 'Browse…' }).click()
+    await dialog.getByText(`Uses ${root}`).waitFor()
     // Past the first 500: the server filters before its cap.
     await dialog.getByRole('button', { name: 'Up to the parent folder' }).click()
     await dialog.getByRole('button', { name: 'Open many' }).click()
