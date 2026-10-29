@@ -1,5 +1,5 @@
 {
-  "id": "terminal", "name": "Terminal", "version": "0.4.0-dev.8", "bakin": ">=0.0.1-rc.42",
+  "id": "terminal", "name": "Terminal", "version": "0.4.0-dev.9", "bakin": ">=0.0.1-rc.42",
   "description": "Persistent shared terminals with per-agent access and retained coding worktrees.",
   "requires": {
     "bins": [
@@ -44,6 +44,7 @@
       { "method": "POST", "path": "/sessions", "summary": "Create a terminal session" },
       { "method": "POST", "path": "/session", "summary": "Operate a terminal session" },
       { "method": "POST", "path": "/service", "summary": "Set up the terminal service" },
+      { "method": "POST", "path": "/service/update", "summary": "Apply the Terminal service update, ending the live sessions the operator confirmed" },
       { "method": "POST", "path": "/cli/new", "summary": "Create a session and attach the operator's terminal" },
       { "method": "POST", "path": "/cli/attach", "summary": "Attach the operator's terminal to a session" },
       { "method": "POST", "path": "/cli/confirm", "summary": "Admit the launched terminal app" },
