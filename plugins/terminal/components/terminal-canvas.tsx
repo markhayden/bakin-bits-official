@@ -80,6 +80,12 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   const [offer, setOffer] = useState<{ text: string; rev: number }>()
   const offerRev = useRef(0)
   const offerPanel = useRef<HTMLDivElement>(null)
+  const focusOffer = useRef(false)
+  useLayoutEffect(() => {
+    if (!focusOffer.current) return
+    focusOffer.current = false
+    offerPanel.current?.querySelector<HTMLButtonElement>('[data-slot="copy-button"]')?.focus({ preventScroll: true })
+  }, [offer?.rev])
   const callbacks = useRef({ onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity, onUnavailable, writable, authority, inputEnabled, onModifiersChange, captureTab: false, sizeEpoch: session.sizeEpoch, zoom, paused })
   callbacks.current = { onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity, onUnavailable, writable, authority, inputEnabled, onModifiersChange, captureTab, sizeEpoch: session.sizeEpoch, zoom, paused }
   const [status, setStatus] = useState('Connecting')
@@ -239,7 +245,12 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       // and the xterm 6.0.0 workarounds apply.
       // OSC 52: the latest offer replaces any earlier one (one pending per session); only a tap copies it.
       // The raw path only: its replays are silent (setLive), the bridge path's syncs and ended-session output are not.
-      const profile = applyTerminalProfile(term, { clipboardOffer: (text) => { if (rawPath.current) setOffer({ text, rev: ++offerRev.current }) } })
+      const profile = applyTerminalProfile(term, { clipboardOffer: (text) => {
+        if (!rawPath.current) return
+        // A keyboard user on the offer being replaced moves to the new one (its button is a new element).
+        focusOffer.current = Boolean(offerPanel.current?.contains(document.activeElement))
+        setOffer({ text, rev: ++offerRev.current })
+      } })
       // Shown, or replaying to be shown next (a failure of either counts).
       let active = true
       // A parser exception would wedge every later write: the screen is
@@ -284,7 +295,16 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
           // No QuickType suggestions inserted into the terminal (spec D9 item 2); compose has its own textarea.
           textarea.setAttribute('autocomplete', 'off')
           // Focusing the terminal to type goes back to the cursor (like ↓ Live).
-          const typing = () => resumeFollow()
+          // Focus that only bounced through an element now gone (a copy's
+          // hidden textarea, which gives it back) is not a return: the view stays.
+          let lostTo: Element | null = null
+          const left = (event: FocusEvent) => { lostTo = event.relatedTarget instanceof Element ? event.relatedTarget : null }
+          const typing = () => {
+            const bounced = lostTo !== null && !lostTo.isConnected
+            lostTo = null
+            if (!bounced) resumeFollow()
+          }
+          textarea.addEventListener('blur', left)
           textarea.addEventListener('focus', typing)
           // However the view got into the history (xterm's scrollbar too), it stays paused there.
           const scrolled = term.onScroll(() => { if (term.buffer.active.viewportY < term.buffer.active.baseY) pause(true) })
@@ -294,7 +314,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
           terminal.current = term
           fit.current = fitAddon
           cursorVisibility.current = cursor
-          detach = () => { textarea.removeEventListener('focus', typing); scrolled.dispose(); switched.dispose(); disposeRenderer() }
+          detach = () => { textarea.removeEventListener('focus', typing); textarea.removeEventListener('blur', left); scrolled.dispose(); switched.dispose(); disposeRenderer() }
         },
         dispose() {
           active = false

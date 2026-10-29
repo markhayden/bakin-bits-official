@@ -815,12 +815,12 @@ rawTest('native scrolling (plan T36): a selection pauses following, and ↓ Live
  * fallback fail), or `hold` (pending until `window.__clipboard.release()`).
  */
 const RECORDING_CLIPBOARD = () => {
-  const state = { writes: [] as string[], mode: 'ok' as 'ok' | 'refuse' | 'hold', release: () => {} }
+  const state = { writes: [] as string[], mode: 'ok' as 'ok' | 'refuse' | 'hold' | 'fallback', release: () => {} }
   Object.assign(window, { __clipboard: state })
   Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
     writeText: (text: string) => {
       state.writes.push(text)
-      if (state.mode === 'refuse') return Promise.reject(new Error('refused'))
+      if (state.mode === 'refuse' || state.mode === 'fallback') return Promise.reject(new Error('refused'))
       if (state.mode === 'hold') return new Promise<void>((resolve) => { state.release = resolve })
       return Promise.resolve()
     },
@@ -828,7 +828,7 @@ const RECORDING_CLIPBOARD = () => {
   const exec = document.execCommand.bind(document)
   document.execCommand = (command: string, ...rest: unknown[]) => command === 'copy' && state.mode === 'refuse' ? false : exec(command, ...(rest as []))
 }
-type Recorded = { writes: string[]; mode: 'ok' | 'refuse' | 'hold'; release(): void }
+type Recorded = { writes: string[]; mode: 'ok' | 'refuse' | 'hold' | 'fallback'; release(): void }
 const clipboard = {
   writes: (page: Page) => page.evaluate(() => (window as unknown as { __clipboard: Recorded }).__clipboard.writes),
   mode: (page: Page, mode: Recorded['mode']) => page.evaluate((next) => { (window as unknown as { __clipboard: Recorded }).__clipboard.mode = next }, mode),
@@ -993,3 +993,54 @@ rawTest('on a phone (plan T36b) the persistent recovery notice folds to its titl
     await browser.close()
   }
 }, 60_000)
+
+rawTest('clipboard offers (plan T36b): focus — a replaced offer keeps a keyboard user on Copy; a copy through the fallback (copied or refused) leaves the view in the history; a pending offer survives a recovery', async () => {
+  const browser = await launchChromium()
+  const client = 'raw-browser-offer-test-04'
+  const { page } = await recordingPage(browser)
+  const other = await (await browser.newContext({ viewport })).newPage()
+  const { id } = await createSession(page, client)
+  const tmux = process.env.TERMINAL_PREVIEW_TMUX!
+  const socket = new TerminalService(process.env.TERMINAL_PREVIEW_ROOT!).socket
+  const live = page.getByRole('button', { name: 'Follow cursor' })
+  try {
+    await open(page, id)
+    await open(other, id)
+    await typeLine(page, offerLine('offer A'))
+    await copyOffer(page).waitFor()
+    // Keyboard focus on Copy; the program offers again (typed on the other viewer, so this one is not refocused).
+    await copyOffer(page).focus()
+    await typeLine(other, offerLine('offer B'))
+    await page.locator('.terminal-view-offer code', { hasText: 'offer B' }).waitFor()
+    expect(await page.evaluate(() => document.activeElement?.getAttribute('data-slot'))).toBe('copy-button')
+    // The terminal focused, then into the history; copying through the fallback path keeps the view there.
+    await typeLine(page, 'clear; seq -f "line-%g" 1 300')
+    await waitForRow(page, '^line-300$')
+    await typeLine(page, offerLine('offer C'))
+    await page.locator('.terminal-view-offer code', { hasText: 'offer C' }).waitFor()
+    await wheelOver(page, -2000, 5)
+    await live.waitFor()
+    for (const mode of ['refuse', 'fallback'] as const) {
+      await clipboard.mode(page, mode)
+      await copyOffer(page).click()
+      await settleFor(page)
+      expect(await live.count()).toBe(1)
+      expect(await shows(page, '^line-300$')).toBe(false)
+      expect(await page.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea'))).toBe(true)
+    }
+    // A pending offer (refused above, or copied and showing its check) and a recovery: it is neither lost nor doubled.
+    await clipboard.mode(page, 'refuse')
+    await typeLine(other, offerLine('offer D'))
+    await page.locator('.terminal-view-offer code', { hasText: 'offer D' }).waitFor()
+    const control = Bun.spawnSync([tmux, '-S', socket, 'list-clients', '-t', id, '-F', '#{client_control_mode} #{client_name}']).stdout.toString()
+      .split('\n').filter((line) => line.startsWith('1 ')).map((line) => line.slice(2))
+    Bun.spawnSync([tmux, '-S', socket, 'detach-client', '-t', control[0]!])
+    await page.getByRole('status', { name: 'Terminal view recovered with limitations' }).waitFor({ timeout: 20_000 })
+    await settleFor(page)
+    expect(await copyOffer(page).count()).toBe(1)
+    expect(await page.locator('.terminal-view-offer code').textContent()).toBe('offer D')
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 90_000)
