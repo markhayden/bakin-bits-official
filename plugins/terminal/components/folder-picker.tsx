@@ -66,7 +66,7 @@ export function FolderPicker({ start, onChoose, onCancel }: { start: string; onC
   const recent = listing?.recent.filter((path) => path !== listing.path) ?? []
   const choosable = listing && !loading
   return <Stack gap="item">
-    {notice && <Alert tone="info"><AlertDescription>{notice}</AlertDescription></Alert>}
+    {notice && <Alert tone="neutral"><AlertDescription>{notice}</AlertDescription></Alert>}
     {error && <Alert tone="attention"><AlertDescription>
       <Inline gap="dense" wrap className="items-center justify-between"><span>{error}</span>
         {!loading && <Button type="button" size="sm" variant="outline" onClick={() => setRequest((last) => ({ ...last, attempt: last.attempt + 1 }))}><RotateCw size={16} />Retry</Button>}
