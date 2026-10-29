@@ -168,15 +168,23 @@ export class Sessions {
   private owedAtStop = false
   private requestRefresh(): void {
     if (this.refreshing) { this.refreshAgain = true; return }
-    this.refreshing = this.refreshStates().catch(() => undefined).finally(() => {
+    this.refreshing = this.trackRefresh().catch(() => undefined).finally(() => {
       this.refreshing = undefined
-      if (this.refreshAgain && !this.closed) { this.refreshAgain = false; this.requestRefresh() }
+      if (!this.refreshAgain || this.closed) return
+      this.refreshAgain = false
+      // Owed when shutdown began: shutdown's own last refresh covers it.
+      if (this.stopping) this.owedAtStop = true; else this.requestRefresh()
     })
   }
   private refreshing: Promise<void> | undefined
   private refreshAgain = false
   private stopping = false
   refreshStates(): Promise<void> {
+    // Shutting down: no new lifecycle work is taken (shutdown runs its own last refresh).
+    if (this.stopping) return Promise.reject(new TerminalError('Terminal is shutting down', 503))
+    return this.trackRefresh()
+  }
+  private trackRefresh(): Promise<void> {
     // Tracked from its call: its saves start after its queue turn, and shutdown waits for them.
     const work = this.refreshOnce()
     const settled = work.then(() => undefined, () => undefined)
@@ -709,6 +717,7 @@ export class Sessions {
     if (had) notify(this.nativeListeners.get(id), (listener) => listener())
   }
   finish(id: string, principal: Principal, generation: number, terminate: boolean): Promise<Session> {
+    if (this.stopping) return Promise.reject(new TerminalError('Terminal is shutting down', 503))
     const operation = this.finishOnce(id, principal, generation, terminate)
     // Held from before the reservation (set synchronously) until the kill is done, and until every
     // finish of the session settles: nothing reaches the program between its final picture and its end.
@@ -881,9 +890,13 @@ export class Sessions {
     }
   }
   async sweep(): Promise<void> {
+    if (this.stopping) throw new TerminalError('Terminal is shutting down', 503)
     // An exited session whose final output is not saved yet (a failed save) tries again before
     // maintenance may complete it, outside the queue.
-    for (const session of this.store.sessions()) if (session.state === 'exited' && session.outputSaved === false) await this.saveFinal(session.id)
+    for (const session of this.store.sessions()) {
+      if (this.stopping) throw new TerminalError('Terminal is shutting down', 503)
+      if (session.state === 'exited' && session.outputSaved === false) await this.saveFinal(session.id)
+    }
     return this.run(() => this.sweepUnlocked())
   }
   /**
@@ -936,7 +949,7 @@ export class Sessions {
     }
     await drain()
     // One last refresh for deaths heard meanwhile (bounded: hints from here on are not taken).
-    if (this.owedAtStop) { await this.refreshStates().catch(() => undefined); await drain() }
+    if (this.owedAtStop) { await this.trackRefresh().catch(() => undefined); await drain() }
     this.closed = true
     await this.driver.detach()
     for (const screen of this.screens.values()) { await screen.drain(); screen.close() }

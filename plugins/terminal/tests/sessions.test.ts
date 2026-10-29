@@ -1033,6 +1033,25 @@ describe('final output (plan T35b)', () => {
     await hints
     expect(performance.now() - started).toBeLessThan(1000)
   })
+  it('once shutdown starts, new lifecycle work is refused (a refresh, a finish, a sweep); accepted work still completes', async () => {
+    const { manager, finalCut, live, store } = fixture()
+    const accepted = await manager.create({ title: 'Accepted', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    const late = await manager.create({ title: 'Late', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    let release!: (cut: Cut | undefined) => void
+    finalCut.next = () => new Promise((resolve) => { release = resolve })
+    const taken = await manager.control(accepted.id, human, 'take')
+    const finishing = manager.finish(accepted.id, human, taken.generation, true)
+    for (let tries = 0; tries < 100 && !release; tries++) await Bun.sleep(1)
+    const stopping = manager.shutdown()
+    const lateTaken = store.session(late.id)!
+    await expect(manager.refreshStates()).rejects.toThrow('shutting down')
+    await expect(manager.finish(late.id, human, lateTaken.generation, true)).rejects.toThrow('shutting down')
+    live.delete(late.id)
+    await expect(manager.sweep()).rejects.toThrow('shutting down')
+    release(await picture())
+    expect((await finishing).state).toBe('completed')
+    await stopping
+  })
   it('Set up service on a live server never removes a running session\'s bundle (a finish between its save and its kill)', async () => {
     const { manager, store } = fixture()
     const session = await manager.create({ title: 'Ending', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
