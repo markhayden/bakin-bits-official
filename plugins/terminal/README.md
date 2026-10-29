@@ -118,7 +118,8 @@ them keeps the keyboard where it is. Scrolling and panning never open the
 keyboard or send input, with one exception that matches native terminals: a
 full-screen program that asked for the mouse (Claude Code, vim with mouse on)
 scrolls itself, so the wheel and vertical drags reach it as scroll events
-once the grid has panned to its edge. A full-screen program that did not ask
+(one per row) once the grid has panned to its edge — on the new viewer, for
+programs that use the SGR mouse encoding, as Claude Code does. A full-screen program that did not ask
 for the mouse gets no arrow keys from scrolling, and a tap never reaches a
 program as a mouse click (a mouse click on a desktop still does, as in any
 terminal).

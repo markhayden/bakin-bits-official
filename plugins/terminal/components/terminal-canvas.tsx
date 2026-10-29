@@ -580,23 +580,43 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
      */
     const programScrolls = () => {
       const term = terminal.current
-      return Boolean(term && term.buffer.active.type === 'alternate' && term.modes.mouseTrackingMode !== 'none')
+      if (!term || !rawPath.current || term.buffer.active.type !== 'alternate') return false
+      // Only modes that report the wheel (X10 has none: xterm would send arrow keys), and only SGR reports:
+      // the viewer's input carries text, and an older encoding's coordinates are raw bytes.
+      const mouse = (term as unknown as { _core: { coreMouseService: { activeProtocol: string; activeEncoding: string } } })._core.coreMouseService
+      return ['VT200', 'DRAG', 'ANY'].includes(mouse.activeProtocol) && mouse.activeEncoding === 'SGR'
     }
-    /** Whether the pane can still pan that way (an overflowing grid pans to its edge before the program scrolls). */
-    const canPan = (dy: number) => dy < 0 ? el.scrollTop > 0 : el.scrollTop < el.scrollHeight - el.clientHeight - 1
-    /** One wheel step to the program per row dragged (xterm turns it into the report), at the finger. */
+    /** How far the pane can pan that way: an overflowing grid pans to its edge before the program scrolls. */
+    const panRoom = (dy: number) => dy < 0 ? -el.scrollTop : Math.max(0, el.scrollHeight - el.clientHeight - el.scrollTop)
+    /**
+     * Scroll the program by `pixels` (negative: up): whole rows become one
+     * wheel report each, the remainder carries. Dispatched in xterm's line
+     * mode (one line per event), so xterm's own pixel scaling never changes
+     * the count. Following pauses: the program's repaint must not pan back.
+     */
     let programCarry = 0
-    const dragProgram = (dy: number, x: number, y: number) => {
+    const passing = new WeakSet<Event>()
+    const scrollProgram = (pixels: number, x: number, y: number) => {
       const term = terminal.current
       const rendered = screen()
       if (!term?.element || !rendered?.clientHeight) return
+      pause()
       const cell = rendered.clientHeight / term.rows
-      programCarry += dy
+      programCarry = Math.sign(programCarry) === Math.sign(pixels) ? programCarry + pixels : pixels
       while (Math.abs(programCarry) >= cell) {
-        const step = Math.sign(programCarry) * cell
-        programCarry -= step
-        term.element.dispatchEvent(new WheelEvent('wheel', { deltaY: step, deltaMode: 0, clientX: x, clientY: y, bubbles: true, cancelable: true }))
+        const step = Math.sign(programCarry)
+        programCarry -= step * cell
+        const report = new WheelEvent('wheel', { deltaY: step, deltaMode: WheelEvent.DOM_DELTA_LINE, clientX: x, clientY: y, bubbles: true, cancelable: true })
+        passing.add(report)
+        term.element.dispatchEvent(report)
       }
+    }
+    /** A vertical move for a program that scrolls itself: what the pane can pan, then the rest to the program. */
+    const programMove = (dy: number, x: number, y: number) => {
+      const room = panRoom(dy)
+      const pan = dy < 0 ? Math.max(dy, room) : Math.min(dy, room)
+      if (pan) { el.scrollBy(0, pan); pause() }
+      if (dy - pan) scrollProgram(dy - pan, x, y)
     }
     const hasHistory = () => {
       const buffer = terminal.current?.buffer.active
@@ -662,8 +682,10 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       event.preventDefault()
       if (drag.owner === 'ended') return
       if (drag.owner === 'program') {
+        // The program stopped taking the mouse (or left the full screen) mid-drag: the drag ends.
+        if (!programScrolls()) { drag.owner = 'ended'; return }
         if (dx) { el.scrollBy(dx, 0); pause() }
-        if (dy && canPan(dy)) { el.scrollBy(0, dy); pause() } else if (dy) dragProgram(dy, x, y)
+        if (dy) programMove(dy, x, y)
         return
       }
       if (dx) { el.scrollBy(dx, 0); pause() }
@@ -688,11 +710,17 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       stopFling()
       if (!event.ctrlKey) {
         // A program that scrolls itself gets a mostly vertical wheel (xterm reports it); a drag's steps are ours to pass on too.
-        if (programScrolls() && Math.abs(event.deltaY) >= Math.abs(event.deltaX) && !canPan(event.deltaY)) return
-        // Otherwise ours: xterm never sees a wheel (no arrow keys, no history it scrolls itself).
+        // Our own reports, on their way to xterm.
+        if (passing.has(event)) return
+        // Never xterm's own: no arrow keys, no history it scrolls itself, no report it would scale.
         event.preventDefault()
         event.stopPropagation()
         const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? el.clientHeight : 1
+        if (programScrolls() && Math.abs(event.deltaY) >= Math.abs(event.deltaX)) {
+          if (event.deltaX) { el.scrollBy(event.deltaX * unit, 0); pause() }
+          programMove(event.deltaY * unit, event.clientX, event.clientY)
+          return
+        }
         if (event.deltaX) { el.scrollBy(event.deltaX * unit, 0); pause() }
         if (event.deltaY) scrollVertical(event.deltaY * unit)
         return

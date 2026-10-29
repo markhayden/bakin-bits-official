@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TerminalService } from '../lib/service'
@@ -603,47 +603,62 @@ rawTest('native scrolling (plan T36): dragging xterm\'s own scrollbar into the h
   }
 }, 60_000)
 
-rawTest('native scrolling (plan T36, as native terminals): a full-screen program that asked for the mouse gets the wheel as scroll reports (and never a click); without the mouse it gets nothing and its screen does not scroll', async () => {
+/** Cell height in the page for a grid of `rows` (the row height the canvas converts scroll pixels by). */
+const cellHeight = (page: Page, rows: number) => page.evaluate((count) => (document.querySelector('.xterm-screen') as HTMLElement).clientHeight / count, rows)
+/** What a program on the alternate screen, in the given mouse mode, received: run it writing its input to a file. */
+async function receiving(page: Page, modes: string, file: string) {
+  rmSync(file, { force: true })
+  await typeLine(page, `clear; printf '\\033[?1049h${modes}%s%s\\n' REA DY; stty -echo -icanon; cat > ${file}`)
+  await waitForRow(page, '^READY$')
+  return async () => {
+    await page.waitForTimeout(1200)
+    await page.keyboard.press('Control+C')
+    await typeLine(page, `stty sane; printf '\\033[?9l\\033[?1000l\\033[?1003l\\033[?1006l\\033[?1049l'`)
+    return existsSync(file) ? readFileSync(file, 'latin1') : ''
+  }
+}
+const reports = (input: string, button: number) => (input.match(new RegExp(`\\x1b\\[<${button};\\d+;\\d+M`, 'g')) ?? []).length
+
+rawTest('native scrolling (plan T36, as native terminals): a full-screen program that asked for the mouse gets one wheel report per row scrolled (never a click); X10 mode or no mouse gets nothing', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-scroll-test-02'
   const page = await browser.newPage({ viewport })
   const { id } = await createSession(page, client)
   const tmux = process.env.TERMINAL_PREVIEW_TMUX!
   const socket = new TerminalService(process.env.TERMINAL_PREVIEW_ROOT!).socket
+  const file = join(tmpdir(), `bakin-wheel-${process.pid}-${Date.now()}.txt`)
   try {
     await open(page, id)
     // A grid that fits the pane (nothing to pan first).
     Bun.spawnSync([tmux, '-S', socket, 'resize-window', '-t', id, '-x', '60', '-y', '15'])
     await page.waitForFunction(() => { const pane = document.querySelector('.terminal-pane')!; return pane.scrollHeight <= pane.clientHeight + 1 && pane.scrollWidth <= pane.clientWidth + 1 }, null, { timeout: 10_000 })
-    await typeLine(page, 'seq -f "before-%g" 1 100')
-    await waitForRow(page, '^before-100$')
-    for (const [mouse, ready] of [['', 'STEADY'], ['\\033[?1000;1006h', 'READY']] as const) {
-      // On the alternate screen, with or without mouse reporting (SGR); anything the program receives is shown by cat -v.
-      await typeLine(page, `clear; printf '\\033[?1049h${mouse}%s%s\\n' ${ready.slice(0, 3)} ${ready.slice(3)}; stty -echo -icanon; cat -v`)
-      await waitForRow(page, `^${ready}$`)
-      const before = await rows(page)
-      await wheelOver(page, -600, 5)
-      await wheelOver(page, 600, 5)
-      await page.waitForTimeout(1500)
-      const received = (await rows(page)).join('\n')
-      if (mouse) {
-        // Wheel up (64) and down (65) reports, SGR; never a button press (0) — the wheel is not a click.
-        expect(received).toMatch(/\^\[\[<64;\d+;\d+M/)
-        expect(received).toMatch(/\^\[\[<65;\d+;\d+M/)
-        expect(received).not.toMatch(/\^\[\[<0;/)
-      } else {
-        // No arrow keys, no reports; the alternate screen did not scroll.
-        expect(received).not.toContain('^[')
-        expect(await rows(page)).toEqual(before)
-      }
-      await page.keyboard.press('Control+C')
-      await typeLine(page, `stty sane; printf '\\033[?1000;1006l\\033[?1049l'`)
+    const cell = await cellHeight(page, 15)
+    // Button tracking, SGR: one report per whole row of scrolling (never more, a remainder carried within a
+    // direction), so half the distance is half the reports; never a click.
+    let done = await receiving(page, '\\033[?1000;1006h', file)
+    await wheelOver(page, -100, 6)
+    await wheelOver(page, 100, 3)
+    let input = await done()
+    const up = reports(input, 64)
+    const down = reports(input, 65)
+    expect(up).toBeGreaterThanOrEqual(5)
+    expect(up).toBeLessThanOrEqual(Math.ceil(600 / cell) + 1)
+    expect(Math.abs(up - 2 * down)).toBeLessThanOrEqual(2)
+    expect(reports(input, 0)).toBe(0)
+    // X10 has no wheel (xterm would send arrow keys), and no mouse at all: nothing reaches the program.
+    for (const modes of ['\\033[?9h', '']) {
+      done = await receiving(page, modes, file)
+      await wheelOver(page, -300, 3)
+      await wheelOver(page, 300, 3)
+      input = await done()
+      expect(input).toBe('')
     }
   } finally {
+    rmSync(file, { force: true })
     await endSession(page, client, id)
     await browser.close()
   }
-}, 60_000)
+}, 90_000)
 
 
 // Touch is dispatched through Chromium's DevTools protocol.
@@ -1177,29 +1192,31 @@ rawTest('Copy text: more than 2,000 lines shows the newest and copies every one 
   }
 }, 90_000)
 
-touchTest('native scrolling on a phone (as native terminals): a vertical drag in a full-screen program that asked for the mouse reaches it as scroll reports; a tap still never does', async () => {
+touchTest('native scrolling on a phone (as native terminals): a vertical drag in a full-screen program that asked for the mouse sends one report per row dragged; a tap still never clicks', async () => {
   const client = 'raw-browser-scroll-test-10'
   const { browser, page, id, drag, tap } = await phone(client)
   const tmux = process.env.TERMINAL_PREVIEW_TMUX!
   const socket = new TerminalService(process.env.TERMINAL_PREVIEW_ROOT!).socket
+  const file = join(tmpdir(), `bakin-drag-${process.pid}-${Date.now()}.txt`)
   try {
     await open(page, id)
     // A grid that fits the phone's pane: the drag has nothing to pan first.
     Bun.spawnSync([tmux, '-S', socket, 'resize-window', '-t', id, '-x', '40', '-y', '12'])
     await page.waitForFunction(() => { const pane = document.querySelector('.terminal-pane')!; return pane.scrollHeight <= pane.clientHeight + 1 }, null, { timeout: 10_000 })
-    await typeLine(page, `clear; printf '\\033[?1049h\\033[?1003;1006h%s%s\\n' READ Y; stty -echo -icanon; cat -v`)
-    await waitForRow(page, '^READY$')
+    const cell = await cellHeight(page, 12)
+    const done = await receiving(page, '\\033[?1003;1006h', file)
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
     await tap({ x: 120, y: 60 })
+    // Finger down 160 px: what is above comes into view — wheel-up reports, one per row.
     await drag({ x: 150, y: 80 }, { x: 150, y: 240 })
-    await page.waitForTimeout(1500)
-    const received = (await rows(page)).join('\n')
-    // Finger down shows what is above: wheel-up reports. No click from the tap.
-    expect(received).toMatch(/\^\[\[<64;\d+;\d+M/)
-    expect(received).not.toMatch(/\^\[\[<0;/)
-    expect(received).not.toMatch(/\^\[\[<35;/)
-    await page.keyboard.press('Control+C')
+    const input = await done()
+    const up = reports(input, 64)
+    expect(up).toBeGreaterThanOrEqual(3)
+    expect(up).toBeLessThanOrEqual(Math.ceil(160 / cell) + 1)
+    expect(reports(input, 0)).toBe(0)
+    expect(reports(input, 35)).toBe(0)
   } finally {
+    rmSync(file, { force: true })
     await endSession(page, client, id)
     await browser.close()
   }
