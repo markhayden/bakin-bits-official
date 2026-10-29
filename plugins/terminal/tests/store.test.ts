@@ -267,3 +267,19 @@ test('a stored bundle damaged on disk reads as none (an output event that lost i
     for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true })
   }
 })
+test('recording a failed save is one write with its mark: interrupted, the session still says not saved after a reopen', async () => {
+  const path = join(tmpdir(), `terminal-bundles-${crypto.randomUUID()}.db`)
+  try {
+    const first = new Store(path)
+    first.save(sessionRow('failing', { outputSaved: false }))
+    // The mark fails after the flag was written: the transaction must take the flag back with it.
+    ;(first as unknown as { mark: () => void }).mark = () => { throw new Error('interrupted') }
+    expect(() => first.markOutput('failing', false)).toThrow('interrupted')
+    first.close()
+    const reopened = new Store(path)
+    stores.push(reopened)
+    expect(reopened.session('failing')?.outputSaved).toBe(false)
+  } finally {
+    for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true })
+  }
+})

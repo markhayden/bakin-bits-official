@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { makeBundle } from '../lib/bundle'
 import { Replica } from '../lib/replica'
 import { Store } from '../lib/store'
+import headless from '@xterm/headless'
+import { applyTerminalProfile, TERMINAL_OPTIONS } from '../lib/terminal-profile'
 
 // Plan T35b rollback contract: B5 (the release before the raw path; 65604c7, the one installed when
 // this was written) and this version share one terminal.db, back and forth. B5's own store code is
@@ -27,6 +29,23 @@ async function picture(text: string) {
   const cut = replica.cut()!
   replica.close()
   return makeBundle(cut, { rebuilds: { overload: 1 } }, 1)
+}
+/** A bundle replayed as a viewer does (checkpoint, then the tail in order), as the text it shows. */
+async function replayed(bundle: Awaited<ReturnType<typeof picture>> | undefined): Promise<string> {
+  const { checkpoint, tail } = bundle!.cut
+  const term = new headless.Terminal({ cols: checkpoint.cols, rows: checkpoint.rows, ...TERMINAL_OPTIONS, scrollback: checkpoint.scrollback })
+  applyTerminalProfile(term).setLive(false)
+  const write = (data: string | Uint8Array) => new Promise<void>((resolve) => term.write(data, resolve))
+  for (const piece of checkpoint.data) await write(piece)
+  for (const event of tail) {
+    if (event.kind === 'output') await write(event.bytes)
+    if (event.kind === 'layout') term.resize(event.cols, event.rows)
+    if (event.kind === 'geometry') { term.resize(event.cols, event.rows); await write(event.bytes) }
+  }
+  let text = ''
+  for (let y = 0; y < term.buffer.active.length; y++) text += term.buffer.active.getLine(y)!.translateToString(true) + '\n'
+  term.dispose()
+  return `${term.cols}x${term.rows}\n${text}`
 }
 /** Equal as pictures (the checkpoint's text may come back in other pieces). */
 const comparable = (bundle: Awaited<ReturnType<typeof picture>> | undefined) => bundle && ({ ...bundle, cut: { ...bundle.cut, checkpoint: { ...bundle.cut.checkpoint, data: [bundle.cut.checkpoint.data.join('')] } } })
@@ -70,8 +89,10 @@ rollbackTest('B5 → this version → B5 → this version: legacy output stays r
   rolled.close()
   // Upgraded again: the deletions are reconciled, the rest is intact.
   const upgraded = new Store(path)
-  // Untouched while rolled back: the same picture, replayed event for event.
+  // Untouched while rolled back: the same picture, field for field and replayed event for event.
   expect(comparable(await upgraded.bundle('kept'))).toEqual(comparable(pictures.kept))
+  expect(await replayed(await upgraded.bundle('kept'))).toBe(await replayed(pictures.kept))
+  expect(await replayed(pictures.kept)).toContain('kept reflowed')
   expect(upgraded.session('kept')?.outputSaved).toBe(true)
   // Written by B5 since: their final output is B5's, the legacy output (no bundle, no flags).
   for (const id of ['ended-under-b5', 'provisional']) {

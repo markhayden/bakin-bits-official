@@ -197,7 +197,8 @@ export class Store {
   }
   /** Record that a session's final output was not saved (or, `true`, is: with its bundle only). */
   markOutput(session: string, saved: false): void {
-    this.setOutputFlags(session, saved, false)
+    // With its mark, in one transaction: a crash between them would read as another version's write.
+    this.db.transaction(() => this.setOutputFlags(session, saved, false))()
   }
   /** The flags, with the record's revision moved (viewers drop a record no newer than one they have). */
   private setOutputFlags(session: string, saved: boolean, evicted: boolean): void {

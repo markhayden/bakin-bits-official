@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'bun:test'
+import { rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { PluginSocket } from '@makinbakin/sdk/types'
 import { DeliveryUncertainError, TerminalError, type Principal, type Session } from '../lib/contracts'
 import type { NativeClient } from '../lib/processes'
+import { Store } from '../lib/store'
 import { SOCKET_CLOSE, TerminalViewer, type ViewerManager } from '../lib/socket'
 import type { RawSource } from '../lib/raw-display'
 import { makeBundle, type Bundle } from '../lib/bundle'
@@ -473,6 +477,27 @@ describe('TerminalViewer on the raw path', () => {
       await until(() => peer.state.closed !== null, 'closed')
       expect(peer.state.closed).toEqual({ code: 4005, reason })
       expect(peer.of('join')).toEqual([])
+    }
+  })
+  it('a failed save, recorded and reopened: the viewer says not saved (4005), never a picture or a reconnect', async () => {
+    const path = join(tmpdir(), `terminal-viewer-${crypto.randomUUID()}.db`)
+    try {
+      const first = new Store(path)
+      first.save(session({ state: 'running', outputSaved: false }))
+      // What Sessions records when the final picture did not come in time, then the kill.
+      first.markOutput('s1', false)
+      first.save({ ...first.session('s1')!, state: 'completed' })
+      first.close()
+      const reopened = new Store(path)
+      const { manager } = fakeManager(reopened.session('s1')!, { bundle: await reopened.bundle('s1') })
+      const peer = fakeSocket()
+      new TerminalViewer(manager, peer.socket, 's1', options)
+      peer.client({ type: 'hello', clientId: CLIENT })
+      await until(() => peer.state.closed !== null, 'closed')
+      expect(peer.state.closed).toEqual({ code: 4005, reason: 'not-saved' })
+      reopened.close()
+    } finally {
+      for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true })
     }
   })
   it('an ended session from before the raw path keeps its legacy output (a sync)', async () => {

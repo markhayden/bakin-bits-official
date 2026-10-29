@@ -3,12 +3,17 @@ import { Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
 import { DAY, type Session } from '../lib/contracts'
 import type { NativeClient, ProcessDriver } from '../lib/processes'
-import { Replica, type Cut } from '../lib/replica'
+import { MAX_BACKLOG_BYTES, Replica, type Cut } from '../lib/replica'
+import { OutputLog } from '../lib/output-log'
+import { drainFinal } from '../lib/processes'
+import { rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { makeBundle } from '../lib/bundle'
 
 const managers: Sessions[] = []
 afterEach(async () => { for (const manager of managers.splice(0)) await manager.shutdown() })
-function fixture(options: { raw?: boolean } = {}) {
+function fixture(options: { raw?: boolean; storePath?: string } = {}) {
   let now = 1000
   let enabled = [{ id: 'patch' }, { id: 'chef' }]
   const writes: string[] = []
@@ -68,7 +73,7 @@ function fixture(options: { raw?: boolean } = {}) {
     forget: (id) => { forgotten.push(id) },
   }
   const releases: Array<{ sessionId: string; worktreePath: string; teardown?: boolean }> = []
-  const store = new Store(':memory:')
+  const store = new Store(options.storePath ?? ':memory:')
   const manager = new Sessions(store, driver, {
     settings: () => ({ enabledAgents: enabled }), now: () => now,
     prepare: async () => ({ ok: false }),
@@ -1102,6 +1107,42 @@ describe('final output (plan T35b)', () => {
     await manager.finish(session.id, human, taken.generation, true)
     expect(finals.filter((entry) => entry.startsWith('final'))).toHaveLength(2)
     expect(manager.get(session.id, human)).toMatchObject({ state: 'completed', outputSaved: true })
+  })
+  it('a terminate during a rebuild: its seed in time is the final picture (never the obsolete base); none in time is not saved; both survive a reopen', async () => {
+    for (const lands of [true, false]) {
+      const path = join(tmpdir(), `terminal-final-${crypto.randomUUID()}.db`)
+      try {
+        const { manager, finalCut, store } = fixture({ storePath: path })
+        const session = await manager.create({ title: 'Rebuilding', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+        // A real replica on a real log: its base is now obsolete (an overload rebuild began).
+        const reseeds: string[] = []
+        const replica = new Replica({ reseed: (reason, turn) => turn(async () => { reseeds.push(reason) }), geometry: (_generation, turn) => turn(async () => undefined), idleMs: 1e9 })
+        const log = new OutputLog()
+        log.attach(replica)
+        log.seed(new TextEncoder().encode('\x1bcobsolete base'), 64, 20, 'attach')
+        for (let tries = 0; tries < 200 && !replica.cut(); tries++) await Bun.sleep(1)
+        replica.pressure(MAX_BACKLOG_BYTES)
+        finalCut.next = async () => {
+          if (lands) setTimeout(() => log.seed(new TextEncoder().encode('\x1bcfresh picture'), 64, 20, 'overload', false), 30)
+          return drainFinal(replica, log, undefined, 300)
+        }
+        const taken = await manager.control(session.id, human, 'take')
+        const ended = await manager.finish(session.id, human, taken.generation, true)
+        expect(ended.outputSaved).toBe(lands)
+        replica.close()
+        store.close()
+        const reopened = new Store(path)
+        expect(reopened.session(session.id)?.outputSaved).toBe(lands)
+        const saved = await reopened.bundle(session.id)
+        if (lands) {
+          expect(saved?.cut.checkpoint.data.join('')).toContain('fresh picture')
+          expect(saved?.cut.checkpoint.data.join('')).not.toContain('obsolete base')
+        } else expect(saved).toBeUndefined()
+        reopened.close()
+      } finally {
+        for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true })
+      }
+    }
   })
   it('Set up service on a live server never removes a running session\'s bundle (a finish between its save and its kill)', async () => {
     const { manager, store } = fixture()
