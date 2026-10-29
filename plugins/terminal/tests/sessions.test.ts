@@ -998,6 +998,41 @@ describe('final output (plan T35b)', () => {
     await stopping
     expect(states).toMatchObject({ Ending: 'completed', A: 'exited', B: 'exited' })
   })
+  it('shutdown waits for a refresh still in the queue, and the save it then starts', async () => {
+    const { manager, finalCut, live, store } = fixture()
+    const session = await manager.create({ title: 'Exits', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    finalCut.next = picture
+    let answer!: () => void
+    const original = manager['driver'].alive
+    manager['driver'].alive = async (id: string) => { await new Promise<void>((resolve) => { answer = resolve }); return original(id) }
+    live.delete(session.id)
+    const refreshing = manager.refreshStates()
+    for (let tries = 0; tries < 100 && !answer; tries++) await Bun.sleep(1)
+    let saved: boolean | undefined
+    const close = store.close.bind(store)
+    store.close = () => { if (saved === undefined) saved = store.session(session.id)?.outputSaved; close() }
+    const stopping = manager.shutdown()
+    await Bun.sleep(5)
+    answer()
+    await refreshing
+    await stopping
+    expect(saved).toBe(true)
+  })
+  it('shutdown takes no more pane-died hints: endless hints never keep it from finishing', async () => {
+    const { manager, paneDied } = fixture()
+    const session = await manager.create({ title: 'Lives', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    // Each refresh's liveness check outlasts the gap between hints: one is always owed.
+    const original = manager['driver'].alive
+    manager['driver'].alive = async (id: string) => { await Bun.sleep(5); return original(id) }
+    let hinting = true
+    const hints = (async () => { while (hinting) { paneDied.get(session.id)!(); await Bun.sleep(1) } })()
+    await Bun.sleep(10)
+    const started = performance.now()
+    await manager.shutdown()
+    hinting = false
+    await hints
+    expect(performance.now() - started).toBeLessThan(1000)
+  })
   it('Set up service on a live server never removes a running session\'s bundle (a finish between its save and its kill)', async () => {
     const { manager, store } = fixture()
     const session = await manager.create({ title: 'Ending', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })

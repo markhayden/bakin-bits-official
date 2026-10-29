@@ -160,15 +160,32 @@ export class Sessions {
    * missed its death), never one per hint.
    */
   private paneDied(): void {
+    // Shutting down: a hint only marks that a refresh is owed; shutdown runs one last one itself, so
+    // endless hints cannot hold it open and a death meanwhile is still saved.
+    if (this.stopping) { this.owedAtStop = true; return }
+    this.requestRefresh()
+  }
+  private owedAtStop = false
+  private requestRefresh(): void {
     if (this.refreshing) { this.refreshAgain = true; return }
     this.refreshing = this.refreshStates().catch(() => undefined).finally(() => {
       this.refreshing = undefined
-      if (this.refreshAgain && !this.closed) { this.refreshAgain = false; this.paneDied() }
+      if (this.refreshAgain && !this.closed) { this.refreshAgain = false; this.requestRefresh() }
     })
   }
   private refreshing: Promise<void> | undefined
   private refreshAgain = false
-  async refreshStates(): Promise<void> {
+  private stopping = false
+  refreshStates(): Promise<void> {
+    // Tracked from its call: its saves start after its queue turn, and shutdown waits for them.
+    const work = this.refreshOnce()
+    const settled = work.then(() => undefined, () => undefined)
+    this.refreshes.add(settled)
+    void settled.then(() => this.refreshes.delete(settled))
+    return work
+  }
+  private refreshes = new Set<Promise<void>>()
+  private async refreshOnce(): Promise<void> {
     const exited = await this.run(async () => {
       const ids: string[] = []
       for (const session of this.store.sessions()) {
@@ -907,14 +924,19 @@ export class Sessions {
     // Lifecycle work outside the queue settles before replicas and the store go, until none is left (one
     // can start another): a coalesced refresh (and the one more it owes), every finish (save, then kill),
     // the queue, every final save.
-    for (;;) {
-      const outstanding = [this.refreshing, ...[...this.finishing.values()].flatMap((all) => [...all]), ...this.ending.values()].filter((work) => work !== undefined)
-      if (!outstanding.length && !this.refreshAgain) break
-      if (!outstanding.length && this.refreshAgain) { this.refreshAgain = false; this.paneDied(); continue }
-      await Promise.allSettled(outstanding)
-      await this.pending
+    // The queue first, each time: work it holds (a refresh's liveness check) can start more of it.
+    this.stopping = true
+    const drain = async () => {
+      for (;;) {
+        await this.pending
+        const outstanding = [this.refreshing, ...this.refreshes, ...[...this.finishing.values()].flatMap((all) => [...all]), ...this.ending.values()].filter((work) => work !== undefined)
+        if (!outstanding.length) return
+        await Promise.allSettled(outstanding)
+      }
     }
-    await this.pending
+    await drain()
+    // One last refresh for deaths heard meanwhile (bounded: hints from here on are not taken).
+    if (this.owedAtStop) { await this.refreshStates().catch(() => undefined); await drain() }
     this.closed = true
     await this.driver.detach()
     for (const screen of this.screens.values()) { await screen.drain(); screen.close() }
