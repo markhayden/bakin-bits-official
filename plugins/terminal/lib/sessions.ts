@@ -752,7 +752,13 @@ export class Sessions {
     return this.run(async () => {
       const session = this.get(id, principal)
       if (session.state === 'completed') return session
-      await this.driver.terminate(id)
+      try {
+        await this.driver.terminate(id)
+      } catch (error) {
+        // The kill failed and the program runs on: what was saved is not its final output.
+        if (await this.driver.alive(id).catch(() => true) && this.store.hasBundle(id)) this.store.discardProvisionalBundle(id)
+        throw error
+      }
       await this.stopScreen(id)
       this.forgetNatives(id)
       session.state = 'completed'

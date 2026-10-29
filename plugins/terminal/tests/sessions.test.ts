@@ -1088,6 +1088,21 @@ describe('final output (plan T35b)', () => {
     await stopping
     expect(terminated).toEqual([session.id])
   })
+  it('a kill that fails after the save leaves the program running: that bundle is not final, and the real end saves again', async () => {
+    const { manager, finalCut, finals, store } = fixture()
+    const session = await manager.create({ title: 'Survives', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+    finalCut.next = picture
+    const original = manager['driver'].terminate
+    manager['driver'].terminate = async () => { throw new Error('kill failed') }
+    const taken = await manager.control(session.id, human, 'take')
+    await expect(manager.finish(session.id, human, taken.generation, true)).rejects.toThrow('kill failed')
+    expect(store.hasBundle(session.id)).toBe(false)
+    expect(manager.get(session.id, human)).toMatchObject({ state: 'running', outputSaved: false })
+    manager['driver'].terminate = original
+    await manager.finish(session.id, human, taken.generation, true)
+    expect(finals.filter((entry) => entry.startsWith('final'))).toHaveLength(2)
+    expect(manager.get(session.id, human)).toMatchObject({ state: 'completed', outputSaved: true })
+  })
   it('Set up service on a live server never removes a running session\'s bundle (a finish between its save and its kill)', async () => {
     const { manager, store } = fixture()
     const session = await manager.create({ title: 'Ending', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
