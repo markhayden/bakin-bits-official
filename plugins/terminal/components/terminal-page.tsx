@@ -91,7 +91,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     lastRendererRebuild.current = Date.now()
     setAttempt((value) => value + 1)
   }, [])
-  // An ended raw-path session with no output to show: the reason, for the open session only.
+  // An ended session with no output to show: the reason, for the open session only.
   const [unavailable, setUnavailable] = useState<{ sessionId: string; reason: UnavailableReason }>()
   const unavailableChanged = useCallback((reason: UnavailableReason) => { if (sessionId) setUnavailable({ sessionId, reason }) }, [sessionId])
   const [agents, setAgents] = useState<SessionOptionsData['agents']>([])
@@ -185,7 +185,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   // One compact status chip sits beside the name instead of a stacked line:
   // green while you drive a live session, muted when ended, amber when the
   // stream is not yet connected.
-  const connected = streamStatus.startsWith('Connected') || streamStatus === 'Completed'
+  const connected = streamStatus.startsWith('Connected')
   const inputEnabled = writable && connected && serviceReady && !busy && !loadError
   // Phones and tablets get the key bar, only while the on-screen keyboard is up (spec D9 item 9).
   const touch = useCoarsePointer()

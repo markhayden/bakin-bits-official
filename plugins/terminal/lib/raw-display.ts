@@ -1,5 +1,5 @@
 /**
- * One viewer's picture on the raw path (spec D13, plan T33): a join is the
+ * One viewer's picture (spec D13, plan T33): a join is the
  * replica's cut — its base checkpoint, then the tail snapshot, then a
  * barrier — and live events after it, all through one ordered sender.
  *

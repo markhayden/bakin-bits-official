@@ -13,7 +13,7 @@ import { makeBundle } from '../lib/bundle'
 
 const managers: Sessions[] = []
 afterEach(async () => { for (const manager of managers.splice(0)) await manager.shutdown() })
-function fixture(options: { raw?: boolean; storePath?: string; setting?: { raw: boolean } } = {}) {
+function fixture(options: { storePath?: string } = {}) {
   let now = 1000
   let enabled = [{ id: 'patch' }, { id: 'chef' }]
   const writes: string[] = []
@@ -21,9 +21,7 @@ function fixture(options: { raw?: boolean; storePath?: string; setting?: { raw: 
   const attached = new Set<string>()
   const terminated: string[] = []
   const forgotten: string[] = []
-  /** Sessions whose bridge PTY is gone while the control client stays. */
-  const bridgeLost = new Set<string>()
-  /** Sessions whose control client closed while the bridge stays; every attach, in order. */
+  /** Sessions whose control client closed; every attach, in order. */
   const controlLost = new Set<string>()
   const attaches: string[] = []
   /** Each final picture asked for, in order with terminations; what the next one gives (a cut, none, or a throw). */
@@ -36,13 +34,12 @@ function fixture(options: { raw?: boolean; storePath?: string; setting?: { raw: 
   let resizeFailure: Error | undefined
   let readBackFailure: Error | undefined
   const tmuxSizes = new Map<string, { cols: number; rows: number }>()
-  const outputs = new Map<string, (data: Uint8Array) => void>()
   /** Terminal apps attached in tmux, per session, and each session's "clients changed" signal. */
   const natives = new Map<string, NativeClient[]>()
   const clientsChanged = new Map<string, () => void>()
   const vanishing = new Set<number>()
   const detachedClients: string[] = []
-  /** Raw-path replicas, by session (none until a test makes one). */
+  /** Replicas, by session (none until a test makes one). */
   const replicas = new Map<string, Replica>()
   /** Sessions whose kill fails (the program runs on). */
   const unkillable = new Set<string>()
@@ -51,11 +48,11 @@ function fixture(options: { raw?: boolean; storePath?: string; setting?: { raw: 
   const driver: ProcessDriver = {
     // Like TmuxProcesses.replica: an ended replica is no source.
     replica: (id) => { const replica = replicas.get(id); return replica?.ended ? undefined : replica },
-    create: async (s) => { await createHold.until; live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, output, changed, died) { attaches.push(s.id); controlLost.delete(s.id); attached.add(s.id); outputs.set(s.id, output); clientsChanged.set(s.id, changed); if (died) paneDied.set(s.id, died) }, connected: (id) => attached.has(id) && !bridgeLost.has(id), controlConnected: (id) => attached.has(id) && !controlLost.has(id),
+    create: async (s) => { await createHold.until; live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, changed, died) { attaches.push(s.id); controlLost.delete(s.id); attached.add(s.id); clientsChanged.set(s.id, changed); if (died) paneDied.set(s.id, died) }, connected: (id) => attached.has(id) && !controlLost.has(id),
     write: async (_id, data) => { if (writeFailure) throw writeFailure; writes.push(data) },
     resize: async (id, cols, rows) => { if (resizeFailure) { tmuxSizes.set(id, { cols: 77, rows: 22 }); throw resizeFailure } tmuxSizes.set(id, { cols, rows }) },
     windowSize: async (id) => { if (readBackFailure) throw readBackFailure; return tmuxSizes.get(id)! },
-    title: async () => {}, alive: async (id) => live.has(id), screen: async () => '',
+    title: async () => {}, alive: async (id) => live.has(id),
     terminate: async (id) => { if (unkillable.has(id)) throw new Error('kill-session failed'); terminated.push(id); finals.push(`terminate ${id}`); live.delete(id) },
     finalCut: async (id, options) => { finals.push(`final ${id} boundary=${options.boundary}`); return finalCut.next() }, inUse: async () => false, detach: async (id) => { if (id) attached.delete(id); else attached.clear() },
     // Like tmux: a client in `vanishing` is listed once, then gone before anyone acts on it.
@@ -82,11 +79,10 @@ function fixture(options: { raw?: boolean; storePath?: string; setting?: { raw: 
     settings: () => ({ enabledAgents: enabled }), now: () => now,
     prepare: async () => ({ ok: false }),
     release: async (input) => { releases.push(input); return releasable ? { ok: true } : { ok: false, error: 'Unmerged work' } },
-    rawPathForNew: () => options.setting?.raw ?? options.raw ?? false,
   })
   managers.push(manager)
   return {
-    manager, store, writes, live, attached, terminated, unkillable, createHold, forgotten, bridgeLost, controlLost, attaches, finals, finalCut, paneDied, releases, outputs, natives, detachedClients, vanishing, replicas,
+    manager, store, writes, live, attached, terminated, unkillable, createHold, forgotten, controlLost, attaches, finals, finalCut, paneDied, releases, natives, detachedClients, vanishing, replicas,
     /** A terminal app attaches (or resizes) in tmux; the control client notices. */
     nativeAttach: async (id: string, client: NativeClient) => {
       natives.set(id, [...(natives.get(id) ?? []).filter((entry) => entry.pid !== client.pid), client])
@@ -105,6 +101,14 @@ function fixture(options: { raw?: boolean; storePath?: string; setting?: { raw: 
     tmuxSizes,
     allowRelease: () => { releasable = true }, disable: () => { enabled = [] }, advance: () => { now += 31 * DAY },
   }
+}
+/** An ended session's saved picture with `text` on its screen. */
+async function picture(text: string) {
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode(`\x1bc${text}`), cols: 80, rows: 24, reason: 'test', history: true })
+  const cut = replica.cut()!
+  replica.close()
+  return makeBundle(cut, { rebuilds: {} }, 1)
 }
 const agent = { kind: 'agent', id: 'patch' } as const
 const human = { kind: 'human', id: 'browser-123456789' } as const
@@ -128,7 +132,7 @@ test('reassignment and disabling revoke reads as well as writes', async () => {
   const { manager, disable } = fixture()
   const session = await manager.create({ title: 'Test', cwd: '/tmp' }, agent)
   await manager.control(session.id, human, 'assign', 'chef')
-  expect(() => manager.output(session.id, agent, 0)).toThrow()
+  await expect(manager.outputText(session.id, agent)).rejects.toThrow('not available to this agent')
   expect(manager.list(agent)).toHaveLength(0)
   disable()
   expect(() => manager.list({ kind: 'agent', id: 'chef' })).toThrow()
@@ -140,12 +144,12 @@ test('completion refuses live processes; age expires output but preserves unmerg
   await expect(manager.finish(session.id, agent, 1, false)).rejects.toThrow('running')
   session.worktreePath = '/tmp/retained'
   manager.store.save(session)
-  manager.store.append(session.id, Buffer.from('retained output'))
+  await manager.store.saveBundle(session.id, await picture('retained output'))
   await manager.finish(session.id, agent, 1, true)
   expect(manager.get(session.id, human).cleanupReason).toBe('Unmerged work')
   advance()
   await manager.sweep()
-  expect(manager.store.bytes()).toBe(0)
+  expect(manager.store.hasBundle(session.id)).toBe(false)
   expect(manager.get(session.id, human).worktreePath).toBe('/tmp/retained')
   await expect(manager.beforeUninstall(async () => {})).rejects.toThrow('retained')
 })
@@ -164,13 +168,33 @@ test('completion removes dead panes and does not extend retention on repeat', as
   expect((await manager.finish(session.id, human, 1, false)).completedAt).toBe(completed.completedAt)
   expect(terminated).toHaveLength(1)
 })
-test('disconnected output fails honestly and a snapshot restores the attachment', async () => {
-  const { manager, attached } = fixture()
+test('a read of a disconnected session attaches it again first', async () => {
+  const { manager, attached, replicas } = fixture()
   const session = await manager.create({ title: 'Reconnect', cwd: '/tmp' }, human)
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bcback'), cols: 80, rows: 24, reason: 'test', history: true })
+  replicas.set(session.id, replica)
   attached.delete(session.id)
-  expect(() => manager.output(session.id, human, 0)).toThrow('reconnect')
-  await manager.screen(session.id, human)
+  expect((await manager.outputText(session.id, human)).text).toBe('back')
   expect(attached.has(session.id)).toBe(true)
+  replica.close()
+})
+test('outputText (the agent tool\'s output): history then screen as lines, the last `lines` when asked; an ended session\'s from its saved picture', async () => {
+  const { manager, replicas, live } = fixture()
+  const session = await manager.create({ title: 'Text', cwd: '/tmp' }, agent)
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bcone\r\ntwo\r\nthree'), cols: 80, rows: 24, reason: 'test', history: true })
+  replicas.set(session.id, replica)
+  expect(await manager.outputText(session.id, agent)).toMatchObject({ text: 'one\ntwo\nthree', lines: 3, truncated: false })
+  expect(await manager.outputText(session.id, agent, 2)).toMatchObject({ text: 'two\nthree', lines: 2, truncated: true })
+  replica.close()
+  // Ended: its bundle, or why there is none.
+  live.delete(session.id)
+  await manager.refreshStates()
+  manager.store.markOutput(session.id, false)
+  await expect(manager.outputText(session.id, agent)).rejects.toThrow('without its output being saved')
+  await manager.store.saveBundle(session.id, await picture('final words'))
+  expect((await manager.outputText(session.id, agent)).text).toBe('final words')
 })
 test('delete always removes the session — a retained worktree tears down, never blocks', async () => {
   const { manager, live, releases, forgotten } = fixture()
@@ -180,7 +204,7 @@ test('delete always removes the session — a retained worktree tears down, neve
   manager.store.save(session)
   live.delete(session.id)
   await manager.finish(session.id, agent, 1, false)
-  manager.store.append(session.id, Buffer.from('history'))
+  await manager.store.saveBundle(session.id, await picture('history'))
   await expect(manager.deleteSession(session.id, agent)).rejects.toThrow('human')
   // The fixture release fails ("Unmerged work"), yet the session is gone: the
   // worktree teardown is best-effort and never blocks removing the record.
@@ -192,7 +216,7 @@ test('delete always removes the session — a retained worktree tears down, neve
   expect(releases.at(-1)).toEqual({ sessionId: session.id, worktreePath: '/tmp/retained', teardown: true })
   expect(releases.some((r) => !r.teardown)).toBe(true)
   expect(manager.list(human)).toHaveLength(0)
-  expect(manager.store.bytes()).toBe(0)
+  expect(manager.store.hasBundle(session.id)).toBe(false)
   expect(() => manager.get(session.id, human)).toThrow('not found')
   await manager.beforeUninstall(async () => {})
 })
@@ -222,41 +246,12 @@ test('completed work is rechecked immediately after merge without a 30-day delay
   expect(manager.get(session.id, human).worktreePath).toBeUndefined()
 })
 
-test('output subscribers hear each parsed chunk once it is stored, and can unsubscribe', async () => {
-  const { manager, outputs } = fixture()
-  const session = await manager.create({ title: 'Live', cwd: '/tmp', program: 'shell' }, human)
-  const heard: number[] = []
-  const unsubscribe = manager.onOutput(session.id, () => { heard.push(manager.output(session.id, human, 0).cursor) })
-  outputs.get(session.id)!(new TextEncoder().encode('hello'))
-  for (let attempt = 0; attempt < 50 && heard.length === 0; attempt++) await Bun.sleep(5)
-  expect(heard).toEqual([1])
-  unsubscribe()
-  outputs.get(session.id)!(new TextEncoder().encode(' again'))
-  await Bun.sleep(30)
-  expect(heard).toEqual([1])
-})
-
 test('a failed delivery surfaces and still consumes the sequence (never retried)', async () => {
   const { manager, failWrites } = fixture()
   const session = await manager.create({ title: 'Input', cwd: '/tmp', program: 'shell' }, human)
   failWrites(new Error('Terminal control connection closed'))
   await expect(manager.write(session.id, human, session.generation, 1, 'ls\r')).rejects.toThrow('control connection closed')
   await expect(manager.write(session.id, human, session.generation, 1, 'ls\r')).rejects.toThrow('sequence')
-})
-
-test('nextOutput resolves on new output, on output that landed before it subscribed, and on abort', async () => {
-  const { manager, outputs } = fixture()
-  const session = await manager.create({ title: 'Wait', cwd: '/tmp', program: 'shell' }, human)
-  const controller = new AbortController()
-  const waiting = manager.nextOutput(session.id, manager.latestCursor(session.id), controller.signal, 5000)
-  outputs.get(session.id)!(new TextEncoder().encode('x'))
-  await waiting
-  expect(manager.latestCursor(session.id)).toBe(1)
-  // Output already past the cursor resolves at once.
-  await manager.nextOutput(session.id, 0, controller.signal, 5000)
-  const aborted = manager.nextOutput(session.id, manager.latestCursor(session.id), controller.signal, 5000)
-  controller.abort()
-  await aborted
 })
 
 test('service setup runs in the same queue as creation, never in the middle of one', async () => {
@@ -347,7 +342,6 @@ test('a failed resize leaves every representation at tmux\'s actual window size'
 test('a resize that cannot be reconciled drops the attachment; input is refused, never marked uncertain', async () => {
   const { manager, failResizes, failReadBack, attached, writes, tmuxSizes } = fixture()
   const session = await manager.create({ title: 'Lost', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
-  await manager.readScreen(session.id, human)
   failResizes(new Error('resize-window failed'))
   failReadBack(new Error('tmux unreachable'))
   await expect(manager.resizeAs(session.id, human, session.sizeEpoch, 120, 40)).rejects.toThrow('reconnect required')
@@ -355,19 +349,17 @@ test('a resize that cannot be reconciled drops the attachment; input is refused,
   await expect(manager.writeNext(session.id, human, session.generation, 'ls\r')).rejects.toThrow('reconnect required')
   expect(manager.get(session.id, human).inputSequence).toBe(0)
   expect(writes).toEqual([])
-  // tmux moved after all; the next viewer sync reattaches and adopts its real window.
+  // tmux moved after all; the next join reattaches and adopts its real window.
   failResizes(undefined)
   failReadBack(undefined)
   tmuxSizes.set(session.id, { cols: 77, rows: 22 })
-  const screen = await manager.readScreen(session.id, human)
-  expect([screen.cols, screen.rows]).toEqual([77, 22])
-  expect(manager.get(session.id, human).sizeRevision).toBe(1)
+  await manager.ensureReplica(session.id, human)
+  expect(manager.get(session.id, human)).toMatchObject({ cols: 77, rows: 22, sizeRevision: 1 })
 })
 
 test('a record that fails to save after tmux resized is reconciled from tmux on the next attachment', async () => {
   const { manager, attached, tmuxSizes } = fixture()
   const session = await manager.create({ title: 'Disk', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
-  await manager.readScreen(session.id, human)
   const save = manager.store.save.bind(manager.store)
   let failing = true
   manager.store.save = (next) => { if (failing) throw new Error('disk full'); save(next) }
@@ -375,8 +367,8 @@ test('a record that fails to save after tmux resized is reconciled from tmux on 
   expect(tmuxSizes.get(session.id)).toEqual({ cols: 120, rows: 40 })
   expect(attached.has(session.id)).toBe(false)
   failing = false
-  const screen = await manager.readScreen(session.id, human)
-  expect([screen.cols, screen.rows]).toEqual([120, 40])
+  await manager.ensureReplica(session.id, human)
+  expect(manager.get(session.id, human)).toMatchObject({ cols: 120, rows: 40 })
   expect(manager.store.sessions().find((stored) => stored.id === session.id)).toMatchObject({ cols: 120, rows: 40 })
 })
 
@@ -387,8 +379,8 @@ test('reattaching after setup adopts tmux\'s window, even when the stored record
   tmuxSizes.set(session.id, { cols: 120, rows: 40 })
   live.add(session.id)
   await manager.setupService(async () => {})
-  const screen = await manager.readScreen(session.id, human)
-  expect([screen.cols, screen.rows]).toEqual([120, 40])
+  await manager.ensureReplica(session.id, human)
+  expect(manager.get(session.id, human)).toMatchObject({ cols: 120, rows: 40 })
   expect(manager.store.sessions().find((stored) => stored.id === session.id)).toMatchObject({ cols: 120, rows: 40 })
 })
 
@@ -524,7 +516,7 @@ test('a CLI-created session starts at the caller\'s terminal size, sized by the 
 
 test('an isolated checkout is prepared for a shell too; a shell defaults to the existing checkout', async () => {
   const prepared: string[] = []
-  const driver = { create: async () => {}, attach() {}, connected: () => true, write: async () => {}, resize: async () => {}, windowSize: async () => ({ cols: 200, rows: 60 }), title: async () => {}, alive: async () => true, screen: async () => '', terminate: async () => {}, inUse: async () => false, detach: async () => {}, clients: async () => [], detachClient: async () => {}, setReadonly: async () => {}, attachArgs: () => [] } satisfies ProcessDriver
+  const driver = { create: async () => {}, attach() {}, connected: () => true, write: async () => {}, resize: async () => {}, windowSize: async () => ({ cols: 200, rows: 60 }), title: async () => {}, alive: async () => true, terminate: async () => {}, inUse: async () => false, detach: async () => {}, clients: async () => [], detachClient: async () => {}, setReadonly: async () => {}, attachArgs: () => [] } satisfies ProcessDriver
   const manager = new Sessions(new Store(':memory:'), driver, {
     settings: () => ({ enabledAgents: [] }),
     prepare: async (input) => { prepared.push(input.sessionId); return { ok: true, worktreePath: '/tmp' } },
@@ -705,57 +697,30 @@ test('one fresh client leaving before it can type does not revoke another', asyn
   expect(natives.get(session.id)?.[0]?.readonly).toBe(false)
 })
 
-test('raw-path input needs only the control client; the bridge path needs its bridge too', async () => {
-  for (const raw of [true, false]) {
-    const { manager, bridgeLost, writes } = fixture({ raw })
-    const session = await manager.create({ title: 'Typing', cwd: '/tmp' }, agent)
-    bridgeLost.add(session.id)
-    const typed = manager.write(session.id, agent, session.generation, 1, 'ls\r')
-    if (raw) {
-      await typed
-      expect(writes).toEqual(['ls\r'])
-    } else {
-      await expect(typed).rejects.toThrow('reconnect required')
-      expect(writes).toEqual([])
-    }
-  }
+test('a join recovers a lost replica (none, ended, or its control client closed) by attaching again; a live one is left alone', async () => {
+  const { manager, attaches, replicas, controlLost } = fixture()
+  const session = await manager.create({ title: 'Raw', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+  expect(attaches).toEqual([session.id])
+  // No replica (it ended, or a server restart left none): attached again.
+  await manager.ensureReplica(session.id, human)
+  expect(attaches).toHaveLength(2)
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 64, rows: 20, reason: 'test', history: true })
+  replicas.set(session.id, replica)
+  await manager.ensureReplica(session.id, human)
+  expect(await manager.readScreen(session.id, human)).toMatchObject({ cols: 64, rows: 20 })
+  expect(attaches).toHaveLength(2)
+  // The control client closed: a replica loss too.
+  controlLost.add(session.id)
+  await manager.ensureReplica(session.id, human)
+  expect(attaches).toHaveLength(3)
+  // An ended replica (a failed reseed) likewise.
+  replica.close()
+  await manager.ensureReplica(session.id, human)
+  expect(attaches).toHaveLength(4)
 })
-
-test('raw path: a join recovers a lost replica (none, ended, or its control client closed) by attaching again; a live one, and the bridge path, are left alone', async () => {
-  for (const raw of [true, false]) {
-    const { manager, attaches, replicas, controlLost, bridgeLost } = fixture({ raw })
-    const session = await manager.create({ title: 'Raw', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
-    expect(attaches).toEqual([session.id])
-    // No replica (it ended, or a server restart left none): attached again on the raw path only.
-    await manager.ensureReplica(session.id, human)
-    expect(attaches).toHaveLength(raw ? 2 : 1)
-    const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
-    await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 64, rows: 20, reason: 'test', history: true })
-    replicas.set(session.id, replica)
-    await manager.ensureReplica(session.id, human)
-    expect(attaches).toHaveLength(raw ? 2 : 1)
-    // A failed legacy bridge (its queue overflows in a flood) never costs a live replica on the raw path:
-    // neither a join nor an agent's raw read reattaches (the bridge path's read does).
-    bridgeLost.add(session.id)
-    await manager.ensureReplica(session.id, human)
-    if (raw) expect(await manager.readScreen(session.id, human)).toMatchObject({ cols: 64, rows: 20 })
-    else await expect(manager.readScreen(session.id, human)).resolves.toBeDefined()
-    expect(attaches).toHaveLength(2)
-    if (!raw) { replica.close(); continue }
-    bridgeLost.delete(session.id)
-    // The control client closed with the bridge still up: a replica loss too.
-    controlLost.add(session.id)
-    await manager.ensureReplica(session.id, human)
-    expect(attaches).toHaveLength(3)
-    // An ended replica (a failed reseed) likewise.
-    replica.close()
-    await manager.ensureReplica(session.id, human)
-    expect(attaches).toHaveLength(4)
-  }
-})
-
-test("raw path: a join to a live replica waits for nothing, even while another session's attachment holds the queue", async () => {
-  const { manager, replicas, tmuxSizes } = fixture({ raw: true })
+test("a join to a live replica waits for nothing, even while another session's attachment holds the queue", async () => {
+  const { manager, replicas, tmuxSizes } = fixture()
   const live = await manager.create({ title: 'Live', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
   const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
   replicas.set(live.id, replica)
@@ -775,37 +740,10 @@ test("raw path: a join to a live replica waits for nothing, even while another s
   replica.close()
 })
 
-test('a session keeps the path it was created on (plan T38a): turning the setting either way never splits a live session', async () => {
-  const setting = { raw: true }
-  const { manager, bridgeLost, controlLost, attaches, replicas } = fixture({ setting })
-  const raw = await manager.create({ title: 'Raw', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
-  setting.raw = false
-  const bridge = await manager.create({ title: 'Bridge', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
-  // Each answers for its own path, whatever the setting says now.
-  expect([manager.rawPath(raw.id), manager.rawPath(bridge.id)]).toEqual([true, false])
-  setting.raw = true
-  expect([manager.rawPath(raw.id), manager.rawPath(bridge.id)]).toEqual([true, false])
-  // Input health: the raw session needs only its control client, the bridge one its bridge.
-  bridgeLost.add(raw.id)
-  const rawTaken = await manager.control(raw.id, human, 'take')
-  await manager.write(raw.id, human, rawTaken.generation, rawTaken.inputSequence + 1, 'ok\r')
-  controlLost.add(bridge.id)
-  const bridgeTaken = await manager.control(bridge.id, human, 'take')
-  await manager.write(bridge.id, human, bridgeTaken.generation, bridgeTaken.inputSequence + 1, 'ok\r')
-  // Recovery follows the session's path too: a lost bridge is the bridge session's to reattach, not the raw one's.
-  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
-  await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 64, rows: 20, reason: 'test', history: true })
-  replicas.set(raw.id, replica)
-  const before = attaches.length
-  await manager.readScreen(raw.id, human)
-  expect(attaches.length).toBe(before)
-  replica.close()
-})
-
-test('raw path: readScreen takes the screen, the grid and the size revision from the replica in one step (adoptSize never moves it)', async () => {
-  const { manager, replicas, tmuxSizes } = fixture({ raw: true })
+test('readScreen takes the screen, the grid and the size revision from the replica in one step (adoptSize never moves it)', async () => {
+  const { manager, replicas, tmuxSizes } = fixture()
   const session = await manager.create({ title: 'Raw', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
-  // No replica, or one not seeded yet: not ready, never the bridge's screen.
+  // No replica, or one not seeded yet: not ready.
   await expect(manager.readScreen(session.id, human)).rejects.toThrow('not ready')
   const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
   replicas.set(session.id, replica)

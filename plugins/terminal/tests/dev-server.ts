@@ -9,7 +9,6 @@ import { tmuxConfig } from '../lib/tmux-config'
 import { TmuxProcesses } from '../lib/processes'
 import { Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
-import { terminalSettings } from '../lib/contracts'
 import type { PluginSocket } from '@makinbakin/sdk/types'
 import { command, creatingScreen, failure, human } from '../lib/http'
 import { TerminalViewer, viewersRetainedSteps } from '../lib/socket'
@@ -33,9 +32,6 @@ const manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProce
   settings: () => ({ enabledAgents: [{ id: 'patch' }] }),
   prepare: async () => ({ ok: false, error: 'Preview has no Git plugin. Use an existing checkout.' }),
   release: async () => ({ ok: false }),
-  // TERMINAL_PREVIEW_RAW=1: every session's viewers take the raw path (spec D13; T38a's setting in the plugin).
-  // The plugin's setting (plan T38a), set by TERMINAL_PREVIEW_RAW=1, read through the same parsing as index.ts.
-  rawPathForNew: () => terminalSettings({ rawPath: process.env.TERMINAL_PREVIEW_RAW === '1' }).rawPath === true,
 })
 const built = await Bun.build({
   entrypoints: [join(import.meta.dir, 'live.fixture.tsx')], outdir: root, target: 'browser', format: 'esm',

@@ -1,6 +1,6 @@
 {
   "name": "@bakin-bits/terminal",
-  "version": "0.4.0-dev.23",
+  "version": "0.4.0-dev.24",
   "private": true,
   "type": "module",
   "main": "./index.ts",
@@ -11,7 +11,6 @@
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",
-    "@xterm/addon-serialize": "0.14.0",
     "@xterm/addon-unicode-graphemes": "0.4.0",
     "@xterm/addon-web-links": "0.12.0",
     "@xterm/addon-webgl": "0.19.0",

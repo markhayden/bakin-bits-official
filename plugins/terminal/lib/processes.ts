@@ -12,7 +12,7 @@ import { reseed } from './reseed'
 import { stripPasteMarkers } from './paste'
 import { TerminalService, terminalEnvironment } from './service'
 
-/** A tmux client on a session that is not Bakin's own bridge or control client: a terminal app (Ghostty and friends) or anything else that attached. */
+/** A tmux client on a session that is not Bakin's own control client: a terminal app (Ghostty and friends) or anything else that attached. */
 export interface NativeClient {
   pid: number
   name: string
@@ -30,11 +30,9 @@ export interface ProcessDriver {
    * detaches from the session; `died` when tmux reports its pane dead (a hint:
    * the caller confirms with `alive`).
    */
-  attach(session: Session, output: (data: Uint8Array) => void, clientsChanged: () => void, died?: () => void): void
-  /** The bridge path's health: the bridge PTY and the control client. */
+  attach(session: Session, clientsChanged: () => void, died?: () => void): void
+  /** The session's health (spec D13): its control client, which carries input, output and queries. */
   connected(id: string): boolean
-  /** The raw path's health (spec D13): the control client alone (input and output both go through it). */
-  controlConnected?(id: string): boolean
   /**
    * Resolves once tmux has accepted the bytes for the pane (not that the
    * program read them). A `paste` is delivered as tmux pastes (bracketed
@@ -44,12 +42,11 @@ export interface ProcessDriver {
   write(id: string, data: string, options?: WriteOptions): Promise<void>
   /** Set the pane title native clients show (`@bakin_title`). */
   title(session: Session): Promise<void>
-  /** tmux first (resize-window), then the bridge PTY. */
+  /** tmux's window (resize-window). */
   resize(id: string, cols: number, rows: number): Promise<void>
   /** The window size tmux actually has. */
   windowSize(id: string): Promise<{ cols: number; rows: number }>
   alive(id: string): Promise<boolean>
-  screen(id: string): Promise<string>
   terminate(id: string): Promise<void>
   inUse(path: string): Promise<boolean>
   detach(id?: string): Promise<void>
@@ -88,14 +85,6 @@ export interface WriteOptions { paste?: boolean; enter?: boolean }
 /** The tmux buffers Bakin's pastes use (lib/paste.ts). */
 const PASTE_BUFFER_PREFIX = 'bakin-paste-'
 
-/**
- * The hybrid bridge per session: a PTY `attach-session` client whose redraw
- * stream is the output viewers render today (and the reattach-recovery
- * path), plus a control-mode client for input, resizes and queries, whose
- * `%output` and layout changes also feed the session's ordered event log
- * (spec D13; consumed by the replica). Both attach `ignore-size`: only
- * Bakin's explicit `resize-window` sizes a session (window-size manual).
- */
 /**
  * The replica's picture once it holds every output tmux sent before a
  * control reply (`boundary`; a reply follows all earlier %output), or, with
@@ -172,8 +161,13 @@ export function cursorCategory(tmux: CursorView, replica: CursorView): string | 
   return undefined
 }
 
+/**
+ * One control-mode client per session (spec D13) for input, resizes and
+ * queries, whose `%output` and layout changes feed the session's ordered
+ * event log, consumed by its replica. It attaches `ignore-size`: only
+ * Bakin's explicit `resize-window` sizes a session (window-size manual).
+ */
 export class TmuxProcesses implements ProcessDriver {
-  private bridges = new Map<string, ReturnType<typeof Bun.spawn>>()
   private pastesSwept = false
   private controls = new Map<string, ControlClient>()
   private logs = new Map<string, OutputLog>()
@@ -202,15 +196,9 @@ export class TmuxProcesses implements ProcessDriver {
   async title(session: Session): Promise<void> {
     await this.service.command(['set-option', '-t', session.id, '@bakin_title', session.title])
   }
-  attach(session: Session, output: (data: Uint8Array) => void, clientsChanged: () => void, died?: () => void): void {
-    if (this.bridges.has(session.id)) return
-    const process = Bun.spawn([this.service.tmux!, '-S', this.service.socket, 'attach-session', '-f', 'ignore-size', '-t', session.id], {
-      env: terminalEnvironment(),
-      terminal: { cols: session.cols, rows: session.rows, data: (_terminal, data) => output(data) },
-      stderr: 'ignore',
-    })
-    this.bridges.set(session.id, process)
-    void process.exited.then(() => { if (this.bridges.get(session.id) === process) this.bridges.delete(session.id) })
+  attach(session: Session, clientsChanged: () => void, died?: () => void): void {
+    // Attached already (a live control client): once per session, never a second client (a lost one is detached first).
+    if (this.connected(session.id)) return
     // A client attaching to this session, any client leaving, or the
     // client-resized hook (tmux.conf sets @bakin_client, which this
     // subscription watches) means the set of terminal apps may have changed.
@@ -395,13 +383,11 @@ export class TmuxProcesses implements ProcessDriver {
     }
     return await this.deletePasteBuffers(() => true) && clean
   }
-  connected(id: string): boolean { return this.bridges.has(id) && !this.controls.get(id)?.isClosed }
-  controlConnected(id: string): boolean { const control = this.controls.get(id); return Boolean(control && !control.isClosed) }
+  connected(id: string): boolean { const control = this.controls.get(id); return Boolean(control && !control.isClosed) }
   async resize(id: string, cols: number, rows: number): Promise<void> {
     const control = this.control(id)
     await control.ready
     await control.command(['resize-window', '-t', id, '-x', String(cols), '-y', String(rows)])
-    this.bridges.get(id)?.terminal?.resize(cols, rows)
   }
   async windowSize(id: string): Promise<{ cols: number; rows: number }> {
     const control = this.control(id)
@@ -409,8 +395,6 @@ export class TmuxProcesses implements ProcessDriver {
     const [line] = await control.command(['display-message', '-p', '-t', id, '#{window_width} #{window_height}'])
     const [cols, rows] = (line ?? '').trim().split(' ').map(Number)
     if (!Number.isInteger(cols) || !Number.isInteger(rows)) throw new TerminalError('Terminal window size is unknown', 503)
-    // Keep the bridge PTY on the real window so its redraw stays whole.
-    this.bridges.get(id)?.terminal?.resize(cols!, rows!)
     return { cols: cols!, rows: rows! }
   }
   async alive(id: string): Promise<boolean> {
@@ -420,9 +404,6 @@ export class TmuxProcesses implements ProcessDriver {
     // pane list so activation/recovery can mark stale running rows as exited.
     const output = await this.service.command(['list-panes', '-a', '-F', '#{session_name} #{pane_dead}'], true)
     return output.split('\n').includes(`${id} 0`)
-  }
-  async screen(id: string): Promise<string> {
-    return this.service.command(['capture-pane', '-p', '-t', id])
   }
   async terminate(id: string): Promise<void> {
     const names = await this.service.command(['list-sessions', '-F', '#{session_name}'])
@@ -439,7 +420,7 @@ export class TmuxProcesses implements ProcessDriver {
   }
   async clients(id: string): Promise<NativeClient[]> {
     // Bakin's own clients by process, never by kind: a foreign control-mode client is just another client.
-    const own = new Set([this.bridges.get(id)?.pid, this.controls.get(id)?.pid])
+    const own = new Set([this.controls.get(id)?.pid])
     const output = await this.service.command(['list-clients', '-t', id, '-F', '#{client_pid} #{client_readonly} #{client_control_mode} #{client_width} #{client_height} #{client_name}'])
     return output.split('\n').flatMap((line) => {
       const [pid, readonly, control, cols, rows, ...name] = line.split(' ')
@@ -475,9 +456,5 @@ export class TmuxProcesses implements ProcessDriver {
       for (const check of this.cursorChecks.values()) clearInterval(check)
       this.cursorChecks.clear()
     }
-    const clients = id ? [this.bridges.get(id)].filter((client) => client !== undefined) : [...this.bridges.values()]
-    if (id) this.bridges.delete(id); else this.bridges.clear()
-    for (const client of clients) { client.kill(); client.terminal?.close() }
-    for (const client of clients) await client.exited
   }
 }

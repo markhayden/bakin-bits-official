@@ -119,8 +119,8 @@ them keeps the keyboard where it is. Scrolling and panning never open the
 keyboard or send input, with one exception that matches native terminals: a
 full-screen program that asked for the mouse (Claude Code, vim with mouse on)
 scrolls itself, so the wheel and vertical drags reach it as scroll events
-(one per row) once the grid has panned to its edge — on the new viewer, for
-programs that use the SGR mouse encoding, as Claude Code does. A full-screen program that did not ask
+once the grid has panned to its edge, for programs that use the SGR mouse
+encoding, as Claude Code does. A full-screen program that did not ask
 for the mouse gets no arrow keys from scrolling, and a tap never reaches a
 program as a mouse click (a mouse click on a desktop still does, as in any
 terminal).
@@ -129,19 +129,17 @@ Session actions › **Use this size as the default** saves the current grid as
 the Default columns/rows for new sessions nobody's screen sized yet (agent
 sessions).
 
-## The new terminal viewer (preview)
+## The terminal viewer
 
-Settings › **Use the new terminal viewer for new sessions (preview)** (off by
-default) gives new sessions a viewer that shows the same picture on every
-device, reflowed exactly as tmux does when a width changes. If the view ever
-has to be refreshed from tmux (very fast output, a lost connection to tmux, a
-difference the safety net found), it does so on its own, without a notice.
-When a session ends its last screen is kept, so an ended session opens to
-what it showed.
+Every device shows the same picture, reflowed exactly as tmux does when a
+width changes. If the view ever has to be refreshed from tmux (very fast
+output, a lost connection to tmux, a difference the safety net found), it does
+so on its own, without a notice. When a session ends its last screen is kept,
+so an ended session opens to what it showed.
 
 When a program in the session offers text for the clipboard (OSC 52 —
 Neovim with OSC 52 clipboard, or `… | base64 | xargs -0 printf
-'\033]52;c;%s\a'`), this viewer shows **Text to copy** in the pane's corner
+'\033]52;c;%s\a'`), the viewer shows **Text to copy** in the pane's corner
 with its first line that has text and a **Copy** button. Nothing writes your
 clipboard until you tap it; a newer offer replaces the last, a copied one goes
 after its check, a refused copy keeps it to try again, and **×** dismisses it.
@@ -162,11 +160,8 @@ choose Session actions › **Copy text…**: the history and screen open as plai
 text in a sheet, where the system's own long-press selection works, with
 **Copy all** (every line, even past the 2,000 shown) and **Refresh**.
 
-A session keeps the viewer it started with until it ends: turning the
-setting off starts new sessions with the current viewer, and open ones are
-unchanged. Either way a program's query is answered once, by tmux. The
-current viewer still records each session's output, so going back (or
-installing an earlier Terminal) keeps every ended session readable.
+A program's query (its cursor position, colours, device attributes) is
+answered once, by tmux; viewers never answer.
 
 ## Continue in a terminal app
 
@@ -213,9 +208,10 @@ cannot invoke this protected tool. Existing runtime tool allowlists still apply.
 
 List/read the session before writing. Supply `id`, its current `generation`, and
 `sequence: inputSequence + 1`. Input is at most 64 KiB. A stale generation or
-sequence fails; never retry ambiguous input. Screen reads return bounded plain
-text. Output reads accept a cursor and return base64 terminal bytes, the next
-cursor, and an explicit truncation flag.
+sequence fails; never retry ambiguous input. `screen` returns the visible pane
+as plain text. `output` returns the session's text, history then screen, as
+plain lines (`lines`: only the last that many; `truncated` says some were
+left out); an ended session's comes from its saved final screen.
 
 ## Lifecycle and Retention
 
@@ -225,29 +221,25 @@ cursor, and an explicit truncation flag.
   never treated as permission to delete work.
 - Complete refuses a live process. Terminate explicitly stops it. Dead tmux
   sessions are removed on completion. Bakin shutdown detaches only its clients.
-- Bakin holds two tmux clients per live session:
-  - an attached client whose redraw stream is the output, and from which a reconnect recovers;
-  - a control-mode client (`tmux -C`) that carries input, resizes and queries,
-    and the program's own output (`%output`, read as bytes): it feeds the
-    session's ordered event log (output and layout changes, batched, bounded
-    at 8 MiB queued; a lost connection or a stalled reader invalidates it).
-    The log feeds the session's server replica, which runs in shadow mode
-    for now: viewers still render the attached client's redraws, and at
-    quiet points the replica's screen is compared with them in the server
-    log (kinds and rows, never contents). A replica starts from a seed:
-    one grouped command (history, screen and modes in one capture) whose
-    reply places it in the log, so no output is lost or repeated around
-    it. It keeps a checkpoint plus the output since (bounded at 4 MiB or
-    4096 events): Bakin's own serializer (every cell, both buffers, saved
-    cursors, charsets, modes, links, the grapheme join state), accepted
-    only when restoring it into a fresh terminal reproduces the full
-    state, and taken in slices of a few milliseconds that never hold up
-    input. tmux can deliver a flood (`yes`) about twice as fast as the
-    replica parses it; past 4 MiB behind, the replica skips the output and
-    rebuilds from tmux (at most once a second while the flood lasts), so
-    the log never overflows.
+- Bakin holds one tmux client per live session: a control-mode client
+  (`tmux -C`) that carries input, resizes and queries, and the program's own
+  output (`%output`, read as bytes). It feeds the session's ordered event log
+  (output and layout changes, batched, bounded at 8 MiB queued; a lost
+  connection or a stalled reader invalidates it), and the log feeds the
+  session's server replica, the picture every viewer and agent read. A
+  replica starts from a seed: one grouped command (history, screen and modes
+  in one capture) whose reply places it in the log, so no output is lost or
+  repeated around it. It keeps a checkpoint plus the output since (bounded at
+  4 MiB or 4096 events): Bakin's own serializer (every cell, both buffers,
+  saved cursors, charsets, modes, links, the grapheme join state), accepted
+  only when restoring it into a fresh terminal reproduces the full state, and
+  taken in slices of a few milliseconds that never hold up input. tmux can
+  deliver a flood (`yes`) about twice as fast as the replica parses it; past
+  4 MiB behind, the replica skips the output and rebuilds from tmux (at most
+  once a second while the flood lasts), so the log never overflows. A lost
+  control client or replica is rebuilt from tmux by the next viewer or read.
 
-  Neither one sizes the window (`window-size manual`): only Bakin's explicit
+  It never sizes the window (`window-size manual`): only Bakin's explicit
   resize does, so an extra client, such as a terminal app, never reshapes a
   session. Typed input is delivered byte-exact with `send-keys -H` and never
   passes through tmux key bindings; a paste is handed to tmux as a paste
@@ -255,19 +247,22 @@ cursor, and an explicit truncation flag.
   asked for bracketed paste. A pane left in copy mode is returned to its
   program first.
 - **Each browser holds one WebSocket to the session** (`/api/plugins/terminal/socket`).
-  - The connection opens with a sync: a snapshot of the screen, the cursor it
-    reflects, and the session's ownership, input sequence and size.
-  - Output follows as binary frames as soon as it is stored. The browser
-    acknowledges what it has drawn, and the server never runs more than
-    256 KiB ahead of a viewer. A viewer stuck behind for 10 s is disconnected
-    and resyncs, so a stalled phone never slows a desktop.
+  - The connection opens with a join: the replica's checkpoint, the output
+    since, and a barrier, with the session's ownership, input sequence and
+    size. The browser replays it off screen and shows it at the barrier; input
+    is accepted once the replay is applied.
+  - Live output follows as binary frames. The browser reports what it has
+    applied, and the server never runs more than 256 KiB ahead of a viewer. A
+    viewer stuck behind for 10 s is disconnected and joins again, so a stalled
+    phone never slows a desktop. A rebuild from tmux reaches a viewer as a
+    rebase: a fresh picture, with input still flowing.
   - Keystrokes are batched while one is in flight. Every input batch gets an
     answer: an error reads **Input not sent** when it was refused, or **May
     have been delivered** when the connection dropped mid-delivery. Input is
     never replayed.
   - The browser reconnects by itself with backoff. After the page has been in
     the background for more than a few seconds, or when the network comes back,
-    it takes a fresh connection and sync, so a phone returning from the
+    it takes a fresh connection and picture, so a phone returning from the
     background picks up where it left off, even if its old socket only looked
     open. Input that was mid-flight when a connection dropped reads **May have
     been delivered**; input still queued reads **Input not sent**. Opening the
@@ -282,10 +277,12 @@ cursor, and an explicit truncation flag.
 - Maintenance runs at startup and hourly, with completion/capacity/task-done
   checks. An exited session idle for 30 days becomes cleanup-eligible, never
   forcibly discarded. `idleDays` is configurable. Live processes always block.
-- Output payloads roll at 10 MiB/session and 250 MiB total. Screen parsing and
-  output pages are also bounded. Completed output expires after 30 days or can
-  be deleted manually. SQLite page/WAL overhead is outside the payload budget;
-  session metadata remains for ownership and retained-work review.
+- An ended session's final screen (its replica's last checkpoint and the
+  output after it) is saved when it ends; all saved screens together are held
+  within 250 MiB, the oldest going first. A completed session's saved screen
+  expires after 30 days or can be deleted manually. SQLite page/WAL overhead
+  is outside that budget; session metadata remains for ownership and
+  retained-work review.
 - Health reports unavailable service, maintenance failure, retained work,
   and live sessions holding more than 640 MB of Bakin's memory (estimated
   each minute from the emulators' structure; a session of 10,000 rows of

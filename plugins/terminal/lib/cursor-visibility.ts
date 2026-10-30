@@ -26,5 +26,3 @@ export function trackCursorVisibility(terminal: ParserTerminal): { readonly hidd
   }
 }
 
-/** Restores the cursor's visibility after a serialized screen (SerializeAddon leaves DECTCEM out). */
-export const cursorVisibilitySequence = (hidden: boolean): string => hidden ? '\x1b[?25l' : '\x1b[?25h'

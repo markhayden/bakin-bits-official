@@ -176,8 +176,9 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     await desk.waitForFunction(() => document.querySelector('.terminal-pane')?.getAttribute('data-fit') === 'width')
     expect(await font(desk)).toBeGreaterThan(13)
 
-    // On the desktop the phone's grid overflows vertically: the wheel pans the pane
-    // (never xterm's history or arrow keys), Ctrl+wheel zooms, and neither types.
+    // On the desktop the phone's grid overflows vertically: the wheel scrolls
+    // the history first and then pans the pane (plan T36, never arrow keys),
+    // Ctrl+wheel zooms, and neither types.
     const deskInputs = deskSocket.inputs().length
     const deskBox = (await desk.locator('.terminal-pane').boundingBox())!
     await desk.mouse.move(deskBox.x + deskBox.width / 2, deskBox.y + deskBox.height / 2)
@@ -188,7 +189,10 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     await desk.mouse.wheel(0, -300)
     await desk.getByRole('button', { name: 'Follow cursor', exact: true }).waitFor()
     await controlsInTopCorner(desk)
+    // Past the history's top (80 lines and the prompt), the rest pans the pane up.
+    for (let n = 0; n < 12 && (await pane(desk)).scrollTop >= beforeWheel.scrollTop; n++) { await desk.mouse.wheel(0, -600); await desk.waitForTimeout(50) }
     expect((await pane(desk)).scrollTop).toBeLessThan(beforeWheel.scrollTop)
+    expect(deskSocket.inputs().length).toBe(deskInputs)
     const deskFont = await font(desk)
     await desk.keyboard.down('Control')
     await desk.mouse.wheel(0, 100)

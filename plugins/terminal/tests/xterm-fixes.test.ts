@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import headless from '@xterm/headless'
-import { patchEraseAbove } from '../lib/xterm-fixes'
-import { Screen } from '../lib/screen'
+import { guardParser, patchEraseAbove } from '../lib/xterm-fixes'
 import { applyTerminalProfile } from '../lib/terminal-profile'
 import { loadGraphemeProvider } from '../lib/unicode-widths'
 
@@ -63,56 +62,42 @@ describe('erase above (ED 1) with the cursor in the last column', () => {
     await write(terminal, 'AAAAAAAAAA\r\nBBBBB\x1b[2;3H\x1b[1J')
     expect(rows(terminal)).toEqual(['', '   BB', ''])
   })
-  it('the server Screen is patched: the sequence no longer wedges its output', async () => {
-    const screen = new Screen(10, 3)
-    await screen.write(new TextEncoder().encode('A\x1b[3;10H\x1b[1J'))
-    await screen.write(new TextEncoder().encode('\x1b[1;1Hstill here'))
-    expect(screen.text()).toContain('still here')
-    screen.close()
+  it('the profile patches it: the sequence no longer wedges a terminal\'s output', async () => {
+    const terminal = new headless.Terminal({ cols: 10, rows: 3, allowProposedApi: true })
+    applyTerminalProfile(terminal)
+    expect(await settles(terminal, 'A\x1b[3;10H\x1b[1J')).toBe(true)
+    await write(terminal, '\x1b[1;1Hstill here')
+    expect(rows(terminal).join('\n')).toContain('still here')
+    terminal.dispose()
   })
-  it('a parser exception fails the Screen instead of wedging it: writes and captures reject, drain settles', async () => {
-    const screen = new Screen(10, 3)
-    const terminal = (screen as unknown as { terminal: Term }).terminal
+})
+
+describe('guardParser', () => {
+  it('a parser exception is reported once instead of wedging the terminal: later writes still call back, parsing nothing', async () => {
+    const terminal = new headless.Terminal({ cols: 10, rows: 3, allowProposedApi: true })
+    const failures: unknown[] = []
+    const parser = guardParser(terminal, (error) => failures.push(error))
     terminal.parser.registerCsiHandler({ final: 'z' }, () => { throw new Error('boom') })
-    await expect(screen.write(new TextEncoder().encode('\x1b[z'))).rejects.toThrow('reconnect required')
-    expect(screen.failed).toBe(true)
-    await expect(screen.write(new TextEncoder().encode('more'))).rejects.toThrow()
-    await expect(screen.snapshot()).rejects.toThrow()
-    await screen.drain()
-    screen.close()
+    expect(await settles(terminal, '\x1b[z')).toBe(true)
+    expect(parser.failed).toBe(true)
+    expect(await settles(terminal, 'more')).toBe(true)
+    expect(rows(terminal).join('')).not.toContain('more')
+    expect(failures).toHaveLength(1)
+    terminal.dispose()
   })
-  it('an async handler rejecting fails the Screen without an unhandled rejection', async () => {
-    const screen = new Screen(10, 3)
-    const terminal = (screen as unknown as { terminal: Term }).terminal
+  it('an async handler rejecting fails it without an unhandled rejection', async () => {
+    const terminal = new headless.Terminal({ cols: 10, rows: 3, allowProposedApi: true })
+    const parser = guardParser(terminal, () => undefined)
     terminal.parser.registerCsiHandler({ final: 'z' }, () => Promise.reject(new Error('async boom')) as unknown as boolean)
     const unhandled: unknown[] = []
     const onUnhandled = (reason: unknown) => { unhandled.push(reason) }
     process.on('unhandledRejection', onUnhandled)
     try {
-      await expect(screen.write(new TextEncoder().encode('\x1b[z'))).rejects.toThrow('reconnect required')
+      expect(await settles(terminal, '\x1b[z')).toBe(true)
       await new Promise(resolve => setTimeout(resolve, 50))
       expect(unhandled).toEqual([])
-      expect(screen.failed).toBe(true)
-      await screen.drain()
-    } finally { process.off('unhandledRejection', onUnhandled); screen.close() }
-  })
-  it('a write that throws on submission fails the Screen and releases its charge; queued writes release theirs', async () => {
-    const screen = new Screen(10, 3)
-    const terminal = (screen as unknown as { terminal: Term & { write: unknown } }).terminal
-    terminal.write = () => { throw new Error('submit boom') }
-    const first = screen.write(new TextEncoder().encode('abc'))
-    const second = screen.write(new TextEncoder().encode('queued'))
-    const [one, two] = await Promise.allSettled([first, second])
-    expect(one.status === 'rejected' && String(one.reason)).toContain('submit boom')
-    // Queued together, they were one submission: both fail with it.
-    expect(two.status === 'rejected' && String(two.reason)).toContain('submit boom')
-    // A write after the failure is refused at once.
-    await expect(screen.write(new TextEncoder().encode('later'))).rejects.toThrow('reconnect required')
-    expect(screen.failed).toBe(true)
-    expect((screen as unknown as { queuedBytes: number }).queuedBytes).toBe(0)
-    await expect(screen.snapshot()).rejects.toThrow()
-    await expect(screen.snapshot()).rejects.toThrow()
-    screen.close()
+      expect(parser.failed).toBe(true)
+    } finally { process.off('unhandledRejection', onUnhandled); terminal.dispose() }
   })
 })
 

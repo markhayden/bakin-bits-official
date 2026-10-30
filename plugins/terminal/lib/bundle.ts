@@ -1,9 +1,9 @@
 /**
- * An ended session's final output on the raw path (spec D13, plan T35b):
+ * An ended session's final output (spec D13, plan T35b):
  * the replica's last cut — its accepted checkpoint, the bounded tail after
  * it and the sequence boundary — with the final dimensions, the profile and
  * format versions, and the session's fidelity (recovery metadata). An ended
- * raw-path session is shown from it through the same join a live one gets
+ * session is shown from it through the same join a live one gets
  * (`bundleSource`).
  *
  * Stored as a small header and many small parts (checkpoint pieces of at

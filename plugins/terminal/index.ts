@@ -39,7 +39,7 @@ const route = (path: string, method: 'GET' | 'POST', summary: string, handler: (
 })
 
 export default definePlugin({
-  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.23',
+  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.24',
   routes: [
     route('/options', 'GET', 'Get terminal form defaults and available agents and tasks', async (request) => {
       const principal = human(request)
@@ -121,7 +121,6 @@ export default definePlugin({
     { key: 'maxSessions', label: 'Maximum live sessions', type: 'number', default: 10 },
     { key: 'maxWorktrees', label: 'Maximum retained worktrees', type: 'number', default: 10 },
     { key: 'idleDays', label: 'Idle worktree review age (days)', type: 'number', default: 30 },
-    { key: 'rawPath', label: 'Use the new terminal viewer for new sessions (preview)', description: 'New sessions show the same picture on every device, say when the view had to be refreshed and why, and keep their last screen after they end. Scrolling back through history and touch gestures are still being finished. Sessions already open keep their viewer until they end; turn this off to start new sessions with the current viewer.', type: 'boolean', default: false },
   ] },
   async activate(ctx: PluginContext) {
     context = ctx
@@ -137,8 +136,6 @@ export default definePlugin({
         if (input.taskId && !await ctx.tasks.get(input.taskId)) throw new TerminalError('Linked task was not found', 400)
       },
       log: ctx.log,
-      // Asked once per new session (plan T38a): a session keeps its viewer for its life.
-      rawPathForNew: () => terminalSettings(ctx.getSettings<Record<string, unknown>>()).rawPath === true,
     })
     if (await service.ready()) await manager.start()
     const maintain = async () => {
@@ -269,7 +266,7 @@ export default definePlugin({
       requiresVerifiedAgent: true,
       parameters: {
         operation: z.enum(['list', 'create', 'screen', 'output', 'write', 'interrupt', 'complete', 'terminate'])
-          .describe('list: your sessions. create: start one. screen: read the visible pane and its size (start here). output: read raw output after a cursor. write: type input. interrupt: send Ctrl-C. complete: finish an exited session. terminate: stop a running process then finish.'),
+          .describe('list: your sessions. create: start one. screen: read the visible pane and its size (start here). output: read its text, history then screen (the last `lines` when given; also after it ended). write: type input. interrupt: send Ctrl-C. complete: finish an exited session. terminate: stop a running process then finish.'),
         input: z.object({
           id: z.string().optional().describe('Session id. Required for screen, output, write, interrupt, complete, terminate.'),
           title: z.string().optional().describe('create: a short human-readable name for the session.'),
@@ -280,7 +277,7 @@ export default definePlugin({
           generation: z.number().int().optional().describe('write, interrupt: the `generation` from your latest response for this session.'),
           sequence: z.number().int().optional().describe('write: the latest `inputSequence` + 1. Consumed once — never reuse or guess it.'),
           data: z.string().optional().describe('write: the exact keystrokes to send. End a command with a carriage return "\\r" to run it.'),
-          cursor: z.number().int().optional().describe('output: return output produced after this cursor (0 for all retained output).'),
+          lines: z.number().int().positive().optional().describe('output: only the last this many lines.'),
         }).default({}).describe('Operation arguments — each field notes which operations use it.'),
       },
       handler: async (params, _agent, context) => {
@@ -292,7 +289,7 @@ export default definePlugin({
           if (operation === 'create') return { ok: true, session: await sessions().create(input, principal) }
           const id = z.string().min(1).parse(input.id)
           if (operation === 'screen') return { ok: true, ...await sessions().readScreen(id, principal) }
-          if (operation === 'output') return { ok: true, ...sessions().output(id, principal, z.number().int().nonnegative().parse(input.cursor ?? 0)) }
+          if (operation === 'output') return { ok: true, ...await sessions().outputText(id, principal, z.number().int().positive().optional().parse(input.lines)) }
           return { ok: true, session: await agentCommand(sessions(), { ...input, operation }, principal) }
         } catch (error) { return { ok: false, error: error instanceof TerminalError ? error.message : 'Invalid or unavailable terminal operation' } }
       },

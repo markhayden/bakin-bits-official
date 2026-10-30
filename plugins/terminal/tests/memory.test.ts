@@ -89,7 +89,7 @@ describe('memory budget (measured)', () => {
     expect(close(result)).toBe(true)
   }, 120000)
 
-  measurement('peak: R1 shadow mode at a checkpoint attempt (replica, Screen, verifier, full queues, three joins) is at most 96 MB live', async () => {
+  measurement('peak: a checkpoint attempt (replica, verifier, full queues, three joins) is at most 96 MB live', async () => {
     const { peak } = await measure('checkpoint-peak')
     expect(peak!).toBeLessThanOrEqual(96 * MB)
   }, 120000)

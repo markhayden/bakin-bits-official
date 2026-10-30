@@ -5,11 +5,10 @@ import { join } from 'node:path'
 import { TerminalService } from '../lib/service'
 import { launchChromium, viewerSocket } from './browser'
 
-// Spec D13 / plan T33: the raw path against the preview with it forced on
-// (TERMINAL_PREVIEW_RAW=1 for both the preview and this run). The overload
-// test reads the pane from tmux: TERMINAL_PREVIEW_TMUX and TERMINAL_PREVIEW_ROOT
+// Spec D13 / plan T33: the viewer against the preview. The overload test
+// reads the pane from tmux: TERMINAL_PREVIEW_TMUX and TERMINAL_PREVIEW_ROOT
 // are the tmux and workingDirectory the preview printed.
-const rawTest = process.env.TERMINAL_PREVIEW_URL && process.env.TERMINAL_PREVIEW_RAW === '1' ? test : test.skip
+const previewTest = process.env.TERMINAL_PREVIEW_URL ? test : test.skip
 
 type Browser = Awaited<ReturnType<typeof launchChromium>>
 type Page = Awaited<ReturnType<Browser['newPage']>>
@@ -52,7 +51,7 @@ const waitForRow = (page: Page, pattern: string, timeout = 10_000) =>
 const hasRow = (page: Page, pattern: string) =>
   page.evaluate((source) => [...document.querySelectorAll('.xterm-accessibility-tree > div')].some((row) => new RegExp(source).test(row.textContent ?? '')), pattern)
 
-rawTest('a viewer that joins during output, mid-escape and in the alternate screen sees what the first one sees', async () => {
+previewTest('a viewer that joins during output, mid-escape and in the alternate screen sees what the first one sees', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-join-test-01'
   const first = await browser.newPage({ viewport })
@@ -100,7 +99,7 @@ rawTest('a viewer that joins during output, mid-escape and in the alternate scre
   }
 }, 120_000)
 
-rawTest('a join carries more than 2,000 retained rows of scrollback', async () => {
+previewTest('a join carries more than 2,000 retained rows of scrollback', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-scroll-test-01'
   const first = await browser.newPage({ viewport })
@@ -122,7 +121,7 @@ rawTest('a join carries more than 2,000 retained rows of scrollback', async () =
   }
 }, 120_000)
 
-rawTest('keystroke to visible echo is under 50 ms at the 95th percentile in normal use', async () => {
+previewTest('keystroke to visible echo is under 50 ms at the 95th percentile in normal use', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-echo-test-01'
   const page = await browser.newPage({ viewport })
@@ -172,7 +171,7 @@ rawTest('keystroke to visible echo is under 50 ms at the 95th percentile in norm
   }
 }, 150_000)
 
-rawTest('overload (D13 bounded load): 30 s of flood with a stalled viewer — eviction, memory, Ctrl-C, freshness and reconnect', async () => {
+previewTest('overload (D13 bounded load): 30 s of flood with a stalled viewer — eviction, memory, Ctrl-C, freshness and reconnect', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-flood-test-01'
   const page = await browser.newPage({ viewport })
@@ -290,7 +289,7 @@ rawTest('overload (D13 bounded load): 30 s of flood with a stalled viewer — ev
   }
 }, 150_000)
 
-rawTest("a width change (plan T34a): the viewer installs tmux's geometry and shows what tmux shows, with no rebuild", async () => {
+previewTest("a width change (plan T34a): the viewer installs tmux's geometry and shows what tmux shows, with no rebuild", async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-width-test-01'
   const page = await browser.newPage({ viewport })
@@ -332,7 +331,7 @@ rawTest("a width change (plan T34a): the viewer installs tmux's geometry and sho
   }
 }, 60_000)
 
-rawTest('a lost replica (plan T35a): the viewer recovers it from tmux quietly (no notice), and input and output carry on', async () => {
+previewTest('a lost replica (plan T35a): the viewer recovers it from tmux quietly (no notice), and input and output carry on', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-recovery-test-01'
   const page = await browser.newPage({ viewport })
@@ -366,7 +365,7 @@ rawTest('a lost replica (plan T35a): the viewer recovers it from tmux quietly (n
   }
 }, 60_000)
 
-rawTest('an ended session (plan T35b): a terminate while watching turns the view into its saved final picture, and a reload shows it again', async () => {
+previewTest('an ended session (plan T35b): a terminate while watching turns the view into its saved final picture, and a reload shows it again', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-ended-test-01'
   const page = await browser.newPage({ viewport })
@@ -395,7 +394,7 @@ rawTest('an ended session (plan T35b): a terminate while watching turns the view
   }
 }, 60_000)
 
-rawTest('an ended session whose output was not saved (plan T35b): the page shows why, with no reconnect loop; another session opens normally after it', async () => {
+previewTest('an ended session whose output was not saved (plan T35b): the page shows why, with no reconnect loop; another session opens normally after it', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-unsaved-test-01'
   const page = await browser.newPage({ viewport })
@@ -433,7 +432,7 @@ rawTest('an ended session whose output was not saved (plan T35b): the page shows
   }
 }, 60_000)
 
-rawTest('the safety net (plan T37): a viewer\'s digests match the replica\'s through real output; one made to differ rejoins and agrees again', async () => {
+previewTest('the safety net (plan T37): a viewer\'s digests match the replica\'s through real output; one made to differ rejoins and agrees again', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-digest-test-01'
   const page = await browser.newPage({ viewport })
@@ -486,7 +485,7 @@ rawTest('the safety net (plan T37): a viewer\'s digests match the replica\'s thr
   }
 }, 90_000)
 
-rawTest('two viewers and a terminal app on one session (plan T38a): a program\'s query is answered exactly once, by tmux', async () => {
+previewTest('two viewers and a terminal app on one session (plan T38a): a program\'s query is answered exactly once, by tmux', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-query-test-01'
   const first = await browser.newPage({ viewport })
@@ -539,7 +538,7 @@ const wheelOver = async (page: Page, deltaY: number, times = 1) => {
   for (let n = 0; n < times; n++) await page.mouse.wheel(0, deltaY)
 }
 
-rawTest('native scrolling (plan T36): the wheel scrolls the history to its top, pauses following, and ↓ Live comes back; output while scrolled up and the other viewer stay put', async () => {
+previewTest('native scrolling (plan T36): the wheel scrolls the history to its top, pauses following, and ↓ Live comes back; output while scrolled up and the other viewer stay put', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-scroll-test-01'
   const page = await browser.newPage({ viewport })
@@ -580,7 +579,7 @@ rawTest('native scrolling (plan T36): the wheel scrolls the history to its top, 
   }
 }, 90_000)
 
-rawTest('native scrolling (plan T36): dragging xterm\'s own scrollbar into the history pauses following too', async () => {
+previewTest('native scrolling (plan T36): dragging xterm\'s own scrollbar into the history pauses following too', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-scroll-test-04'
   const page = await browser.newPage({ viewport })
@@ -620,7 +619,7 @@ async function receiving(page: Page, modes: string, file: string) {
 }
 const reports = (input: string, button: number) => (input.match(new RegExp(`\\x1b\\[<${button};\\d+;\\d+M`, 'g')) ?? []).length
 
-rawTest('native scrolling (plan T36, as native terminals): a full-screen program that asked for the mouse gets the wheel as xterm (VS Code) reports it — one report per wheel event, never a click; X10 mode or no mouse gets nothing', async () => {
+previewTest('native scrolling (plan T36, as native terminals): a full-screen program that asked for the mouse gets the wheel as xterm (VS Code) reports it — one report per wheel event, never a click; X10 mode or no mouse gets nothing', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-scroll-test-02'
   const page = await browser.newPage({ viewport })
@@ -683,7 +682,7 @@ rawTest('native scrolling (plan T36, as native terminals): a full-screen program
 
 
 // Touch is dispatched through Chromium's DevTools protocol.
-const touchTest = process.env.TERMINAL_BROWSER === 'webkit' ? test.skip : rawTest
+const touchTest = process.env.TERMINAL_BROWSER === 'webkit' ? test.skip : previewTest
 async function phone(client: string) {
   const browser = await launchChromium()
   const context = await browser.newContext({ viewport: { width: 390, height: 760 }, hasTouch: true, isMobile: true })
@@ -823,7 +822,7 @@ touchTest('native scrolling on a phone (plan T36): returning to the cursor while
   }
 }, 90_000)
 
-rawTest('native scrolling (plan T36): a selection pauses following, and ↓ Live clears it', async () => {
+previewTest('native scrolling (plan T36): a selection pauses following, and ↓ Live clears it', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-scroll-test-09'
   const page = await browser.newPage({ viewport })
@@ -891,7 +890,7 @@ async function recordingPage(browser: Browser, options: Parameters<Browser['newC
   return { context, page: await context.newPage() }
 }
 
-rawTest('clipboard offers (plan T36b): copied only on the tap, exactly, with the check; the latest replaces the last; a join, a reload, a reconnect or a recovery never replays one', async () => {
+previewTest('clipboard offers (plan T36b): copied only on the tap, exactly, with the check; the latest replaces the last; a join, a reload, a reconnect or a recovery never replays one', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-offer-test-01'
   const { page } = await recordingPage(browser)
@@ -941,7 +940,7 @@ rawTest('clipboard offers (plan T36b): copied only on the tap, exactly, with the
   }
 }, 90_000)
 
-rawTest('clipboard offers (plan T36b): a refused write keeps the offer; a copy that settles after a newer offer neither clears nor confirms it', async () => {
+previewTest('clipboard offers (plan T36b): a refused write keeps the offer; a copy that settles after a newer offer neither clears nor confirms it', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-offer-test-02'
   const { page } = await recordingPage(browser)
@@ -1012,7 +1011,7 @@ touchTest('clipboard offers on a 320 px phone (plan T36b): the offer, ↓ Live, 
 }, 60_000)
 
 
-rawTest('clipboard offers (plan T36b): focus — a replaced offer keeps a keyboard user on Copy; a copy through the fallback (copied or refused) leaves the view in the history; a pending offer survives a recovery', async () => {
+previewTest('clipboard offers (plan T36b): focus — a replaced offer keeps a keyboard user on Copy; a copy through the fallback (copied or refused) leaves the view in the history; a pending offer survives a recovery', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-offer-test-04'
   const { page } = await recordingPage(browser)
@@ -1072,7 +1071,7 @@ rawTest('clipboard offers (plan T36b): focus — a replaced offer keeps a keyboa
   }
 }, 90_000)
 
-rawTest('clipboard offers (plan T36b): labelled and previewed by their first line with text; Dismiss clears one without writing anything', async () => {
+previewTest('clipboard offers (plan T36b): labelled and previewed by their first line with text; Dismiss clears one without writing anything', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-offer-test-05'
   const { page } = await recordingPage(browser)
@@ -1093,7 +1092,7 @@ rawTest('clipboard offers (plan T36b): labelled and previewed by their first lin
   }
 }, 60_000)
 
-rawTest('Copy text: the session menu opens the terminal\'s text as page text (history and screen, wrapped lines whole); Copy all copies it exactly', async () => {
+previewTest('Copy text: the session menu opens the terminal\'s text as page text (history and screen, wrapped lines whole); Copy all copies it exactly', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-copy-text-01'
   const { page } = await recordingPage(browser, { viewport: { width: 390, height: 760 }, hasTouch: true, isMobile: true })
@@ -1127,7 +1126,7 @@ rawTest('Copy text: the session menu opens the terminal\'s text as page text (hi
   }
 }, 60_000)
 
-rawTest('Copy text: more than 2,000 lines shows the newest and copies every one exactly; reopening takes new output; before the first picture it says the terminal is connecting', async () => {
+previewTest('Copy text: more than 2,000 lines shows the newest and copies every one exactly; reopening takes new output; before the first picture it says the terminal is connecting', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-copy-text-02'
   const { page } = await recordingPage(browser, { viewport: { width: 390, height: 760 }, hasTouch: true, isMobile: true })
@@ -1249,7 +1248,7 @@ touchTest('native scrolling on a phone (nested, as iOS): in a full-screen progra
   }
 }, 60_000)
 
-rawTest('full screen (the host\'s): the whole document goes full screen, menus still show and work, typing right after the toggle reaches the terminal, Exit comes back', async () => {
+previewTest('full screen (the host\'s): the whole document goes full screen, menus still show and work, typing right after the toggle reaches the terminal, Exit comes back', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-fullscreen-01'
   const page = await browser.newPage({ viewport })

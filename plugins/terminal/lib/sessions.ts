@@ -5,11 +5,11 @@ import { authorize, createSchema, DAY, DeliveryUncertainError, TerminalError, ty
 import type { NativeClient, ProcessDriver, WriteOptions } from './processes'
 import { claimSize, clampSize, nextSize } from './sizing'
 import type { Fidelity, RawSource } from './raw-display'
-import { Screen } from './screen'
-import { screenView, shadowDiff } from './shadow'
 import { Store } from './store'
 import { makeBundle, type Bundle } from './bundle'
 import { visibleText } from './terminal-state'
+import { bufferText } from './buffer-text'
+import { bundleText } from './bundle-text'
 
 interface WorktreeResult { ok: boolean; error?: string; worktreePath?: string }
 /** How long a launched terminal app has to confirm its pid (spec D7). */
@@ -40,30 +40,13 @@ export interface SessionOptions {
   validateLinks?(input: CreateInput): Promise<void>
   now?(): number
   log?: { info(message: string, data?: Record<string, unknown>): void }
-  /** Quiet time before the shadow replica is compared with the bridge (SHADOW_QUIET_MS). */
-  shadowQuietMs?: number
-  /**
-   * Whether a session created now takes the raw path (spec D13, T38a's
-   * setting). Asked once, at creation: the path is the session's for its
-   * life (`Session.rawPath`), so a change of the setting never splits a live
-   * session between two policies.
-   */
-  rawPathForNew?(): boolean
 }
 
-/** Bridge output quiet for this long is a point where the shadow replica and the bridge should agree. */
-export const SHADOW_QUIET_MS = 1000
 /** How long an ending session's final picture may take (a drain, or a rebuild's seed) before its output is recorded as not saved. */
 export const FINAL_CUT_MS = 3000
-/** Mismatches are logged at most once per session in this window (each is counted). */
-export const SHADOW_LOG_MS = 10 * 60 * 1000
-/** What shadow mode has seen for a session. */
-export interface ShadowStats { compared: number; mismatched: number; last?: string; loggedAt?: number }
 
 export class Sessions {
   private pending: Promise<unknown> = Promise.resolve()
-  private screens = new Map<string, Screen>()
-  private outputListeners = new Map<string, Set<() => void>>()
   private sessionListeners = new Map<string, Set<(session: Session) => void>>()
   private reservations = new Map<string, Reservation>()
   /** Admitted terminal apps by session, keyed by tmux client pid. */
@@ -75,10 +58,8 @@ export class Sessions {
   /** Every finish outstanding, by session, from its reservation to its kill: input is refused, startup's bundle rule skips them. */
   private finishing = new Map<string, Set<Promise<void>>>()
   private timers = new Set<ReturnType<typeof setTimeout>>()
-  private shadowTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  /** Bridge chunks parsed per session: a comparison spanning a new one is not a quiet point. */
-  private bridgeChunks = new Map<string, number>()
-  readonly shadow = new Map<string, ShadowStats>()
+  /** Sessions this manager has attached (its control client asked for), until detached: attach runs once per session. */
+  private attached = new Set<string>()
   private closed = false
   constructor(readonly store: Store, private driver: ProcessDriver, private options: SessionOptions) {}
   private now(): number { return this.options.now?.() ?? Date.now() }
@@ -110,15 +91,13 @@ export class Sessions {
     this.pending = next.catch(() => {})
     return next
   }
-  /** What live sessions hold in this process (lib/memory.ts): bridge screens, replicas and their logs. Steps: run it sliced. */
+  /** What live sessions hold in this process (lib/memory.ts): replicas and their logs. Steps: run it sliced. */
   *retainedSteps(): Generator<void, number> {
-    let total = this.driver.retainedSteps ? yield* this.driver.retainedSteps() : 0
-    for (const screen of [...this.screens.values()]) total += yield* screen.retainedSteps()
-    return total
+    return this.driver.retainedSteps ? yield* this.driver.retainedSteps() : 0
   }
   /** Periodic upkeep of live sessions' emulators (link orphans erased since their last sweep). */
   async maintainEmulators(): Promise<void> {
-    await Promise.all([this.driver.maintain?.(), ...[...this.screens.values()].map((screen) => screen.maintain())])
+    await this.driver.maintain?.()
   }
   list(principal: Principal): Session[] {
     if (principal.kind === 'agent' && !this.enabled().includes(principal.id)) throw new TerminalError('Terminal is disabled for this agent', 403)
@@ -132,39 +111,6 @@ export class Sessions {
   }
   /** Boot: reattach live sessions (a restarted service may have lost titles). */
   start(): Promise<void> { return this.setupService(async () => {}, { startup: true }) }
-  /** The newest stored output cursor for a session (0 when none). */
-  latestCursor(id: string): number {
-    return this.store.output(id, Number.MAX_SAFE_INTEGER).cursor
-  }
-  /**
-   * Resolve once output past `cursor` is stored, the signal aborts, or
-   * `idleMs` passes (a keepalive for long-quiet sessions). Subscribes before
-   * re-checking the store, so output landing in between is never missed.
-   */
-  nextOutput(id: string, cursor: number, signal: AbortSignal, idleMs = 15_000): Promise<void> {
-    return new Promise<void>((resolve) => {
-      const done = () => {
-        clearTimeout(timer)
-        unsubscribe()
-        signal.removeEventListener('abort', done)
-        resolve()
-      }
-      const unsubscribe = this.onOutput(id, done)
-      const timer = setTimeout(done, idleMs)
-      signal.addEventListener('abort', done, { once: true })
-      if (signal.aborted || this.latestCursor(id) > cursor) done()
-    })
-  }
-  /** Hear about newly stored output for a session (push instead of polling). */
-  onOutput(id: string, listener: () => void): () => void {
-    let listeners = this.outputListeners.get(id)
-    if (!listeners) this.outputListeners.set(id, listeners = new Set())
-    listeners.add(listener)
-    return () => {
-      listeners.delete(listener)
-      if (!listeners.size) this.outputListeners.delete(id)
-    }
-  }
   /**
    * tmux says a pane died: one refresh at a time, and one more after it when
    * hints came meanwhile (a refresh that already checked a session may have
@@ -231,106 +177,30 @@ export class Sessions {
     try {
       this.adoptSize(session, await this.driver.windowSize(session.id))
     } catch {
-      await this.stopScreen(session.id)
+      await this.detach(session.id)
       return false
     }
     // Terminal apps already attached (one left over from before a restart, or
-    // a raw attach while nobody watched) meet the same admission check.
+    // an attach while nobody watched) meet the same admission check.
     await this.reconcileClients(session.id).catch(() => undefined)
     return true
   }
+  /** Once per session until it is detached: a second attach would be a second control client (and a fake recovery). */
   private attachUnreconciled(session: Session): void {
-    if (this.screens.has(session.id)) return
-    const screen = new Screen(session.cols, session.rows)
-    this.screens.set(session.id, screen)
-    this.driver.attach(session, (data) => {
-      if (this.closed || this.screens.get(session.id) !== screen) return
-      for (let offset = 0; offset < data.length; offset += 65536) {
-        const chunk = data.slice(offset, offset + 65536)
-        // Screen.failed exposes bounded-parser overflow to readers; a fresh attachment recovers it.
-        void screen.write(chunk, () => {
-          this.store.append(session.id, chunk)
-          for (const listener of this.outputListeners.get(session.id) ?? []) listener()
-          // A chunk parsed after its screen was stopped (or replaced) is not this attachment's.
-          if (this.closed || this.screens.get(session.id) !== screen) return
-          this.bridgeChunks.set(session.id, (this.bridgeChunks.get(session.id) ?? 0) + 1)
-          this.shadowSoon(session.id)
-        }).catch(() => undefined)
-      }
-    }, () => this.clientsChanged(session.id), () => this.paneDied())
+    if (this.attached.has(session.id)) return
+    this.attached.add(session.id)
+    this.driver.attach(session, () => this.clientsChanged(session.id), () => this.paneDied())
   }
-  /** Compare the shadow replica with the bridge once the bridge has been quiet (spec D13, R1). */
-  private shadowSoon(id: string): void {
-    if (!this.driver.replica || this.closed) return
-    clearTimeout(this.shadowTimers.get(id))
-    this.shadowTimers.set(id, setTimeout(() => {
-      this.shadowTimers.delete(id)
-      void this.compareShadow(id).catch(() => undefined)
-    }, this.options.shadowQuietMs ?? SHADOW_QUIET_MS))
-  }
-  private async compareShadow(id: string): Promise<void> {
-    const replica = this.driver.replica?.(id)
-    const screen = this.screens.get(id)
-    if (this.closed || !replica || !screen || screen.failed) return
-    const chunks = this.bridgeChunks.get(id)
-    // Read between the replica's events; undefined while it waits for a seed (or ended).
-    const raw = await replica.read((terminal) => ({ view: screenView(terminal), activity: replica.activity, quietMs: replica.quietMs }))
-    if (!raw || this.closed) return
-    const quiet = this.options.shadowQuietMs ?? SHADOW_QUIET_MS
-    // The replica moved recently: the bridge's redraw of it may not have arrived yet.
-    if (raw.quietMs < quiet) { this.shadowSoon(id); return }
-    const bridge = await screen.capture(() => screen.view())
-    // Either side moved while they were read, or the attachment changed: not a quiet point.
-    if (this.closed || this.bridgeChunks.get(id) !== chunks || replica.activity !== raw.activity || this.screens.get(id) !== screen || this.driver.replica?.(id) !== replica) {
-      this.shadowSoon(id)
-      return
-    }
-    const mismatch = shadowDiff(bridge, raw.view)
-    const stats = this.shadow.get(id) ?? { compared: 0, mismatched: 0 }
-    this.shadow.set(id, stats)
-    stats.compared++
-    if (!mismatch) return
-    stats.mismatched++
-    stats.last = mismatch.kind === 'row' ? `row ${mismatch.row}` : mismatch.kind
-    const now = this.now()
-    if (stats.loggedAt !== undefined && now - stats.loggedAt < SHADOW_LOG_MS) return
-    stats.loggedAt = now
-    // Kinds and rows only: never screen contents. Copy mode and tmux messages show on the bridge only.
-    this.options.log?.info('Terminal shadow replica differs from the bridge screen', {
-      sessionId: id, mismatch: stats.last, compared: stats.compared, mismatched: stats.mismatched, replica: { ...replica.stats },
-    })
-  }
-  private async stopScreen(id: string): Promise<void> {
-    const screen = this.screens.get(id)
-    this.screens.delete(id)
+  private async detach(id: string): Promise<void> {
+    this.attached.delete(id)
     await this.driver.detach(id)
-    if (screen) { await screen.drain(); screen.close() }
-    // After the drain: a chunk still being parsed finds no screen and records nothing.
-    // A new attachment made meanwhile keeps its own.
-    if (this.screens.has(id)) return
-    clearTimeout(this.shadowTimers.get(id))
-    this.shadowTimers.delete(id)
-    this.shadow.delete(id)
-    this.bridgeChunks.delete(id)
-  }
-  private ensureScreen(id: string, principal: Principal): Promise<Screen> {
-    return this.run(async () => {
-      const session = this.get(id, principal)
-      await this.ensureAttached(session)
-      return this.screens.get(id)!
-    })
   }
   private async ensureAttached(session: Session): Promise<void> {
     if (session.state !== 'running') throw new TerminalError('Live terminal screen unavailable', 503)
-    // Each path judges by its own source (spec D13 "Two paths"). The raw path's is the replica alone: its
-    // control client closed or its replica ended (a failed reseed) is a loss, recovered by attaching again;
-    // a failed legacy bridge (its queue overflows in a flood) never costs a live replica, and is not
-    // repaired from here (the bridge goes with T38b).
-    const lost = session.rawPath
-      ? !this.replicaLive(session.id)
-      : !this.driver.connected(session.id) || this.screens.get(session.id)?.failed || !this.screens.has(session.id)
-    if (lost) {
-      await this.stopScreen(session.id)
+    // The session's source is its replica (spec D13): its control client closed or its replica ended (a
+    // failed reseed) is a loss, recovered by attaching again.
+    if (!this.replicaLive(session.id)) {
+      await this.detach(session.id)
       if (!await this.driver.alive(session.id)) throw new TerminalError('Terminal process has exited', 409)
       if (!await this.attach(session)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
     }
@@ -360,8 +230,6 @@ export class Sessions {
         createdAt: this.now(), lastActivityAt: this.now(),
         // Its final output is a bundle once it ends (plan T35b); a crash before that leaves this false.
         outputSaved: false,
-        // Its path, for its life (plan T38a).
-        ...(this.options.rawPathForNew?.() ? { rawPath: true as const } : {}),
       }
       if ((input.checkout ?? (input.program === 'shell' ? 'existing' : 'isolated')) === 'isolated') {
         await this.sweepUnlocked()
@@ -394,7 +262,7 @@ export class Sessions {
         authorize(session, principal, this.enabled(), true, session.generation)
         if (!session.agentId || !this.enabled().includes(session.agentId)) throw new TerminalError('No enabled agent is assigned')
         this.dropReservations(id)
-        // The agent drives alone: terminal apps are detached first (Bakin's bridge and control clients stay).
+        // The agent drives alone: terminal apps are detached first (Bakin's control client stays).
         await this.detachNatives(id)
         session.owner = { kind: 'agent', id: session.agentId }
       } else session.owner = principal
@@ -427,9 +295,8 @@ export class Sessions {
     // The Return of a Paste + Enter counts too.
     if (Buffer.byteLength(data) + (options.paste && options.enter ? 1 : 0) > 65536) throw new TerminalError('Input exceeds 64 KiB', 413)
     // No attachment (a resize could not be reconciled): refuse before consuming, so nothing is uncertain.
-    // The raw path's input health is the control client's alone (spec D13 "Two paths").
-    const healthy = session.rawPath ? this.driver.controlConnected?.(id) ?? false : this.driver.connected(id)
-    if (!healthy) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
+    // Input health is the control client's (spec D13).
+    if (!this.driver.connected(id)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
     // Consume the sequence before delivery. A transport failure is never auto-retried.
     session.inputSequence = sequence
     session.lastActivityAt = this.now()
@@ -462,8 +329,7 @@ export class Sessions {
     })
   }
   /**
-   * tmux first (the source of truth), then the bridge PTY, the headless
-   * screen and the record. If tmux refuses, read back the window it actually
+   * tmux first (the source of truth), then the record. If tmux refuses, read back the window it actually
    * has and make everything else match. Runs inside the queue, so input
    * waits until the representations agree. When they cannot be made to
    * agree (tmux unreachable, the record unwritable), the attachment is
@@ -481,14 +347,13 @@ export class Sessions {
       this.adoptSize(session, size)
       return session
     } catch {
-      await this.stopScreen(session.id)
+      await this.detach(session.id)
       throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
     }
   }
-  /** Make the headless screen and the record match `size` (tmux's window). */
+  /** Make the record match `size` (tmux's window). */
   private adoptSize(session: Session, size: { cols: number; rows: number }): void {
     if (size.cols !== session.cols || size.rows !== session.rows) {
-      this.screens.get(session.id)?.resize(size.cols, size.rows)
       session.cols = size.cols
       session.rows = size.rows
       session.sizeRevision++
@@ -561,15 +426,10 @@ export class Sessions {
     })
     await admitted
   }
-  /** Whether this session's viewers take the raw path (lib/socket.ts). */
-  rawPath(id: string): boolean {
-    const session = this.store.sessions().find((entry) => entry.id === id)
-    return session?.rawPath === true
-  }
-  /** The session's replica while attached (the raw path's source). */
+  /** The session's replica while attached. */
   replica(id: string): RawSource | undefined { return this.driver.replica?.(id) }
   private replicaLive(id: string): boolean {
-    return (this.driver.controlConnected?.(id) ?? false) && Boolean(this.driver.replica?.(id))
+    return this.driver.connected(id) && Boolean(this.driver.replica?.(id))
   }
   /**
    * A raw join's first step: the session attached, its replica live (one lost is rebuilt from tmux: a
@@ -779,7 +639,7 @@ export class Sessions {
         if (await this.driver.alive(id).catch(() => true) && this.store.hasBundle(id)) this.store.discardProvisionalBundle(id)
         throw error
       }
-      await this.stopScreen(id)
+      await this.detach(id)
       this.forgetNatives(id)
       session.state = 'completed'
       session.completedAt = this.now()
@@ -814,7 +674,7 @@ export class Sessions {
     if (this.store.session(id)?.outputSaved) return
     let evicted: string[] = []
     try {
-      const cut = await this.driver.finalCut?.(id, { boundary: this.driver.controlConnected?.(id) ?? false, timeoutMs: FINAL_CUT_MS })
+      const cut = await this.driver.finalCut?.(id, { boundary: this.driver.connected(id), timeoutMs: FINAL_CUT_MS })
       if (cut) ({ evicted } = await this.store.saveBundle(id, makeBundle(cut, this.fidelity(id), this.now())))
       else this.markNotSaved(id)
     } catch (error) {
@@ -827,39 +687,43 @@ export class Sessions {
       if (session) notify(this.sessionListeners.get(changed), (listener) => listener(session))
     }
   }
-  async screen(id: string, principal: Principal): Promise<{ session: Session; data: string; cursor: number }> {
-    const screen = await this.ensureScreen(id, principal)
-    const snapshot = await screen.capture(() => ({ data: screen.serialize(), cursor: this.store.output(id, Number.MAX_SAFE_INTEGER).cursor }))
-    const current = this.get(id, principal)
-    return { session: current, ...snapshot }
-  }
   /**
-   * The visible pane as text, with the grid it was read at (captured
-   * together). On the raw path, all of it from the replica in one step: its
-   * screen, its dimensions and its size revision (spec D3, plan T34a).
+   * The visible pane as text, with the grid it was read at — all of it from
+   * the replica in one step: its screen, its dimensions and its size
+   * revision (spec D3, plan T34a).
    */
   async readScreen(id: string, principal: Principal): Promise<{ screen: string; cols: number; rows: number; sizeRevision: number }> {
-    const screen = await this.ensureScreen(id, principal)
-    if (this.rawPath(id)) {
-      const replica = this.driver.replica?.(id)
-      const view = await replica?.read((terminal) => ({ screen: visibleText(terminal), cols: terminal.cols, rows: terminal.rows, sizeRevision: replica.sizeRevision }))
-      if (!view) throw new TerminalError('Terminal output is not ready yet; retry', 503)
-      return view
-    }
-    return screen.capture(() => {
-      const session = this.get(id, principal)
-      return { screen: screen.text(), cols: session.cols, rows: session.rows, sizeRevision: session.sizeRevision }
+    const replica = await this.run(async () => {
+      await this.ensureAttached(this.get(id, principal))
+      return this.driver.replica?.(id)
     })
+    const view = await replica?.read((terminal) => ({ screen: visibleText(terminal), cols: terminal.cols, rows: terminal.rows, sizeRevision: replica.sizeRevision }))
+    if (!view) throw new TerminalError('Terminal output is not ready yet; retry', 503)
+    return view
   }
-  /** One bounded page of stored output after `cursor`, as bytes (at least one stored chunk, else at most `limit` bytes). */
-  outputPage(id: string, principal: Principal, cursor: number, limit?: number): { session: Session; cursor: number; data: Buffer; truncated: boolean } {
+  /**
+   * The session's text, history and screen, as plain lines (the agent tool's
+   * `output`): the replica's while it runs, its saved final picture once it
+   * ended. `lines` keeps the last that many.
+   */
+  async outputText(id: string, principal: Principal, lines?: number): Promise<{ session: Session; text: string; lines: number; truncated: boolean }> {
     const session = this.get(id, principal)
-    if (session.state === 'running' && (!this.driver.connected(id) || this.screens.get(id)?.failed)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
-    return { session, ...this.store.output(id, cursor, limit) }
-  }
-  output(id: string, principal: Principal, cursor: number) {
-    const page = this.outputPage(id, principal, cursor)
-    return { ...page, data: page.data.toString('base64') }
+    let read: { text: string; lines: number } | undefined
+    if (session.state === 'running') {
+      const replica = await this.run(async () => {
+        await this.ensureAttached(this.get(id, principal))
+        return this.driver.replica?.(id)
+      })
+      read = await replica?.read((terminal) => bufferText(terminal.buffer.active))
+      if (!read) throw new TerminalError('Terminal output is not ready yet; retry', 503)
+    } else {
+      const bundle = await this.store.bundle(id)
+      if (!bundle) throw new TerminalError(session.historyDeleted ? 'This session\'s output was deleted' : 'This session ended without its output being saved', 404)
+      read = await bundleText(bundle)
+    }
+    const all = read.text ? read.text.split('\n') : []
+    const kept = lines !== undefined && all.length > lines ? all.slice(-lines) : all
+    return { session: this.get(id, principal), text: kept.join('\n'), lines: kept.length, truncated: kept.length < all.length }
   }
   deleteHistory(id: string, principal: Principal): Promise<void> {
     return this.run(() => this.deleteHistoryUnlocked(id, principal))
@@ -868,8 +732,8 @@ export class Sessions {
     if (principal.kind !== 'human') throw new TerminalError('Only the human can delete history', 403)
     const session = this.get(id, principal)
     if (session.state !== 'completed') throw new TerminalError('Complete the session before deleting history')
-    await this.stopScreen(id)
-    this.store.deleteOutput(id)
+    await this.detach(id)
+    this.store.deleteBundle(id)
     session.historyDeleted = true
     this.save(session)
   }
@@ -885,7 +749,7 @@ export class Sessions {
       if (session.worktreePath) {
         await this.options.release({ sessionId: session.id, worktreePath: session.worktreePath, teardown: true }).catch(() => undefined)
       }
-      await this.stopScreen(id)
+      await this.detach(id)
       this.forgetNatives(id)
       this.driver.forget?.(id)
       this.store.deleteSession(id)
@@ -911,7 +775,7 @@ export class Sessions {
         // Not while its final save is in flight (sweep() tries a failed one again first).
         if (session.state === 'exited' && !this.ending.has(session.id)) {
           await this.driver.terminate(session.id)
-          await this.stopScreen(session.id)
+          await this.detach(session.id)
           session.state = 'completed'
           session.completedAt = this.now()
           this.save(session)
@@ -1016,8 +880,6 @@ export class Sessions {
   async shutdown(): Promise<void> {
     for (const timer of this.timers) clearTimeout(timer)
     this.timers.clear()
-    for (const timer of this.shadowTimers.values()) clearTimeout(timer)
-    this.shadowTimers.clear()
     for (const token of [...this.reservations.keys()]) this.dropReservation(token, 'Terminal is shutting down')
     // Lifecycle work outside the queue settles before replicas and the store go, until none is left (one
     // can start another): a coalesced refresh (and the one more it owes), every finish (save, then kill),
@@ -1037,9 +899,8 @@ export class Sessions {
     // One last refresh for deaths heard meanwhile (bounded: hints from here on are not taken).
     if (this.owedAtStop) { await this.trackRefresh().catch(() => undefined); await drain() }
     this.closed = true
+    this.attached.clear()
     await this.driver.detach()
-    for (const screen of this.screens.values()) { await screen.drain(); screen.close() }
-    this.screens.clear()
     this.store.close()
   }
 }

@@ -1,5 +1,5 @@
 /**
- * The browser side of the raw path's picture (spec D13, plan T33; the
+ * The browser side of a viewer's picture (spec D13, plan T33; the
  * server side is lib/raw-display.ts): a `join` or `rebase` header starts a
  * picture in a fresh terminal, its checkpoint text (`bytes` of UTF-8 in
  * binary frames, written as they come), then the side state, the tail,

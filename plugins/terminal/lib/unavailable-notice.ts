@@ -1,5 +1,5 @@
 /**
- * What an ended raw-path session shows instead of its output, by why there
+ * What an ended session shows instead of its output, by why there
  * is none (plan T35b). Pure and browser-safe. (Recoveries of a live view are
  * quiet: the persistent recovery notice was removed at acceptance, Mark
  * 2026-10-29 — it was noise; the session's fidelity is still kept.)

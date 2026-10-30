@@ -43,15 +43,13 @@ export interface Session {
   cleanupReason?: string
   historyDeleted?: boolean
   /**
-   * The raw path's final output (plan T35b): false from the session's start
-   * until its bundle is saved, true after. Absent on sessions from before the
-   * raw path, which show their legacy retained output.
+   * Its final picture (plan T35b): false from the session's start until its
+   * bundle is saved, true after. Absent on sessions ended before bundles
+   * existed, which have no saved picture.
    */
   outputSaved?: boolean
   /** Its saved bundle was removed to keep every bundle within the store's limit (oldest first). */
   outputEvicted?: boolean
-  /** Its viewers take the raw path (spec D13), set at creation from the setting and kept for its life (plan T38a). */
-  rawPath?: true
 }
 export interface TerminalSettings {
   enabledAgents?: Array<{ id: string }>
@@ -60,12 +58,6 @@ export interface TerminalSettings {
   maxSessions?: number
   maxWorktrees?: number
   idleDays?: number
-  /**
-   * Viewers render the server replica's stream (spec D13's raw path, plan
-   * T38a) instead of the bridge; off by default, the bridge is the
-   * rollback path until T38b.
-   */
-  rawPath?: boolean
 }
 export function terminalSettings(raw: Record<string, unknown>): TerminalSettings {
   const bounded = (value: unknown, fallback: number, max: number) => Number.isInteger(value) && (value as number) >= 1 && (value as number) <= max ? (value as number) : fallback
@@ -83,7 +75,6 @@ export function terminalSettings(raw: Record<string, unknown>): TerminalSettings
     maxSessions: bounded(raw.maxSessions, 10, 100),
     maxWorktrees: bounded(raw.maxWorktrees, 10, 100),
     idleDays: bounded(raw.idleDays, 30, 365),
-    rawPath: raw.rawPath === true,
   }
 }
 /** The eight characters after `terminal-`: enough to tell sessions apart, short enough to type. */

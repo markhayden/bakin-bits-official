@@ -15,7 +15,6 @@ import { terminalBytes } from '../../lib/memory'
 import { BATCH_BYTES, MAX_QUEUED_BYTES, type LogEvent } from '../../lib/output-log'
 import { CHECKPOINT_BYTES, MAX_TAIL_BYTES, Replica } from '../../lib/replica'
 import { seedCommands, seedFrom } from '../../lib/reseed'
-import { Screen } from '../../lib/screen'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from '../../lib/terminal-profile'
 import { drain, type Term } from '../../lib/terminal-state'
 
@@ -120,17 +119,14 @@ async function measure(shape: Shape): Promise<Measurement> {
     return { measured: heap() - before, estimate: drain(r.retainedSteps()) }
   }
   if (shape === 'sessions') {
-    // Three live sessions at once (replica and bridge Screen each): they add up.
+    // Three live sessions at once (a replica each): they add up.
     const text = lines(coloured)
-    const bytes = encode(text)
     const before = heap()
     let estimate = 0
     for (let n = 0; n < 3; n++) {
       const r = await seeded(text)
-      const screen = new Screen(120, 40)
-      for (let at = 0; at < bytes.length; at += BATCH_BYTES) await screen.write(bytes.subarray(at, at + BATCH_BYTES))
-      keep.push(r, screen)
-      estimate += drain(r.retainedSteps()) + drain(screen.retainedSteps())
+      keep.push(r)
+      estimate += drain(r.retainedSteps())
     }
     return { measured: heap() - before, estimate }
   }
@@ -142,11 +138,8 @@ async function measure(shape: Shape): Promise<Measurement> {
   const r = await seeded(text)
   keep.push(r)
   if (shape === 'replica') return { measured: heap() - before, estimate: drain(r.retainedSteps()) }
-  // R1 shadow mode: the bridge Screen holds the same session and the log queue is full.
-  const screen = new Screen(120, 40)
-  const bytes = encode(text)
-  for (let at = 0; at < bytes.length; at += BATCH_BYTES) await screen.write(bytes.subarray(at, at + BATCH_BYTES))
-  keep.push(screen, filler(MAX_QUEUED_BYTES))
+  // The log queue is full.
+  keep.push(filler(MAX_QUEUED_BYTES))
   if (shape === 'checkpoint-peak') {
     // The live high-water: a tail just short of an attempt and three joins
     // of it held, then one checkpoint attempt (serialize, verify in a scratch
@@ -166,7 +159,7 @@ async function measure(shape: Shape): Promise<Measurement> {
     if (!result || 'rejected' in result) throw new Error(`expected an accepted checkpoint, got ${JSON.stringify(result)}`)
     keep.push(result)
     high = Math.max(high, heap())
-    return { measured: heap() - before, estimate: drain(r.retainedSteps()) + drain(screen.retainedSteps()) + MAX_QUEUED_BYTES, peak: high - before + MAX_TAIL_BYTES - r.tailSize }
+    return { measured: heap() - before, estimate: drain(r.retainedSteps()) + MAX_QUEUED_BYTES, peak: high - before + MAX_TAIL_BYTES - r.tailSize }
   }
   if (shape === 'checkpoint-rss') {
     // What the machine pays for the same attempt run by the replica itself
@@ -182,7 +175,7 @@ async function measure(shape: Shape): Promise<Measurement> {
     })
     if (r.stats.accepted !== 1) throw new Error(`expected one accepted checkpoint, got ${JSON.stringify(r.stats)}`)
     keep.push(joins)
-    return { measured: heap() - before, estimate: drain(r.retainedSteps()) + drain(screen.retainedSteps()) + MAX_QUEUED_BYTES, rss }
+    return { measured: heap() - before, estimate: drain(r.retainedSteps()) + MAX_QUEUED_BYTES, rss }
   }
   throw new Error(`unknown shape ${shape}`)
 }

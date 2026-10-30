@@ -1,8 +1,7 @@
 /**
- * Pastes from viewers (spec D9 item 2). A viewer cannot know whether the
- * program enabled bracketed paste: on the bridge path its terminal's mode
- * is tmux's client mode, which tmux turns on for every client it attaches
- * (tty_start) whatever the pane wants. So a viewer marks a paste as one
+ * Pastes from viewers (spec D9 item 2). A viewer does not decide whether
+ * the program enabled bracketed paste (tmux knows the pane's mode). So a
+ * viewer marks a paste as one
  * (the socket's `paste` input), and the server hands the text to tmux as a
  * paste (paste-buffer -p), which adds the markers only if the program
  * itself enabled bracketed paste. Plain input is never reinterpreted.

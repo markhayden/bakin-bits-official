@@ -2,6 +2,7 @@ import { expect } from 'bun:test'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { browserTest, launchChromium } from './browser'
+import { joinFrames } from './fixture-socket'
 
 browserTest('HTTP browsers load terminals and empty and error states own the full workspace', async () => {
   const browser = await launchChromium()
@@ -60,7 +61,7 @@ browserTest('a screen that does not size the session fits the font to its width 
     await page.routeWebSocket('**/api/plugins/terminal/socket**', (socket) => socket.onMessage((message) => {
       const frame = JSON.parse(String(message)) as { type: string }
       if (frame.type === 'resize') resizes++
-      if (frame.type === 'hello') socket.send(JSON.stringify({ type: 'sync', epoch: 1, cursor: 0, session, snapshot: btoa('$ agent work\r\n') }))
+      if (frame.type === 'hello') for (const sent of joinFrames(session, '$ agent work\r\n')) socket.send(typeof sent === 'string' ? sent : Buffer.from(sent))
     }))
     await page.goto(new URL('/terminal/agent-view', process.env.TERMINAL_PREVIEW_URL!).href)
     await page.locator('.terminal-xterm .xterm').waitFor()
@@ -85,7 +86,7 @@ browserTest('immersive terminals use the full workspace and retain compact navig
   try {
     await page.route('**/api/plugins/terminal/sessions', (route) => route.fulfill({ json: { serviceReady: true, sessions: [session] } }))
     await page.routeWebSocket('**/api/plugins/terminal/socket**', (socket) => socket.onMessage((message) => {
-      if ((JSON.parse(String(message)) as { type: string }).type === 'hello') socket.send(JSON.stringify({ type: 'sync', epoch: 1, cursor: 0, session, snapshot: btoa('$ git status\r\nWorking tree clean\r\n') }))
+      if ((JSON.parse(String(message)) as { type: string }).type === 'hello') for (const sent of joinFrames(session, '$ git status\r\nWorking tree clean\r\n')) socket.send(typeof sent === 'string' ? sent : Buffer.from(sent))
     }))
     await page.goto(process.env.TERMINAL_PREVIEW_URL!)
     await page.getByRole('table', { name: 'Terminal sessions', exact: true }).waitFor()

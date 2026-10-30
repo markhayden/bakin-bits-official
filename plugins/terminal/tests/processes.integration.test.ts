@@ -139,8 +139,8 @@ processTest('control client: command round trip, quoting, subscriptions and exit
   }
 }, 20000)
 
-processTest('bridge: titles the session, cancels copy-mode before input, and sizes the window only on a claim', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-bridge-'))
+processTest('the control client titles the session, cancels copy-mode before input, and sizes the window only on a claim', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-control-'))
   const service = new TerminalService(root)
   const config = join(root, 'tmux.conf')
   await Bun.write(config, (await import('../lib/tmux-config')).tmuxConfig())
@@ -150,14 +150,14 @@ processTest('bridge: titles the session, cancels copy-mode before input, and siz
   let manager: Sessions | undefined
   const wait = async (predicate: () => Promise<boolean>) => {
     for (let attempt = 0; attempt < 100; attempt++) { if (await predicate()) return; await Bun.sleep(50) }
-    throw new Error('Bridge probe timed out')
+    throw new Error('Control probe timed out')
   }
   try {
     await wait(() => service.ready())
     manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProcesses(service), options)
     const session = await manager.create({ title: 'Bridge "probe"', cwd: root }, human)
     expect((await service.command(['display-message', '-p', '-t', session.id, '#{@bakin_title}'])).trim()).toBe('Bridge "probe"')
-    // The bridge and control clients never size the window.
+    // The control client never sizes the window.
     expect((await service.command(['display-message', '-p', '-t', session.id, '#{window_width}x#{window_height}'])).trim()).toBe(`${session.cols}x${session.rows}`)
     // Input cancels a pane left in copy mode, then reaches the shell.
     await service.command(['copy-mode', '-t', session.id])
@@ -213,7 +213,7 @@ processTest('terminal apps: an unreserved attach is detached; an admitted one si
     await raw.exited
     expect(await attachedPids()).not.toContain(raw.pid)
     expect(manager.get(session.id, human).cols).toBe(200)
-    // So is a foreign control-mode client: only Bakin's own bridge and control clients are exempt.
+    // So is a foreign control-mode client: only Bakin's own control client is exempt.
     const foreign = Bun.spawn([service.tmux!, '-S', service.socket, '-C', 'attach-session', '-t', session.id], { env: terminalEnvironment(), stdin: 'pipe', stdout: 'ignore', stderr: 'ignore' })
     apps.push(foreign)
     await wait(async () => !(await attachedPids()).includes(foreign.pid), 'foreign control client detached')

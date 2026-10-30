@@ -136,11 +136,6 @@ test('agents cannot resize, screen reads carry the grid, and the operator can sa
 })
 
 
-test('the new viewer (plan T38a) is a declared setting, off by default', () => {
-  const field = plugin.settingsSchema!.fields.find((entry) => entry.key === 'rawPath')
-  expect(field).toMatchObject({ type: 'boolean', default: false })
-})
-
 test('every API route the plugin registers is declared in its manifest, and every declared one exists (the host refuses an undeclared route at activation)', async () => {
   const manifest = await Bun.file(join(import.meta.dir, '../bakin-plugin.json')).json() as { contributes: { apiRoutes: Array<{ method: string; path: string }> } }
   const key = (route: { method: string; path: string }) => `${route.method.toUpperCase()} ${route.path}`

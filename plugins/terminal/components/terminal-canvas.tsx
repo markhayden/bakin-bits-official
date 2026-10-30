@@ -61,7 +61,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string, paste?: boolean): void; onClaim(data: string): void; onSession(session: Session): void; onPresence(presence: Presence): void; onResult(result: InputResult): void
   /** The renderer hit a parser exception: this screen has stopped and must be rebuilt. */
   onRendererFailed(): void
-  /** An ended raw-path session has no output to show. */
+  /** An ended session has no output to show. */
   onUnavailable?(reason: UnavailableReason): void
 }) {
   const pane = useRef<HTMLDivElement>(null)
@@ -83,7 +83,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
    */
   const [offer, setOffer] = useState<{ text: string; rev: number }>()
   const offerRev = useRef(0)
-  /** Whether a picture has been shown (a sync applied, or a raw picture gone live): before it the terminal is merely empty. */
+  /** Whether a picture has been shown: before it the terminal is merely empty. */
   const shown = useRef(false)
   const offerPanel = useRef<HTMLDivElement>(null)
   const focusOffer = useRef(false)
@@ -101,8 +101,6 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   const socket = useRef<TerminalSocketClient | null>(null)
   const sentSize = useRef('')
   const ready = useRef(false)
-  /** This connection takes the raw path (a join, not a sync). */
-  const rawPath = useRef(false)
   // Re-plan the sizing screen's grid (pane changes and acknowledged sizes both ask).
   const replan = useRef<() => void>(() => {})
   /** Stops a touch fling and drops the scroll remainder (a deliberate return to Live). */
@@ -161,7 +159,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     // Never resend a size within one claim; the session update the server pushes resizes xterm.
     const key = `${callbacks.current.sizeEpoch} ${cols}x${rows}`
     if ((term.cols === cols && term.rows === rows) || sentSize.current === key) return
-    // Only a size that actually left counts; a disconnected one is retried after the next sync.
+    // Only a size that actually left counts; a disconnected one is retried after the next picture.
     if (socket.current?.resize(callbacks.current.sizeEpoch, cols, rows)) sentSize.current = key
   }
   function resizeToViewport() {
@@ -237,22 +235,21 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
      * A terminal and everything that belongs to it: the shared profile, the
      * parser guard, the cursor tracker and its own listeners, made before it
      * is shown; `attach` opens it in the pane with its addons and renderer.
-     * The bridge path keeps one per connection. The raw path (spec D13)
-     * replays each picture into a fresh one (components/raw-picture.ts) and
-     * shows it only at the picture's barrier: the one shown until then stays,
-     * and the screen-reader rows of the new one start from the whole picture.
+     * Each picture (spec D13) replays into a fresh one
+     * (components/raw-picture.ts), shown only at the picture's barrier: the
+     * one shown until then stays, and the screen-reader rows of the new one
+     * start from the whole picture.
      */
     const create = (cols: number, rows: number) => {
       const term = new Terminal({ cols, rows, ...TERMINAL_OPTIONS, fontSize: terminal.current?.options.fontSize ?? callbacks.current.zoom ?? BASE_FONT, screenReaderMode: true, convertEol: false, theme: { background }, linkHandler: LINK_HANDLER })
-      // Show/hide cursor as the output sets it; a sync's snapshot ends with it too.
+      // Show/hide cursor as the output sets it (a picture's side state restores it too).
       const cursor = trackCursorVisibility(term)
       // The shared profile (spec D13): queries are tmux's to answer (a viewer's
       // replies would be typed into the pane), links and clipboard are policed,
       // and the xterm 6.0.0 workarounds apply.
       // OSC 52: the latest offer replaces any earlier one (one pending per session); only a tap copies it.
-      // The raw path only: its replays are silent (setLive), the bridge path's syncs and ended-session output are not.
+      // Replays are silent (setLive): only live output offers.
       const profile = applyTerminalProfile(term, { clipboardOffer: (text) => {
-        if (!rawPath.current) return
         // A keyboard user on the offer being replaced moves to the new one (its button is a new element).
         focusOffer.current = Boolean(offerPanel.current?.contains(document.activeElement))
         setOffer({ text, rev: ++offerRev.current })
@@ -260,7 +257,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       // Shown, or replaying to be shown next (a failure of either counts).
       let active = true
       // A parser exception would wedge every later write: the screen is
-      // rebuilt (a fresh connection and sync) instead. Failed, it stops: no
+      // rebuilt (a fresh connection and picture) instead. Failed, it stops: no
       // input, and its socket closes (a failed screen never reconnects
       // itself; only a rebuild does).
       const parser = guardParser(term, () => {
@@ -338,10 +335,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     // A fresh terminal (a mount or Reconnect terminal) has shown nothing yet.
     shown.current = false
     bundle.attach()
-    /** The raw path's picture being replayed, not shown yet. */
+    /** The picture being replayed, not shown yet. */
     let pending: ReturnType<typeof create> | undefined
-    // The raw path sizes this screen from the picture and its ordered layouts, never from session updates.
-    rawPath.current = false
     inputHandle.current = {
       focus: () => bundle.term.focus(),
       blur: () => bundle.term.blur(),
@@ -395,28 +390,9 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
     const client = new TerminalSocketClient({
       url: url.href, clientId: clientId(),
-      onSync: (sync) => {
-        // A sync is a complete picture: the snapshot, then output after its cursor.
-        // Shown once the snapshot is parsed (an empty one, an ended session's, waits for its output) — by the terminal
-        // on screen: a disposed one's queued write can still call back after Reconnect terminal.
-        shown.current = false
-        rawPath.current = false
-        bundle.term.reset()
-        if (sync.snapshot) {
-          const term = bundle.term
-          term.write(Uint8Array.from(atob(sync.snapshot), (value) => value.charCodeAt(0)), () => { if (terminal.current === term) shown.current = true })
-        }
-        callbacks.current.onSession(sync.session)
-        ready.current = sync.session.state !== 'completed'
-        // Every sync re-fits: the server may hold any size by now.
-        sentSize.current = ''
-        requestAnimationFrame(applyView)
-      },
-      // A failed screen stops acknowledging: its output is discarded, not shown.
-      onOutput: (bytes, done) => { const { term, parser } = bundle; term.write(bytes, () => { if (terminal.current === term) shown.current = true; if (!parser.failed) done() }) },
-      // The raw path: every picture in a fresh terminal at its own size (keyboard focus kept).
+      // Every picture in a fresh terminal at its own size (keyboard focus kept); this screen is sized
+      // from the picture and its ordered layouts, never from session updates.
       onPicture: (header) => {
-        rawPath.current = true
         pending?.dispose()
         const next = create(header.checkpoint.cols, header.checkpoint.rows)
         pending = next
@@ -480,7 +456,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
         if (next !== 'Connected') { ready.current = false; reset() }
         else {
           ready.current = true
-          // Ready (the sync, or the first applied replay): fit again; a size asked for before was refused while joining.
+          // Ready (the first applied replay): fit again; a size asked for before was refused while joining.
           sentSize.current = ''
           requestAnimationFrame(applyView)
         }
@@ -491,7 +467,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     client.connect()
     // Phones suspend backgrounded pages and may leave a socket that looks open
     // but is dead: after a real absence (or a network change) take a fresh
-    // connection and sync; otherwise just run any pending reconnect now.
+    // connection and picture; otherwise just run any pending reconnect now.
     let hiddenAt = 0
     const visibility = () => {
       if (document.hidden) { hiddenAt = Date.now(); return }
@@ -527,8 +503,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   // A new grid: other screens refit their font to it; the authority re-plans
   // against its pane (which may have moved again before this answer came).
   useEffect(() => {
-    // The raw path's grid follows its picture and layouts, in order (components/raw-picture.ts).
-    if (!rawPath.current) terminal.current?.resize(session.cols, session.rows)
+    // The grid follows its picture and layouts, in order (components/raw-picture.ts).
     if (callbacks.current.authority) replan.current()
     else requestAnimationFrame(applyView)
   }, [session.cols, session.rows])
@@ -578,7 +553,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
      */
     const programScrolls = () => {
       const term = terminal.current
-      if (!term || !rawPath.current || term.buffer.active.type !== 'alternate') return false
+      if (!term || term.buffer.active.type !== 'alternate') return false
       // Only modes that report the wheel (X10 has none: xterm would send arrow keys), and only SGR reports:
       // the viewer's input carries text, and an older encoding's coordinates are raw bytes.
       const mouse = (term as unknown as { _core: { coreMouseService: { activeProtocol: string; activeEncoding: string } } })._core.coreMouseService

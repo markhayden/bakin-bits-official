@@ -1,5 +1,5 @@
 /**
- * The digest a raw-path viewer and the server's replica compare at the same
+ * The digest a viewer and the server's replica compare at the same
  * `{epoch, seq}` (spec D13 digest safety net, plan T37): the visible screen
  * (every cell's characters, width and attributes, and each row's wrap), the
  * cursor (position, visibility, style), the active buffer, mouse reporting
