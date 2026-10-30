@@ -21,7 +21,7 @@
     "zod": "~4.6.5"
   },
   "peerDependencies": {
-    "@makinbakin/sdk": ">=0.0.1-rc.42",
+    "@makinbakin/sdk": ">=0.0.1-rc.45",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

@@ -8,8 +8,9 @@ and normal permission prompts. Bakin does not disable CLI safety controls.
 ## Development Status
 
 This is a macOS-first implementation. It requires Bakin and `@makinbakin/sdk`
-`>=0.0.1-rc.42`: the client bundle is built for the host-provided zod contract
-(`react19-sdk-focused-v2`, rc.42), and rc.40 added consent, verified downloads, and repair for
+`>=0.0.1-rc.45`: it uses the host's full screen (`useFullscreen`, rc.45); the
+client bundle is built for the host-provided zod contract (`react19-sdk-focused-v2`,
+rc.42), and rc.40 added consent, verified downloads, and repair for
 plugin-managed binaries.
 That release includes verified invocation context, local plugin storage, Git
 session-worktree hooks, and required uninstall preflight. The version used to
