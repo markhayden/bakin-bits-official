@@ -39,7 +39,7 @@ const route = (path: string, method: 'GET' | 'POST', summary: string, handler: (
 })
 
 export default definePlugin({
-  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.22',
+  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.23',
   routes: [
     route('/options', 'GET', 'Get terminal form defaults and available agents and tasks', async (request) => {
       const principal = human(request)

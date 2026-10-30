@@ -68,6 +68,13 @@ export function reorderBySearchResults(items) {
   return items
 }
 
+/** Host full screen (stub): inactive, no browser full screen; enter/exit do nothing. */
+export function useFullscreen() {
+  const override = hookOverride('useFullscreen')
+  if (override) return override()
+  return { active: false, browser: false, enter() {}, exit() {}, toggle() {} }
+}
+
 export function useDebug() {
   const override = hookOverride('useDebug')
   if (override) return override()

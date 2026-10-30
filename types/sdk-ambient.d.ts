@@ -1870,6 +1870,8 @@ declare module '@makinbakin/sdk/hooks' {
   export function useAgentIds(): string[]
   export function useMainAgentId(): string | null
   export function useDebug(): [boolean]
+  export interface FullscreenControls { active: boolean; browser: boolean; enter(): void; exit(): void; toggle(): void }
+  export function useFullscreen(): FullscreenControls
   export function useNotificationChannels(): NotificationChannel[]
   export function getChannelLabel(channelId: string, channels?: NotificationChannel[]): string
   export function toast(message: string, type?: 'success' | 'error' | 'info' | 'warning'): void
