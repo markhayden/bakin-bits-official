@@ -1248,3 +1248,28 @@ touchTest('native scrolling on a phone (nested, as iOS): in a full-screen progra
     await browser.close()
   }
 }, 60_000)
+
+rawTest('full screen: the terminal\'s page fills the display (Bakin\'s sidebar and top bar gone) and the terminal grows into it; Exit full screen comes back', async () => {
+  const browser = await launchChromium()
+  const client = 'raw-browser-fullscreen-01'
+  const page = await browser.newPage({ viewport })
+  const { id } = await createSession(page, client)
+  try {
+    await open(page, id)
+    const before = (await page.locator('.terminal-pane').boundingBox())!
+    await page.getByRole('button', { name: 'Full screen' }).click()
+    await page.waitForFunction(() => document.fullscreenElement?.getAttribute('data-archetype') === 'workspace', null, { timeout: 5_000 })
+    // Everything outside the terminal's page is outside the full-screen element.
+    expect(await page.evaluate(() => [...document.querySelectorAll('nav, aside')].every((element) => !document.fullscreenElement!.contains(element) || element.closest('[data-archetype="workspace"]') !== null))).toBe(true)
+    await page.waitForTimeout(500)
+    const during = (await page.locator('.terminal-pane').boundingBox())!
+    expect(during.height).toBeGreaterThanOrEqual(before.height)
+    await page.screenshot({ path: join(import.meta.dir, '../test-results/raw/fullscreen-desktop.png') })
+    await page.getByRole('button', { name: 'Exit full screen' }).click()
+    await page.waitForFunction(() => document.fullscreenElement === null, null, { timeout: 5_000 })
+    await page.getByRole('button', { name: 'Full screen' }).waitFor()
+  } finally {
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 60_000)

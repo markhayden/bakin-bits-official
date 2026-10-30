@@ -5,7 +5,7 @@ import { Alert, AlertDescription, Badge, Banner, Button, Select, SelectContent, 
 import { PluginLink, useQueryState, useRouter } from '@makinbakin/sdk/navigation'
 import { formatAge } from '@makinbakin/sdk/utils'
 import { toast } from '@makinbakin/sdk/hooks'
-import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Terminal, RotateCw, Keyboard, Ruler, AppWindow, ClipboardCopy } from 'lucide-react'
+import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Terminal, RotateCw, Keyboard, Ruler, AppWindow, ClipboardCopy, Expand, Shrink } from 'lucide-react'
 import { attachCommand, shortId, type Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
 import { unavailableNotice } from '../lib/unavailable-notice'
@@ -23,6 +23,7 @@ import { estimateTerminalSize } from './terminal-size'
 import type { InputResult, Presence } from './terminal-socket'
 import { NewSession } from './new-session'
 import { TerminalTool as Tool } from './terminal-tool'
+import { useFullscreen } from './use-fullscreen'
 import { useTerminalAgents } from './use-terminal-agents'
 import { SessionActions, type SessionConfirmation } from './session-actions'
 import './terminal.css'
@@ -47,6 +48,8 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   // Copy text: the terminal's text as it was when the sheet opened.
   const [copying, setCopying] = useState(false)
   const readText = useCallback(() => viewHandle.current?.text(), [])
+  // Full screen: the terminal's whole workspace page (header, terminal, key bar), so the browser's UI and Bakin's chrome go.
+  const fullscreen = useFullscreen(useCallback(() => document.querySelector<HTMLElement>('[data-archetype="workspace"]'), []))
   const [updateError, setUpdateError] = useState('')
   const applyTrigger = useRef<HTMLButtonElement>(null)
   /** Set by a successful update: its trigger goes with the banner, so focus goes to New terminal. */
@@ -367,6 +370,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     description="Restarts Terminal's tmux with the current configuration. Sessions keep working until then."
     action={<Button ref={applyTrigger} size="sm" variant="outline" disabled={busy} onClick={() => { setUpdateError(''); updated.current = false; setUpdating(true) }}>Apply update</Button>} />
   const controls = session && <Inline gap="dense" wrap={false} aria-label="Terminal controls">
+            {fullscreen.supported && <Tool label={fullscreen.active ? 'Exit full screen' : 'Full screen'} description={fullscreen.active ? 'Back to the page (or hold Esc).' : 'Fill the screen with this terminal; hold Esc to leave.'} active={fullscreen.active} onClick={fullscreen.toggle}>{fullscreen.active ? <Shrink size={16} /> : <Expand size={16} />}</Tool>}
             {!ended && !session.historyDeleted && <SizeControl session={session} frozen={presence.sizeFrozen} busy={busy} onMinFont={() => viewHandle.current?.refit()} onFit={() => { if (!viewHandle.current?.fitToDevice()) setError('Size not changed: the terminal is reconnecting.') }} />}
             <Popover>
               <Tool label="Session details" description="View the working directory, agent assignment, and linked work." render={<PopoverTrigger render={<Button size="icon-sm" variant="ghost" aria-label="Session details" />} />}><Info size={16} /></Tool>

@@ -241,3 +241,10 @@
   align-content: start;
   gap: var(--bakin-layout-gap-item);
 }
+
+/* Full screen: the terminal's workspace page fills the display on the canvas colour (no host chrome around it). */
+[data-archetype="workspace"]:fullscreen {
+  background: var(--bakin-color-canvas-default);
+  height: 100dvh;
+  width: 100vw;
+}

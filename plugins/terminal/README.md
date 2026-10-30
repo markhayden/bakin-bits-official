@@ -147,6 +147,12 @@ after its check, a refused copy keeps it to try again, and **×** dismisses it.
 Opening, reloading or reconnecting never brings an old offer back. tmux's own
 copy mode sends its copies to attached terminal apps, not to this viewer.
 
+**Full screen** (the ⤢ button in the session header, where the browser supports
+it — desktop browsers and Android; not an iPhone's Safari) fills the display
+with the terminal: the browser's UI and Bakin's sidebar and top bar go, the
+compact session header and key bar stay. Esc still reaches the terminal (hold
+Esc, or use the button, to leave), where the browser lets a page keep Esc.
+
 To copy terminal text on a phone (the terminal has no touch selection),
 choose Session actions › **Copy text…**: the history and screen open as plain
 text in a sheet, where the system's own long-press selection works, with
