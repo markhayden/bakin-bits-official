@@ -8,10 +8,8 @@ import { toast } from '@makinbakin/sdk/hooks'
 import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Terminal, RotateCw, Keyboard, Ruler, AppWindow, ClipboardCopy } from 'lucide-react'
 import { attachCommand, shortId, type Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
-import { fidelityNotice, unavailableNotice } from '../lib/fidelity-notice'
-import { screenDevice } from './terminal-view'
+import { unavailableNotice } from '../lib/unavailable-notice'
 import type { UnavailableReason } from '../lib/socket'
-import type { Fidelity } from '../lib/raw-display'
 import { api } from './api'
 import { KeyBar } from './key-bar'
 import { lineTail, useCoarsePointer, useEditingSession, useEnterHidesKeyboard } from './editing-session'
@@ -91,9 +89,6 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     lastRendererRebuild.current = Date.now()
     setAttempt((value) => value + 1)
   }, [])
-  // The raw path's fidelity for the open session (server-held: every join restates it, so a reconnect keeps the notice).
-  const [fidelity, setFidelity] = useState<{ sessionId: string; value: Fidelity }>()
-  const fidelityChanged = useCallback((value: Fidelity) => { if (sessionId) setFidelity({ sessionId, value }) }, [sessionId])
   // An ended raw-path session with no output to show: the reason, for the open session only.
   const [unavailable, setUnavailable] = useState<{ sessionId: string; reason: UnavailableReason }>()
   const unavailableChanged = useCallback((reason: UnavailableReason) => { if (sessionId) setUnavailable({ sessionId, reason }) }, [sessionId])
@@ -175,10 +170,6 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const openSession = useRef(sessionId)
   openSession.current = sessionId
   const ended = session?.state === 'exited' || session?.state === 'completed'
-  const notice = fidelity && fidelity.sessionId === sessionId ? fidelityNotice(fidelity.value) : undefined
-  // On a phone the notice stays (it is persistent) but folds to its title: its details would take the terminal's rows.
-  const foldNotice = screenDevice() === 'phone'
-  const [noticeDetails, setNoticeDetails] = useState(false)
   const missing = unavailable && unavailable.sessionId === sessionId ? unavailableNotice(unavailable.reason) : undefined
   // An update applied elsewhere (another tab, Health) leaves nothing to confirm.
   useEffect(() => { if (!serviceUpdateRequired && updating && !busy) setUpdating(false) }, [serviceUpdateRequired, updating, busy])
@@ -501,15 +492,13 @@ function Workspace({ sessionId }: { sessionId?: string }) {
           {feedback}
         </Stack>}
         {state ?? (!session ? <SystemState kind="initial-empty" scope="page" icon={<Terminal size={32} />} title="Terminal not found" description="This session is not available." action={<Button variant="outline" nativeButton={false} render={<PluginLink to="/terminal" />}>Back to terminals</Button>} /> : <>
-          {(!serviceReady || session.cleanupReason || (idleReturn && drivingWithAgent) || notice) && <Stack gap="item" className="shrink-0 p-bakin-4">
-          {notice && <Banner headingLevel={2} tone="attention" announce="polite" title={notice.title} description={!foldNotice || noticeDetails ? notice.description : undefined}
-            action={foldNotice ? <Button size="lg" variant="outline" aria-expanded={noticeDetails} onClick={() => setNoticeDetails((open) => !open)}>{noticeDetails ? 'Hide details' : 'Show details'}</Button> : undefined} />}
+          {(!serviceReady || session.cleanupReason || (idleReturn && drivingWithAgent)) && <Stack gap="item" className="shrink-0 p-bakin-4">
           {!serviceReady && <SystemState kind="error" scope="inline" title="Terminal service unavailable" description="Existing sessions are retained." action={<Button disabled={busy} onClick={() => void setup()}>Set up service</Button>} />}
           {idleReturn && drivingWithAgent && <Alert tone="attention"><AlertDescription><Inline gap="dense" wrap className="items-center justify-between"><span>You've been idle — returning control to {ownerAgentName ?? 'the agent'} shortly.</span><Button size="sm" variant="outline" onClick={markActivity}>Keep driving</Button></Inline></AlertDescription></Alert>}
           {session.cleanupReason && <Alert tone="attention"><AlertDescription>{session.cleanupReason}</AlertDescription></Alert>}
           </Stack>}
           <Separator />
-          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : missing ? <SystemState kind="error" recovery="unavailable" scope="page" title={missing.title} description={missing.description} /> : <TerminalCanvas key={session.id} session={session} writable={writable} offerKeyboard={keyed && editing === 'idle' && Boolean(inputEnabled)} inputEnabled={Boolean(inputEnabled)} inputHandle={inputHandle} viewHandle={viewHandle} onModifiersChange={setModifiers} captureTab={captureTab} attempt={attempt} onStatus={streamChanged} onInput={(data, paste) => input(data, { paste })} onClaim={handleClaim} onSession={update} onPresence={setPresence} onResult={handleResult} onRendererFailed={rendererFailed} onFidelity={fidelityChanged} onUnavailable={unavailableChanged} />}
+          {session.historyDeleted ? <SystemState kind="initial-empty" scope="page" title="Output history deleted" description="Session metadata is retained." /> : missing ? <SystemState kind="error" recovery="unavailable" scope="page" title={missing.title} description={missing.description} /> : <TerminalCanvas key={session.id} session={session} writable={writable} offerKeyboard={keyed && editing === 'idle' && Boolean(inputEnabled)} inputEnabled={Boolean(inputEnabled)} inputHandle={inputHandle} viewHandle={viewHandle} onModifiersChange={setModifiers} captureTab={captureTab} attempt={attempt} onStatus={streamChanged} onInput={(data, paste) => input(data, { paste })} onClaim={handleClaim} onSession={update} onPresence={setPresence} onResult={handleResult} onRendererFailed={rendererFailed} onUnavailable={unavailableChanged} />}
         </>)}
       </Stack>
     </WorkspacePageBody>

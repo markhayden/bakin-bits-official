@@ -7,10 +7,9 @@ import { Panel } from '@makinbakin/sdk/layout'
 import { CopyButton } from '@makinbakin/sdk/patterns'
 import { ArrowDown, Keyboard, X, ZoomOut } from 'lucide-react'
 import type { Session } from '../lib/contracts'
-import type { Fidelity } from '../lib/raw-display'
 import type { UnavailableReason } from '../lib/socket'
 import { installGeometry } from '../lib/geometry'
-import { programSteps, routeScroll } from './scroll-route'
+import { routeScroll } from './scroll-route'
 import { offerCaption, offerPreview } from '../lib/offer-preview'
 import { bufferText } from '../lib/buffer-text'
 import { screenDigest } from '../lib/digest'
@@ -55,15 +54,13 @@ const LINK_HANDLER = {
   },
 }
 
-export function TerminalCanvas({ session, writable, captureTab, attempt, offerKeyboard = false, inputEnabled, inputHandle, viewHandle, onModifiersChange, onStatus, onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity, onUnavailable }: {
+export function TerminalCanvas({ session, writable, captureTab, attempt, offerKeyboard = false, inputEnabled, inputHandle, viewHandle, onModifiersChange, onStatus, onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onUnavailable }: {
   /** Show the corner keyboard button (a touch screen with the keyboard down). */
   offerKeyboard?: boolean
   inputEnabled: boolean; inputHandle: RefObject<TerminalInputHandle | null>; viewHandle: RefObject<TerminalViewHandle | null>; onModifiersChange(state: ModifierState): void;
   session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string, paste?: boolean): void; onClaim(data: string): void; onSession(session: Session): void; onPresence(presence: Presence): void; onResult(result: InputResult): void
   /** The renderer hit a parser exception: this screen has stopped and must be rebuilt. */
   onRendererFailed(): void
-  /** The raw path: the session's fidelity from the server (lib/fidelity-notice.ts says what to show). */
-  onFidelity?(fidelity: Fidelity): void
   /** An ended raw-path session has no output to show. */
   onUnavailable?(reason: UnavailableReason): void
 }) {
@@ -95,8 +92,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     focusOffer.current = false
     offerPanel.current?.querySelector<HTMLButtonElement>('[data-slot="copy-button"]')?.focus({ preventScroll: true })
   }, [offer?.rev])
-  const callbacks = useRef({ onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity, onUnavailable, writable, authority, inputEnabled, onModifiersChange, captureTab: false, sizeEpoch: session.sizeEpoch, zoom, paused })
-  callbacks.current = { onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity, onUnavailable, writable, authority, inputEnabled, onModifiersChange, captureTab, sizeEpoch: session.sizeEpoch, zoom, paused }
+  const callbacks = useRef({ onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onUnavailable, writable, authority, inputEnabled, onModifiersChange, captureTab: false, sizeEpoch: session.sizeEpoch, zoom, paused })
+  callbacks.current = { onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onUnavailable, writable, authority, inputEnabled, onModifiersChange, captureTab, sizeEpoch: session.sizeEpoch, zoom, paused }
   const [status, setStatus] = useState('Connecting')
   useEffect(() => { onStatus(status) }, [status, onStatus])
   const terminal = useRef<Terminal | null>(null)
@@ -473,7 +470,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
         }
       },
       onDisplay: (state) => { pane.current?.setAttribute('data-display', state) },
-      onFidelity: (fidelity) => callbacks.current.onFidelity?.(fidelity),
+      // Recoveries stay quiet (Mark, 2026-10-29: the notice was noise); the count is kept on the pane for tests and debugging.
+      onFidelity: (fidelity) => { pane.current?.setAttribute('data-recoveries', String(fidelity.recoveries ?? 0)) },
       onUnavailable: (reason) => callbacks.current.onUnavailable?.(reason),
       onSession: (next) => callbacks.current.onSession(next),
       onPresence: (presence) => callbacks.current.onPresence(presence),
@@ -589,34 +587,27 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     /** How far the pane can pan that way: an overflowing grid pans to its edge before the program scrolls. */
     const panRoom = (dy: number) => dy < 0 ? -el.scrollTop : Math.max(0, el.scrollHeight - el.clientHeight - el.scrollTop)
     /**
-     * Scroll the program by `pixels` (negative: up): whole rows become one
-     * wheel report each, the remainder carries. Dispatched in xterm's line
-     * mode (one line per event), so xterm's own pixel scaling never changes
-     * the count. Following pauses: the program's repaint must not pan back.
+     * A touch drag's distance to the program, as the trackpad-style pixel
+     * wheel xterm turns into reports itself (its own accumulation and
+     * damping — what VS Code sends, and what Claude Code is tuned for: one
+     * report scrolls it a few lines, and a fast stream accelerates).
+     * Following pauses: the program's repaint must not pan back.
      */
-    let programCarry = 0
     const passing = new WeakSet<Event>()
-    const scrollProgram = (pixels: number, x: number, y: number, modifiers: { altKey?: boolean; metaKey?: boolean } = {}) => {
+    const scrollProgram = (pixels: number, x: number, y: number) => {
       const term = terminal.current
-      const rendered = screen()
-      if (!term?.element || !rendered?.clientHeight) return
+      if (!term?.element) return
       pause()
-      const counted = programSteps(pixels, rendered.clientHeight / term.rows, programCarry)
-      programCarry = counted.carry
-      for (let n = 0; n < Math.abs(counted.steps); n++) {
-        const step = Math.sign(counted.steps)
-        // A desktop wheel's Alt (Meta) rides along: programs bind modified scrolling.
-        const report = new WheelEvent('wheel', { deltaY: step, deltaMode: WheelEvent.DOM_DELTA_LINE, clientX: x, clientY: y, altKey: modifiers.altKey, metaKey: modifiers.metaKey, bubbles: true, cancelable: true })
-        passing.add(report)
-        term.element.dispatchEvent(report)
-      }
+      const report = new WheelEvent('wheel', { deltaY: pixels, deltaMode: WheelEvent.DOM_DELTA_PIXEL, clientX: x, clientY: y, bubbles: true, cancelable: true })
+      passing.add(report)
+      term.element.dispatchEvent(report)
     }
-    /** A vertical move for a program that scrolls itself: what the pane can pan, then the rest to the program. */
-    const programMove = (dy: number, x: number, y: number, modifiers?: { altKey?: boolean; metaKey?: boolean }) => {
+    /** A drag's vertical move for a program that scrolls itself: what the pane can pan, then the rest to the program. */
+    const programMove = (dy: number, x: number, y: number) => {
       const room = panRoom(dy)
       const pan = dy < 0 ? Math.max(dy, room) : Math.min(dy, room)
       if (pan) { el.scrollBy(0, pan); pause() }
-      if (dy - pan) scrollProgram(dy - pan, x, y, modifiers)
+      if (dy - pan) scrollProgram(dy - pan, x, y)
     }
     /** The rendered row height: a line-mode wheel moves this far per line. */
     const rowHeight = () => {
@@ -634,10 +625,11 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
      * the end. A vertical drag with history is ours (history, then the pan,
      * in one motion, with a fling); anything else is the browser's native pan.
      */
-    let drag: { x: number; y: number; owner?: 'ours' | 'native' | 'program' | 'ended'; samples: { at: number; dy: number }[] } | undefined
+    let drag: { x: number; y: number; lastX?: number; lastY?: number; owner?: 'ours' | 'native' | 'program' | 'ended'; samples: { at: number; dy: number }[] } | undefined
     let fling = 0
     const stopFling = () => { cancelAnimationFrame(fling); fling = 0 }
-    const startFling = (samples: { at: number; dy: number }[]) => {
+    /** After a release: momentum through `move` (the view's history and pan, or a program that scrolls itself), until it stops. */
+    const startFling = (samples: { at: number; dy: number }[], move: (pixels: number) => boolean = scrollVertical) => {
       const recent = samples.filter((sample) => sample.at >= performance.now() - 100)
       if (recent.length < 2) return
       let velocity = recent.reduce((sum, sample) => sum + sample.dy, 0) / Math.max(16, recent[recent.length - 1]!.at - recent[0]!.at)
@@ -646,7 +638,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
         const elapsed = now - last
         last = now
         velocity *= Math.pow(0.95, elapsed / 16)
-        fling = Math.abs(velocity) > 0.02 && scrollVertical(velocity * elapsed) ? requestAnimationFrame(step) : 0
+        fling = Math.abs(velocity) > 0.02 && move(velocity * elapsed) ? requestAnimationFrame(step) : 0
       }
       if (Math.abs(velocity) > 0.2) fling = requestAnimationFrame(step)
     }
@@ -680,8 +672,9 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       if (!drag.owner) {
         if (!dx && !dy) return
         const vertical = Math.abs(dy) >= Math.abs(dx)
-        drag.owner = vertical && programScrolls() ? 'program' : vertical && hasHistory() ? 'ours' : 'native'
-        programCarry = 0
+        // A program that scrolls itself takes a vertical drag only once the grid is at its edge that way: until
+        // then the browser pans it natively, momentum and all (nested scrolling, as iOS does it).
+        drag.owner = vertical && programScrolls() ? (panRoom(dy) ? 'native' : 'program') : vertical && hasHistory() ? 'ours' : 'native'
       }
       if (drag.owner === 'native') { pause(); return }
       // The browser's scroll was cancelled from the first move: an ended drag stays still.
@@ -692,6 +685,10 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
         if (!programScrolls()) { drag.owner = 'ended'; return }
         if (dx) { el.scrollBy(dx, 0); pause() }
         if (dy) programMove(dy, x, y)
+        drag.lastX = x
+        drag.lastY = y
+        drag.samples.push({ at: performance.now(), dy })
+        if (drag.samples.length > 20) drag.samples.shift()
         return
       }
       if (dx) { el.scrollBy(dx, 0); pause() }
@@ -702,6 +699,11 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     const end = (event: TouchEvent) => {
       // Only a release flings; a cancelled touch (the system took it) stops where it was.
       if (event.touches.length === 0 && drag?.owner === 'ours' && event.type === 'touchend') startFling(drag.samples)
+      // A program's drag glides on too (the program still decides how far each report scrolls).
+      if (event.touches.length === 0 && drag?.owner === 'program' && event.type === 'touchend') {
+        const at = { x: drag.lastX ?? drag.x, y: drag.lastY ?? drag.y }
+        startFling(drag.samples, (pixels) => { if (!programScrolls()) return false; programMove(pixels, at.x, at.y); return true })
+      }
       if (event.touches.length === 0) { drag = undefined; if (event.type === 'touchcancel') carry = 0 }
       if (!pinch || event.touches.length >= 2) return
       // The last move may still be waiting for its frame: commit what it asked for.
@@ -715,19 +717,16 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     const wheel = (event: WheelEvent) => {
       stopFling()
       if (!event.ctrlKey) {
-        // A program that scrolls itself gets a mostly vertical wheel (xterm reports it); a drag's steps are ours to pass on too.
-        // Our own reports, on their way to xterm.
+        // Our own (a drag's), on their way to xterm.
         if (passing.has(event)) return
-        // Never xterm's own: no arrow keys, no history it scrolls itself, no report it would scale.
+        // A program that scrolls itself gets a mostly vertical wheel exactly as xterm reports it (one report per
+        // event, its own trackpad accumulation, Alt kept — as VS Code sends it), once the grid has panned to its
+        // edge. Shift+wheel stays the view's; Ctrl+wheel is zoom, below.
+        if (programScrolls() && !event.shiftKey && Math.abs(event.deltaY) >= Math.abs(event.deltaX) && !panRoom(event.deltaY)) { pause(); return }
+        // Otherwise never xterm's own: no arrow keys, no history it scrolls itself.
         event.preventDefault()
         event.stopPropagation()
         const unit = event.deltaMode === 1 ? rowHeight() : event.deltaMode === 2 ? el.clientHeight : 1
-        // Shift+wheel stays the view's (as xterm keeps it from the program); Ctrl+wheel is zoom, below.
-        if (programScrolls() && !event.shiftKey && Math.abs(event.deltaY) >= Math.abs(event.deltaX)) {
-          if (event.deltaX) { el.scrollBy(event.deltaX * unit, 0); pause() }
-          programMove(event.deltaY * unit, event.clientX, event.clientY, { altKey: event.altKey, metaKey: event.metaKey })
-          return
-        }
         if (event.deltaX) { el.scrollBy(event.deltaX * unit, 0); pause() }
         if (event.deltaY) scrollVertical(event.deltaY * unit)
         return

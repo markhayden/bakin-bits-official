@@ -27,6 +27,8 @@ async function endSession(page: Page, client: string, id: string): Promise<void>
   const taken = await (await page.request.post(endpoint('/session'), { headers, data: { id, operation: 'take' } })).json() as { generation: number }
   await page.request.post(endpoint('/session'), { headers, data: { id, operation: 'terminate', generation: taken.generation } })
 }
+/** The view has recovered at least once (the pane's quiet count; there is no notice). */
+const recovered = (page: Page, timeout = 20_000) => page.waitForFunction(() => Number(document.querySelector('.terminal-pane')?.getAttribute('data-recoveries') ?? 0) >= 1, null, { timeout })
 /** Open the session and wait until its first replay is applied (the display is live). */
 async function open(page: Page, id: string): Promise<void> {
   await page.goto(new URL(`/terminal/${id}`, base()).href)
@@ -330,35 +332,34 @@ rawTest("a width change (plan T34a): the viewer installs tmux's geometry and sho
   }
 }, 60_000)
 
-rawTest('a lost replica (plan T35a): the viewer recovers it from tmux and shows the persistent recovery notice, which a reload keeps', async () => {
+rawTest('a lost replica (plan T35a): the viewer recovers it from tmux quietly (no notice), and input and output carry on', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-recovery-test-01'
   const page = await browser.newPage({ viewport })
   const { id } = await createSession(page, client)
   const tmux = process.env.TERMINAL_PREVIEW_TMUX!
   const socket = new TerminalService(process.env.TERMINAL_PREVIEW_ROOT!).socket
-  const notice = page.getByRole('status', { name: 'Terminal view recovered with limitations' })
   try {
     await open(page, id)
     await typeLine(page, `printf '%s-%s\\n' before loss`)
     await waitForRow(page, '^before-loss$')
-    expect(await notice.count()).toBe(0)
     // Bakin's control client (the replica's source) is lost while the pane and the bridge stay.
     const control = Bun.spawnSync([tmux, '-S', socket, 'list-clients', '-t', id, '-F', '#{client_control_mode} #{client_name}']).stdout.toString()
       .split('\n').filter((line) => line.startsWith('1 ')).map((line) => line.slice(2))
     expect(control).toHaveLength(1)
     Bun.spawnSync([tmux, '-S', socket, 'detach-client', '-t', control[0]!])
     // The viewer reconnects; the join attaches again and rebuilds the replica from tmux.
-    await notice.waitFor({ timeout: 20_000 })
-    await expect(notice.textContent()).resolves.toContain("Cause: the view's connection to tmux was replaced.")
+    await recovered(page)
+    // Quietly: the persistent notice was removed at acceptance.
+    expect(await page.locator('[data-slot="banner"]').count()).toBe(0)
     await waitForRow(page, '^before-loss$')
     // Input still reaches the program, and its output shows.
     await typeLine(page, `printf '%s-%s\\n' after loss`)
     await waitForRow(page, '^after-loss$')
-    // The fidelity is the server's: a reload (a new connection) shows the notice again.
+    // The fidelity is still the server's: a reload (a new connection) is told of the recovery again.
     await page.reload()
     await page.waitForFunction(() => document.querySelector('[data-display]')?.getAttribute('data-display') === 'live', null, { timeout: 15_000 })
-    await notice.waitFor({ timeout: 5_000 })
+    await recovered(page, 5_000)
   } finally {
     await endSession(page, client, id)
     await browser.close()
@@ -619,7 +620,7 @@ async function receiving(page: Page, modes: string, file: string) {
 }
 const reports = (input: string, button: number) => (input.match(new RegExp(`\\x1b\\[<${button};\\d+;\\d+M`, 'g')) ?? []).length
 
-rawTest('native scrolling (plan T36, as native terminals): a full-screen program that asked for the mouse gets one wheel report per row scrolled (never a click); X10 mode or no mouse gets nothing', async () => {
+rawTest('native scrolling (plan T36, as native terminals): a full-screen program that asked for the mouse gets the wheel as xterm (VS Code) reports it — one report per wheel event, never a click; X10 mode or no mouse gets nothing', async () => {
   const browser = await launchChromium()
   const client = 'raw-browser-scroll-test-02'
   const page = await browser.newPage({ viewport })
@@ -633,19 +634,17 @@ rawTest('native scrolling (plan T36, as native terminals): a full-screen program
     Bun.spawnSync([tmux, '-S', socket, 'resize-window', '-t', id, '-x', '60', '-y', '15'])
     await page.waitForFunction(() => { const pane = document.querySelector('.terminal-pane')!; return pane.scrollHeight <= pane.clientHeight + 1 && pane.scrollWidth <= pane.clientWidth + 1 }, null, { timeout: 10_000 })
     const cell = await cellHeight(page, 15)
-    // Button tracking, SGR: one report per whole row of scrolling (never more, a remainder carried within a
-    // direction), so half the distance is half the reports; never a click.
+    // Button tracking, SGR: a mouse wheel's notches (100 px each, more than a row) are one report each, as VS Code
+    // sends them (the program, like Claude Code, scrolls a few lines per report and accelerates fast spins); never a click.
     let done = await receiving(page, '\\033[?1000;1006h', file)
     await wheelOver(page, -100, 6)
     await wheelOver(page, 100, 3)
     let input = await done()
-    const up = reports(input, 64)
-    const down = reports(input, 65)
-    expect(up).toBeGreaterThanOrEqual(5)
-    expect(up).toBeLessThanOrEqual(Math.ceil(600 / cell) + 1)
-    expect(Math.abs(up - 2 * down)).toBeLessThanOrEqual(2)
+    expect(100).toBeGreaterThan(cell)
+    expect(reports(input, 64)).toBe(6)
+    expect(reports(input, 65)).toBe(3)
     expect(reports(input, 0)).toBe(0)
-    // A line-mode wheel (a mouse with notches): exactly one report per line, whatever the row height.
+    // A line-mode wheel: one report per event too, however many lines it says.
     // Chromium only: WebKit does not deliver the reports the canvas dispatches while handling a wheel a script
     // dispatched (observed; real wheels — the part above — reach the program on WebKit too).
     const lineMode = process.env.TERMINAL_BROWSER !== 'webkit'
@@ -658,13 +657,13 @@ rawTest('native scrolling (plan T36, as native terminals): a full-screen program
       done = await receiving(page, '\\033[?1000;1006h', file)
       await wheelLines(-3, 5)
       input = await done()
-      expect(reports(input, 64)).toBe(15)
+      expect(reports(input, 64)).toBe(5)
       // Alt rides along (64 + 8 = 72 up); Shift keeps the wheel from the program.
       done = await receiving(page, '\\033[?1000;1006h', file)
       await wheelLines(-2, 2, { altKey: true })
       await wheelLines(-2, 2, { shiftKey: true })
       input = await done()
-      expect(reports(input, 72)).toBe(4)
+      expect(reports(input, 72)).toBe(2)
       expect(reports(input, 64)).toBe(0)
     }
     // X10 has no wheel (xterm would send arrow keys), and no mouse at all: nothing reaches the program.
@@ -932,7 +931,7 @@ rawTest('clipboard offers (plan T36b): copied only on the tap, exactly, with the
     const control = Bun.spawnSync([tmux, '-S', socket, 'list-clients', '-t', id, '-F', '#{client_control_mode} #{client_name}']).stdout.toString()
       .split('\n').filter((line) => line.startsWith('1 ')).map((line) => line.slice(2))
     Bun.spawnSync([tmux, '-S', socket, 'detach-client', '-t', control[0]!])
-    await page.getByRole('status', { name: 'Terminal view recovered with limitations' }).waitFor({ timeout: 20_000 })
+    await recovered(page)
     await settleFor(page)
     expect(await copyOffer(page).count()).toBe(0)
     expect(await clipboard.writes(page)).toEqual([offered])
@@ -1012,33 +1011,6 @@ touchTest('clipboard offers on a 320 px phone (plan T36b): the offer, ↓ Live, 
   }
 }, 60_000)
 
-rawTest('on a phone (plan T36b) the persistent recovery notice folds to its title; Show details shows the rest', async () => {
-  const browser = await launchChromium()
-  const client = 'raw-browser-recovery-test-02'
-  const page = await (await browser.newContext({ viewport: { width: 390, height: 760 }, hasTouch: true, isMobile: true })).newPage()
-  const { id } = await createSession(page, client)
-  const tmux = process.env.TERMINAL_PREVIEW_TMUX!
-  const socket = new TerminalService(process.env.TERMINAL_PREVIEW_ROOT!).socket
-  const notice = page.getByRole('status', { name: 'Terminal view recovered with limitations' })
-  try {
-    await open(page, id)
-    const control = Bun.spawnSync([tmux, '-S', socket, 'list-clients', '-t', id, '-F', '#{client_control_mode} #{client_name}']).stdout.toString()
-      .split('\n').filter((line) => line.startsWith('1 ')).map((line) => line.slice(2))
-    Bun.spawnSync([tmux, '-S', socket, 'detach-client', '-t', control[0]!])
-    await notice.waitFor({ timeout: 20_000 })
-    expect(await notice.textContent()).not.toContain('Cause:')
-    const toggle = notice.getByRole('button', { name: 'Show details' })
-    expect((await toggle.boundingBox())!.height).toBeGreaterThanOrEqual(44)
-    await toggle.click()
-    await expect(notice.textContent()).resolves.toContain("Cause: the view's connection to tmux was replaced.")
-    expect(await notice.getByRole('button', { name: 'Hide details' }).getAttribute('aria-expanded')).toBe('true')
-    await notice.getByRole('button', { name: 'Hide details' }).click()
-    expect(await notice.textContent()).not.toContain('Cause:')
-  } finally {
-    await endSession(page, client, id)
-    await browser.close()
-  }
-}, 60_000)
 
 rawTest('clipboard offers (plan T36b): focus — a replaced offer keeps a keyboard user on Copy; a copy through the fallback (copied or refused) leaves the view in the history; a pending offer survives a recovery', async () => {
   const browser = await launchChromium()
@@ -1090,7 +1062,7 @@ rawTest('clipboard offers (plan T36b): focus — a replaced offer keeps a keyboa
     const control = Bun.spawnSync([tmux, '-S', socket, 'list-clients', '-t', id, '-F', '#{client_control_mode} #{client_name}']).stdout.toString()
       .split('\n').filter((line) => line.startsWith('1 ')).map((line) => line.slice(2))
     Bun.spawnSync([tmux, '-S', socket, 'detach-client', '-t', control[0]!])
-    await page.getByRole('status', { name: 'Terminal view recovered with limitations' }).waitFor({ timeout: 20_000 })
+    await recovered(page)
     await settleFor(page)
     expect(await copyOffer(page).count()).toBe(1)
     expect(await page.locator('.terminal-view-offer code').textContent()).toBe('offer D')
@@ -1214,7 +1186,7 @@ rawTest('Copy text: more than 2,000 lines shows the newest and copies every one 
   }
 }, 90_000)
 
-touchTest('native scrolling on a phone (as native terminals): a vertical drag in a full-screen program that asked for the mouse sends one report per row dragged; a tap still never clicks', async () => {
+touchTest('native scrolling on a phone (as native terminals): a vertical drag in a full-screen program that asked for the mouse reaches it as trackpad scrolling (xterm\'s own damping); a tap still never clicks', async () => {
   const client = 'raw-browser-scroll-test-10'
   const { browser, page, id, drag, tap } = await phone(client)
   const tmux = process.env.TERMINAL_PREVIEW_TMUX!
@@ -1232,11 +1204,44 @@ touchTest('native scrolling on a phone (as native terminals): a vertical drag in
     // Finger down 160 px: what is above comes into view — wheel-up reports, one per row.
     await drag({ x: 150, y: 80 }, { x: 150, y: 240 })
     const input = await done()
+    // xterm damps trackpad-sized steps (0.3 of a row each): fewer reports than rows, more than none.
     const up = reports(input, 64)
-    expect(up).toBeGreaterThanOrEqual(3)
-    expect(up).toBeLessThanOrEqual(Math.ceil(160 / cell) + 1)
+    expect(up).toBeGreaterThanOrEqual(1)
+    expect(up).toBeLessThan(Math.ceil(160 / cell))
     expect(reports(input, 0)).toBe(0)
     expect(reports(input, 35)).toBe(0)
+  } finally {
+    rmSync(file, { force: true })
+    await endSession(page, client, id)
+    await browser.close()
+  }
+}, 60_000)
+
+touchTest('native scrolling on a phone (nested, as iOS): in a full-screen program that asked for the mouse, a drag first pans a tall grid natively — nothing reaches the program — and only at the grid\'s edge scrolls the program', async () => {
+  const client = 'raw-browser-scroll-test-11'
+  const { browser, page, id, drag } = await phone(client)
+  const tmux = process.env.TERMINAL_PREVIEW_TMUX!
+  const socket = new TerminalService(process.env.TERMINAL_PREVIEW_ROOT!).socket
+  const file = join(tmpdir(), `bakin-nested-${process.pid}-${Date.now()}.txt`)
+  const pane = () => page.evaluate(() => { const element = document.querySelector('.terminal-pane')!; return { top: element.scrollTop, max: element.scrollHeight - element.clientHeight } })
+  try {
+    await open(page, id)
+    // A grid much taller than the phone's pane.
+    Bun.spawnSync([tmux, '-S', socket, 'resize-window', '-t', id, '-x', '40', '-y', '90'])
+    await page.waitForFunction(() => { const element = document.querySelector('.terminal-pane')!; return element.scrollHeight > element.clientHeight + 200 }, null, { timeout: 10_000 })
+    const done = await receiving(page, '\\033[?1000;1006h', file)
+    await page.evaluate(() => { (document.activeElement as HTMLElement | null)?.blur(); document.querySelector('.terminal-pane')!.scrollTop = 0 })
+    // Finger up from the top: the grid pans down natively (toward the program's input line); no report.
+    await drag({ x: 195, y: 380 }, { x: 195, y: 80 })
+    await page.waitForFunction(() => document.querySelector('.terminal-pane')!.scrollTop > 100, null, { timeout: 5_000 })
+    // At the grid's bottom edge, the next finger-up drag scrolls the program.
+    await page.evaluate(() => { const element = document.querySelector('.terminal-pane')!; element.scrollTop = element.scrollHeight })
+    const atEdge = await pane()
+    expect(atEdge.top).toBeGreaterThanOrEqual(atEdge.max - 1)
+    await drag({ x: 195, y: 380 }, { x: 195, y: 80 })
+    const input = await done()
+    expect(reports(input, 65)).toBeGreaterThanOrEqual(1)
+    expect(reports(input, 64)).toBe(0)
   } finally {
     rmSync(file, { force: true })
     await endSession(page, client, id)

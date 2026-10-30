@@ -39,16 +39,3 @@ export function routeScroll(delta: number, pane: PaneScroll, history: HistoryScr
   return { pan: panBy(pixels - bound * cell), lines: bound, carry: 0 }
 }
 
-/**
- * Whole wheel reports for a program that scrolls itself (one per row):
- * `pixels` (negative: up) at `cell` px a row, with the remainder `carry`
- * (in rows) kept within a direction. Counted in rows with a tolerance, so
- * fractional row heights (display scaling, zoom) never lose a report to
- * floating-point remainders.
- */
-export function programSteps(pixels: number, cell: number, carry = 0): { steps: number; carry: number } {
-  const rows = (Math.sign(carry) === Math.sign(pixels) ? carry : 0) + pixels / cell
-  const steps = Math.trunc(rows + Math.sign(rows) * 1e-6) || 0
-  const rest = rows - steps
-  return { steps, carry: Math.abs(rest) < 1e-6 ? 0 : rest }
-}

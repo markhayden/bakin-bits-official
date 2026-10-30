@@ -134,10 +134,9 @@ Settings › **Use the new terminal viewer for new sessions (preview)** (off by
 default) gives new sessions a viewer that shows the same picture on every
 device, reflowed exactly as tmux does when a width changes. If the view ever
 has to be refreshed from tmux (very fast output, a lost connection to tmux, a
-difference the safety net found), the session shows a persistent notice
-naming why (on a phone it folds to its title; **Show details** opens the
-rest). When a session ends its last screen is kept, so an ended session
-opens to what it showed.
+difference the safety net found), it does so on its own, without a notice.
+When a session ends its last screen is kept, so an ended session opens to
+what it showed.
 
 When a program in the session offers text for the clipboard (OSC 52 —
 Neovim with OSC 52 clipboard, or `… | base64 | xargs -0 printf
