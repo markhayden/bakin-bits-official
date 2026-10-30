@@ -262,6 +262,23 @@ test('setup finds a session that exited while nothing watched (a restart): it at
   await setup
   expect(settled).toBe(true)
 })
+test('a sweep retry replaces an unusable attachment (its control client connected, its replica ended) before saving', async () => {
+  const { manager, live, replicas, attaches, finals, store, attached } = fixture()
+  const session = await manager.create({ title: 'Overflowed', cwd: '/tmp' }, human)
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  replicas.set(session.id, replica)
+  live.delete(session.id)
+  await manager.refreshStates()
+  store.markOutput(session.id, false)
+  // The replica ended (a log overflow) while the control client stayed connected.
+  replica.close()
+  expect(attached.has(session.id)).toBe(true)
+  const before = attaches.length
+  finals.length = 0
+  await manager.sweep()
+  expect(attaches.length).toBe(before + 1)
+  expect(finals[0]).toStartWith(`final ${session.id}`)
+})
 test('sweep reserves every retried save before waiting on any: a later one is never completed (its pane killed) while an earlier one saves', async () => {
   const { manager, live, finalCut, terminated, store, advance } = fixture()
   const first = await manager.create({ title: 'First', cwd: '/tmp' }, human)

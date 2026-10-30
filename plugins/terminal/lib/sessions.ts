@@ -814,14 +814,18 @@ export class Sessions {
     // An exited session whose final output is not saved yet (a failed save) tries again before
     // maintenance may complete it: every retry reserved at once (in the queue, attached to its
     // retained pane if nothing is), then saved outside it.
-    const retries = await this.run(async () => this.store.sessions()
-      .filter((session) => session.state === 'exited' && session.outputSaved === false)
-      .map((session) => {
-        // A control client that closed is replaced: a new one seeds a replica from the pane.
-        if (!this.driver.connected(session.id)) this.attached.delete(session.id)
+    const retries = await this.run(async () => {
+      const saves: Promise<void>[] = []
+      for (const session of this.store.sessions()) {
+        if (session.state !== 'exited' || session.outputSaved !== false) continue
+        // An unusable attachment (its control client closed, or its replica ended) is replaced: a new one
+        // seeds a replica from the pane.
+        if (!this.replicaLive(session.id)) await this.detach(session.id)
         this.attachUnreconciled(session)
-        return this.saveFinal(session.id)
-      }), true)
+        saves.push(this.saveFinal(session.id))
+      }
+      return saves
+    }, true)
     await Promise.all(retries)
     return this.run(() => this.sweepUnlocked(), true)
   }
