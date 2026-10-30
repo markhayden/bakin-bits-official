@@ -279,6 +279,49 @@ test('a sweep retry replaces an unusable attachment (its control client connecte
   expect(attaches.length).toBe(before + 1)
   expect(finals[0]).toStartWith(`final ${session.id}`)
 })
+test('a sweep started while a save is in flight waits for it; when it fails, the retry saves from a replaced attachment before maintenance completes the session', async () => {
+  const { manager, live, finalCut, finals, terminated, advance, store, attaches } = fixture()
+  const session = await manager.create({ title: 'Overlap', cwd: '/tmp' }, human)
+  const source = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  await source.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bclast words'), cols: 80, rows: 24, reason: 'test', history: true })
+  const cut = source.cut()!
+  source.close()
+  let failFirst!: () => void
+  const cuts: Array<() => Promise<Cut | undefined>> = [
+    () => new Promise((resolve) => { failFirst = () => resolve(undefined) }),
+    async () => cut,
+  ]
+  finalCut.next = () => cuts.shift()!()
+  live.delete(session.id)
+  const refresh = manager.refreshStates()
+  for (let n = 0; n < 50 && !failFirst; n++) await Bun.sleep(2)
+  advance()
+  const before = attaches.length
+  const sweep = manager.sweep()
+  await Bun.sleep(20)
+  // Nothing was decided while the first save ran.
+  expect(terminated).toEqual([])
+  expect(attaches.length).toBe(before)
+  failFirst()
+  await refresh
+  await sweep
+  expect(finals.filter((entry) => entry.startsWith('final'))).toHaveLength(2)
+  expect(store.session(session.id)?.outputSaved).toBe(true)
+  expect(terminated).toEqual([session.id])
+  expect(finals.at(-1)).toBe(`terminate ${session.id}`)
+})
+test('a maintenance pass that did not retry an unsaved session leaves it for one that does', async () => {
+  const { manager, live, terminated, advance, store } = fixture()
+  const session = await manager.create({ title: 'Unsaved', cwd: '/tmp' }, human)
+  live.delete(session.id)
+  await manager.refreshStates()
+  store.markOutput(session.id, false)
+  advance()
+  await manager['run'](() => manager['sweepUnlocked'](), true)
+  expect(terminated).toEqual([])
+  await manager.sweep()
+  expect(terminated).toEqual([session.id])
+})
 test('sweep reserves every retried save before waiting on any: a later one is never completed (its pane killed) while an earlier one saves', async () => {
   const { manager, live, finalCut, terminated, store, advance } = fixture()
   const first = await manager.create({ title: 'First', cwd: '/tmp' }, human)

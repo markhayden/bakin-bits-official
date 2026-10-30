@@ -784,11 +784,12 @@ export class Sessions {
     }
     this.save(session)
   }
-  private async sweepUnlocked(): Promise<void> {
+  /** `retried`: the unsaved sessions whose save this sweep tried again; any other unsaved one waits for a sweep that does. */
+  private async sweepUnlocked(retried = new Set<string>()): Promise<void> {
     for (const session of this.store.sessions()) {
       if (this.now() - session.lastActivityAt >= (this.options.settings().idleDays ?? 30) * DAY) {
-        // Not while its final save is in flight (sweep() tries a failed one again first).
-        if (session.state === 'exited' && !this.ending.has(session.id)) {
+        // Not while its final save is in flight, nor before a retry of a failed one (sweep() tries it first).
+        if (session.state === 'exited' && !this.ending.has(session.id) && (session.outputSaved !== false || retried.has(session.id))) {
           await this.driver.terminate(session.id)
           await this.detach(session.id)
           session.state = 'completed'
@@ -813,21 +814,26 @@ export class Sessions {
   private async sweepOnce(): Promise<void> {
     // An exited session whose final output is not saved yet (a failed save) tries again before
     // maintenance may complete it: every retry reserved at once (in the queue, attached to its
-    // retained pane if nothing is), then saved outside it.
+    // retained pane if nothing is), then saved outside it. Saves already in flight settle first (each is
+    // bounded): a retry decided while one runs would share it, and it reads the replica it started with.
+    await Promise.allSettled([...this.ending.values()])
+    const retried = new Set<string>()
     const retries = await this.run(async () => {
       const saves: Promise<void>[] = []
       for (const session of this.store.sessions()) {
-        if (session.state !== 'exited' || session.outputSaved !== false) continue
+        // One that started since is in flight on a live attachment: it is its own save.
+        if (session.state !== 'exited' || session.outputSaved !== false || this.ending.has(session.id)) continue
         // An unusable attachment (its control client closed, or its replica ended) is replaced: a new one
         // seeds a replica from the pane.
         if (!this.replicaLive(session.id)) await this.detach(session.id)
         this.attachUnreconciled(session)
         saves.push(this.saveFinal(session.id))
+        retried.add(session.id)
       }
       return saves
     }, true)
     await Promise.all(retries)
-    return this.run(() => this.sweepUnlocked(), true)
+    return this.run(() => this.sweepUnlocked(retried), true)
   }
   /**
    * Set up (or update) the tmux service in the manager's queue, so it can
