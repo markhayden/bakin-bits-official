@@ -1,6 +1,6 @@
 /**
  * Workarounds for bugs in the pinned xterm 6.0.0, applied identically to
- * the browser terminal and the server's headless Screen. Each has a test
+ * the browser terminal and the server's profile terminals. Each has a test
  * that fails once upstream fixes the bug (drop the patch then).
  */
 

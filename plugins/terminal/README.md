@@ -283,6 +283,11 @@ left out); an ended session's comes from its saved final screen.
   expires after 30 days or can be deleted manually. SQLite page/WAL overhead
   is outside that budget; session metadata remains for ownership and
   retained-work review.
+- Upgrading from a Terminal that still had the old viewer (0.4.0-dev.23 or
+  earlier): end every session first. Sessions that ended under the old
+  viewer and never saved a final screen open with **Output not saved**.
+  Going back to such a version afterwards deletes every saved final screen,
+  and upgrading again does not bring them back.
 - Health reports unavailable service, maintenance failure, retained work,
   and live sessions holding more than 640 MB of Bakin's memory (estimated
   each minute from the emulators' structure; a session of 10,000 rows of

@@ -32,6 +32,7 @@ function fakeManager(initial = session(), raw: { replica?: RawSource; bundle?: B
   const divergences: string[] = []
   let ensureError: Error | undefined
   let ensureStall: Promise<void> = Promise.resolve()
+  let finalSave: Promise<void> = Promise.resolve()
   const manager: ViewerManager = {
     get: (id) => { if (id !== current.id) throw new TerminalError('Session not found', 404); return current },
     onSessionChange: (_id, listener) => { sessionListeners.add(listener); return () => sessionListeners.delete(listener) },
@@ -51,12 +52,14 @@ function fakeManager(initial = session(), raw: { replica?: RawSource; bundle?: B
     bundle: async () => raw.bundle,
     diverged: (id, detail) => { divergences.push(`${id} ${detail.category} ${detail.mismatches}`) },
     ensureReplica: async (id) => { ensured.push(id); if (ensureError) throw ensureError; await ensureStall },
+    finalSaved: () => finalSave,
     fidelity: () => ({ rebuilds: {} }),
   }
   return {
     manager, writes, ensured, divergences,
     failEnsure: (error: Error) => { ensureError = error },
     stallEnsure: (until: Promise<void>) => { ensureStall = until },
+    pendingSave: (until: Promise<void>) => { finalSave = until },
     change: (next: Partial<Session>) => { current = { ...current, ...next }; for (const listener of sessionListeners) listener(current) },
     failWrites: (error: Error) => { writeError = error },
     setNatives: (next: NativeClient[]) => { natives = next; for (const listener of nativeListeners) listener() },
@@ -297,6 +300,24 @@ describe('TerminalViewer pictures', () => {
     peer.client({ type: 'input', generation: 1, viewerSeq: 1, data: 'ls\r' })
     await until(() => peer.of('result').length === 1, 'refused')
     expect(peer.of('result')[0]).toMatchObject({ status: 'rejected' })
+  })
+  it('an ended session whose final save is still running waits for it, then joins its bundle (never a final not-saved)', async () => {
+    const replica = await seeded()
+    const bundle = makeBundle(replica.cut()!, { rebuilds: {} }, 1)
+    const raw: { bundle?: Bundle } = {}
+    const { manager, pendingSave, change } = fakeManager(session({ state: 'exited', outputSaved: false }), raw)
+    let finish!: () => void
+    pendingSave(new Promise<void>((resolve) => { finish = resolve }))
+    const peer = fakeSocket()
+    new TerminalViewer(manager, peer.socket, 's1', options)
+    peer.client({ type: 'hello', clientId: CLIENT })
+    await Bun.sleep(30)
+    expect(peer.state.closed).toBeNull()
+    raw.bundle = bundle
+    change({ outputSaved: true })
+    finish()
+    await until(() => peer.of('barrier').length === 1, 'joined the saved picture')
+    expect(peer.state.closed).toBeNull()
   })
   it('a bundle that cannot be read, or whose replay fails, closes 4005 unreadable: never a stuck join or a resync loop', async () => {
     const replica = await seeded()

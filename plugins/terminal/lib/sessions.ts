@@ -27,7 +27,7 @@ const nativeViewer = (pid: number) => `native:${pid}`
 /** Tell every listener; one that throws never stops the rest or the caller's bookkeeping. */
 function notify<T>(listeners: Iterable<T> | undefined, call: (listener: T) => void): void {
   for (const listener of listeners ?? []) {
-    try { call(listener) } catch { /* a viewer's failure is its own (it resyncs) */ }
+    try { call(listener) } catch { /* a viewer's failure is its own (it rejoins) */ }
   }
 }
 /** The creating screen's grid and what kind of screen it is (it holds the size claim). */
@@ -151,26 +151,27 @@ export class Sessions {
   }
   private refreshes = new Set<Promise<void>>()
   private async refreshOnce(): Promise<void> {
-    const exited = await this.run(async () => {
-      const ids: string[] = []
+    const saving = await this.run(async () => {
+      const saves: Promise<void>[] = []
       for (const session of this.store.sessions()) {
         if (session.state === 'running' && !await this.driver.alive(session.id)) {
           session.state = 'exited'
           this.forgetNatives(session.id)
           this.save(session)
-          ids.push(session.id)
+          // The pane stays (remain-on-exit): what the program printed last is in the replica. Its save is
+          // registered with the exit, so a viewer that joins the ended session waits for it (`finalSaved`).
+          saves.push(this.saveFinal(session.id))
         }
       }
-      return ids
+      return saves
     }, true)
-    // The pane stays (remain-on-exit): what the program printed last is in the replica.
-    await Promise.all(exited.map((id) => this.saveFinal(id)))
+    await Promise.all(saving)
   }
   /**
    * Attach and adopt tmux's actual window before anything reads or writes
    * through the attachment (the record may be stale: a resize whose save
    * failed, a crash). False when tmux cannot say: the attachment is dropped
-   * again, and the next viewer sync retries.
+   * again, and the next join or read retries.
    */
   private async attach(session: Session): Promise<boolean> {
     this.attachUnreconciled(session)
@@ -245,7 +246,7 @@ export class Sessions {
       await this.driver.create(session)
       session.state = 'running'
       this.save(session)
-      // Unreconciled, the session stays detached; the first viewer sync retries.
+      // Unreconciled, the session stays detached; the first join or read retries.
       await this.attach(session)
       return session
     })
@@ -664,6 +665,10 @@ export class Sessions {
     this.ending.set(id, work)
     return work
   }
+  /** Settles once the session's final save in flight, if any, has: its record then says whether it was saved. */
+  finalSaved(id: string): Promise<void> {
+    return this.ending.get(id) ?? Promise.resolve()
+  }
   /** Best effort: the failure is recorded when it can be, and never stops what follows (a kill). */
   private markNotSaved(id: string): void {
     try { this.store.markOutput(id, false) } catch (error) {
@@ -697,7 +702,11 @@ export class Sessions {
       await this.ensureAttached(this.get(id, principal))
       return this.driver.replica?.(id)
     })
-    const view = await replica?.read((terminal) => ({ screen: visibleText(terminal), cols: terminal.cols, rows: terminal.rows, sizeRevision: replica.sizeRevision }))
+    // Access is checked again once the read runs: a reassignment while it waited revokes it.
+    const view = await replica?.read((terminal) => {
+      this.get(id, principal)
+      return { screen: visibleText(terminal), cols: terminal.cols, rows: terminal.rows, sizeRevision: replica.sizeRevision }
+    })
     if (!view) throw new TerminalError('Terminal output is not ready yet; retry', 503)
     return view
   }
@@ -714,7 +723,7 @@ export class Sessions {
         await this.ensureAttached(this.get(id, principal))
         return this.driver.replica?.(id)
       })
-      read = await replica?.read((terminal) => bufferText(terminal.buffer.active))
+      read = await replica?.read((terminal) => { this.get(id, principal); return bufferText(terminal.buffer.active) })
       if (!read) throw new TerminalError('Terminal output is not ready yet; retry', 503)
     } else {
       const bundle = await this.store.bundle(id)
@@ -817,7 +826,7 @@ export class Sessions {
           // and its kill.
           if (options.startup && !this.finishing.has(session.id) && this.store.hasBundle(session.id)) this.store.discardProvisionalBundle(session.id)
           await this.driver.title(session)
-          // Unreconciled, the session stays detached; the first viewer sync retries.
+          // Unreconciled, the session stays detached; the first join or read retries.
           await this.attach(session)
         } else { session.state = 'exited'; this.save(session) }
       }

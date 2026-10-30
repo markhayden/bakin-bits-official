@@ -69,6 +69,8 @@ export interface ViewerManager {
   fidelity(id: string): Fidelity
   /** An ended session's saved final output (lib/bundle.ts), if it can be read. */
   bundle(id: string): Promise<Bundle | undefined>
+  /** Settles once the session's final save in flight, if any, has. */
+  finalSaved(id: string): Promise<void>
 }
 
 const message = z.discriminatedUnion('type', [
@@ -236,7 +238,7 @@ export class TerminalViewer {
     return { sizeFrozen: this.frozen(session), nativeClients: this.manager.nativeClients(session.id).length }
   }
 
-  /** Tell this viewer when the size freezes or thaws, or terminal apps come and go (only on change; sync carries the first value). */
+  /** Tell this viewer when the size freezes or thaws, or terminal apps come and go (only on change; the picture header carries the first value). */
   private presence(session: Session): void {
     const presence = this.presenceOf(session)
     const key = JSON.stringify(presence)
@@ -352,7 +354,15 @@ export class TerminalViewer {
   }
 
   /** An ended session's final picture, joined like a live one; the session's own fidelity travels in the bundle. */
-  private async joinEnded(session: Session): Promise<void> {
+  private async joinEnded(ended: Session): Promise<void> {
+    let session = ended
+    // Not saved yet may be a save still in flight (a natural exit is published before its save ends): wait for it.
+    if (!session.outputSaved) {
+      await this.manager.finalSaved(this.sessionId)
+      if (this.closed) return
+      try { session = this.manager.get(this.sessionId, this.principal!) }
+      catch (error) { this.failed(error); return }
+    }
     // A bundle that cannot be read, or whose replay fails, is unreadable: final, never a resync loop.
     const bundle = session.outputSaved ? await this.manager.bundle(this.sessionId).catch(() => undefined) : undefined
     if (this.closed) return

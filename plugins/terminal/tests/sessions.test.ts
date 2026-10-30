@@ -196,6 +196,45 @@ test('outputText (the agent tool\'s output): history then screen as lines, the l
   await manager.store.saveBundle(session.id, await picture('final words'))
   expect((await manager.outputText(session.id, agent)).text).toBe('final words')
 })
+test('a reassignment while a read waits revokes it: access is checked again when the read runs', async () => {
+  const { manager, replicas } = fixture()
+  const session = await manager.create({ title: 'Revoked', cwd: '/tmp' }, agent)
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bcsecret'), cols: 80, rows: 24, reason: 'test', history: true })
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  let waiting = 0
+  const read = replica.read.bind(replica)
+  replica.read = (async (fn: Parameters<typeof read>[0]) => { waiting++; await gate; return read(fn) }) as typeof replica.read
+  replicas.set(session.id, replica)
+  const screen = manager.readScreen(session.id, agent)
+  const text = manager.outputText(session.id, agent)
+  for (let n = 0; n < 50 && waiting < 2; n++) await Bun.sleep(2)
+  expect(waiting).toBe(2)
+  await manager.control(session.id, human, 'assign', 'chef')
+  release()
+  const results = await Promise.allSettled([screen, text])
+  expect(results.map((result) => result.status === 'rejected' && String(result.reason))).toEqual(['Error: Session not available to this agent', 'Error: Session not available to this agent'])
+  replica.close()
+})
+test('a natural exit registers its final save with the exit: finalSaved waits for it', async () => {
+  const { manager, live, finalCut } = fixture()
+  const session = await manager.create({ title: 'Exiting', cwd: '/tmp' }, human)
+  let release!: () => void
+  finalCut.next = () => new Promise((resolve) => { release = () => resolve(undefined) })
+  live.delete(session.id)
+  const refresh = manager.refreshStates()
+  for (let n = 0; n < 50 && manager.get(session.id, human).state !== 'exited'; n++) await Bun.sleep(2)
+  expect(manager.get(session.id, human).state).toBe('exited')
+  let settled = false
+  const saved = manager.finalSaved(session.id).then(() => { settled = true })
+  await Bun.sleep(20)
+  expect(settled).toBe(false)
+  release()
+  await saved
+  await refresh
+  expect(manager.get(session.id, human).outputSaved).toBe(false)
+})
 test('delete always removes the session — a retained worktree tears down, never blocks', async () => {
   const { manager, live, releases, forgotten } = fixture()
   const session = await manager.create({ title: 'Done', cwd: '/tmp' }, agent)
