@@ -154,14 +154,7 @@ export class Sessions {
     const saving = await this.run(async () => {
       const saves: Promise<void>[] = []
       for (const session of this.store.sessions()) {
-        if (session.state === 'running' && !await this.driver.alive(session.id)) {
-          session.state = 'exited'
-          this.forgetNatives(session.id)
-          this.save(session)
-          // The pane stays (remain-on-exit): what the program printed last is in the replica. Its save is
-          // registered with the exit, so a viewer that joins the ended session waits for it (`finalSaved`).
-          saves.push(this.saveFinal(session.id))
-        }
+        if (session.state === 'running' && !await this.driver.alive(session.id)) saves.push(this.publishExit(session))
       }
       return saves
     }, true)
@@ -665,6 +658,19 @@ export class Sessions {
     this.ending.set(id, work)
     return work
   }
+  /**
+   * A running session's program exited (in the queue): its final save is
+   * registered before the exit is published, so a viewer that joins the
+   * ended session waits for it (`finalSaved`). The pane stays
+   * (remain-on-exit): what the program printed last is in the replica.
+   */
+  private publishExit(session: Session): Promise<void> {
+    const saving = this.saveFinal(session.id)
+    session.state = 'exited'
+    this.forgetNatives(session.id)
+    this.save(session)
+    return saving
+  }
   /** Settles once the session's final save in flight, if any, has: its record then says whether it was saved. */
   finalSaved(id: string): Promise<void> {
     return this.ending.get(id) ?? Promise.resolve()
@@ -806,17 +812,27 @@ export class Sessions {
   private sweeps = new Set<Promise<void>>()
   private async sweepOnce(): Promise<void> {
     // An exited session whose final output is not saved yet (a failed save) tries again before
-    // maintenance may complete it, outside the queue.
-    for (const session of this.store.sessions()) if (session.state === 'exited' && session.outputSaved === false) await this.saveFinal(session.id)
+    // maintenance may complete it: every retry reserved at once (in the queue, attached to its
+    // retained pane if nothing is), then saved outside it.
+    const retries = await this.run(async () => this.store.sessions()
+      .filter((session) => session.state === 'exited' && session.outputSaved === false)
+      .map((session) => {
+        // A control client that closed is replaced: a new one seeds a replica from the pane.
+        if (!this.driver.connected(session.id)) this.attached.delete(session.id)
+        this.attachUnreconciled(session)
+        return this.saveFinal(session.id)
+      }), true)
+    await Promise.all(retries)
     return this.run(() => this.sweepUnlocked(), true)
   }
   /**
    * Set up (or update) the tmux service in the manager's queue, so it can
    * never land in the middle of a session's creation, then reattach.
    */
-  setupService(install: () => Promise<void>, options: { startup?: boolean } = {}): Promise<void> {
-    return this.run(async () => {
+  async setupService(install: () => Promise<void>, options: { startup?: boolean } = {}): Promise<void> {
+    const saving = await this.run(async () => {
       await install()
+      const saves: Promise<void>[] = []
       for (const session of this.store.sessions()) {
         if (session.state !== 'running') continue
         if (await this.driver.alive(session.id)) {
@@ -828,9 +844,16 @@ export class Sessions {
           await this.driver.title(session)
           // Unreconciled, the session stays detached; the first join or read retries.
           await this.attach(session)
-        } else { session.state = 'exited'; this.save(session) }
+        } else {
+          // Its program exited while nothing watched (a restart): attached to its retained pane, its
+          // replica seeds from it, so the final save still has the last screen.
+          this.attachUnreconciled(session)
+          saves.push(this.publishExit(session))
+        }
       }
+      return saves
     })
+    await Promise.all(saving)
   }
   /**
    * The service update a person confirmed (Terminal's Apply update): the

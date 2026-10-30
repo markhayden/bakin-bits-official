@@ -358,8 +358,12 @@ export class TerminalViewer {
     let session = ended
     // Not saved yet may be a save still in flight (a natural exit is published before its save ends): wait for it.
     if (!session.outputSaved) {
-      await this.manager.finalSaved(this.sessionId)
+      // Within the join's deadline: a save that takes longer is the reconnect's to wait for.
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), this.options.replicaWaitMs ?? REPLICA_WAIT_MS) })
+      const outcome = await Promise.race([this.manager.finalSaved(this.sessionId), late]).finally(() => clearTimeout(timer))
       if (this.closed) return
+      if (outcome === 'late') { this.close(SOCKET_CLOSE.resync, 'Terminal output not ready; reconnect'); return }
       try { session = this.manager.get(this.sessionId, this.principal!) }
       catch (error) { this.failed(error); return }
     }

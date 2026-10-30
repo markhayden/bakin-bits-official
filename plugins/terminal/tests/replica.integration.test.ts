@@ -407,6 +407,26 @@ processTest('final output (plan T35b): a terminate right after the last output, 
   }
 }, 60_000)
 
+processTest('final output after a restart: a session whose program exited while nothing was attached saves its last screen from the retained pane at setup', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bakin-replica-cold-'))
+  const h = await harness(root)
+  const store = (h.manager as unknown as { store: Store }).store
+  try {
+    await until(() => Boolean(h.driver.replica(h.session.id)?.cut()), 'seeded')
+    // As after a restart: Bakin's client gone, then the program prints and exits unwatched.
+    await h.driver.detach(h.session.id)
+    ;(h.manager as unknown as { attached: Set<string> }).attached.clear()
+    await h.service.command(['send-keys', '-t', h.session.id, "printf '%s-%s\\n' last before-restart; exit", 'Enter'])
+    await until(async () => (await h.service.command(['display-message', '-p', '-t', h.session.id, '#{pane_dead}'])).trim() === '1', 'pane dead')
+    await h.manager.setupService(async () => {})
+    expect(h.manager.get(h.session.id, human)).toMatchObject({ state: 'exited', outputSaved: true })
+    expect(await bundleText((await store.bundle(h.session.id))!)).toContain('last-before-restart')
+  } finally {
+    await h.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 60_000)
+
 processTest('final output (plan T35b): a terminate during an overload rebuild ends within its bound, and what was recorded survives a reopen consistently', async () => {
   const root = mkdtempSync(join(tmpdir(), 'bakin-replica-final-flood-'))
   const h = await harness(root)

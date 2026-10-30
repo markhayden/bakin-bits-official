@@ -217,23 +217,74 @@ test('a reassignment while a read waits revokes it: access is checked again when
   expect(results.map((result) => result.status === 'rejected' && String(result.reason))).toEqual(['Error: Session not available to this agent', 'Error: Session not available to this agent'])
   replica.close()
 })
-test('a natural exit registers its final save with the exit: finalSaved waits for it', async () => {
+test('a natural exit registers its final save with the exit: a viewer joining while the refresh still checks another session waits for it', async () => {
   const { manager, live, finalCut } = fixture()
-  const session = await manager.create({ title: 'Exiting', cwd: '/tmp' }, human)
-  let release!: () => void
-  finalCut.next = () => new Promise((resolve) => { release = () => resolve(undefined) })
-  live.delete(session.id)
+  const first = await manager.create({ title: 'First', cwd: '/tmp' }, human)
+  const second = await manager.create({ title: 'Second', cwd: '/tmp' }, human)
+  let releaseSave!: () => void
+  finalCut.next = () => new Promise((resolve) => { releaseSave = () => resolve(undefined) })
+  // The refresh publishes the first exit, then waits on the second's liveness check.
+  let releaseCheck!: () => void
+  const check = new Promise<void>((resolve) => { releaseCheck = resolve })
+  const alive = manager['driver'].alive.bind(manager['driver'])
+  manager['driver'].alive = async (id: string) => { if (id === second.id) await check; return alive(id) }
+  live.delete(first.id)
   const refresh = manager.refreshStates()
-  for (let n = 0; n < 50 && manager.get(session.id, human).state !== 'exited'; n++) await Bun.sleep(2)
-  expect(manager.get(session.id, human).state).toBe('exited')
+  for (let n = 0; n < 50 && manager.get(first.id, human).state !== 'exited'; n++) await Bun.sleep(2)
+  expect(manager.get(first.id, human).state).toBe('exited')
   let settled = false
-  const saved = manager.finalSaved(session.id).then(() => { settled = true })
+  const saved = manager.finalSaved(first.id).then(() => { settled = true })
   await Bun.sleep(20)
   expect(settled).toBe(false)
-  release()
+  releaseCheck()
+  releaseSave()
   await saved
   await refresh
-  expect(manager.get(session.id, human).outputSaved).toBe(false)
+  expect(manager.get(first.id, human).outputSaved).toBe(false)
+})
+test('setup finds a session that exited while nothing watched (a restart): it attaches to the retained pane first, and its save is registered with the exit', async () => {
+  const { manager, live, finalCut, attaches, finals } = fixture()
+  const session = await manager.create({ title: 'Restarted', cwd: '/tmp' }, human)
+  // As after a restart: nothing attached, and the program has exited meanwhile.
+  ;(manager as unknown as { attached: Set<string> }).attached.clear()
+  live.delete(session.id)
+  let releaseSave!: () => void
+  finalCut.next = () => new Promise((resolve) => { releaseSave = () => resolve(undefined) })
+  const setup = manager.setupService(async () => {})
+  for (let n = 0; n < 50 && !finals.some((entry) => entry.startsWith(`final ${session.id}`)); n++) await Bun.sleep(2)
+  expect(attaches.filter((id) => id === session.id)).toHaveLength(2)
+  expect(manager.get(session.id, human).state).toBe('exited')
+  let settled = false
+  void manager.finalSaved(session.id).then(() => { settled = true })
+  await Bun.sleep(20)
+  expect(settled).toBe(false)
+  releaseSave()
+  await setup
+  expect(settled).toBe(true)
+})
+test('sweep reserves every retried save before waiting on any: a later one is never completed (its pane killed) while an earlier one saves', async () => {
+  const { manager, live, finalCut, terminated, store, advance } = fixture()
+  const first = await manager.create({ title: 'First', cwd: '/tmp' }, human)
+  const second = await manager.create({ title: 'Second', cwd: '/tmp' }, human)
+  for (const id of [first.id, second.id]) live.delete(id)
+  await manager.refreshStates()
+  for (const id of [first.id, second.id]) store.markOutput(id, false)
+  advance()
+  const releases: Array<() => void> = []
+  finalCut.next = () => new Promise((resolve) => { releases.push(() => resolve(undefined)) })
+  const sweep = manager.sweep()
+  for (let n = 0; n < 50 && releases.length === 0; n++) await Bun.sleep(2)
+  let settled = false
+  void manager.finalSaved(second.id).then(() => { settled = true })
+  await Bun.sleep(20)
+  expect(settled).toBe(false)
+  // Maintenance run meanwhile (a creation's) leaves both reserved sessions alone.
+  await manager['run'](() => manager['sweepUnlocked'](), true)
+  expect(terminated).toEqual([])
+  for (let n = 0; n < 50 && releases.length < 2; n++) { for (const release of releases.splice(0)) release(); await Bun.sleep(2) }
+  for (const release of releases.splice(0)) release()
+  await sweep
+  expect(terminated.sort()).toEqual([first.id, second.id].sort())
 })
 test('delete always removes the session — a retained worktree tears down, never blocks', async () => {
   const { manager, live, releases, forgotten } = fixture()

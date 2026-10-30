@@ -319,6 +319,15 @@ describe('TerminalViewer pictures', () => {
     await until(() => peer.of('barrier').length === 1, 'joined the saved picture')
     expect(peer.state.closed).toBeNull()
   })
+  it('a final save that does not settle within the join deadline closes for a reconnect, never a final not-saved', async () => {
+    const { manager, pendingSave } = fakeManager(session({ state: 'exited', outputSaved: false }), {})
+    pendingSave(new Promise<void>(() => {}))
+    const peer = fakeSocket()
+    new TerminalViewer(manager, peer.socket, 's1', { ...options, replicaWaitMs: 100 })
+    peer.client({ type: 'hello', clientId: CLIENT })
+    await until(() => peer.state.closed !== null, 'closed')
+    expect(peer.state.closed).toEqual({ code: SOCKET_CLOSE.resync, reason: 'Terminal output not ready; reconnect' })
+  })
   it('a bundle that cannot be read, or whose replay fails, closes 4005 unreadable: never a stuck join or a resync loop', async () => {
     const replica = await seeded()
     const cut = replica.cut()!
