@@ -207,6 +207,25 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     expect(deskSocket.inputs().length).toBe(deskInputs)
     await phone.waitForFunction(() => document.querySelector('.terminal-pane')?.getAttribute('data-fit') === 'pane')
 
+    // A phone's header shows the size as an icon alone; the desktop shows the grid too.
+    expect(await sizeButton(phone).locator('.terminal-size-grid').isVisible()).toBe(false)
+    expect(await sizeButton(desk).locator('.terminal-size-grid').isVisible()).toBe(true)
+    // Going back hands the size to the desktop; it then offers going back to the phone, and the phone
+    // (whose own fit is already offered) shows no going back. Fitting again takes it back.
+    // (The phone's size popover is still open from its fit above.)
+    await phone.getByRole('button', { name: 'Back to desktop', exact: true }).tap()
+    const restore = await phoneSocket.waitFor((frame) => frame.type === 'restore-size')
+    expect(typeof restore.epoch).toBe('number')
+    await desk.waitForFunction(() => document.querySelector('[aria-label^="Terminal size"]')?.getAttribute('aria-label')?.includes('sized by this device'))
+    await phone.getByRole('button', { name: 'Back to desktop', exact: true }).waitFor({ state: 'detached' })
+    expect(await phone.getByRole('button', { name: /^Back to / }).count()).toBe(0)
+    await sizeButton(desk).click()
+    await desk.getByRole('button', { name: 'Back to phone', exact: true }).waitFor()
+    await desk.keyboard.press('Escape')
+    await phone.getByRole('button', { name: 'Fit to this device', exact: true }).tap()
+    await desk.waitForFunction(() => document.querySelector('[aria-label^="Terminal size"]')?.getAttribute('aria-label')?.includes('sized by phone'))
+    await phone.waitForFunction(() => document.querySelector('.terminal-pane')?.getAttribute('data-fit') === 'pane')
+
     // The phone leaving freezes the size; the desktop says so and can take it back.
     await phone.close()
     await desk.waitForFunction(() => document.querySelector('[aria-label^="Terminal size"]')?.getAttribute('aria-label')?.includes('size frozen'))

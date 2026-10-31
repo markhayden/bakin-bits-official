@@ -473,6 +473,54 @@ test('any human may claim, even while an agent drives; a former authority is sta
   await expect(manager.claim(session.id, agent, 100, 30, { kind: 'browser', device: 'desktop' })).rejects.toThrow()
 })
 
+test('going back restores the previous grid and the screen that sized it; only a human may', async () => {
+  const { manager, tmuxSizes } = fixture()
+  const session = await manager.create({ title: 'Shared', cwd: '/tmp', program: 'shell' }, human)
+  const desk = { kind: 'human', id: 'desk-0123456789abcdef' } as const
+  const phone = { kind: 'human', id: 'phone-0123456789abcdef' } as const
+  await expect(manager.restoreSize(session.id, desk, session.sizeEpoch)).rejects.toThrow('There is no previous size to go back to')
+  await manager.claim(session.id, desk, 180, 50, { kind: 'browser', device: 'desktop' })
+  const handedOff = await manager.claim(session.id, phone, 44, 30, { kind: 'browser', device: 'phone' })
+  const epoch = handedOff.sizeEpoch
+  expect(handedOff.previousSize).toEqual({ cols: 180, rows: 50, authority: { viewer: desk.id, kind: 'browser', device: 'desktop' } })
+  await expect(manager.restoreSize(session.id, agent, epoch)).rejects.toThrow('Only the human sizes terminal sessions')
+  // Two screens go back at once: the first wins; the second, decided at the same epoch, is refused rather than toggling back.
+  const [first, second] = await Promise.allSettled([manager.restoreSize(session.id, phone, epoch), manager.restoreSize(session.id, desk, epoch)])
+  expect(first.status).toBe('fulfilled')
+  expect(second.status === 'rejected' ? String(second.reason) : 'restored twice').toContain('The size changed meanwhile')
+  const restored = manager.get(session.id, human)
+  expect(restored.sizeAuthority).toEqual({ viewer: desk.id, kind: 'browser', device: 'desktop' })
+  expect([restored.cols, restored.rows, restored.sizeEpoch]).toEqual([180, 50, epoch + 1])
+  expect(tmuxSizes.get(session.id)).toEqual({ cols: 180, rows: 50 })
+  // The phone's former epoch is stale now; its size is the one to go back to.
+  await expect(manager.resizeAs(session.id, phone, epoch, 44, 24)).rejects.toThrow('Another device is sizing this session')
+  expect(restored.previousSize).toEqual({ cols: 44, rows: 30, authority: { viewer: phone.id, kind: 'browser', device: 'phone' } })
+})
+
+test('going back to a terminal app sizes by its window now, and only while tmux still lists it', async () => {
+  const { manager, nativeAttach, natives } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  await nativeAttach(session.id, ghostty(501))
+  await manager.confirmAttach(reserved.token, 501)
+  let claimed = await manager.claim(session.id, human, 60, 20, { kind: 'browser', device: 'phone' })
+  // The app's window changed while the phone sized the session.
+  await nativeAttach(session.id, ghostty(501, 132, 44, false))
+  let restored = await manager.restoreSize(session.id, human, claimed.sizeEpoch)
+  expect(restored.sizeAuthority).toEqual({ viewer: 'native:501', kind: 'native' })
+  expect([restored.cols, restored.rows]).toEqual([132, 44])
+  // The phone sizes it again and the app's window changes (Bakin caches 140×45); then the app leaves and the
+  // restore runs before Bakin hears of it: the grid the app left (132×44), never its cached window.
+  claimed = await manager.claim(session.id, human, 60, 20, { kind: 'browser', device: 'phone' })
+  await nativeAttach(session.id, ghostty(501, 140, 45, false))
+  const cached = manager.nativeClients(session.id)[0]!
+  expect([cached.cols, cached.rows]).toEqual([140, 45])
+  natives.set(session.id, [])
+  restored = await manager.restoreSize(session.id, human, claimed.sizeEpoch)
+  expect(restored.sizeAuthority).toEqual({ viewer: 'native:501', kind: 'native' })
+  expect([restored.cols, restored.rows]).toEqual([132, 44])
+})
+
 test('claims clamp to the 40x10 floor', async () => {
   const { manager } = fixture()
   const session = await manager.create({ title: 'Tiny', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })

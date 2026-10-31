@@ -72,8 +72,13 @@
   outline-offset: -2px;
 }
 
-/* Compact headers show the grid alone; the popover names who sizes it. */
-@media (max-width: 48rem) {
+/* Narrow screens drop who sizes it; phones and narrow screens show the icon
+   alone. The popover (and the trigger's label) carry the rest. */
+@media (max-width: 64rem) {
+  [data-bakin-plugin="terminal"] .terminal-size-detail { display: none; }
+}
+@media (max-width: 48rem), (pointer: coarse) {
+  [data-bakin-plugin="terminal"] .terminal-size-grid,
   [data-bakin-plugin="terminal"] .terminal-size-detail { display: none; }
 }
 

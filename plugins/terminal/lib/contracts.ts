@@ -15,6 +15,7 @@ export type Principal = { kind: 'human'; id: string } | { kind: 'agent'; id: str
 /** What kind of screen claims the size: it names the authority in the header ("Sized by phone"). */
 export const screenDevice = z.enum(['desktop', 'phone'])
 export type SizeClaimant = { kind: 'browser'; device: z.infer<typeof screenDevice> } | { kind: 'native' }
+export type SizeAuthority = { viewer: string } & SizeClaimant
 export interface Session {
   revision?: number
   id: string
@@ -30,7 +31,9 @@ export interface Session {
   cols: number
   rows: number
   /** The viewer that sizes the grid (spec D2); absent until someone claims. */
-  sizeAuthority?: { viewer: string } & SizeClaimant
+  sizeAuthority?: SizeAuthority
+  /** The grid and authority before the last handoff: "go back" restores them (spec D10). */
+  previousSize?: { cols: number; rows: number; authority: SizeAuthority }
   /** Bumped by every claim; a resize must carry the current epoch. */
   sizeEpoch: number
   /** Bumped by every actual dimension change; agents re-read after it moves. */

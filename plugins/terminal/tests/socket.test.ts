@@ -48,6 +48,7 @@ function fakeManager(initial = session(), raw: { replica?: RawSource; bundle?: B
     },
     claim: async () => current,
     resizeAs: async () => current,
+    restoreSize: async () => current,
     replica: () => raw.replica,
     bundle: async () => raw.bundle,
     diverged: (id, detail) => { divergences.push(`${id} ${detail.category} ${detail.mismatches}`) },
@@ -203,7 +204,7 @@ describe('TerminalViewer', () => {
     expect(peer.state.closed?.code).toBe(SOCKET_CLOSE.notFound)
   })
 
-  it('routes claim and epoch-checked resize to the manager and reports a refused size quietly', async () => {
+  it('routes claim, epoch-checked resize and restore to the manager and reports a refused size quietly', async () => {
     const { manager } = await live()
     const calls: string[] = []
     manager.claim = async (_id, principal, cols, rows, authority) => { calls.push(`claim ${principal.id} ${cols}x${rows} ${authority.kind}/${authority.kind === 'browser' ? authority.device : ''}`); return manager.get('s1', principal) }
@@ -211,10 +212,12 @@ describe('TerminalViewer', () => {
     const peer = fakeSocket()
     new TerminalViewer(manager, peer.socket, 's1', options)
     await joined(peer)
+    manager.restoreSize = async (_id, principal, epoch) => { calls.push(`restore ${principal.id} @${epoch}`); throw new TerminalError('There is no previous size to go back to', 409) }
     peer.client({ type: 'claim', cols: 120, rows: 40, device: 'phone' })
     peer.client({ type: 'resize', epoch: 2, cols: 100, rows: 30 })
-    await until(() => peer.of('size-refused').length === 1, 'refusal')
-    expect(calls).toEqual([`claim ${CLIENT} 120x40 browser/phone`, 'resize @2'])
+    peer.client({ type: 'restore-size', epoch: 3 })
+    await until(() => peer.of('size-refused').length === 2, 'refusals')
+    expect(calls).toEqual([`claim ${CLIENT} 120x40 browser/phone`, 'resize @2', `restore ${CLIENT} @3`])
     expect(peer.state.closed).toBeNull()
   })
 

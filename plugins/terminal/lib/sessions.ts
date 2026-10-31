@@ -3,7 +3,7 @@ import { realpathSync, statSync } from 'node:fs'
 import { relative, isAbsolute } from 'node:path'
 import { authorize, createSchema, DAY, DeliveryUncertainError, TerminalError, type CreateInput, type Principal, type Session, type SizeClaimant, type TerminalSettings } from './contracts'
 import type { NativeClient, ProcessDriver, WriteOptions } from './processes'
-import { claimSize, clampSize, nextSize } from './sizing'
+import { claimSize, clampSize, nextSize, restoreSize } from './sizing'
 import type { Fidelity, RawSource } from './raw-display'
 import { Store } from './store'
 import { makeBundle, type Bundle } from './bundle'
@@ -310,6 +310,22 @@ export class Sessions {
       if (session.state !== 'running') throw new TerminalError('Session has exited')
       Object.assign(session, claimSize(session, principal.id, claimant))
       const size = clampSize(cols, rows)
+      return this.applySize(session, size.cols, size.rows)
+    })
+  }
+  /** Go back to the size before the last handoff: its grid, and the screen or app that sized it (any human). */
+  restoreSize(id: string, principal: Principal, epoch: number): Promise<Session> {
+    return this.run(async () => {
+      if (principal.kind !== 'human') throw new TerminalError('Only the human sizes terminal sessions', 403)
+      const session = this.get(id, principal)
+      if (session.state !== 'running') throw new TerminalError('Session has exited')
+      const { cols, rows, ...authority } = restoreSize(session, epoch)
+      // A terminal app still attached (tmux lists it now, and it was admitted) sizes by its window now, not the grid it had.
+      const viewer = authority.sizeAuthority?.kind === 'native' ? authority.sizeAuthority.viewer : undefined
+      const admitted = this.natives.get(id)
+      const app = viewer ? (await this.driver.clients(id)).find((client) => nativeViewer(client.pid) === viewer && admitted?.has(client.pid)) : undefined
+      Object.assign(session, authority)
+      const size = app ? clampSize(app.cols, app.rows) : { cols, rows }
       return this.applySize(session, size.cols, size.rows)
     })
   }

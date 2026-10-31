@@ -148,6 +148,13 @@ export class TerminalSocketClient {
     return true
   }
 
+  /** Hand the size back to whoever sized it before the last handoff, as of size `epoch`. True when sent. */
+  restoreSize(epoch: number): boolean {
+    if (!this.ready || !this.socket) return false
+    this.socket.send(JSON.stringify({ type: 'restore-size', epoch }))
+    return true
+  }
+
   /** The authority's pane changed: follow it at the current size `epoch`. True when sent. */
   resize(epoch: number, cols: number, rows: number): boolean {
     if (!this.ready || !this.socket) return false

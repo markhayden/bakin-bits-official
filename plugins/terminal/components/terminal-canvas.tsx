@@ -29,6 +29,8 @@ import '@xterm/xterm/css/xterm.css'
 /** What the page asks of the canvas: "Fit to this device" claims the size; refit applies a new smallest-text choice. */
 export interface TerminalViewHandle {
   fitToDevice(): boolean
+  /** Back to the size before the last handoff; false while reconnecting. */
+  restoreSize(): boolean
   refit(): void
   /** The terminal's text now (Copy text): history and screen, plain; undefined until its first picture is shown. */
   text(): { text: string; lines: number } | undefined
@@ -371,6 +373,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
         const { cols, rows } = clampSize(Math.floor(box.width / cell.width), Math.floor(box.height / cell.height))
         return socket.current?.claim(cols, rows, screenDevice()) ?? false
       },
+      restoreSize: () => socket.current?.restoreSize(callbacks.current.sizeEpoch) ?? false,
       refit: () => applyView(),
     }
     const leave = (event: Event) => {

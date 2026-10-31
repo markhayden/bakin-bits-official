@@ -95,13 +95,22 @@ take control. Reassignment revokes the previous agent's reads and writes.
 
 A session has one real grid. Exactly one screen sizes it, by an explicit
 claim: the browser (or terminal app) that created it, or the last one where
-someone chose **Fit to this device** in the header's size control
-(`200×60 · Sized by this device | desktop | phone | terminal app`). That
+someone chose **Fit to this device** in the header's size control. The
+control is an icon for who sizes the grid (a phone, a desktop, a terminal
+app, or a snowflake when frozen); wide screens add the grid and
+`Sized by this device | desktop | phone | terminal app`. That
 screen keeps the grid fitted to its pane: height changes apply at once,
 width changes after 100 ms. Viewing, typing, rotating, opening a keyboard, or
 Take/Return control on any other screen never resizes anything. When the
 sizing screen disconnects the header says **Size frozen** and the grid holds
 until someone fits it again.
+
+**Fit to this device** is always offered. After a handoff to this device
+the control also offers **Back to desktop** (or phone, or terminal app): the
+screen that sized the session before. A connected one fits the grid to its
+own window again; one that is not connected gets the grid it left, and the
+size holds. Going back is a toggle, so the other screen offers it next.
+Two screens going back at once: the second is refused, as the size moved.
 
 Every other screen renders the real grid locally. Its font is fitted to the
 pane's width (never below 10px on touch screens, 8px elsewhere) and the pane

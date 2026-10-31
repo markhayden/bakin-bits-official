@@ -371,7 +371,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const controls = session && <Inline gap="dense" wrap={false} aria-label="Terminal controls">
             {/* Back to typing after the toggle with a mouse (on touch, focusing would raise the keyboard). */}
             <Tool label={fullscreen.active ? 'Exit full screen' : 'Full screen'} description={fullscreen.active ? 'Back to the page.' : 'Fill the screen with this terminal.'} active={fullscreen.active} onClick={() => { fullscreen.toggle(); if (!window.matchMedia('(pointer: coarse)').matches) inputHandle.current?.focus() }}>{fullscreen.active ? <Shrink size={16} /> : <Expand size={16} />}</Tool>
-            {!ended && !session.historyDeleted && <SizeControl session={session} frozen={presence.sizeFrozen} busy={busy} onMinFont={() => viewHandle.current?.refit()} onFit={() => { if (!viewHandle.current?.fitToDevice()) setError('Size not changed: the terminal is reconnecting.') }} />}
+            {!ended && !session.historyDeleted && <SizeControl session={session} frozen={presence.sizeFrozen} busy={busy} onMinFont={() => viewHandle.current?.refit()} onFit={() => { if (!viewHandle.current?.fitToDevice()) setError('Size not changed: the terminal is reconnecting.') }} onRestore={() => { if (!viewHandle.current?.restoreSize()) setError('Size not changed: the terminal is reconnecting.') }} />}
             <Popover>
               <Tool label="Session details" description="View the working directory, agent assignment, and linked work." render={<PopoverTrigger render={<Button size="icon-sm" variant="ghost" aria-label="Session details" />} />}><Info size={16} /></Tool>
               <PopoverContent align="end">

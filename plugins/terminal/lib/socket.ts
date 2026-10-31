@@ -6,6 +6,8 @@
  *   { generation, viewerSeq, data } · claim { cols, rows, device } (this
  *   screen sizes the session from now on) · resize { epoch, cols, rows } (the
  *   claiming screen changed size; stale for anyone else or an older epoch) ·
+ *   restore-size { epoch } (back to the authority before the last handoff,
+ *   decided at the epoch this screen showed) ·
  *   retired { bytes } (every display byte applied or discarded, in all) ·
  *   replay-applied { epoch } · digest { epoch, seq, digest } · pong
  * server → client (lib/raw-display.ts, spec D13): join / rebase (the
@@ -58,6 +60,7 @@ export interface ViewerManager {
   onNatives(id: string, listener: () => void): () => void
   writeNext(id: string, principal: Principal, generation: number, data: string, options?: WriteOptions): Promise<Session>
   claim(id: string, principal: Principal, cols: number, rows: number, claimant: SizeClaimant): Promise<Session>
+  restoreSize(id: string, principal: Principal, epoch: number): Promise<Session>
   resizeAs(id: string, principal: Principal, epoch: number, cols: number, rows: number): Promise<Session>
   /** The session's replica, while attached. */
   replica(id: string): RawSource | undefined
@@ -77,6 +80,7 @@ const message = z.discriminatedUnion('type', [
   z.object({ type: z.literal('hello'), clientId: z.string().regex(CLIENT_ID) }),
   // `paste`: the data is one paste (lib/paste.ts), delivered as tmux pastes; `enter`: then Return, once it went.
   z.object({ type: z.literal('input'), generation: z.number().int().nonnegative(), viewerSeq: z.number().int().positive(), data: z.string().max(65536), paste: z.boolean().optional(), enter: z.boolean().optional() }),
+  z.object({ type: z.literal('restore-size'), epoch: z.number().int().nonnegative() }),
   z.object({ type: z.literal('claim'), cols: z.number().int().min(1).max(400), rows: z.number().int().min(1).max(150), device: screenDevice }),
   z.object({ type: z.literal('resize'), epoch: z.number().int().nonnegative(), cols: z.number().int().min(1).max(400), rows: z.number().int().min(1).max(150) }),
   z.object({ type: z.literal('pong') }),
@@ -210,8 +214,10 @@ export class TerminalViewer {
       case 'input': return this.input(parsed.generation, parsed.viewerSeq, parsed.data, { paste: parsed.paste ?? false, enter: (parsed.paste ?? false) && (parsed.enter ?? false) })
       case 'claim':
       case 'resize':
+      case 'restore-size':
         try {
-          if (parsed.type === 'claim') await this.manager.claim(this.sessionId, this.principal!, parsed.cols, parsed.rows, { kind: 'browser', device: parsed.device })
+          if (parsed.type === 'restore-size') await this.manager.restoreSize(this.sessionId, this.principal!, parsed.epoch)
+          else if (parsed.type === 'claim') await this.manager.claim(this.sessionId, this.principal!, parsed.cols, parsed.rows, { kind: 'browser', device: parsed.device })
           else await this.manager.resizeAs(this.sessionId, this.principal!, parsed.epoch, parsed.cols, parsed.rows)
         } catch (error) {
           // A stale resize (someone else claimed) is normal: the pushed session says who sizes now.

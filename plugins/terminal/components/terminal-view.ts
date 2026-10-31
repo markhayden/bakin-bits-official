@@ -6,7 +6,7 @@
  * axes. Pinch (or Ctrl+wheel) sets a per-device font that overrides the fit
  * until "Reset view". Both live in this browser's storage, which may be absent.
  */
-import type { Session } from '../lib/contracts'
+import type { SizeAuthority } from '../lib/contracts'
 
 export const BASE_FONT = 13
 export const MAX_FONT = 32
@@ -109,8 +109,7 @@ export function revealClearOf(view: ScrollView & { scrollWidth: number; scrollHe
 }
 
 /** Who "Sized by …" names. Agents never size a session, so they never appear here. */
-export function sizedBy(session: Pick<Session, 'sizeAuthority'>, me: string): string | undefined {
-  const authority = session.sizeAuthority
+export function sizedBy(authority: SizeAuthority | undefined, me: string): string | undefined {
   if (!authority) return undefined
   if (authority.kind === 'native') return 'terminal app'
   return authority.viewer === me ? 'this device' : authority.device
