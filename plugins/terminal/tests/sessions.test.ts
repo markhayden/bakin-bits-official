@@ -3,6 +3,7 @@ import { Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
 import { DAY, TerminalError, type Session } from '../lib/contracts'
 import type { AttachEvents, NativeClient, ProcessDriver } from '../lib/processes'
+import type { AttentionEvent } from '../lib/attention'
 import { MAX_BACKLOG_BYTES, Replica, type Cut } from '../lib/replica'
 import { OutputLog } from '../lib/output-log'
 import { drainFinal } from '../lib/processes'
@@ -39,6 +40,8 @@ function fixture(options: { storePath?: string } = {}) {
   const clientsChanged = new Map<string, () => void>()
   /** Each session's attach events, as the driver gives them (attention, bells). */
   const attachEvents = new Map<string, AttachEvents>()
+  /** What was announced to browsers (lib/attention.ts). */
+  const announced: AttentionEvent[] = []
   const vanishing = new Set<number>()
   const detachedClients: string[] = []
   /** Replicas, by session (none until a test makes one). */
@@ -81,10 +84,11 @@ function fixture(options: { storePath?: string } = {}) {
     settings: () => ({ enabledAgents: enabled }), now: () => now,
     prepare: async () => ({ ok: false }),
     release: async (input) => { releases.push(input); return releasable ? { ok: true } : { ok: false, error: 'Unmerged work' } },
+    announce: (event) => { announced.push(event) },
   })
   managers.push(manager)
   return {
-    manager, store, writes, live, attached, attachEvents, terminated, unkillable, createHold, forgotten, controlLost, attaches, finals, finalCut, paneDied, releases, natives, detachedClients, vanishing, replicas,
+    manager, store, writes, live, attached, attachEvents, announced, terminated, unkillable, createHold, forgotten, controlLost, attaches, finals, finalCut, paneDied, releases, natives, detachedClients, vanishing, replicas,
     /** A terminal app attaches (or resizes) in tmux; the control client notices. */
     nativeAttach: async (id: string, client: NativeClient) => {
       natives.set(id, [...(natives.get(id) ?? []).filter((entry) => entry.pid !== client.pid), client])
@@ -1518,8 +1522,8 @@ describe('attention', () => {
     expect(manager.get(session.id, human).attention).toBeUndefined()
     expect(seen).toEqual([needsYou, undefined])
   })
-  it('an exit clears it, and an ended session records none', async () => {
-    const { manager, attachEvents, live, paneDied, finalCut } = fixture()
+  it('an exit clears it (and says so), and an ended session records none', async () => {
+    const { manager, attachEvents, live, paneDied, finalCut, announced } = fixture()
     const session = await manager.create({ title: 'Codex', cwd: '/tmp', program: 'shell' }, human, start)
     attachEvents.get(session.id)!.attention!('turn-finished')
     await manager.idle()
@@ -1529,6 +1533,7 @@ describe('attention', () => {
     for (let tries = 0; tries < 100 && manager.get(session.id, human).state !== 'exited'; tries++) await Bun.sleep(5)
     await manager.idle()
     expect(manager.get(session.id, human).attention).toBeUndefined()
+    expect(announced).toHaveLength(2)
     attachEvents.get(session.id)!.attention!('needs-you')
     attachEvents.get(session.id)!.bell!('5')
     await manager.idle()
@@ -1536,8 +1541,8 @@ describe('attention', () => {
     expect(manager.get(session.id, human).attention).toBeUndefined()
     expect(manager.get(session.id, human).bellAt).toBeUndefined()
   })
-  it('finishing a session clears it', async () => {
-    const { manager, attachEvents, finalCut } = fixture()
+  it('finishing a session clears it, and says so', async () => {
+    const { manager, attachEvents, finalCut, announced } = fixture()
     const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
     attachEvents.get(session.id)!.attention!('needs-you')
     await manager.idle()
@@ -1545,6 +1550,55 @@ describe('attention', () => {
     await manager.finish(session.id, human, session.generation, true)
     expect(manager.get(session.id, human)).toMatchObject({ state: 'completed' })
     expect(manager.get(session.id, human).attention).toBeUndefined()
+    expect(announced).toEqual([{ sessionId: session.id }, { sessionId: session.id }])
+  })
+  it('every change is announced (by session id: screens re-read); a bell only when recorded', async () => {
+    const { manager, attachEvents, announced, later } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    attachEvents.get(session.id)!.attention!('needs-you')
+    await manager.idle()
+    attachEvents.get(session.id)!.bell!('1')
+    await manager.idle()
+    later(1000)
+    // Within the bell interval: counted, not announced.
+    attachEvents.get(session.id)!.bell!('2')
+    await manager.idle()
+    attachEvents.get(session.id)!.attention!(undefined)
+    await manager.idle()
+    expect(announced).toEqual([{ sessionId: session.id }, { sessionId: session.id }, { sessionId: session.id }])
+  })
+  it('each new state is a new occurrence, strictly increasing even across clears and within one millisecond', async () => {
+    const { manager, attachEvents } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const occurrences: number[] = []
+    for (const state of ['needs-you', 'turn-finished', undefined, 'needs-you'] as const) {
+      attachEvents.get(session.id)!.attention!(state)
+      await manager.idle()
+      const attention = manager.get(session.id, human).attention
+      if (attention) occurrences.push(attention.occurrence)
+    }
+    expect(occurrences).toEqual([1, 2, 3])
+  })
+  it('acknowledging marks only the occurrence shown: a newer one (even in the same millisecond) stays unacknowledged; agents cannot', async () => {
+    const { manager, attachEvents, announced } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    attachEvents.get(session.id)!.attention!('needs-you')
+    await manager.idle()
+    const shown = manager.get(session.id, human).attention!.occurrence
+    attachEvents.get(session.id)!.attention!('turn-finished')
+    await manager.idle()
+    await manager.acknowledge(session.id, human, shown)
+    expect(manager.get(session.id, human).attention).toMatchObject({ state: 'turn-finished' })
+    expect(manager.get(session.id, human).attention?.acknowledgedAt).toBeUndefined()
+    const current = manager.get(session.id, human).attention!.occurrence
+    await manager.acknowledge(session.id, human, current)
+    expect(manager.get(session.id, human).attention?.acknowledgedAt).toBeNumber()
+    expect(announced.at(-1)).toEqual({ sessionId: session.id })
+    // Acknowledging again changes nothing (and announces nothing).
+    const count = announced.length
+    await manager.acknowledge(session.id, human, current)
+    expect(announced.length).toBe(count)
+    await expect(manager.acknowledge(session.id, { kind: 'agent', id: 'main' }, current)).rejects.toThrow()
   })
   it('a bell is a count that differs from the last seen; recorded at most once every 30 seconds', async () => {
     const { manager, attachEvents, later } = fixture()

@@ -1874,7 +1874,9 @@ declare module '@makinbakin/sdk/hooks' {
   export function useFullscreen(): FullscreenControls
   export function useNotificationChannels(): NotificationChannel[]
   export function getChannelLabel(channelId: string, channels?: NotificationChannel[]): string
-  export function toast(message: string, type?: 'success' | 'error' | 'info' | 'warning'): void
+  export function toast(message: import('react').ReactNode, type?: 'success' | 'error' | 'info' | 'warning', duration?: number): string
+  /** An OS notification when the operator enabled them and no Bakin tab has focus (a click opens `url`). */
+  export function sendBrowserNotification(title: string, body: string, url?: string): void
 
   export type PluginEventPayload = Record<string, unknown> & { event?: string }
   export function emitPluginEvent(payload: PluginEventPayload): void

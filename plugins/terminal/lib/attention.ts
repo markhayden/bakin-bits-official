@@ -1,14 +1,15 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Session } from './contracts'
+import type { AttentionState, AttentionSummary, Session } from './contracts'
+export type { AttentionEvent, AttentionState, AttentionSummary } from './contracts'
+export { ATTENTION_EVENT } from './contracts'
 
 /**
  * Attention (spec item 5): what a coding program says about its turn, set by
  * the program's own hooks as the pane option `@bakin_attention` and read
  * through the control client's subscription. A shell has no semantic state.
  */
-export const ATTENTION_STATES = ['needs-you', 'turn-finished', 'working'] as const
-export type AttentionState = typeof ATTENTION_STATES[number]
+export const ATTENTION_STATES = ['needs-you', 'turn-finished', 'working'] as const satisfies readonly AttentionState[]
 
 /** A subscription value: one of the states, or nothing (cleared, unset, or anything else). */
 export function parseAttention(value: string): AttentionState | undefined {
@@ -179,4 +180,9 @@ export type Activity = 'active' | 'quiet' | 'exited'
 export function activity(session: Pick<Session, 'state'>, lastOutputAt: number | undefined, now: number): Activity {
   if (session.state !== 'running') return 'exited'
   return lastOutputAt !== undefined && now - lastOutputAt < ACTIVE_MS ? 'active' : 'quiet'
+}
+
+/** What `GET /attention` gives for a session. */
+export function attentionSummary({ id, title, program, state, attention, bellAt }: Session): AttentionSummary {
+  return { id, title, program, state, attention, bellAt }
 }

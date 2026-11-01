@@ -156,6 +156,11 @@ export function toast(...args) {
   if (override) return override(...args)
 }
 
+export function sendBrowserNotification(...args) {
+  const override = hookOverride('sendBrowserNotification')
+  if (override) return override(...args)
+}
+
 export function usePluginJsonFetch(pluginId, path) {
   const clean = path?.startsWith('/') ? path.slice(1) : path
   const url = path === null ? null : `/api/plugins/${pluginId}/${clean ?? ''}`

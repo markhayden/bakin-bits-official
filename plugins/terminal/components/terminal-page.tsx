@@ -10,7 +10,7 @@ import { attachCommand, shortId, type Session } from '../lib/contracts'
 import type { SessionOptionsData } from '../lib/session-options'
 import { unavailableNotice } from '../lib/unavailable-notice'
 import type { UnavailableReason } from '../lib/socket'
-import { api } from './api'
+import { api, clientId } from './api'
 import { KeyBar } from './key-bar'
 import { lineTail, useCoarsePointer, useEditingSession, useEnterHidesKeyboard } from './editing-session'
 import { INPUT_LIMIT_BYTES, NO_MODIFIERS, type ModifierState, type TerminalInputHandle } from './terminal-input'
@@ -25,6 +25,7 @@ import { NewSession } from './new-session'
 import { TerminalTool as Tool } from './terminal-tool'
 import { useTerminalAgents } from './use-terminal-agents'
 import { SessionActions, type SessionConfirmation } from './session-actions'
+import { attentionChip, setWatching, wantsYou, WATCHING_BEAT_MS } from './attention'
 import './terminal.css'
 
 const VIEWS = ['active', 'review', 'completed', 'all'] as const
@@ -200,6 +201,48 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   // One word (the tooltip has the rest, e.g. "Watching Patch").
   const chipLabel = session?.historyDeleted ? 'Output deleted' : ended ? 'Ended' : !connected ? streamStatus.split(' / ')[0] : writable ? 'Driving' : 'Watching'
   const statusChip = session && <Badge size="xs" variant="solid" tone={chipTone} role="status" title={status}>{chipLabel}</Badge>
+  // What a coding program says about its turn (lib/attention.ts): outlined once acknowledged.
+  const attention = session && attentionChip(session)
+  const attentionBadgeEl = attention && <Badge size="xs" variant={attention.acknowledged ? 'outline' : 'solid'} tone={attention.tone} title={attention.title} data-attention={session?.attention?.state}>{attention.label}</Badge>
+  // Open and focused here: other tabs on this device hear it, so none of them tells this session. Its own
+  // lifecycle, beating while the session is open (an attention change never interrupts it).
+  const watchingId = session?.state === 'running' ? session.id : undefined
+  useEffect(() => {
+    if (!watchingId) return
+    const tab = clientId()
+    const beat = () => setWatching(tab, document.visibilityState === 'visible' && document.hasFocus() ? watchingId : undefined)
+    beat()
+    const timer = setInterval(beat, WATCHING_BEAT_MS)
+    window.addEventListener('focus', beat)
+    window.addEventListener('blur', beat)
+    document.addEventListener('visibilitychange', beat)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener('focus', beat)
+      window.removeEventListener('blur', beat)
+      document.removeEventListener('visibilitychange', beat)
+      setWatching(tab, undefined)
+    }
+  }, [watchingId])
+  // A state that wants you, seen here, is acknowledged by its occurrence — retried each beat while focused
+  // until it lands (the badge and every other device follow).
+  const acknowledgeOccurrence = session && wantsYou(session) ? session.attention?.occurrence : undefined
+  useEffect(() => {
+    if (!watchingId || acknowledgeOccurrence === undefined) return
+    const acknowledge = () => {
+      if (document.visibilityState !== 'visible' || !document.hasFocus()) return
+      void api<Session>('/session', { id: watchingId, operation: 'acknowledge', occurrence: acknowledgeOccurrence }).then((result) => { if (result.id) update(result) }).catch(() => undefined)
+    }
+    acknowledge()
+    const timer = setInterval(acknowledge, WATCHING_BEAT_MS)
+    window.addEventListener('focus', acknowledge)
+    document.addEventListener('visibilitychange', acknowledge)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener('focus', acknowledge)
+      document.removeEventListener('visibilitychange', acknowledge)
+    }
+  }, [watchingId, acknowledgeOccurrence, update])
   // Shown while the session is also open in a terminal app on this Mac (bakin terminal attach).
   const appChip = session && !ended && presence.nativeClients > 0 && <Badge size="xs" variant="outline" title="Also open in a terminal app on this Mac"><AppWindow size={12} />Open in a terminal app</Badge>
   useEffect(() => { setAssignment(session?.agentId ?? '') }, [session?.id, session?.agentId])
@@ -465,7 +508,7 @@ function Workspace({ sessionId }: { sessionId?: string }) {
             const name = choice?.name ?? item.agentId
             return <Inline gap="dense" wrap={false} className="min-w-0"><AgentAvatar size="xs" decorative agent={{ id: item.agentId, name, imageSrc: choice?.imageSrc, color: choice?.color }} /><Text size="meta" className="truncate">{name}</Text></Inline>
           } },
-          { key: 'state', header: 'Status', narrow: 'meta', sortable: true, sortValue: (item) => item.state === 'running' ? 0 : item.state === 'exited' ? 1 : 2, cell: (item) => <Stack gap="dense" align="start"><Badge size="xs" variant="solid" tone={item.state === 'running' ? 'success' : 'neutral'}>{item.state === 'running' ? 'Running' : item.state === 'exited' ? 'Exited' : 'Completed'}</Badge>{item.state === 'running' && (apps[item.id] ?? 0) > 0 && <Badge size="xs" variant="outline"><AppWindow size={12} />Open in a terminal app</Badge>}{item.worktreePath && <Badge size="xs" variant="soft">Worktree retained</Badge>}</Stack> },
+          { key: 'state', header: 'Status', narrow: 'meta', sortable: true, sortValue: (item) => item.state === 'running' ? 0 : item.state === 'exited' ? 1 : 2, cell: (item) => <Stack gap="dense" align="start"><Badge size="xs" variant="solid" tone={item.state === 'running' ? 'success' : 'neutral'}>{item.state === 'running' ? 'Running' : item.state === 'exited' ? 'Exited' : 'Completed'}</Badge>{(() => { const chip = attentionChip(item); return chip && <Badge size="xs" variant={chip.acknowledged ? 'outline' : 'solid'} tone={chip.tone} title={chip.title}>{chip.label}</Badge> })()}{item.state === 'running' && (apps[item.id] ?? 0) > 0 && <Badge size="xs" variant="outline"><AppWindow size={12} />Open in a terminal app</Badge>}{item.worktreePath && <Badge size="xs" variant="soft">Worktree retained</Badge>}</Stack> },
           { key: 'activity', header: 'Last activity', narrow: 'label', sortable: true, sortValue: (item) => item.lastActivityAt, cell: (item) => <Text size="meta" tone="muted" title={new Date(item.lastActivityAt).toLocaleString()}>{formatAge(new Date(item.lastActivityAt).toISOString())}</Text> },
           { key: 'cwd', header: 'Working directory', narrow: 'label', headClassName: 'w-1/3', cellClassName: 'whitespace-normal', cell: (item) => <Text size="meta" tone="muted" mono className="block break-all">{item.cwd}</Text> },
           { key: 'actions', header: 'Actions', narrow: 'trailing', hideLabel: true, align: 'end', headClassName: 'w-(--bakin-layout-size-row)', cell: (item) => <SessionActions session={item} busy={busy} label={`Actions for ${item.title}`} allowTake onOperate={(operation, id) => void operate(operation, {}, id)} onConfirm={setConfirm} /> },
@@ -475,9 +518,9 @@ function Workspace({ sessionId }: { sessionId?: string }) {
     </PageBody>
   </Page> : <WorkspacePage mode="immersive" viewport="visual" className="terminal-page" data-terminal-ui-ready={!loading ? '' : undefined}>
     <WorkspacePageHeader>
-        <PageHeader navigation={back} eyebrow="Terminal" title={session?.title ?? 'Terminal'} meta={<Inline gap="dense" wrap={false}>{statusChip}{appChip}</Inline>} actions={controls} />
+        <PageHeader navigation={back} eyebrow="Terminal" title={session?.title ?? 'Terminal'} meta={<Inline gap="dense" wrap={false}>{statusChip}{attentionBadgeEl}{appChip}</Inline>} actions={controls} />
     </WorkspacePageHeader>
-    <WorkspacePageCompactHeader navigation={back} title={<Inline gap="dense" wrap={false} className="min-w-0 items-center"><span className="truncate">{session?.title ?? 'Terminal'}</span>{statusChip}{appChip}</Inline>} action={controls} />
+    <WorkspacePageCompactHeader navigation={back} title={<Inline gap="dense" wrap={false} className="min-w-0 items-center"><span className="truncate">{session?.title ?? 'Terminal'}</span>{statusChip}{attentionBadgeEl}{appChip}</Inline>} action={controls} />
     {/* The accessory slot stays mounted for any live session and only its
         content follows the device and keyboard: adding or removing the slot
         itself restructures the body and would remount the terminal (dropping

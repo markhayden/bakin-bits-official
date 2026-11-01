@@ -7,6 +7,7 @@ import { Store } from './lib/store'
 import { TerminalService } from './lib/service'
 import { TmuxProcesses } from './lib/processes'
 import { Sessions } from './lib/sessions'
+import { ATTENTION_EVENT, attentionSummary } from './lib/attention'
 import { MemoryWarning, RETAINED_WARNING_BYTES } from './lib/memory'
 import { runSliced } from './lib/replica'
 import { TerminalError, terminalSettings, type Principal } from './lib/contracts'
@@ -39,7 +40,7 @@ const route = (path: string, method: 'GET' | 'POST', summary: string, handler: (
 })
 
 export default definePlugin({
-  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.26',
+  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.27',
   routes: [
     route('/options', 'GET', 'Get terminal form defaults and available agents and tasks', async (request) => {
       const principal = human(request)
@@ -58,6 +59,11 @@ export default definePlugin({
       if (serviceReady) await sessions().refreshStates()
       const list = sessions().list(principal).map((session) => ({ ...session, nativeClients: sessions().nativeClients(session.id).length, activity: sessions().activity(session) }))
       return Response.json({ sessions: list, serviceReady, serviceUpdateRequired: await service?.updateRequired() })
+    }),
+    // The nav badge's read: no tmux round trips (the list's state refresh is the page's).
+    route('/attention', 'GET', "Each session's attention, for the nav badge", async (request) => {
+      const principal = human(request)
+      return Response.json({ sessions: sessions().list(principal).map(attentionSummary) })
     }),
     route('/sessions', 'POST', 'Create a terminal session', async (request) => {
       const principal = human(request)
@@ -135,6 +141,7 @@ export default definePlugin({
       validateLinks: async (input) => {
         if (input.taskId && !await ctx.tasks.get(input.taskId)) throw new TerminalError('Linked task was not found', 400)
       },
+      announce: (event) => ctx.events.emit(ATTENTION_EVENT, event),
       log: ctx.log,
     })
     if (await service.ready()) await manager.start()

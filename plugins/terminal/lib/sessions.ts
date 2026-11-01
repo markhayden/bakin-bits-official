@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
 import { relative, isAbsolute } from 'node:path'
 import { authorize, createSchema, DAY, DeliveryUncertainError, TerminalError, type CreateInput, type Principal, type Session, type SizeClaimant, type TerminalSettings } from './contracts'
-import { activity, type Activity, type AttentionState } from './attention'
+import { activity, type Activity, type AttentionEvent, type AttentionState } from './attention'
 import type { NativeClient, ProcessDriver, WriteOptions } from './processes'
 import { claimSize, clampSize, nextSize, restoreSize } from './sizing'
 import type { Fidelity, RawSource } from './raw-display'
@@ -39,6 +39,8 @@ export interface SessionOptions {
   prepare(input: { repoPath: string; sessionId: string; agent: string }): Promise<WorktreeResult | undefined>
   release(input: { sessionId: string; worktreePath: string; teardown?: boolean }): Promise<WorktreeResult | undefined>
   validateLinks?(input: CreateInput): Promise<void>
+  /** Tell every browser (lib/attention.ts ATTENTION_EVENT). */
+  announce?(event: AttentionEvent): void
   now?(): number
   log?: { info(message: string, data?: Record<string, unknown>): void }
 }
@@ -199,10 +201,34 @@ export class Sessions {
     return this.run(async () => {
       const session = this.store.sessions().find((entry) => entry.id === id)
       if (!session || session.state !== 'running' || session.attention?.state === state) return
-      if (state) session.attention = { state, since: this.now() }
-      else delete session.attention
+      if (state) {
+        const occurrence = (session.attentionSeq ?? 0) + 1
+        session.attentionSeq = occurrence
+        session.attention = { state, since: this.now(), occurrence }
+      } else delete session.attention
       this.save(session)
+      this.announce({ sessionId: id })
     }).catch(() => undefined)
+  }
+  /**
+   * The operator saw the session's state (it is open and focused): it stops
+   * counting. Only the occurrence shown — a newer one stays unacknowledged.
+   */
+  acknowledge(id: string, principal: Principal, occurrence: number): Promise<Session> {
+    return this.run(async () => {
+      if (principal.kind !== 'human') throw new TerminalError('Only the operator acknowledges', 403)
+      const session = this.get(id, principal)
+      if (!session.attention || session.attention.occurrence !== occurrence || session.attention.acknowledgedAt !== undefined) return session
+      session.attention = { ...session.attention, acknowledgedAt: this.now() }
+      this.save(session)
+      this.announce({ sessionId: id })
+      return session
+    })
+  }
+  private announce(event: AttentionEvent): void {
+    try { this.options.announce?.(event) } catch (error) {
+      this.options.log?.info('Terminal could not announce attention', { sessionId: event.sessionId, error: error instanceof Error ? error.message : String(error) })
+    }
   }
   /**
    * tmux's bell count: one that differs from the count last seen rang (a
@@ -216,9 +242,11 @@ export class Sessions {
       const session = this.store.sessions().find((entry) => entry.id === id)
       if (!session || session.state !== 'running' || session.bellCount === count) return
       // A session from before counts were kept starts from tmux's.
-      if (session.bellCount !== undefined && this.now() - (session.bellAt ?? -Infinity) >= BELL_INTERVAL_MS) session.bellAt = this.now()
+      const rang = session.bellCount !== undefined && this.now() - (session.bellAt ?? -Infinity) >= BELL_INTERVAL_MS
+      if (rang) session.bellAt = this.now()
       session.bellCount = count
       this.save(session)
+      if (rang) this.announce({ sessionId: id })
     }).catch(() => undefined)
   }
   private async detach(id: string): Promise<void> {
@@ -690,9 +718,11 @@ export class Sessions {
       await this.detach(id)
       this.forgetNatives(id)
       session.state = 'completed'
+      const had = session.attention !== undefined
       delete session.attention
       session.completedAt = this.now()
       this.save(session)
+      if (had) this.announce({ sessionId: id })
       await this.clean(session)
       return session
     }, true)
@@ -723,9 +753,11 @@ export class Sessions {
     const saving = this.saveFinal(session.id)
     session.state = 'exited'
     // Nobody's turn is pending in a program that ended.
+    const had = session.attention !== undefined
     delete session.attention
     this.forgetNatives(session.id)
     this.save(session)
+    if (had) this.announce({ sessionId: session.id })
     return saving
   }
   /** Settles once the session's final save in flight, if any, has: its record then says whether it was saved. */

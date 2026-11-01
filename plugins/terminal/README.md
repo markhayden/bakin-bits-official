@@ -213,6 +213,8 @@ Claude Code and Codex sessions report their turn: **needs you** (a permission or
 - A subagent's tool runs never change the main agent's state. An interrupted turn clears: Codex says so at once; Claude Code reports no interrupt, so its idle prompt about a minute later clears a leftover "working" or "needs you".
 - **Shell** sessions have no turn state.
 
+Sessions show their state as a chip in the list and the session header (solid until seen, then outlined). The **Terminal** nav item counts sessions that need you or whose turn finished. Each change to one of those, and each bell, raises a toast in every visible Bakin tab and one OS notification (when notifications are on and no Bakin tab has focus) — except for the session you have open and focused on this device, which instead marks the state as seen, on every device. Seen and resolved are separate: a seen state stays on the chip until the program moves on.
+
 Every session also has an activity — active (it printed in the last 5 seconds), quiet, or exited — and a bell (as tmux counts them: not the BEL that ends a title) is recorded at most once every 30 seconds.
 
 ## Agent Tool

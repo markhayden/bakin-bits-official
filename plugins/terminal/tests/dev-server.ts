@@ -14,6 +14,7 @@ import { command, creatingScreen, failure, human } from '../lib/http'
 import { TerminalViewer, viewersRetainedSteps } from '../lib/socket'
 import { drain } from '../lib/terminal-state'
 import { attachBody, confirmBody, launch, operator, resolveRef } from '../lib/cli'
+import { ATTENTION_EVENT, attentionSummary } from '../lib/attention'
 
 const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-preview-'))
 // Terminal runs only the managed tmux: give the disposable home one
@@ -28,7 +29,10 @@ writeFileSync(join(root, 'tmux.conf'), tmuxConfig())
 const tmux = Bun.spawn([service.tmux!, '-D', '-S', service.socket, '-f', join(root, 'tmux.conf')], { env: terminalEnvironment(), stdout: 'ignore', stderr: 'ignore' })
 for (let i = 0; i < 40 && !await service.ready(); i++) await Bun.sleep(50)
 if (!await service.ready()) { tmux.kill(); await tmux.exited; throw new Error('Preview tmux service failed to start') }
+// The host's event stream for plugin events (`/__events`): attention announcements, as ctx.events relays them.
+const listeners = new Set<ReadableStreamDefaultController<string>>()
 const manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProcesses(service), {
+  announce: (event) => { for (const listener of listeners) listener.enqueue(`data: ${JSON.stringify({ event: ATTENTION_EVENT, ...event })}\n\n`) },
   settings: () => ({ enabledAgents: [{ id: 'patch' }] }),
   prepare: async () => ({ ok: false, error: 'Preview has no Git plugin. Use an existing checkout.' }),
   release: async () => ({ ok: false }),
@@ -76,6 +80,11 @@ const server = Bun.serve<ViewerData>({
     }
     try {
       // The preview's memory for the bounded-load gate: the heap after a collection, and resident memory.
+      if (url.pathname === '/__events') {
+        let mine: ReadableStreamDefaultController<string> | undefined
+        const stream = new ReadableStream<string>({ start(controller) { mine = controller; listeners.add(controller); controller.enqueue(': open\n\n') }, cancel() { if (mine) listeners.delete(mine) } })
+        return new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } })
+      }
       if (url.pathname === '/__memory') {
         Bun.gc(true)
         return Response.json({ heap: heapStats().heapSize, rss: process.memoryUsage.rss(), estimate: { sessions: drain(manager.retainedSteps()), viewers: drain(viewersRetainedSteps()) } })
@@ -103,8 +112,9 @@ const server = Bun.serve<ViewerData>({
         }
         if (path === '/sessions' && request.method === 'GET') {
           await manager.refreshStates()
-          return Response.json({ sessions: manager.list(principal).map((session) => ({ ...session, nativeClients: manager.nativeClients(session.id).length })), serviceReady: true })
+          return Response.json({ sessions: manager.list(principal).map((session) => ({ ...session, nativeClients: manager.nativeClients(session.id).length, activity: manager.activity(session) })), serviceReady: true })
         }
+        if (path === '/attention') return Response.json({ sessions: manager.list(principal).map(attentionSummary) })
         if (path === '/sessions' && request.method === 'POST') {
           const body = await request.json() as Record<string, unknown>
           return Response.json(await manager.create(body, principal, creatingScreen(body.size)))

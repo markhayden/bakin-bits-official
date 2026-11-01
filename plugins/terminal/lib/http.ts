@@ -24,11 +24,13 @@ export function creatingScreen(raw: unknown): StartSize | undefined {
  */
 export const commandSchema = z.object({
   id: z.string().min(1).max(100),
-  operation: z.enum(['take', 'return', 'assign', 'complete', 'terminate', 'delete-history', 'delete']),
+  operation: z.enum(['take', 'return', 'assign', 'complete', 'terminate', 'delete-history', 'delete', 'acknowledge']),
   generation: z.number().int().nonnegative().optional(),
   sequence: z.number().int().positive().optional(),
   data: z.string().max(65536).optional(),
   agentId: z.string().min(1).max(100).optional(),
+  /** `acknowledge`: the attention occurrence shown. */
+  occurrence: z.number().int().positive().optional(),
 })
 
 export async function command(manager: Sessions, raw: unknown, principal: Principal): Promise<unknown> {
@@ -38,6 +40,9 @@ export async function command(manager: Sessions, raw: unknown, principal: Princi
     case 'complete': case 'terminate': return manager.finish(input.id, principal, input.generation ?? -1, input.operation === 'terminate')
     case 'delete-history': await manager.deleteHistory(input.id, principal); return { deleted: true }
     case 'delete': await manager.deleteSession(input.id, principal); return { deleted: true }
+    case 'acknowledge':
+      if (input.occurrence === undefined) throw new TerminalError('The attention occurrence to acknowledge is required', 400)
+      return manager.acknowledge(input.id, principal, input.occurrence)
   }
 }
 
