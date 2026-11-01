@@ -11,7 +11,8 @@ import { ATTENTION_EVENT, attentionSummary } from './lib/attention'
 import { MemoryWarning, RETAINED_WARNING_BYTES } from './lib/memory'
 import { runSliced } from './lib/replica'
 import { TerminalError, terminalSettings, type Principal } from './lib/contracts'
-import { agentCommand, command, creatingScreen, failure, human } from './lib/http'
+import { agentCommand, command, creatingScreen, failure, human, uploadImage } from './lib/http'
+import { Uploads } from './lib/uploads'
 import { sessionOptions } from './lib/session-options'
 import { listDirectories, recentDirectories } from './lib/directories'
 import { TerminalViewer, viewersRetainedSteps } from './lib/socket'
@@ -40,7 +41,7 @@ const route = (path: string, method: 'GET' | 'POST', summary: string, handler: (
 })
 
 export default definePlugin({
-  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.27',
+  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.28',
   routes: [
     route('/options', 'GET', 'Get terminal form defaults and available agents and tasks', async (request) => {
       const principal = human(request)
@@ -70,6 +71,7 @@ export default definePlugin({
       const body = await request.json() as Record<string, unknown>
       return Response.json(await sessions().create(body, principal, creatingScreen(body.size)))
     }),
+    route('/upload', 'POST', 'Keep an image for a session draft', async (request) => Response.json(await uploadImage(sessions(), request, human(request)))),
     route('/session', 'POST', 'Operate a terminal session', async (request) => {
       const principal = human(request)
       const body = await request.json() as { id?: unknown; operation?: unknown }
@@ -134,7 +136,9 @@ export default definePlugin({
     if (!root) throw new Error('Terminal requires Bakin with local plugin storage and verified invocation support')
     mkdirSync(root, { recursive: true, mode: 0o700 }); chmodSync(root, 0o700)
     service = new TerminalService(root)
-    manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProcesses(service, ctx.log), {
+    const store = new Store(join(root, 'terminal.db'))
+    manager = new Sessions(store, new TmuxProcesses(service, ctx.log), {
+      uploads: new Uploads(root, store),
       settings: () => terminalSettings(ctx.getSettings<Record<string, unknown>>()),
       prepare: (input) => ctx.hooks.invoke('git.prepareSessionWorktree', input),
       release: (input) => ctx.hooks.invoke('git.releaseSessionWorktree', input),

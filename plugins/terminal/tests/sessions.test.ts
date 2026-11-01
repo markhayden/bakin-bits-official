@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, test } from 'bun:test'
-import { Sessions } from '../lib/sessions'
+import { MAX_UPLOADS_READING, Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
 import { DAY, TerminalError, type Session } from '../lib/contracts'
 import type { AttachEvents, NativeClient, ProcessDriver } from '../lib/processes'
@@ -7,13 +7,19 @@ import type { AttentionEvent } from '../lib/attention'
 import { MAX_BACKLOG_BYTES, Replica, type Cut } from '../lib/replica'
 import { OutputLog } from '../lib/output-log'
 import { drainFinal } from '../lib/processes'
-import { rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { Uploads } from '../lib/uploads'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { makeBundle } from '../lib/bundle'
 
 const managers: Sessions[] = []
-afterEach(async () => { for (const manager of managers.splice(0)) await manager.shutdown() })
+/** Temporary upload directories, removed after each test. */
+const roots: string[] = []
+afterEach(async () => {
+  for (const manager of managers.splice(0)) await manager.shutdown()
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
 function fixture(options: { storePath?: string } = {}) {
   let now = 1000
   let enabled = [{ id: 'patch' }, { id: 'chef' }]
@@ -80,7 +86,11 @@ function fixture(options: { storePath?: string } = {}) {
   }
   const releases: Array<{ sessionId: string; worktreePath: string; teardown?: boolean }> = []
   const store = new Store(options.storePath ?? ':memory:')
+  const uploadRoot = mkdtempSync(join(tmpdir(), 'bakin-terminal-uploads-'))
+  roots.push(uploadRoot)
+  const uploads = new Uploads(uploadRoot, store)
   const manager = new Sessions(store, driver, {
+    uploads,
     settings: () => ({ enabledAgents: enabled }), now: () => now,
     prepare: async () => ({ ok: false }),
     release: async (input) => { releases.push(input); return releasable ? { ok: true } : { ok: false, error: 'Unmerged work' } },
@@ -88,7 +98,7 @@ function fixture(options: { storePath?: string } = {}) {
   })
   managers.push(manager)
   return {
-    manager, store, writes, live, attached, attachEvents, announced, terminated, unkillable, createHold, forgotten, controlLost, attaches, finals, finalCut, paneDied, releases, natives, detachedClients, vanishing, replicas,
+    manager, store, writes, live, attached, attachEvents, announced, uploads, uploadRoot, terminated, unkillable, createHold, forgotten, controlLost, attaches, finals, finalCut, paneDied, releases, natives, detachedClients, vanishing, replicas,
     /** A terminal app attaches (or resizes) in tmux; the control client notices. */
     nativeAttach: async (id: string, client: NativeClient) => {
       natives.set(id, [...(natives.get(id) ?? []).filter((entry) => entry.pid !== client.pid), client])
@@ -1616,5 +1626,140 @@ describe('attention', () => {
     expect(await report('2')).toBe(first)
     expect(await report('3')).toBe(first! + 30_000)
     expect(manager.get(session.id, human).bellCount).toBe('3')
+  })
+})
+
+/** A PNG header of the given size (enough for sniffImage), padded to `bytes`. */
+function png(width = 4, height = 3, bytes = 64): Uint8Array {
+  const data = new Uint8Array(bytes)
+  data.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52])
+  new DataView(data.buffer).setUint32(16, width)
+  new DataView(data.buffer).setUint32(20, height)
+  return data
+}
+
+describe('uploads', () => {
+  const start = { cols: 64, rows: 20, kind: 'browser', device: 'desktop' } as const
+  it('the input owner keeps an image at the generation it holds; the path is the session folder', async () => {
+    const { manager, uploadRoot, store } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const upload = await manager.upload(session.id, human, session.generation, async () => png())
+    expect(upload).toMatchObject({ session: session.id, kind: 'png', width: 4, height: 3, bytes: 64 })
+    expect(upload.name).toMatch(/^[0-9a-f-]{36}\.png$/)
+    expect(upload.path).toBe(join(uploadRoot, 'uploads', session.id, upload.name))
+    expect(existsSync(upload.path)).toBe(true)
+    expect(store.uploads(session.id).map((entry) => entry.name)).toEqual([upload.name])
+  })
+  it('a stale generation, an agent, or an ended session keeps nothing', async () => {
+    const { manager, uploadRoot, finalCut } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    await expect(manager.upload(session.id, human, session.generation + 1, async () => png())).rejects.toThrow('Input ownership changed')
+    await expect(manager.upload(session.id, { kind: 'agent', id: 'main' }, session.generation, async () => png())).rejects.toThrow()
+    finalCut.next = async () => undefined
+    await manager.finish(session.id, human, session.generation, true)
+    await expect(manager.upload(session.id, human, manager.get(session.id, human).generation, async () => png())).rejects.toThrow('Session has exited')
+    expect(existsSync(join(uploadRoot, 'uploads'))).toBe(false)
+  })
+  it('only a few bodies are read at once; the next waits its turn by being refused', async () => {
+    const { manager } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const releases: Array<() => void> = []
+    const reading = Array.from({ length: MAX_UPLOADS_READING }, () => manager.upload(session.id, human, session.generation, () => new Promise<Uint8Array>((resolve) => { releases.push(() => resolve(png())) })))
+    await expect(manager.upload(session.id, human, session.generation, async () => png())).rejects.toThrow('Other images are still uploading')
+    // A body read but waiting on the queue still holds its slot.
+    let unblock!: () => void
+    const blocker = manager['run'](() => new Promise<void>((resolve) => { unblock = resolve }))
+    for (const release of releases) release()
+    await Bun.sleep(5)
+    await expect(manager.upload(session.id, human, session.generation, async () => png())).rejects.toThrow('Other images are still uploading')
+    unblock()
+    await blocker
+    expect((await Promise.all(reading)).length).toBe(MAX_UPLOADS_READING)
+    await expect(manager.upload(session.id, human, session.generation, async () => png())).resolves.toMatchObject({ kind: 'png' })
+  })
+  it('two uploads racing for the last of the quota: the queue lets one in', async () => {
+    const { manager, uploads } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const big = png(100, 100, 10 * 1024 * 1024)
+    for (let index = 0; index < 9; index++) uploads.save(session.id, big, 1)
+    const results = await Promise.allSettled([1, 2].map(() => manager.upload(session.id, human, session.generation, async () => big)))
+    expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected'])
+  })
+  it('a history that cannot be deleted yet is tried again; other sessions are still maintained', async () => {
+    const { manager, finalCut, later, uploadRoot } = fixture()
+    finalCut.next = async () => undefined
+    const stuck = await manager.create({ title: 'Stuck', cwd: '/tmp', program: 'shell' }, human, start)
+    await manager.upload(stuck.id, human, stuck.generation, async () => png())
+    await manager.finish(stuck.id, human, stuck.generation, true)
+    const other = await manager.create({ title: 'Other', cwd: '/tmp', program: 'shell' }, human, start)
+    await manager.finish(other.id, human, other.generation, true)
+    later(30 * DAY)
+    // Its folder cannot be emptied.
+    chmodSync(join(uploadRoot, 'uploads', stuck.id), 0o000)
+    try {
+      await manager.sweep()
+      expect(manager.get(stuck.id, human).historyDeleted).toBeUndefined()
+      expect(manager.get(other.id, human).historyDeleted).toBe(true)
+    } finally { chmodSync(join(uploadRoot, 'uploads', stuck.id), 0o700) }
+    await manager.sweep()
+    expect(manager.get(stuck.id, human).historyDeleted).toBe(true)
+  })
+  it('thirty days after a session completed, its history and its images are deleted', async () => {
+    const { manager, finalCut, later, uploads } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const upload = await manager.upload(session.id, human, session.generation, async () => png())
+    uploads.markSent(session.id, upload.name, 1)
+    finalCut.next = async () => undefined
+    await manager.finish(session.id, human, session.generation, true)
+    later(30 * DAY)
+    await manager.sweep()
+    expect(manager.get(session.id, human).historyDeleted).toBe(true)
+    expect(existsSync(upload.path)).toBe(false)
+  })
+  it('a takeover while the bytes arrive keeps nothing (the generation is checked again once they are in)', async () => {
+    const { manager, uploadRoot } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    let arrive!: (bytes: Uint8Array) => void
+    const uploading = manager.upload(session.id, human, session.generation, () => new Promise((resolve) => { arrive = resolve }))
+    await manager.idle()
+    await manager.control(session.id, human, 'take')
+    arrive(png())
+    await expect(uploading).rejects.toThrow('Input ownership changed')
+    expect(existsSync(join(uploadRoot, 'uploads', session.id))).toBe(false)
+  })
+  it('removing one takes only a recorded upload (never a path a caller made up)', async () => {
+    const { manager, uploadRoot } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const upload = await manager.upload(session.id, human, session.generation, async () => png())
+    expect(await manager.removeUpload(session.id, human, session.generation, '../terminal.db')).toEqual({ removed: false })
+    expect(await manager.removeUpload(session.id, human, session.generation, upload.name)).toEqual({ removed: true })
+    expect(readdirSync(join(uploadRoot, 'uploads', session.id))).toEqual([])
+  })
+  it('deleting the history or the session deletes its images', async () => {
+    const { manager, uploadRoot, store } = fixture()
+    for (const remove of ['history', 'session'] as const) {
+      const session = await manager.create({ title: remove, cwd: '/tmp', program: 'shell' }, human, start)
+      const upload = await manager.upload(session.id, human, session.generation, async () => png())
+      await manager.finish(session.id, human, session.generation, true)
+      if (remove === 'history') await manager.deleteHistory(session.id, human)
+      else await manager.deleteSession(session.id, human)
+      expect(existsSync(upload.path)).toBe(false)
+      expect(existsSync(join(uploadRoot, 'uploads', session.id))).toBe(false)
+      expect(store.uploads(session.id)).toEqual([])
+    }
+  })
+  it('maintenance removes images never sent within a day; sent ones stay', async () => {
+    const { manager, uploads, later } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const sent = await manager.upload(session.id, human, session.generation, async () => png())
+    const draft = await manager.upload(session.id, human, session.generation, async () => png())
+    uploads.markSent(session.id, sent.name, 1)
+    later(24 * 60 * 60 * 1000 - 1)
+    await manager.sweep()
+    expect(existsSync(draft.path)).toBe(true)
+    later(2)
+    await manager.sweep()
+    expect(existsSync(draft.path)).toBe(false)
+    expect(existsSync(sent.path)).toBe(true)
   })
 })

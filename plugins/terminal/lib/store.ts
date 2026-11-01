@@ -1,6 +1,7 @@
 import { Database } from 'bun:sqlite'
 import { assembleBundle, bundleHeader, bundleParts, type Bundle, type BundlePart } from './bundle'
 import type { Session } from './contracts'
+import type { Upload } from './uploads'
 
 /** Sliced store work holds the event loop at most about this long between yields. */
 const SLICE_MS = 4
@@ -20,7 +21,8 @@ export class Store {
       CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS bundles (session TEXT PRIMARY KEY, generation INTEGER NOT NULL, header TEXT NOT NULL, bytes INTEGER NOT NULL, saved_at INTEGER NOT NULL, parts INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS bundle_parts (session TEXT NOT NULL, generation INTEGER NOT NULL, idx INTEGER NOT NULL, kind TEXT NOT NULL, meta TEXT, data BLOB, PRIMARY KEY (session, generation, idx));
-      CREATE TABLE IF NOT EXISTS bundle_generations (id INTEGER PRIMARY KEY AUTOINCREMENT);`)
+      CREATE TABLE IF NOT EXISTS bundle_generations (id INTEGER PRIMARY KEY AUTOINCREMENT);
+      CREATE TABLE IF NOT EXISTS uploads (session TEXT NOT NULL, name TEXT NOT NULL, kind TEXT NOT NULL, bytes INTEGER NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, created_at INTEGER NOT NULL, sent_at INTEGER, PRIMARY KEY (session, name));`)
     // The generation counter starts above every generation already stored (rows written before it existed).
     const highest = (this.db.query('SELECT MAX(g) AS g FROM (SELECT MAX(generation) AS g FROM bundles UNION ALL SELECT MAX(generation) FROM bundle_parts UNION ALL SELECT MAX(id) FROM bundle_generations)').get() as { g: number | null }).g
     if (highest) this.db.query('INSERT OR IGNORE INTO bundle_generations(id) VALUES (?)').run(highest)
@@ -185,5 +187,32 @@ export class Store {
       this.db.query('DELETE FROM sessions WHERE id=?').run(session)
     })()
   }
+  /** Images pasted into sessions (lib/uploads.ts): the records, the files are theirs. */
+  addUpload(upload: Upload): void {
+    this.db.query('INSERT INTO uploads VALUES (?, ?, ?, ?, ?, ?, ?, NULL)').run(upload.session, upload.name, upload.kind, upload.bytes, upload.width, upload.height, upload.createdAt)
+  }
+  uploads(session: string): Upload[] {
+    return (this.db.query('SELECT * FROM uploads WHERE session=? ORDER BY created_at').all(session) as UploadRow[]).map(uploadOf)
+  }
+  uploadBytes(session: string): number {
+    return (this.db.query('SELECT COALESCE(SUM(bytes), 0) AS total FROM uploads WHERE session=?').get(session) as { total: number }).total
+  }
+  markUploadSent(session: string, name: string, at: number): void {
+    this.db.query('UPDATE uploads SET sent_at=COALESCE(sent_at, ?) WHERE session=? AND name=?').run(at, session, name)
+  }
+  /** Whether there was such an upload. */
+  deleteUpload(session: string, name: string): boolean {
+    return this.db.query('DELETE FROM uploads WHERE session=? AND name=?').run(session, name).changes > 0
+  }
+  deleteUploads(session: string): void {
+    this.db.query('DELETE FROM uploads WHERE session=?').run(session)
+  }
+  /** Never sent, and made before `before`. */
+  abandonedUploads(before: number): Upload[] {
+    return (this.db.query('SELECT * FROM uploads WHERE sent_at IS NULL AND created_at < ?').all(before) as UploadRow[]).map(uploadOf)
+  }
   close(): void { this.db.close() }
 }
+
+interface UploadRow { session: string; name: string; kind: Upload['kind']; bytes: number; width: number; height: number; created_at: number; sent_at: number | null }
+const uploadOf = (row: UploadRow): Upload => ({ session: row.session, name: row.name, kind: row.kind, bytes: row.bytes, width: row.width, height: row.height, createdAt: row.created_at, ...(row.sent_at !== null ? { sentAt: row.sent_at } : {}) })

@@ -320,6 +320,15 @@ left out); an ended session's comes from its saved final screen.
   worktrees, and successful service shutdown. Linked plugins must use
   `bakin plugins remove terminal`, not bypass preflight through unlink.
 
+- Images pasted into a session are kept in the plugin's own data folder,
+  `<plugin data>/uploads/<session>/<generated name>` (folder `0700`, files
+  `0600`): PNG, JPEG or WebP only, recognised by their bytes, at most 10 MB
+  each, 40 megapixels (as the image's header says) and 100 MB per session.
+  Only whoever drives the session can add one, checked again once the image
+  has arrived. They are deleted with the session's history (by hand, or 30
+  days after it completed) and with the session; one never sent to the
+  program is deleted after 24 hours.
+
 ## Security and Privacy
 
 This is a trusted single-user host, **not an OS sandbox or hostile-agent

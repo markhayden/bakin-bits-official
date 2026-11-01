@@ -7,6 +7,7 @@ import type { NativeClient, ProcessDriver, WriteOptions } from './processes'
 import { claimSize, clampSize, nextSize, restoreSize } from './sizing'
 import type { Fidelity, RawSource } from './raw-display'
 import { Store } from './store'
+import type { Upload, Uploads } from './uploads'
 import { makeBundle, type Bundle } from './bundle'
 import { visibleText } from './terminal-state'
 import { bufferText } from './buffer-text'
@@ -39,11 +40,16 @@ export interface SessionOptions {
   prepare(input: { repoPath: string; sessionId: string; agent: string }): Promise<WorktreeResult | undefined>
   release(input: { sessionId: string; worktreePath: string; teardown?: boolean }): Promise<WorktreeResult | undefined>
   validateLinks?(input: CreateInput): Promise<void>
+  /** Images pasted into sessions (lib/uploads.ts). */
+  uploads?: Uploads
   /** Tell every browser (lib/attention.ts ATTENTION_EVENT). */
   announce?(event: AttentionEvent): void
   now?(): number
   log?: { info(message: string, data?: Record<string, unknown>): void }
 }
+
+/** Image bodies read at once, every session together (each at most 10 MB). */
+export const MAX_UPLOADS_READING = 4
 
 /** Bells closer together than this are one notification (spec item 5). */
 export const BELL_INTERVAL_MS = 30_000
@@ -67,6 +73,8 @@ export class Sessions {
   /** Sessions this manager has attached (its control client asked for), until detached: attach runs once per session. */
   private attached = new Set<string>()
   private closed = false
+  /** Image bodies being read now (MAX_UPLOADS_READING at most). */
+  private uploadsReading = 0
   constructor(readonly store: Store, private driver: ProcessDriver, private options: SessionOptions) {}
   private now(): number { return this.options.now?.() ?? Date.now() }
   /** Persist and tell live viewers (ownership, size and state reach them at once). */
@@ -223,6 +231,40 @@ export class Sessions {
       this.save(session)
       this.announce({ sessionId: id })
       return session
+    })
+  }
+  /**
+   * Keep an image for the session's input (spec item 8): only its input
+   * owner, at the generation it holds — checked again once the bytes are in,
+   * in the queue, so a takeover meanwhile keeps nothing.
+   */
+  async upload(id: string, principal: Principal, generation: number, read: () => Promise<Uint8Array>): Promise<Upload & { path: string }> {
+    const uploads = this.options.uploads
+    if (!uploads) throw new TerminalError('Image paste is unavailable', 503)
+    const writable = (session: Session) => {
+      authorize(session, principal, this.enabled(), true, generation)
+      if (session.state !== 'running') throw new TerminalError('Session has exited')
+    }
+    writable(this.get(id, principal))
+    // Bodies are read outside the queue: only a few at once, so their memory stays bounded.
+    if (this.uploadsReading >= MAX_UPLOADS_READING) throw new TerminalError('Other images are still uploading; try again in a moment', 503)
+    // The slot is held until the image is kept or refused: a body waiting on the queue still counts.
+    this.uploadsReading++
+    try {
+      const bytes = await read()
+      return await this.run(async () => {
+        writable(this.get(id, principal))
+        const upload = uploads.save(id, bytes, this.now())
+        return { ...upload, path: uploads.path(upload) }
+      })
+    } finally { this.uploadsReading-- }
+  }
+  /** The operator took an image out of the draft. */
+  removeUpload(id: string, principal: Principal, generation: number, name: string): Promise<{ removed: boolean }> {
+    return this.run(async () => {
+      const session = this.get(id, principal)
+      authorize(session, principal, this.enabled(), true, generation)
+      return { removed: this.options.uploads?.remove(id, name) ?? false }
     })
   }
   private announce(event: AttentionEvent): void {
@@ -838,6 +880,8 @@ export class Sessions {
     if (session.state !== 'completed') throw new TerminalError('Complete the session before deleting history')
     await this.detach(id)
     this.store.deleteBundle(id)
+    // Its pasted images are its history too.
+    this.options.uploads?.removeSession(id)
     session.historyDeleted = true
     this.save(session)
   }
@@ -856,6 +900,7 @@ export class Sessions {
       await this.detach(id)
       this.forgetNatives(id)
       this.driver.forget?.(id)
+      this.options.uploads?.removeSession(id)
       this.store.deleteSession(id)
     })
   }
@@ -875,6 +920,9 @@ export class Sessions {
   }
   /** `retried`: the unsaved sessions whose save this sweep tried again; any other unsaved one waits for a sweep that does. */
   private async sweepUnlocked(retried = new Set<string>()): Promise<void> {
+    for (const failure of this.options.uploads?.sweepAbandoned(this.now()) ?? []) {
+      this.options.log?.info('Terminal could not delete an abandoned image; it is tried again next sweep', failure)
+    }
     for (const session of this.store.sessions()) {
       if (this.now() - session.lastActivityAt >= (this.options.settings().idleDays ?? 30) * DAY) {
         // Not while its final save is in flight, nor before a retry of a failed one (sweep() tries it first).
@@ -887,7 +935,12 @@ export class Sessions {
         }
       }
       if (session.state === 'completed') await this.clean(session)
-      if (session.completedAt !== undefined && this.now() - session.completedAt >= 30 * DAY && !session.historyDeleted) await this.deleteHistoryUnlocked(session.id, { kind: 'human', id: 'maintenance' })
+      if (session.completedAt !== undefined && this.now() - session.completedAt >= 30 * DAY && !session.historyDeleted) {
+        // One that cannot be deleted now (an image that will not go) is tried again next sweep; the rest go on.
+        await this.deleteHistoryUnlocked(session.id, { kind: 'human', id: 'maintenance' }).catch((error: unknown) => {
+          this.options.log?.info('Terminal could not delete a session history; it is tried again next sweep', { sessionId: session.id, error: error instanceof Error ? error.message : String(error) })
+        })
+      }
     }
   }
   sweep(): Promise<void> {
