@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
 import { relative, isAbsolute } from 'node:path'
 import { authorize, createSchema, DAY, DeliveryUncertainError, TerminalError, type CreateInput, type Principal, type Session, type SizeClaimant, type TerminalSettings } from './contracts'
+import { activity, type Activity, type AttentionState } from './attention'
 import type { NativeClient, ProcessDriver, WriteOptions } from './processes'
 import { claimSize, clampSize, nextSize, restoreSize } from './sizing'
 import type { Fidelity, RawSource } from './raw-display'
@@ -41,6 +42,9 @@ export interface SessionOptions {
   now?(): number
   log?: { info(message: string, data?: Record<string, unknown>): void }
 }
+
+/** Bells closer together than this are one notification (spec item 5). */
+export const BELL_INTERVAL_MS = 30_000
 
 /** How long an ending session's final picture may take (a drain, or a rebuild's seed) before its output is recorded as not saved. */
 export const FINAL_CUT_MS = 3000
@@ -183,7 +187,39 @@ export class Sessions {
   private attachUnreconciled(session: Session): void {
     if (this.attached.has(session.id)) return
     this.attached.add(session.id)
-    this.driver.attach(session, () => this.clientsChanged(session.id), () => this.paneDied())
+    this.driver.attach(session, {
+      clientsChanged: () => this.clientsChanged(session.id),
+      died: () => this.paneDied(),
+      attention: (state) => { void this.attention(session.id, state) },
+      bell: (count) => { void this.bell(session.id, count) },
+    })
+  }
+  /** The program's hooks changed its pane's attention (or a fresh attachment read it): a running session records it. */
+  private attention(id: string, state: AttentionState | undefined): Promise<void> {
+    return this.run(async () => {
+      const session = this.store.sessions().find((entry) => entry.id === id)
+      if (!session || session.state !== 'running' || session.attention?.state === state) return
+      if (state) session.attention = { state, since: this.now() }
+      else delete session.attention
+      this.save(session)
+    }).catch(() => undefined)
+  }
+  /**
+   * tmux's bell count: one that differs from the count last seen rang (a
+   * bell is recorded at most once every BELL_INTERVAL_MS, so every screen
+   * notifies once). The count is kept with the session, so a bell between
+   * attachments, or before tmux's first report, is never taken for the
+   * starting point.
+   */
+  private bell(id: string, count: string): Promise<void> {
+    return this.run(async () => {
+      const session = this.store.sessions().find((entry) => entry.id === id)
+      if (!session || session.state !== 'running' || session.bellCount === count) return
+      // A session from before counts were kept starts from tmux's.
+      if (session.bellCount !== undefined && this.now() - (session.bellAt ?? -Infinity) >= BELL_INTERVAL_MS) session.bellAt = this.now()
+      session.bellCount = count
+      this.save(session)
+    }).catch(() => undefined)
   }
   private async detach(id: string): Promise<void> {
     this.attached.delete(id)
@@ -221,7 +257,7 @@ export class Sessions {
         ...input, cwd, agentId, id: `terminal-${randomUUID()}`, owner: principal,
         generation: 1, inputSequence: 0, state: 'running',
         ...this.startSize(principal, size),
-        createdAt: this.now(), lastActivityAt: this.now(),
+        createdAt: this.now(), lastActivityAt: this.now(), bellCount: '',
         // Its final output is a bundle once it ends (plan T35b); a crash before that leaves this false.
         outputSaved: false,
       }
@@ -465,6 +501,8 @@ export class Sessions {
   fidelity(id: string): Fidelity { return this.driver.fidelity?.(id) ?? { rebuilds: {} } }
   /** The terminal apps admitted to a session right now. */
   nativeClients(id: string): NativeClient[] { return [...this.natives.get(id)?.values() ?? []] }
+  /** Active, quiet or exited, from the pane's real output (lib/attention.ts). */
+  activity(session: Session): Activity { return activity(session, this.driver.lastOutputAt?.(session.id), this.now()) }
   /** Hear when a terminal app is admitted, resizes, or leaves. */
   onNatives(id: string, listener: () => void): () => void {
     let listeners = this.nativeListeners.get(id)
@@ -652,6 +690,7 @@ export class Sessions {
       await this.detach(id)
       this.forgetNatives(id)
       session.state = 'completed'
+      delete session.attention
       session.completedAt = this.now()
       this.save(session)
       await this.clean(session)
@@ -683,6 +722,8 @@ export class Sessions {
   private publishExit(session: Session): Promise<void> {
     const saving = this.saveFinal(session.id)
     session.state = 'exited'
+    // Nobody's turn is pending in a program that ended.
+    delete session.attention
     this.forgetNatives(session.id)
     this.save(session)
     return saving

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { ATTENTION_OPTION, ATTENTION_SUBSCRIPTION, attentionLaunch, BELL_OPTION, BELL_SUBSCRIPTION, bellHook, parseAttention, type AttentionState } from './attention'
 import type { Session } from './contracts'
 import { TerminalError } from './contracts'
 import { ControlClient } from './control'
@@ -11,6 +12,14 @@ import { Replica, type Cut, type SizeRevision } from './replica'
 import { reseed } from './reseed'
 import { stripPasteMarkers } from './paste'
 import { TerminalService, terminalEnvironment } from './service'
+
+export interface AttachEvents {
+  clientsChanged(): void
+  died?(): void
+  attention?(state: AttentionState | undefined): void
+  /** tmux's bell count for the session, on attach and whenever it changes. */
+  bell?(count: string): void
+}
 
 /** A tmux client on a session that is not Bakin's own control client: a terminal app (Ghostty and friends) or anything else that attached. */
 export interface NativeClient {
@@ -28,9 +37,11 @@ export interface ProcessDriver {
   /**
    * `clientsChanged` fires when a tmux client attaches to, resizes on, or
    * detaches from the session; `died` when tmux reports its pane dead (a hint:
-   * the caller confirms with `alive`).
+   * the caller confirms with `alive`); `attention` with the pane's attention
+   * (lib/attention.ts) on attach and whenever it changes (lossy, at most once a
+   * second); `bell` with tmux's bell count (lib/attention.ts), likewise.
    */
-  attach(session: Session, clientsChanged: () => void, died?: () => void): void
+  attach(session: Session, events: AttachEvents): void
   /** The session's health (spec D13): its control client, which carries input, output and queries. */
   connected(id: string): boolean
   /**
@@ -52,6 +63,8 @@ export interface ProcessDriver {
   detach(id?: string): Promise<void>
   /** The session's server replica (spec D13), while attached. */
   replica?(id: string): Replica | undefined
+  /** When the pane last printed (wall clock), since this process attached it. */
+  lastOutputAt?(id: string): number | undefined
   /** The rebuilds the session's output has been through (outlives replica replacement, kept until `forget`). */
   fidelity?(id: string): Fidelity
   /**
@@ -180,6 +193,8 @@ export class TmuxProcesses implements ProcessDriver {
   private cursorRebuiltAt = new Map<string, number>()
   /** Sessions made by this process and not attached yet: their first replica starts with the pane, losing nothing. */
   private fresh = new Set<string>()
+  /** When each session's pane last printed (its `%output`, never a seed). */
+  private outputAt = new Map<string, number>()
   constructor(private service: TerminalService, private log?: { info(message: string, data?: Record<string, unknown>): void }, private options: { now?: () => number; cursorCheckMs?: number } = {}) {}
   private now(): number { return this.options.now?.() ?? performance.now() }
   async create(session: Session): Promise<void> {
@@ -187,8 +202,12 @@ export class TmuxProcesses implements ProcessDriver {
     const env = terminalEnvironment()
     const executable = session.program === 'shell' ? env.SHELL || '/bin/zsh' : Bun.which(session.program, { PATH: env.PATH })
     if (!executable) throw new TerminalError(`${session.program} is not installed`, 503)
+    // A coding program's hooks report its attention to this session's pane (lib/attention.ts).
+    const attention = attentionLaunch(session.program, { root: this.service.root, tmux: this.service.tmux!, socket: this.service.socket, sessionId: session.id })
     await this.service.command(['new-session', '-d', '-s', session.id, '-x', String(session.cols), '-y', String(session.rows), '-c', session.cwd,
-      '/usr/bin/env', '-i', ...Object.entries(env).map(([key, value]) => `${key}=${value}`), executable, ...(session.program === 'shell' ? ['-l'] : [])])
+      '/usr/bin/env', '-i', ...Object.entries({ ...env, ...attention.env }).map(([key, value]) => `${key}=${value}`), executable, ...(session.program === 'shell' ? ['-l'] : attention.args),
+      // In the same command: tmux runs all of it before it reads the program's first output, so a bell at startup is counted.
+      ';', ...bellHook(session.id)])
     this.fresh.add(session.id)
     await this.title(session)
   }
@@ -196,7 +215,7 @@ export class TmuxProcesses implements ProcessDriver {
   async title(session: Session): Promise<void> {
     await this.service.command(['set-option', '-t', session.id, '@bakin_title', session.title])
   }
-  attach(session: Session, clientsChanged: () => void, died?: () => void): void {
+  attach(session: Session, events: AttachEvents): void {
     // Attached already (a live control client): once per session, never a second client (a lost one is detached first).
     if (this.connected(session.id)) return
     // A client attaching to this session, any client leaving, or the
@@ -208,14 +227,20 @@ export class TmuxProcesses implements ProcessDriver {
     const control = ControlClient.attach(this.service.tmux!, this.service.socket, session.id, terminalEnvironment(), {
       notification: (line) => {
         const [kind, , , name] = line.split(' ')
-        if ((kind === '%client-session-changed' && name === session.id) || kind === '%client-detached' || line.startsWith('%subscription-changed bakin-client ')) clientsChanged()
-        // The program exited (the pane stays: remain-on-exit); its value follows ' : '.
-        if (line.startsWith('%subscription-changed bakin-dead ') && line.slice(line.indexOf(' : ') + 3).trim() === '1') died?.()
+        if ((kind === '%client-session-changed' && name === session.id) || kind === '%client-detached' || line.startsWith('%subscription-changed bakin-client ')) events.clientsChanged()
+        // A subscription's value follows ' : '. The program exited (the pane stays: remain-on-exit).
+        const value = () => line.slice(line.indexOf(' : ') + 3)
+        if (line.startsWith('%subscription-changed bakin-dead ') && value().trim() === '1') events.died?.()
+        if (line.startsWith(`%subscription-changed ${ATTENTION_SUBSCRIPTION} `)) events.attention?.(parseAttention(value()))
+        if (line.startsWith(`%subscription-changed ${BELL_SUBSCRIPTION} `)) events.bell?.(value().trim())
         const layout = parseLayoutChange(line)
         if (layout) log.layout(layout.cols, layout.rows)
       },
       // A Bakin session has one pane.
-      output: (_pane, bytes) => log.output(bytes),
+      output: (_pane, bytes) => {
+        this.outputAt.set(session.id, Date.now())
+        log.output(bytes)
+      },
       closed: (reason) => log.invalidate(reason),
     })
     this.controls.set(session.id, control)
@@ -257,6 +282,11 @@ export class TmuxProcesses implements ProcessDriver {
     void control.ready.then(async () => {
       await control.command(['refresh-client', '-B', 'bakin-client::#{@bakin_client}'])
       await control.command(['refresh-client', '-B', 'bakin-dead::#{pane_dead}'])
+      await control.command(['refresh-client', '-B', `${ATTENTION_SUBSCRIPTION}::#{${ATTENTION_OPTION}}`])
+      // Set at creation too; again here for a session made before it was (idempotent; the hook and the count
+      // survive Bakin's restarts in the tmux server).
+      await control.command(bellHook(session.id))
+      await control.command(['refresh-client', '-B', `${BELL_SUBSCRIPTION}::#{${BELL_OPTION}}`])
       replica.start()
     }).catch(() => undefined)
   }
@@ -272,7 +302,8 @@ export class TmuxProcesses implements ProcessDriver {
   /** The session's ordered event log, while its control connection is attached. */
   outputLog(id: string): OutputLog | undefined { return this.logs.get(id) }
   fidelity(id: string): Fidelity { return this.fidelities.get(id) ?? { rebuilds: {} } }
-  forget(id: string): void { this.fidelities.delete(id); this.revisions.delete(id); this.fresh.delete(id); this.cursorRebuiltAt.delete(id) }
+  lastOutputAt(id: string): number | undefined { return this.outputAt.get(id) }
+  forget(id: string): void { this.outputAt.delete(id); this.fidelities.delete(id); this.revisions.delete(id); this.fresh.delete(id); this.cursorRebuiltAt.delete(id) }
   /** At quiet points, the replica's cursor against tmux's; a disagreement rebuilds it (bounded) and is logged without contents. */
   private watchCursor(id: string, replica: Replica, log: OutputLog, control: ControlClient): void {
     clearInterval(this.cursorChecks.get(id))

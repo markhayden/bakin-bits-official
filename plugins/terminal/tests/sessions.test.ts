@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, test } from 'bun:test'
 import { Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
 import { DAY, TerminalError, type Session } from '../lib/contracts'
-import type { NativeClient, ProcessDriver } from '../lib/processes'
+import type { AttachEvents, NativeClient, ProcessDriver } from '../lib/processes'
 import { MAX_BACKLOG_BYTES, Replica, type Cut } from '../lib/replica'
 import { OutputLog } from '../lib/output-log'
 import { drainFinal } from '../lib/processes'
@@ -37,6 +37,8 @@ function fixture(options: { storePath?: string } = {}) {
   /** Terminal apps attached in tmux, per session, and each session's "clients changed" signal. */
   const natives = new Map<string, NativeClient[]>()
   const clientsChanged = new Map<string, () => void>()
+  /** Each session's attach events, as the driver gives them (attention, bells). */
+  const attachEvents = new Map<string, AttachEvents>()
   const vanishing = new Set<number>()
   const detachedClients: string[] = []
   /** Replicas, by session (none until a test makes one). */
@@ -48,7 +50,7 @@ function fixture(options: { storePath?: string } = {}) {
   const driver: ProcessDriver = {
     // Like TmuxProcesses.replica: an ended replica is no source.
     replica: (id) => { const replica = replicas.get(id); return replica?.ended ? undefined : replica },
-    create: async (s) => { await createHold.until; live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, changed, died) { attaches.push(s.id); controlLost.delete(s.id); attached.add(s.id); clientsChanged.set(s.id, changed); if (died) paneDied.set(s.id, died) }, connected: (id) => attached.has(id) && !controlLost.has(id),
+    create: async (s) => { await createHold.until; live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, events) { attaches.push(s.id); controlLost.delete(s.id); attached.add(s.id); clientsChanged.set(s.id, events.clientsChanged); if (events.died) paneDied.set(s.id, events.died); attachEvents.set(s.id, events) }, connected: (id) => attached.has(id) && !controlLost.has(id),
     write: async (_id, data) => { if (writeFailure) throw writeFailure; writes.push(data) },
     resize: async (id, cols, rows) => { if (resizeFailure) { tmuxSizes.set(id, { cols: 77, rows: 22 }); throw resizeFailure } tmuxSizes.set(id, { cols, rows }) },
     windowSize: async (id) => { if (readBackFailure) throw readBackFailure; return tmuxSizes.get(id)! },
@@ -82,7 +84,7 @@ function fixture(options: { storePath?: string } = {}) {
   })
   managers.push(manager)
   return {
-    manager, store, writes, live, attached, terminated, unkillable, createHold, forgotten, controlLost, attaches, finals, finalCut, paneDied, releases, natives, detachedClients, vanishing, replicas,
+    manager, store, writes, live, attached, attachEvents, terminated, unkillable, createHold, forgotten, controlLost, attaches, finals, finalCut, paneDied, releases, natives, detachedClients, vanishing, replicas,
     /** A terminal app attaches (or resizes) in tmux; the control client notices. */
     nativeAttach: async (id: string, client: NativeClient) => {
       natives.set(id, [...(natives.get(id) ?? []).filter((entry) => entry.pid !== client.pid), client])
@@ -1491,5 +1493,74 @@ describe('the confirmed service update (applyServiceUpdate)', () => {
     const one = await manager.create({ title: 'One', cwd: '/tmp', program: 'shell' }, human)
     const failing = async () => { throw new TerminalError('Could not bootstrap the Terminal LaunchAgent', 503) }
     await expect(manager.applyServiceUpdate([one.id], human, failing, async () => true)).rejects.toThrow('Ended One; the update was not applied: Could not bootstrap the Terminal LaunchAgent')
+  })
+})
+
+describe('attention', () => {
+  const start = { cols: 64, rows: 20, kind: 'browser', device: 'desktop' } as const
+  it('records what the pane says, with when, and clears it; every change reaches live viewers', async () => {
+    const { manager, attachEvents, later } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const seen: Array<Session['attention']> = []
+    manager.onSessionChange(session.id, (changed) => seen.push(changed.attention))
+    later(1000)
+    attachEvents.get(session.id)!.attention!('needs-you')
+    await manager.idle()
+    const needsYou = manager.get(session.id, human).attention
+    expect(needsYou?.state).toBe('needs-you')
+    // The same state again changes nothing (subscriptions re-send on reconnect).
+    later(1000)
+    attachEvents.get(session.id)!.attention!('needs-you')
+    await manager.idle()
+    expect(manager.get(session.id, human).attention).toEqual(needsYou)
+    attachEvents.get(session.id)!.attention!(undefined)
+    await manager.idle()
+    expect(manager.get(session.id, human).attention).toBeUndefined()
+    expect(seen).toEqual([needsYou, undefined])
+  })
+  it('an exit clears it, and an ended session records none', async () => {
+    const { manager, attachEvents, live, paneDied, finalCut } = fixture()
+    const session = await manager.create({ title: 'Codex', cwd: '/tmp', program: 'shell' }, human, start)
+    attachEvents.get(session.id)!.attention!('turn-finished')
+    await manager.idle()
+    finalCut.next = async () => undefined
+    live.delete(session.id)
+    paneDied.get(session.id)!()
+    for (let tries = 0; tries < 100 && manager.get(session.id, human).state !== 'exited'; tries++) await Bun.sleep(5)
+    await manager.idle()
+    expect(manager.get(session.id, human).attention).toBeUndefined()
+    attachEvents.get(session.id)!.attention!('needs-you')
+    attachEvents.get(session.id)!.bell!('5')
+    await manager.idle()
+    expect(manager.get(session.id, human)).toMatchObject({ state: 'exited' })
+    expect(manager.get(session.id, human).attention).toBeUndefined()
+    expect(manager.get(session.id, human).bellAt).toBeUndefined()
+  })
+  it('finishing a session clears it', async () => {
+    const { manager, attachEvents, finalCut } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    attachEvents.get(session.id)!.attention!('needs-you')
+    await manager.idle()
+    finalCut.next = async () => undefined
+    await manager.finish(session.id, human, session.generation, true)
+    expect(manager.get(session.id, human)).toMatchObject({ state: 'completed' })
+    expect(manager.get(session.id, human).attention).toBeUndefined()
+  })
+  it('a bell is a count that differs from the last seen; recorded at most once every 30 seconds', async () => {
+    const { manager, attachEvents, later } = fixture()
+    const session = await manager.create({ title: 'Shell', cwd: '/tmp', program: 'shell' }, human, start)
+    const report = async (count: string) => { attachEvents.get(session.id)!.bell!(count); await manager.idle(); return manager.get(session.id, human).bellAt }
+    // tmux's count before any bell is empty: nothing rang.
+    expect(await report('')).toBeUndefined()
+    // The first report already counts one (a bell before tmux's first sample): it rang.
+    const first = await report('1')
+    expect(first).toBeNumber()
+    later(29_000)
+    expect(await report('2')).toBe(first)
+    // The same count again (a reconnect's first report) is no bell.
+    later(1000)
+    expect(await report('2')).toBe(first)
+    expect(await report('3')).toBe(first! + 30_000)
+    expect(manager.get(session.id, human).bellCount).toBe('3')
   })
 })

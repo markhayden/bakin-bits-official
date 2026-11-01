@@ -115,8 +115,8 @@ function Workspace({ sessionId }: { sessionId?: string }) {
   const refresh = useCallback(async () => {
     try {
       const known = listEpoch.current
-      const result = await api<{ sessions: Array<Session & { nativeClients?: number }>; serviceReady: boolean; serviceUpdateRequired?: boolean }>('/sessions')
-      for (const { nativeClients: _apps, ...session } of result.sessions) update(session)
+      const result = await api<{ sessions: Array<Session & { nativeClients?: number; activity?: string }>; serviceReady: boolean; serviceUpdateRequired?: boolean }>('/sessions')
+      for (const { nativeClients: _apps, activity: _activity, ...session } of result.sessions) update(session)
       setApps(Object.fromEntries(result.sessions.map((session) => [session.id, session.nativeClients ?? 0])))
       // Deleted sessions vanish from the server list. Drop them locally, but
       // never against a response older than a session added while in flight.

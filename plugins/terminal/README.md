@@ -204,6 +204,17 @@ seconds; any other tmux client on a session, including a hand-typed
 `tmux attach`, is detached at once. A Bakin restart detaches attached terminal
 apps; attach again.
 
+## Attention
+
+Claude Code and Codex sessions report their turn: **needs you** (a permission or question prompt), **working**, or **your turn** (the turn finished). Bakin launches them with its own hooks, which set the session's state in tmux; the plugin never edits `~/.claude` or `~/.codex`.
+
+- **Claude Code** gets them through `--settings` (a generated file under the plugin's data directory). They merge with your own, project and plugin hooks. An idle prompt is not "needs you".
+- **Codex** gets them as `-c hooks.…` overrides. Codex runs a new hook only after it is trusted: the first Codex session opens Codex's hook review, where `t` trusts them; Codex records that itself, once (the hooks are the same in every session). Until then a Codex session's state is unknown. Bakin never bypasses hook trust.
+- A subagent's tool runs never change the main agent's state. An interrupted turn clears: Codex says so at once; Claude Code reports no interrupt, so its idle prompt about a minute later clears a leftover "working" or "needs you".
+- **Shell** sessions have no turn state.
+
+Every session also has an activity — active (it printed in the last 5 seconds), quiet, or exited — and a bell (as tmux counts them: not the BEL that ends a title) is recorded at most once every 30 seconds.
+
 ## Agent Tool
 
 `bakin_exec_terminal_session` accepts `operation` and an `input` object. Operations

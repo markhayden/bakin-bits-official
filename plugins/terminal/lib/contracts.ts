@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { AttentionState } from './attention'
 
 export const createSchema = z.object({
   title: z.string().trim().min(1).max(100),
@@ -39,6 +40,12 @@ export interface Session {
   /** Bumped by every actual dimension change; agents re-read after it moves. */
   sizeRevision: number
   state: 'running' | 'exited' | 'completed'
+  /** What the coding program says about its turn (its hooks; lib/attention.ts), since when. Absent when unknown. */
+  attention?: { state: AttentionState; since: number }
+  /** The last bell recorded, at most one per session every BELL_INTERVAL_MS. */
+  bellAt?: number
+  /** tmux's bell count last seen (`@bakin_bell`, empty before any): a different count is a bell, even one rung while Bakin was not attached. */
+  bellCount?: string
   createdAt: number
   lastActivityAt: number
   completedAt?: number

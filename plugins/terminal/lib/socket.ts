@@ -12,7 +12,8 @@
  *   replay-applied { epoch } · digest { epoch, seq, digest } · pong
  * server → client (lib/raw-display.ts, spec D13): join / rebase (the
  *   replica's checkpoint text, then its tail), barrier, layout, rebuilding,
- *   live output, digest-point · session { session } · presence { sizeFrozen,
+ *   live output, digest-point · session { session } (its attention and
+ *   bellAt included: lib/attention.ts) · presence { sizeFrozen,
  *   nativeClients } · result { viewerSeq, status: accepted | rejected |
  *   uncertain, error? } · size-refused · ping · error { error }
  *
