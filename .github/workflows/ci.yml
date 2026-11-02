@@ -17,7 +17,7 @@ env:
   # plugin socket routes, interactive CLI launch, useFullscreen and the
   # canonical stylesheet for this stack; repinned to the release commit before
   # this stack merges. Pin a reviewed commit, never a moving branch.
-  BAKIN_SDK_REF: de4c42deb3e558dfa49befbe44e8672154a1b26b
+  BAKIN_SDK_REF: fd65b5cd53ca70afab04d8fd2a960201d6aa9b18
 
 jobs:
   check:
