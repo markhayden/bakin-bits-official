@@ -3,7 +3,7 @@ import type { ProjectDetailData } from '../types'
 export const plan = '# Weekend plan\n\n## Goal\n\nPlan a short walk and photograph the river.\n\n## Route\n\n- River trail\n- Visitor center'
 export function detailFixtureProject(id = 'sample'): ProjectDetailData {
   return {
-    id, title: id === 'sample' ? 'Weekend photography plan' : 'Another project', status: 'draft', owner: 'main', progress: 50,
+    id, title: id === 'sample' ? 'Weekend photography plan' : 'Another project', titleSource: 'agent', status: 'draft', owner: 'main', progress: 50, planRevision: 1, planSeenRevision: 1,
     tasks: [
       { id: 't001', instanceId: '00000000-0000-4000-8000-000000000101', title: 'Prepare camera gear', description: 'Charge batteries', checked: true },
       { id: 't002', instanceId: '00000000-0000-4000-8000-000000000102', title: 'Confirm walking route', description: 'Check weather', checked: false },
@@ -16,7 +16,11 @@ export function createDetailFixtureState() {
   return {
     project: detailFixtureProject(),
     other: detailFixtureProject('other'),
-    history: [{ ts: '2026-01-14T10:00:00Z', author: 'agent', body: plan.replace('and photograph the river.', 'along the river.') }],
+    history: [{ ts: '2026-01-14T10:00:00Z', author: 'agent', body: plan.replace('and photograph the river.', 'along the river.'), revision: 0 }],
+    produced: [
+      { assetId: 'shot-list', type: 'text', description: 'Golden hour shot list', taskId: 'board-task' },
+      { assetId: 'route-notes', type: 'text', description: 'Route notes', taskId: 'board-task' },
+    ],
     failures: {} as Record<string, number>,
     requests: [] as { method: string; path: string; body: Record<string, any> }[],
     receipts: {} as Record<string, string>,
@@ -34,6 +38,8 @@ export function detailFixtureFetch(state: DetailFixtureState, fallback: typeof f
     state.requests.push({ method, path, body })
     if (state.failures[key]) { state.failures[key]--; return Response.json({ error: 'Synthetic request failure' }, { status: 503 }) }
     if (path.endsWith('/brainstorm/seen')) return Response.json({ ok: true })
+    if (path.endsWith('/plan/seen')) { state.project.planSeenRevision = body.revision; return Response.json({ ok: true, planSeenRevision: body.revision }) }
+    if (path.endsWith('/files')) return Response.json({ produced: state.produced })
     if (path.endsWith('/ask')) return Response.json({ ok: true }, { status: 202 })
     if (path.endsWith('/history')) return Response.json({ history: state.history })
     if (path.endsWith('/history/0/restore')) { state.project.body = state.history[0]!.body; changed(); return Response.json({ ok: true }) }

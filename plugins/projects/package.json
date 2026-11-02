@@ -6,12 +6,12 @@
   "main": "./index.ts",
   "scripts": {
     "test:ui": "bakin-plugin-test-ui",
-    "test:ui:collections": "bakin-plugin-test-ui --config tests/plan.ui-test.ts && bakin-plugin-test-ui --config tests/detail.ui-test.ts && PROJECTS_UI_SURFACE=edit bakin-plugin-test-ui --config tests/detail.ui-test.ts && bun tests/detail.browser-test.ts"
+    "test:ui:collections": "bakin-plugin-test-ui --config tests/plan.ui-test.ts && PROJECTS_UI_SURFACE=conversation bakin-plugin-test-ui --config tests/detail.ui-test.ts && PROJECTS_UI_SURFACE=plan bakin-plugin-test-ui --config tests/detail.ui-test.ts && PROJECTS_UI_SURFACE=steps bakin-plugin-test-ui --config tests/detail.ui-test.ts && PROJECTS_UI_SURFACE=files bakin-plugin-test-ui --config tests/detail.ui-test.ts && PROJECTS_UI_SURFACE=start bakin-plugin-test-ui --config tests/detail.ui-test.ts && bun tests/detail.browser-test.ts"
   },
   "peerDependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "@makinbakin/sdk": ">=0.0.1-rc.41"
+    "@makinbakin/sdk": ">=0.0.1-rc.45"
   },
   "dependencies": {
     "js-yaml": "^5.4.2",
