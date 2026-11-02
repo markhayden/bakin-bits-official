@@ -1,0 +1,5 @@
+# `bun test` from this folder (the installed-package conformance run) registers
+# the DOM before any module loads: without it react-dom initialises first and
+# no React event handler fires. The repository root has its own preload.
+[test]
+preload = ["./tests/setup-dom.ts"]
