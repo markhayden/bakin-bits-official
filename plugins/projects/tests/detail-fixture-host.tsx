@@ -13,7 +13,7 @@ globalThis.EventSource = FixtureEventSource as unknown as typeof EventSource
 const state = createDetailFixtureState()
 const changed = () => emitPluginEvent({ event: 'projects.changed', projectId: 'sample' })
 Object.assign(globalThis, { __projectsFixture: { state, changed } })
-function Detail(props: { id?: string; pathname?: string; params?: Record<string, string> }) {
+function Detail(props: { id?: string; params?: Record<string, string> }) {
   useLayoutEffect(() => {
     const prior = globalThis.fetch
     globalThis.fetch = detailFixtureFetch(state, prior, changed)
@@ -22,11 +22,15 @@ function Detail(props: { id?: string; pathname?: string; params?: Record<string,
   return <ProjectDetailRoute {...props} />
 }
 function Index() { return <div><h1>Project list fixture</h1><PluginLink to="/projects/sample">Open sample project</PluginLink></div> }
-export function mountDetailFixture(mode: 'read' | 'edit' = 'read') {
-  const scenario = new URL(location.href).searchParams.get('scenario')
+/** The tab under test rides the route, like a shared link would. */
+export function mountDetailFixture(surfaceTab?: 'plan' | 'steps' | 'files') {
+  const params = new URL(location.href).searchParams
+  const scenario = params.get('scenario')
+  const tab = params.get('tab') ?? surfaceTab ?? null
   if (scenario === 'conversation') state.project.brainstormMessages = Array.from({ length: 30 }, (_, index) => ({ kind: 'user' as const, ts: `2026-01-15T10:${String(index).padStart(2, '0')}:00Z`, content: `Conversation message ${index}. A longer message to make the history scroll at a narrow viewport.` }))
   if (scenario === 'draft') writeComposerDraft('project:sample', 'Retained brainstorm draft')
+  if (scenario === 'plan-updated') Object.assign(state.project, { planRevision: 2, planSeenRevision: 1, planUpdatedBy: 'agent', planUpdatedAt: '2026-01-15T09:00:00Z' })
   if (scenario === 'history-error') state.failures['GET /api/plugins/projects/sample/history'] = 1
-  createRoot(document.getElementById('root')!).render(<PluginUiFixtureHost fixture={{ ...DEFAULT_PLUGIN_UI_FIXTURE, route: `/projects/sample${mode === 'edit' ? '/edit' : ''}`, network: [] }}
-    registrations={[{ id: 'projects', routes: { '/projects': Index, '/projects/[id]': Detail, '/projects/[id]/edit': Detail } }]} />)
+  createRoot(document.getElementById('root')!).render(<PluginUiFixtureHost fixture={{ ...DEFAULT_PLUGIN_UI_FIXTURE, route: `/projects/sample${tab ? `?tab=${tab}` : ''}`, network: [] }}
+    registrations={[{ id: 'projects', routes: { '/projects': Index, '/projects/[id]': Detail } }]} />)
 }
