@@ -12,7 +12,7 @@ export function TerminalControls({ disabled, ctrl, onCtrl, onKey }: {
   const preserveFocus = (event: React.MouseEvent) => event.preventDefault()
   const keyButton = (key: TerminalKey) => <Button key={key} size="lg" variant="outline" disabled={disabled} onMouseDown={preserveFocus} onClick={() => onKey(key)}>{key}</Button>
   return <Stack role="group" aria-label="Terminal keys" gap="dense" className="terminal-input-controls border-t border-bakin-border-subtle bg-bakin-canvas-default p-bakin-3">
-    {expanded && <Panel id={panelId} scroll padding="compact" aria-label="More terminal keys" className="max-h-[min(12rem,calc(var(--bakin-workspace-viewport-height,100dvh)*0.2))]">
+    {expanded && <Panel id={panelId} scroll padding="compact" aria-label="More terminal keys" className="terminal-more-keys">
       <Inline gap="dense" justify="center">
         {EDITING_KEYS.map(keyButton)}
         {CONTROL_SHORTCUTS.map(key => keyButton(`Ctrl+${key}`))}
