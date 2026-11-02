@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { ImagePlus } from 'lucide-react'
+import { ImagePlus, X } from 'lucide-react'
 import { ComposerAttachmentTray } from '@makinbakin/sdk/conversation'
 import { Inline } from '@makinbakin/sdk/layout'
 import { CopyButton } from '@makinbakin/sdk/patterns'
@@ -24,8 +24,9 @@ const OUTCOMES: Record<Exclude<PasteOutcome, 'sent'>, string> = {
  * each session's draft (it outlives this sheet) and clears it only when the
  * server accepted the paste. On a touch device it sits in the key accessory
  * (focus inside it is still the terminal's typing session); on a desktop the
- * page opens it for an image or from its menu, and Escape closes it, keeping
- * the draft.
+ * page opens it for an image or from its menu, titles it with what Paste
+ * and Paste + Enter do, and closes it from its button or Escape, keeping the
+ * draft. Its sends keep clear of the host's Live Activity button there.
  */
 export function ComposeSheet({ draft, kept, disabled, textarea, images, onDraft, onSend, onAddImages, onRemoveImage, onClose }: {
   draft: string
@@ -39,7 +40,7 @@ export function ComposeSheet({ draft, kept, disabled, textarea, images, onDraft,
   onSend(text: string, enter: boolean): PasteOutcome
   onAddImages(files: File[]): void
   onRemoveImage(id: string): void
-  /** Desktop: Escape closes the sheet (the draft stays). */
+  /** Desktop: the sheet's title and close button, and Escape, close it (the draft stays). */
   onClose?(): void
 }) {
   // The page's draft is the text (it clears it once a paste is accepted).
@@ -62,19 +63,26 @@ export function ComposeSheet({ draft, kept, disabled, textarea, images, onDraft,
     onDrop={(event) => { if (!carriesImages(event.dataTransfer)) return; event.preventDefault(); add(imageFiles(event.dataTransfer.files)) }}
     // Not while an input method is composing (its own Escape), nor one something else took.
     onKeyDown={(event) => { if (event.key === 'Escape' && onClose && !event.nativeEvent.isComposing && !event.defaultPrevented) { event.preventDefault(); onClose() } }}>
+    {onClose && <div className="terminal-compose-header">
+      <div>
+        <Text as="h2" weight="semibold">Compose</Text>
+        <Text as="p" size="meta" tone="muted">Paste types it into the terminal; Paste + Enter also presses Return.</Text>
+      </div>
+      <Button size="icon-sm" variant="ghost" aria-label="Close compose" title="Close (Esc)" onClick={onClose}><X size={16} /></Button>
+    </div>}
     {images.length > 0 && <ComposerAttachmentTray disabled={disabled} className="terminal-compose-images"
       items={images.map((image) => ({ id: image.id, name: image.label, previewUrl: image.preview, status: image.status === 'failed' ? 'error' : image.status, errorMessage: image.error }))}
       onRemove={onRemoveImage}
       itemAction={(item) => {
         const path = images.find((image) => image.id === item.id)?.upload?.path
-        return path ? <CopyButton text={path} label={`Copy the path of ${item.name}`} /> : null
+        return path ? <span className="terminal-compose-copy"><Text size="meta" tone="muted">Copy path</Text><CopyButton text={path} label={`Copy the path of ${item.name}`} /></span> : null
       }} />}
-    <Textarea ref={textarea} aria-label="Text to send" value={text} autoSize minRows={3} maxRows={6}
+    <Textarea ref={textarea} aria-label="Text to send" placeholder="Write a message, or paste or drop an image" value={text} autoSize minRows={3} maxRows={6}
       onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => change(event.target.value)}
       // An image pasted here joins the draft (text pastes stay text).
       onPaste={(event: React.ClipboardEvent<HTMLTextAreaElement>) => { if (!carriesImages(event.clipboardData)) return; event.preventDefault(); add(imageFiles(event.clipboardData.files)) }} />
     {message && <Text role="status" size="meta" tone="muted">{message}</Text>}
-    <Inline gap="dense" justify="between" role="group" aria-label="Send">
+    <Inline gap="dense" justify="between" role="group" aria-label="Send" className="terminal-compose-actions">
       <Input ref={picker} type="file" accept={IMAGE_TYPES.join(',')} multiple hidden aria-hidden="true" tabIndex={-1}
         onChange={(event) => { add(imageFiles(event.target.files)); event.target.value = '' }} />
       <Button variant="ghost" onMouseDown={keepFocus} onClick={() => picker.current?.click()}><ImagePlus size={16} />Add image</Button>

@@ -118,6 +118,25 @@ describe('ComposeSheet with images', () => {
     expect(textPaste.defaultPrevented).toBe(false)
     expect(calls).toEqual(['add:shot.png'])
   })
+  test('on a desktop the sheet says what it is for and closes from a button, keeping the draft', () => {
+    let closed = 0
+    const { view } = sheet({ text: 'kept', onClose: () => { closed++ } })
+    expect(view.getByRole('heading', { name: 'Compose' })).toBeTruthy()
+    expect(view.getByText('Paste types it into the terminal; Paste + Enter also presses Return.')).toBeTruthy()
+    expect((view.getByRole('textbox', { name: 'Text to send' }) as HTMLTextAreaElement).placeholder).toBe('Write a message, or paste or drop an image')
+    fireEvent.click(view.getByRole('button', { name: 'Close compose' }))
+    expect(closed).toBe(1)
+    expect((view.getByRole('textbox', { name: 'Text to send' }) as HTMLTextAreaElement).value).toBe('kept')
+  })
+  test('in the key accessory (no close) the sheet stays compact: no heading, no close button', () => {
+    const { view } = sheet()
+    expect(view.queryByRole('heading', { name: 'Compose' })).toBeNull()
+    expect(view.queryByRole('button', { name: 'Close compose' })).toBeNull()
+  })
+  test('a kept image says what its copy button copies', () => {
+    const { view } = sheet({ images: [image('ready', 'ready', { upload: { name: 'n.png', path: '/data/n.png' } })] })
+    expect(view.getByText('Copy path')).toBeTruthy()
+  })
   test('the picker takes images; Escape closes (when the page lets it) and keeps the draft', () => {
     let closed = 0
     const { view, calls } = sheet({ text: 'kept', onClose: () => { closed++ } })
