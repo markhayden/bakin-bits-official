@@ -230,19 +230,23 @@
   gap: var(--bakin-layout-gap-dense);
 }
 
-/* The folder picker: one steady size while browsing (no jumping as folders change), the list scrolling inside it. */
+/* The folder picker: one steady size while browsing (no jumping as folders change), the list scrolling inside it.
+   Its dialog is portalled: the plugin-scoped selector serves the host (which wraps portals), the bare one the preview. */
+[data-bakin-plugin="terminal"] .terminal-folder-dialog,
 .terminal-folder-dialog {
   max-width: 42rem;
   height: min(85dvh, 46rem);
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
+[data-bakin-plugin="terminal"] .terminal-folder-picker,
 .terminal-folder-picker {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: var(--bakin-layout-gap-item);
   min-height: 0;
 }
+[data-bakin-plugin="terminal"] .terminal-folder-list,
 .terminal-folder-list {
   min-height: 0;
   overflow-y: auto;

@@ -3,7 +3,7 @@ import { ImagePlus } from 'lucide-react'
 import { ComposerAttachmentTray } from '@makinbakin/sdk/conversation'
 import { Inline } from '@makinbakin/sdk/layout'
 import { CopyButton } from '@makinbakin/sdk/patterns'
-import { Button, Text, Textarea } from '@makinbakin/sdk/ui'
+import { Button, Input, Text, Textarea } from '@makinbakin/sdk/ui'
 import { carriesImages, IMAGE_TYPES, imageFiles, type DraftImage } from './compose-images'
 
 // The actions keep focus in the textarea (the keyboard stays up) until the page moves it.
@@ -75,7 +75,7 @@ export function ComposeSheet({ draft, kept, disabled, textarea, images, onDraft,
       onPaste={(event: React.ClipboardEvent<HTMLTextAreaElement>) => { if (!carriesImages(event.clipboardData)) return; event.preventDefault(); add(imageFiles(event.clipboardData.files)) }} />
     {message && <Text role="status" size="meta" tone="muted">{message}</Text>}
     <Inline gap="dense" justify="between" role="group" aria-label="Send">
-      <input ref={picker} type="file" accept={IMAGE_TYPES.join(',')} multiple hidden aria-hidden="true" tabIndex={-1}
+      <Input ref={picker} type="file" accept={IMAGE_TYPES.join(',')} multiple hidden aria-hidden="true" tabIndex={-1}
         onChange={(event) => { add(imageFiles(event.target.files)); event.target.value = '' }} />
       <Button variant="ghost" onMouseDown={keepFocus} onClick={() => picker.current?.click()}><ImagePlus size={16} />Add image</Button>
       <Inline gap="dense">
