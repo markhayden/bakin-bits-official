@@ -5,6 +5,9 @@ import { join } from 'node:path'
 import { DIRECTORY_LIMIT, listDirectories, recentDirectories } from '../lib/directories'
 import type { Session } from '../lib/contracts'
 
+// Root reads and deletes regardless of permissions (CI's conformance container runs as root): what a
+// permission refusal does cannot be shown there.
+const ROOT = process.getuid?.() === 0
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'bakin-terminal-dirs-')))
 afterAll(() => { chmodSync(join(root, 'locked'), 0o700); rmSync(root, { recursive: true, force: true }) })
 for (const name of ['beta', 'Alpha', '.hidden', 'gamma', 'locked']) mkdirSync(join(root, name))
@@ -33,7 +36,7 @@ describe('listDirectories (the New terminal folder picker)', () => {
     await expect(listDirectories('relative/path')).rejects.toThrow('must be absolute')
     await expect(listDirectories(join(root, 'a-file.txt'))).rejects.toThrow('is not a folder')
     await expect(listDirectories(join(root, 'missing'))).rejects.toThrow('does not exist')
-    await expect(listDirectories(join(root, 'locked'))).rejects.toThrow('cannot be read')
+    if (!ROOT) await expect(listDirectories(join(root, 'locked'))).rejects.toThrow('cannot be read')
   })
   it('is bounded: a huge folder lists the first DIRECTORY_LIMIT and says it was cut', async () => {
     const big = join(root, 'big')

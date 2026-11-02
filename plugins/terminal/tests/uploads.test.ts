@@ -7,6 +7,9 @@ import { Store } from '../lib/store'
 import { uploadImage } from '../lib/http'
 import type { Sessions } from '../lib/sessions'
 
+// Root reads and deletes regardless of permissions (CI's conformance container runs as root): what a
+// permission refusal does cannot be shown there.
+const ROOT = process.getuid?.() === 0
 const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-upload-store-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 
@@ -130,6 +133,7 @@ describe('Uploads', () => {
     utimesSync(lone, dayAgo, dayAgo)
     sweeping.sweepAbandoned(now)
     expect(existsSync(empty)).toBe(false)
+    if (ROOT) return
     // An unreadable session folder is answered; another session's orphan still goes.
     const locked = join(base, 'uploads', 's3')
     const other = join(base, 'uploads', 's4')
@@ -159,7 +163,7 @@ describe('Uploads', () => {
     linked.removeSession('s2')
     expect(existsSync(join(elsewhere, 'keep.txt'))).toBe(true)
   })
-  test('a folder that cannot be read is no absence: the records stay', () => {
+  test.skipIf(ROOT)('a folder that cannot be read is no absence: the records stay', () => {
     const base = mkdtempSync(join(root, 'unreadable-'))
     const records = new Store(':memory:')
     const locked = new Uploads(base, records)
@@ -168,7 +172,7 @@ describe('Uploads', () => {
     try { expect(() => locked.removeSession('s1')).toThrow() } finally { chmodSync(join(base, 'uploads'), 0o700) }
     expect(records.uploads('s1')).toHaveLength(1)
   })
-  test('a file that cannot be deleted keeps its record (still counted, swept again)', () => {
+  test.skipIf(ROOT)('a file that cannot be deleted keeps its record (still counted, swept again)', () => {
     const base = mkdtempSync(join(root, 'stuck-'))
     const records = new Store(':memory:')
     const stuck = new Uploads(base, records)

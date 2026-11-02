@@ -138,7 +138,9 @@ test('a large bundle is written and read in slices: the event loop is never held
   await new Promise((resolve) => setImmediate(resolve))
   probing = false
   expect(text(read)!.length).toBe(text(big)!.length)
-  expect(worst).toBeLessThan(12)
+  // Slices are about 4 ms; a write that never yielded would hold the loop for the whole 64 MB (seconds).
+  // 50 ms tells the two apart on a slow or coverage-instrumented CI runner too.
+  expect(worst).toBeLessThan(50)
 })
 test('on open: an interrupted write is dropped', async () => {
   const path = join(tmpdir(), `terminal-bundles-${crypto.randomUUID()}.db`)

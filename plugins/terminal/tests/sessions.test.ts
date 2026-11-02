@@ -1685,7 +1685,8 @@ describe('uploads', () => {
     const results = await Promise.allSettled([1, 2].map(() => manager.upload(session.id, human, session.generation, async () => big)))
     expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected'])
   })
-  it('a history that cannot be deleted yet is tried again; other sessions are still maintained', async () => {
+  // Root deletes regardless of permissions (CI's conformance container runs as root).
+  it.skipIf(process.getuid?.() === 0)('a history that cannot be deleted yet is tried again; other sessions are still maintained', async () => {
     const { manager, finalCut, later, uploadRoot } = fixture()
     finalCut.next = async () => undefined
     const stuck = await manager.create({ title: 'Stuck', cwd: '/tmp', program: 'shell' }, human, start)
