@@ -4,12 +4,19 @@
  */
 import { z } from 'zod'
 import { defineRoute } from '@makinbakin/sdk'
-import type { BakinPlugin, PluginContext, RuntimeAgent } from '@makinbakin/sdk/types'
+import type { BakinPlugin, ConversationTurnService, PluginContext, RuntimeAgent } from '@makinbakin/sdk/types'
 import { conversationThreadId } from '@makinbakin/sdk/utils'
 import { createProjectRepository, PlanHistoryUnavailableError, projectToSummary } from './lib/parser'
-import { createProjectService } from './lib/project-service'
+import { createProjectService, deriveChecklist } from './lib/project-service'
 import { ProjectMutationError } from './lib/project-mutations'
-import type { Project, ProjectBrainstormMessage, ProjectStatus, ProjectPatch, ChecklistPatch } from './types'
+import { buildProjectBrainstormContext } from './lib/brainstorm-prompt'
+import { createStewardGates } from './lib/steward/gates'
+import { withAdmissionFence } from './lib/steward/admission'
+import { createInputGate } from './lib/steward/input-gate'
+import { buildStewardDigest } from './lib/steward/digest'
+import { createStewardLoop, localDay, readStewardSettings, STEWARD_DEFAULTS, type StewardLoop } from './lib/steward/reservation'
+import { registerStewardTools } from './lib/steward/tools'
+import type { MutationCaller, Project, ProjectBrainstormMessage, ProjectStatus, ProjectPatch, ChecklistPatch, ProducedFile } from './types'
 
 const log = {
   info: (...args: unknown[]) => console.info('[projects]', ...args),
@@ -18,6 +25,31 @@ const log = {
 }
 
 let activeProjectRepository: ReturnType<typeof createProjectRepository> | null = null
+/** Bound in activate(); onReady resumes kickoffs a crash left pending (D8). */
+let resumePendingKickoffs: (() => Promise<void>) | null = null
+/** The steward loop's timer starts in activate() and stops in onShutdown (D20). */
+let stewardLoop: StewardLoop | null = null
+/** This activation's brainstorm turns — ended in onShutdown. */
+let activeBrainstormTurns: ConversationTurnService | null = null
+/**
+ * Turn admissions (an /ask or a kickoff preparing its context and starting a
+ * turn) are tracked from their first await, so shutdown can close the door,
+ * drain the ones already preparing, and only then end live turns — none can
+ * slip onto a retired turn service.
+ */
+let admissionsOpen = false
+const pendingAdmissions = new Set<Promise<unknown>>()
+
+async function admitTurn<T>(fn: () => Promise<T>): Promise<T | 'closed'> {
+  if (!admissionsOpen) return 'closed'
+  const work = fn()
+  pendingAdmissions.add(work)
+  try {
+    return await work
+  } finally {
+    pendingAdmissions.delete(work)
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -37,8 +69,30 @@ function mutationFailure(error: unknown): Response {
   return json({ error: error instanceof PlanHistoryUnavailableError ? error.message : 'Project could not be saved. Try again.', code: 'storage_error' }, 500)
 }
 
+/**
+ * Who is calling a REST mutation (D9a): the Projects UI declares the
+ * operator (`OPERATOR_DECLARATION_HEADERS`); a request from an agent context
+ * (`X-Bakin-Agent-Context`) or with no declaration is held to the agent
+ * rules. Declared, not verified — the HTTP API has no authentication, the
+ * same documented limit as approvals.
+ */
+function callerFromRequest(req: Request): MutationCaller {
+  const agent = req.headers.get('x-bakin-agent-context')
+  if (agent !== null) return { kind: 'agent', agentId: agent.trim() || 'unknown' }
+  return req.headers.get('x-bakin-operator') === 'declared' ? { kind: 'user' } : { kind: 'agent', agentId: 'unknown' }
+}
+
 async function readBody<T>(req: Request): Promise<T> {
   return req.json() as Promise<T>
+}
+
+/** Run `work` over `items` with at most `limit` in flight. */
+async function forEachLimit<T>(items: readonly T[], limit: number, work: (item: T) => Promise<void>): Promise<void> {
+  let next = 0
+  const lane = async () => {
+    while (next < items.length) await work(items[next++]!)
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane))
 }
 
 async function getRuntimeMainAgentId(ctx: PluginContext): Promise<string> {
@@ -47,57 +101,6 @@ async function getRuntimeMainAgentId(ctx: PluginContext): Promise<string> {
     ?? agents.find((agent: RuntimeAgent) => agent.id === 'main')
     ?? agents[0]
   return main?.id ?? 'main'
-}
-
-// The plan-first brainstorm posture (bakin#703): the plan document is the
-// PRIMARY working artifact. Incremental edits apply directly (every body
-// write is snapshotted with a visible diff + restore, so they are safe);
-// wholesale rewrites ask in chat first. ONE constant — the /ask route and
-// the bakin_exec_projects_ask tool must never drift apart.
-const PROJECT_BRAINSTORM_INSTRUCTIONS = [
-  'Project brainstorm mode:',
-  'The project plan (body + checklist) is your PRIMARY working artifact — actively create, edit, and refine it as the conversation evolves; the chat is the working conversation around it.',
-  'If the project body is empty or stale, draft or update it without being asked.',
-  'Apply INCREMENTAL updates directly, then report exactly what you changed: additions, checklist changes (add/check/update items), and section-scoped edits are yours to make via the project tools.',
-  'Prefer bakin_exec_projects_apply_plan for combined body and checklist updates; use the checklist item tools for single-item changes.',
-  'ASK FIRST — in chat, before applying — for wholesale rewrites or large deletions of existing content: propose the change and wait for confirmation.',
-  'Every plan edit is snapshotted with a visible diff and one-click restore, so direct incremental edits are safe.',
-  'Invoke Bakin tools as described in your Tool access section — the exact call form depends on the active runtime.',
-  'If the user asks for advice only, lead with the answer in chat; plan upkeep still applies — make any needed incremental edit afterwards and mention it.',
-  'If suggesting tasks, format them as a numbered list.',
-].join('\n')
-
-/** Shared brainstorm context — the /ask route and the _ask exec tool build
- *  the SAME prompt so the plan-first posture can never drift between them. */
-function buildProjectBrainstormContext(project: Project, request: string): string {
-  const assetLines = project.assets.length > 0
-    ? ['', 'Attached assets (summaries — use asset tools to read full content if needed):', ...project.assets.map(a => `- ${a.assetId}${a.label ? ` — ${a.label}` : ''}`)]
-    : []
-  const SPEC_CAP = 3000
-  const truncated = project.body.length > SPEC_CAP
-  return [
-    `You are being asked about project "${project.title}" (id: ${project.id}, status: ${project.status}).`,
-    `Progress: ${project.progress}% (${project.tasks.filter(t => t.checked).length}/${project.tasks.length} items checked)`,
-    '',
-    'Project spec:',
-    project.body.slice(0, SPEC_CAP),
-    // Visible omission marker — an agent told the plan is its primary
-    // artifact must never mistake a truncated view for the whole spec.
-    ...(truncated
-      ? [`[... spec truncated: showing ${SPEC_CAP} of ${project.body.length} chars — read the full plan with bakin_exec_projects_get before any rewrite; prefer appendBody or single-item edits.]`]
-      : []),
-    '',
-    'Checklist items:',
-    ...project.tasks.map(t => `- [${t.checked ? 'x' : ' '}] ${t.title}${t.taskId ? ` (linked: ${t.taskId})` : ''}`),
-    ...assetLines,
-    '',
-    PROJECT_BRAINSTORM_INSTRUCTIONS,
-    '',
-    'User request:',
-    request,
-    '',
-    'Respond concisely.',
-  ].join('\n')
 }
 
 // ---------------------------------------------------------------------------
@@ -148,16 +151,20 @@ const projectsPlugin: BakinPlugin = {
   name: 'Projects',
   version: '2.0.0',
 
-  settingsSchema: {
-    fields: [
-      { key: 'defaultStatus', type: 'select', label: 'Default project status', description: 'Status assigned to new projects', options: [{ value: 'active', label: 'Active' }, { value: 'planning', label: 'Planning' }, { value: 'paused', label: 'Paused' }], default: 'active' },
-      { key: 'autoPromoteThreshold', type: 'number', label: 'Auto-promote threshold', description: 'Auto-promote checklist items to tasks when project has more than N unchecked items (0 = disabled)', default: 0 },
-    ],
-  },
-
   navItems: [
     { id: 'projects', label: 'Projects', icon: 'FolderKanban', href: '/projects', order: 30 },
   ],
+
+  // The steward loop (D29). Check-ins are board tasks, so budget limits and
+  // tag routing (`project-steward`) apply through dispatch.
+  settingsSchema: {
+    fields: [
+      { key: 'stewardEnabled', type: 'boolean', label: 'Lead check-ins', description: 'Let each Active project\'s lead check in as work moves: send steps to the board, chase blocked work, and ask you when a decision or sign-off is needed.', default: STEWARD_DEFAULTS.enabled },
+      { key: 'stewardScanMinutes', type: 'number', label: 'Look for changes every (minutes)', description: 'How often Active projects are checked for something that needs the lead. Finished, blocked or reviewed work also triggers a look within about 30 seconds.', default: STEWARD_DEFAULTS.scanMinutes },
+      { key: 'stewardStuckAfterHours', type: 'number', label: 'Call work stuck after (hours)', description: 'A review or a project with no movement this long counts as stuck, and an unresolved situation is raised again once per this window.', default: STEWARD_DEFAULTS.stuckAfterHours },
+      { key: 'stewardMaxRunsPerDay', type: 'number', label: 'Check-ins per project per day', description: 'At most this many check-ins per project per day. When the limit is hit, the project shows "Check-ins paused for today".', default: STEWARD_DEFAULTS.maxRunsPerDay },
+    ],
+  },
 
   routes: [
     legacyRoute('GET', '/', 'List projects'),
@@ -171,13 +178,16 @@ const projectsPlugin: BakinPlugin = {
     legacyRoute('DELETE', '/:projectId/checklist/:itemId', 'Remove checklist item'),
     legacyRoute('POST', '/:projectId/checklist/:itemId/link', 'Link checklist item to task'),
     legacyRoute('POST', '/:projectId/checklist/:itemId/promote', 'Promote item to task'),
+    legacyRoute('GET', '/:projectId/files', 'Files produced by the project\'s board tasks (derived)'),
     legacyRoute('POST', '/:projectId/assets', 'Attach asset'),
     legacyRoute('PATCH', '/:projectId/assets/:assetId', 'Relink asset reference'),
     legacyRoute('DELETE', '/:projectId/assets/:assetId', 'Detach asset'),
     legacyRoute('POST', '/:projectId/ask', 'Ask agent about project (202; streams over the plugin-event bus)'),
     legacyRoute('POST', '/:projectId/ask/abort', 'Abort the in-flight brainstorm turn'),
+    legacyRoute('POST', '/:projectId/steward/pause', 'Pause or resume the lead\'s check-ins (operator only)'),
     legacyRoute('GET', '/brainstorm/attention', 'Brainstorm attention totals (unread + in-flight)'),
     legacyRoute('POST', '/:projectId/brainstorm/seen', 'Mark a project brainstorm as seen'),
+    legacyRoute('POST', '/:projectId/plan/seen', 'Mark a plan revision as seen (the "Plan updated" baseline)'),
     legacyRoute('GET', '/:projectId/history', 'Plan body snapshot history (oldest first)'),
     legacyRoute('POST', '/:projectId/history/:index/restore', 'Restore a plan snapshot (snapshots current first)'),
   ],
@@ -187,6 +197,10 @@ const projectsPlugin: BakinPlugin = {
     const repo = createProjectRepository(ctx.storage)
     activeProjectRepository = repo
     const projectService = createProjectService(ctx, repo)
+    stewardLoop?.stop()
+    const steward = createStewardLoop({ ctx, repo })
+    stewardLoop = steward
+    const inputGate = createInputGate(repo)
     const {
       createProject,
       updateProject,
@@ -203,7 +217,8 @@ const projectsPlugin: BakinPlugin = {
       detachAsset,
       rebuildIndex,
       resolveLinkedTaskStatuses,
-      autoCheckLinkedItem,
+      boardIndex,
+      derive,
     } = projectService
     const readProject = repo.readProject
     const readAllProjects = repo.readAllProjects
@@ -224,6 +239,8 @@ const projectsPlugin: BakinPlugin = {
         // Fires at 202-accept — the nav working dot must not wait out model
         // latency for the first chunk (bakin#707).
         started: 'projects.brainstorm.started',
+        // Steward check-ins and questions written outside a turn (D24a).
+        appended: 'projects.brainstorm.appended',
       },
       payload: (key) => ({ projectId: key }),
       resolveThread: async (key) =>
@@ -243,12 +260,108 @@ const projectsPlugin: BakinPlugin = {
         workClass: 'chat',
         runId: (key, turnId) => `brainstorm:projects:${key}:turn:${turnId}`,
       },
+      hooks: {
+        // The kickoff receipt rides until its first turn settles (D8); a
+        // reply to a check-in question ends its gate the same way (D25).
+        onSettled: async ({ key }) => {
+          const kickoff = readProject(key)?.kickoff
+          if (kickoff?.state === 'started') await projectService.advanceKickoff(key, kickoff.requestId, 'started', 'settled')
+          await inputGate.settleReply(key)
+        },
+      },
     })
+
+    // Sign-off gates ride Bakin's approvals; registered in activate() so a
+    // hot reload re-binds them (D26).
+    // Steward rows (check-ins, questions, sign-off notes) are turn admissions
+    // too: tracked so shutdown drains them, refused once it has begun — never
+    // written through a retired turn service over the next one's live turn.
+    const stewardTurns = new Proxy(brainstormTurns, {
+      get(target, prop) {
+        if (prop === 'appendExternal') {
+          return async (...args: Parameters<ConversationTurnService['appendExternal']>) => {
+            const result = await admitTurn(() => target.appendExternal(...args))
+            if (result === 'closed') throw new Error('Projects is restarting')
+            return result
+          }
+        }
+        const value = Reflect.get(target, prop) as unknown
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    const stewardGates = createStewardGates({ ctx, repo, turns: stewardTurns, projectService })
+    stewardGates.registerGates()
+
+    activeBrainstormTurns = brainstormTurns
+    admissionsOpen = true
+
+    /**
+     * Start a pending kickoff's first brainstorm turn — the SAME path as
+     * /ask. `started` is written only after the engine accepts, so a retry
+     * or the boot sweep can never start it twice; a busy engine leaves it
+     * pending for the next attempt.
+     */
+    // In-process admission: one start attempt per project at a time. The
+    // receipt is re-read after the awaits, so a retry that lost the race to
+    // a completed start never starts the turn again.
+    const startingKickoffs = new Set<string>()
+    /** `pending` = the engine did not admit the turn; the receipt stays for a retry. */
+    async function startKickoff(projectId: string): Promise<'started' | 'in-flight' | 'pending'> {
+      if (startingKickoffs.has(projectId)) return 'in-flight'
+      startingKickoffs.add(projectId)
+      try {
+        const project = readProject(projectId)
+        const kickoff = project?.kickoff
+        if (!project || kickoff?.state !== 'pending' || !kickoff.message) return 'started'
+        // The engine persists the user row BEFORE accepting: a transcript is
+        // proof the turn was already accepted (e.g. the `started` write failed).
+        if (readBrainstormMessages(projectId).length > 0) {
+          await projectService.advanceKickoff(projectId, kickoff.requestId, 'pending', 'started')
+          return 'started'
+        }
+        const message = kickoff.message
+        const result = await admitTurn(async () => {
+          const runtimeContent = buildProjectBrainstormContext(await derive(project), message, { live: true })
+          if (readProject(projectId)?.kickoff?.state !== 'pending') return 'superseded' as const
+          return brainstormTurns.start(ctx, projectId, message, {
+            agentId: kickoff.agentId ?? project.owner,
+            runtimeContent,
+          })
+        })
+        if (result === 'superseded') return 'started'
+        if (result !== 'accepted') return 'pending'
+        await projectService.advanceKickoff(projectId, kickoff.requestId, 'pending', 'started')
+        return 'started'
+      } finally {
+        startingKickoffs.delete(projectId)
+      }
+    }
+
+    resumePendingKickoffs = async () => {
+      for (const project of readAllProjects()) {
+        const kickoff = project.kickoff
+        if (!kickoff || kickoff.state === 'settled') continue
+        try {
+          // A turn alive at boot died with the process (the interrupted-turn
+          // sweep already stamped its transcript). The engine persists the
+          // user row BEFORE accepting, so a pending receipt with a transcript
+          // was accepted too — settle both; only a truly unstarted kickoff runs.
+          if (kickoff.state === 'started' || readBrainstormMessages(project.id).length > 0) {
+            await projectService.advanceKickoff(project.id, kickoff.requestId, kickoff.state, 'settled')
+          } else {
+            await startKickoff(project.id)
+          }
+        } catch (err) {
+          log.error('kickoff resume failed', err, { projectId: project.id })
+        }
+      }
+    }
 
     // ─── Search Content Type Registration ─────────────────────────────
 
-    /** Convert a project to a search document */
-    function projectToSearchDoc(project: Project): Record<string, unknown> {
+    /** Convert a project to a search document (progress derived from the board). */
+    async function projectToSearchDoc(raw: Project): Promise<Record<string, unknown>> {
+      const project = await derive(raw)
       return {
         title: project.title,
         body: project.body,
@@ -286,7 +399,7 @@ const projectsPlugin: BakinPlugin = {
       reindex: async function* () {
         const projects = readAllProjects()
         for (const project of projects) {
-          yield { key: project.id, doc: projectToSearchDoc(project) }
+          yield { key: project.id, doc: await projectToSearchDoc(project) }
         }
       },
       verifyExists: async (key: string) => {
@@ -299,7 +412,7 @@ const projectsPlugin: BakinPlugin = {
       try {
         const project = readProject(projectId)
         if (project) {
-          await ctx.search.index(projectId, projectToSearchDoc(project))
+          await ctx.search.index(projectId, await projectToSearchDoc(project))
         }
       } catch (err) {
         log.warn('Failed to index project', { projectId, error: err instanceof Error ? err.message : String(err) })
@@ -309,25 +422,28 @@ const projectsPlugin: BakinPlugin = {
     // Register task extension hooks. Core emits task lifecycle events and
     // the tasks plugin asks for generic detail enrichment; projects owns the
     // project-specific behavior behind those extension points.
-    ctx.hooks.register('tasks.statusChanged', async (d: unknown) => {
-      const data = d as Record<string, unknown>
-      const to = String(data.to ?? '').toLowerCase()
-      if (to !== 'done' && to !== 'archived') return
-      const taskId = data.taskId as string | undefined
-      if (taskId) await autoCheckLinkedItem(taskId)
+    // Linked-step completion is DERIVED from the board (D16a) — a column
+    // change writes nothing here; it tells open project pages to refetch and
+    // schedules a debounced steward scan for work-task transitions (D21).
+    ctx.hooks.register('tasks.statusChanged', (d: unknown) => {
+      const taskId = (d as Record<string, unknown>).taskId
+      const entry = typeof taskId === 'string' ? projectService.getProjectForTask(taskId) : undefined
+      if (entry) ctx.events.emit('projects.changed', { projectId: entry.projectId, action: 'task.statusChanged', taskItemId: entry.taskItemId })
+      steward.onTaskStatusChanged(d)
     }, {
-      label: 'Sync project task state.',
-      summary: 'Updates linked project checklist items when a task moves into a completed state. Use it to keep project progress in sync with task lifecycle events.',
+      label: 'Refresh project task state.',
+      summary: 'Tells open project pages to refetch when a linked task changes column (linked step completion is derived from the board at read time) and schedules the project steward\'s check for work tasks reaching done, blocked or review.',
       hookKind: 'event',
     })
-    ctx.hooks.register('tasks.enrichDetails', (d: unknown) => {
+    ctx.hooks.register('tasks.enrichDetails', async (d: unknown) => {
       const data = d as Record<string, unknown>
       const task = data.task as Record<string, unknown> | undefined
       const projectId = task?.projectId as string | undefined
       if (!projectId) return data
 
-      const project = readProject(projectId)
-      if (!project) return data
+      const stored = readProject(projectId)
+      if (!stored) return data
+      const project = await derive(stored)
 
       return {
         ...data,
@@ -365,8 +481,27 @@ const projectsPlugin: BakinPlugin = {
 
     // Boot sweep (bakin#706): brainstorms whose transcript ends on a user
     // row lost their turn to a process death — stamp an honest error row.
-    try {
+    // No turn is alive at boot, so a reply gate left open ends too (D25).
+    // Only on the FIRST activation in this process: a hot reload re-runs
+    // activate() while the previous activation's turns and queued appends are
+    // still alive, and sweeping then would stamp live turns and withdraw
+    // questions whose cards are merely queued.
+    const g = globalThis as Record<string, unknown>
+    const firstActivation = g.__bakinProjectsActivated !== true
+    g.__bakinProjectsActivated = true
+    if (firstActivation) try {
       for (const project of readAllProjects()) {
+        if (project.replyPending) void inputGate.settleReply(project.id)
+        // A question must not hold the project when its card never reached
+        // the transcript (its queued batch died with the process), or when a
+        // user message after the card already ended it (the process died
+        // before the gate flipped) (D25).
+        const questionId = project.waitingOn?.questionId
+        if (questionId) {
+          const transcript = readBrainstormMessages(project.id)
+          const card = transcript.findIndex(row => row.kind === 'tool' && (row.metadata?.bakinQuestion as { id?: unknown } | undefined)?.id === questionId)
+          if (card === -1 || transcript.slice(card + 1).some(row => row.kind === 'user')) void inputGate.withdraw(project.id, questionId)
+        }
         const rows = readBrainstormMessages(project.id)
         const last = rows[rows.length - 1]
         if (last?.kind !== 'user') continue
@@ -386,6 +521,16 @@ const projectsPlugin: BakinPlugin = {
       const statusFilter = url.searchParams.get('status') as ProjectStatus | null
       let projects = readAllProjects()
       if (statusFilter) projects = projects.filter(p => p.status === statusFilter)
+      const tasks = await ctx.tasks.list()
+      const board = new Map(tasks.map(task => [task.id, { column: task.column, title: task.title, ...(task.agent ? { agent: task.agent } : {}) }]))
+      projects = projects.map(p => deriveChecklist(p, board))
+      const stewardSettings = readStewardSettings(ctx)
+      const now = new Date()
+      const today = localDay(now)
+      /** The steward's read of an Active project: is work stuck? (D29 list signal) */
+      const stuck = (p: Project) => p.status === 'active' && buildStewardDigest(p, tasks, {
+        now, stuckAfterMs: stewardSettings.stuckAfterHours * 3_600_000, steward: p.steward,
+      }).signals.some(signal => signal.kind === 'blocked' || signal.kind === 'idle-review' || signal.kind === 'stalled')
       // Per-project attention flags so list rows can show WHICH project has
       // an unseen reply / running turn (the nav badge names only the count).
       const inflight = new Set(brainstormTurns.listInFlight().map(t => t.key))
@@ -394,6 +539,14 @@ const projectsPlugin: BakinPlugin = {
           ...projectToSummary(p),
           brainstormUnread: hasUnseenBrainstormReply(p.id),
           brainstormStreaming: inflight.has(p.id),
+          doneCount: p.tasks.filter(task => task.checked).length,
+          waitingForYou: repo.readWaitingForUser(p.id),
+          planUpdated: p.planUpdatedBy === 'agent' && p.planRevision > repo.readSeen(p.id).planSeenRevision,
+          needsApproval: Object.values(p.gates ?? {}).some(gate => gate.state === 'pending'),
+          stuck: stuck(p),
+          checkinsPausedToday: p.status === 'active' && stewardSettings.enabled
+            && p.steward?.runs?.date === today && p.steward.runs.count >= stewardSettings.maxRunsPerDay,
+          ...(p.stewardPaused ? { stewardPaused: true } : {}),
         })),
       })
     }
@@ -404,7 +557,7 @@ const projectsPlugin: BakinPlugin = {
       const url = new URL(req.url, 'http://localhost')
       const id = url.searchParams.get('projectId') || url.searchParams.get('id')
       if (!id) return json({ error: 'Missing id parameter' }, 400)
-      const project = readProject(id)
+      const project = await projectService.reconcileLinks(id)
       if (!project) return json({ error: 'Project not found' }, 404)
       const { operations: _operations, ...resolvedProject } = await resolveLinkedTaskStatuses(project)
       // Sample the flag before the preview: if the turn settles between the
@@ -415,6 +568,8 @@ const projectsPlugin: BakinPlugin = {
       return json({
         project: {
           ...resolvedProject,
+          planSeenRevision: repo.readSeen(id).planSeenRevision,
+          brainstormUnread: hasUnseenBrainstormReply(id),
           brainstormMessages: readBrainstormMessages(id),
           // Server-seeded in-flight flag + streamed-so-far text — a remount
           // mid-turn rehydrates the indicator AND the reply's beginning.
@@ -425,12 +580,32 @@ const projectsPlugin: BakinPlugin = {
     }
     routeHandlers.set('GET /:projectId', getHandler)
 
-    // POST / — create project
+    // POST / — create project. With `requestId` + `firstMessage` it is the
+    // start screen's idempotent kickoff (D8): a retry returns the same
+    // project and never starts a second first turn.
     const createHandler = async (req: Request) => {
-      const body = await readBody<{ title: string; body?: string; owner?: string; tasks?: string[] }>(req)
+      const body = await readBody<{ title: string; body?: string; owner?: string; tasks?: string[]; requestId?: string; firstMessage?: string }>(req)
       if (!body.title) return json({ error: 'Missing title' }, 400)
+      if (body.requestId !== undefined || body.firstMessage !== undefined) {
+        try {
+          const owner = body.owner || await getRuntimeMainAgentId(ctx)
+          const result = await projectService.kickoffProject({
+            requestId: body.requestId ?? '', title: body.title, owner, message: body.firstMessage ?? '',
+          })
+          const started = result.kickoff.state === 'pending' ? await startKickoff(result.id) : 'started'
+          if (result.created) indexProject(result.id).catch(() => {})
+          // The project exists but its first turn did not start: a retryable
+          // failure — the client's retry (same requestId) resumes this project.
+          if (started === 'pending') {
+            return json({ error: 'The project was created but the conversation could not start. Try again.', code: 'kickoff_pending', id: result.id }, 503)
+          }
+          return json({ ok: true, id: result.id, created: result.created })
+        } catch (error) {
+          return mutationFailure(error)
+        }
+      }
       const owner = body.owner ?? await getRuntimeMainAgentId(ctx)
-      const result = await createProject({ ...body, owner })
+      const result = await createProject({ ...body, owner, titleSource: 'user' })
       ctx.activity.audit('created', owner, { projectId: result.id, title: body.title })
       ctx.activity.log(owner, `Created project "${body.title}"`)
       indexProject(result.id).catch(() => {})
@@ -447,7 +622,21 @@ const projectsPlugin: BakinPlugin = {
       const id = url.searchParams.get('projectId') || bodyId
       if (!id) return json({ error: 'Missing id' }, 400)
       try {
-        await updateProject(id, patch, undefined, expected)
+        const before = readProject(id)?.status
+        const handoff = before === 'draft' && patch.status === 'active'
+        // Start is the hand-off (D27): the lead's first check-in runs past the
+        // fingerprint gate — with no steps it breaks the plan down. Recorded
+        // durably BEFORE the status flips, so a failed or crashed first
+        // attempt is retried by the next scan (a Start that then fails leaves
+        // a harmless flag on a draft).
+        if (handoff) await steward.requestRun(id, 'handoff')
+        await updateProject(id, patch, callerFromRequest(req), expected)
+        if (handoff) steward.scan(id).catch(err => log.error('steward hand-off failed; the next scan retries', err, { projectId: id }))
+        // Completing or archiving ends the steward loop: open check-ins and
+        // pending sign-offs go with it (D28).
+        if (patch.status === 'completed' || patch.status === 'archived') {
+          await stewardGates.cleanup(id, { reason: `Project ${patch.status}` })
+        }
         ctx.activity.audit('updated', 'system', { projectId: id })
         ctx.activity.log('system', `Updated project ${id}`)
         indexProject(id).catch(() => {})
@@ -464,10 +653,20 @@ const projectsPlugin: BakinPlugin = {
       const body = await readBody<{ id?: string; deleteLinkedTasks?: boolean }>(req).catch(() => ({} as { id?: string; deleteLinkedTasks?: boolean }))
       const id = url.searchParams.get('projectId') || body.id
       if (!id) return json({ error: 'Missing id' }, 400)
+      // Deleting a project deletes its plan and steps: a human decision (D9a).
+      if (callerFromRequest(req).kind === 'agent') {
+        return json({ error: 'Agents cannot delete projects — that is the user\'s decision.', code: 'agent_project_delete' }, 403)
+      }
       // A live brainstorm must die with its project — otherwise it keeps
       // billing and resurrects the transcript sidecar (review I2).
       brainstormTurns.abort(id)
       try {
+        // The steward goes first: check-ins are paused durably (no scan or
+        // recovery can reserve another while the delete runs), the open
+        // check-in is removed (aborting a running turn) and pending sign-offs
+        // are cancelled — independently of whether work tasks are kept.
+        await projectService.setStewardPaused(id, true)
+        await stewardGates.cleanup(id, { reason: 'Project deleted' })
         if (body.deleteLinkedTasks) {
           const project = readProject(id)
           if (project) {
@@ -551,7 +750,7 @@ const projectsPlugin: BakinPlugin = {
         const projectId = url.searchParams.get('projectId') || body.projectId
         const taskItemId = url.searchParams.get('itemId') || body.taskItemId
         if (!projectId || !taskItemId) return json({ error: 'Missing projectId or taskItemId' }, 400)
-        await removeChecklistItem(projectId, taskItemId, body.expectedInstanceId)
+        await removeChecklistItem(projectId, taskItemId, callerFromRequest(req), body.expectedInstanceId)
         ctx.activity.audit('checklist.removed', 'system', { projectId })
         ctx.activity.log('system', 'Removed checklist item from project', { taskId: projectId })
         indexProject(projectId).catch(() => {})
@@ -589,6 +788,44 @@ const projectsPlugin: BakinPlugin = {
       } catch (err) { return mutationFailure(err) }
     }
     routeHandlers.set('POST /:projectId/checklist/:itemId/promote', promoteHandler)
+
+    // GET /:projectId/files — what the project's board tasks produced (D17):
+    // derived live through the assets plugin's task index, one task per
+    // call, bounded fan-out, deduped by asset. Nothing is persisted here.
+    routeHandlers.set('GET /:projectId/files', async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const id = url.searchParams.get('projectId')
+      if (!id) return json({ error: 'Missing projectId' }, 400)
+      const project = readProject(id)
+      if (!project) return json({ error: 'Project not found' }, 404)
+      const taskIds = new Set(project.tasks.map(item => item.taskId).filter((taskId): taskId is string => Boolean(taskId)))
+      try {
+        for (const task of await ctx.tasks.list({ projectId: id })) taskIds.add(task.id)
+      } catch (err) {
+        log.warn('Could not list project tasks for files', { projectId: id, err })
+      }
+      const produced = new Map<string, ProducedFile>()
+      await forEachLimit([...taskIds], 8, async (taskId) => {
+        let rows: unknown
+        try {
+          rows = await ctx.hooks.invoke('assets.listByTask', { taskId })
+        } catch (err) {
+          log.warn('assets.listByTask failed', { projectId: id, taskId, err })
+          return
+        }
+        if (!Array.isArray(rows)) return
+        for (const row of rows as Record<string, unknown>[]) {
+          if (typeof row?.assetId !== 'string' || produced.has(row.assetId)) continue
+          produced.set(row.assetId, {
+            assetId: row.assetId,
+            type: typeof row.type === 'string' ? row.type : 'other',
+            description: typeof row.description === 'string' ? row.description : '',
+            taskId,
+          })
+        }
+      })
+      return json({ produced: [...produced.values()] })
+    })
 
     // POST /:projectId/assets — attach asset
     const attachHandler = async (req: Request) => {
@@ -674,12 +911,24 @@ const projectsPlugin: BakinPlugin = {
       const project = readProject(projectId)
       if (!project) return json({ error: 'Project not found' }, 404)
       const agentId = body.agent || await getRuntimeMainAgentId(ctx)
-      const context = buildProjectBrainstormContext(project, body.prompt)
-
-      const result = await brainstormTurns.start(ctx, projectId, body.prompt, {
-        agentId,
-        runtimeContent: context,
-      })
+      // The next user message ends an open check-in question (D25): it rides
+      // this turn's context, and the gate flips only once the turn is
+      // admitted. Sampling → admission → flip run inside the admission fence
+      // a question is posted under, so the question this reply ends is
+      // exactly the one its context carried.
+      const result = await admitTurn(() => withAdmissionFence(projectId, async () => {
+        const derived = await derive(project)
+        const pendingQuestion = readProject(projectId)?.waitingOn
+        const context = buildProjectBrainstormContext(derived, body.prompt, { live: true, ...(pendingQuestion ? { pendingQuestion } : {}) })
+        const started = await brainstormTurns.start(ctx, projectId, body.prompt, { agentId, runtimeContent: context })
+        if (started === 'accepted' && pendingQuestion) {
+          await inputGate.admitReply(projectId, pendingQuestion.questionId)
+          // The turn may have settled before the flip landed: nothing would clear it.
+          if (!brainstormTurns.isInFlight(projectId)) await inputGate.settleReply(projectId)
+        }
+        return started
+      }))
+      if (result === 'closed') return json({ error: 'Projects is restarting — try again in a moment.', code: 'restarting' }, 503)
       if (result === 'not_found') return json({ error: 'Project not found' }, 404)
       if (result === 'busy') return json({ error: 'A brainstorm turn is already running for this project' }, 409)
       return json({ ok: true, streaming: true }, 202)
@@ -694,11 +943,29 @@ const projectsPlugin: BakinPlugin = {
       return json({ ok: true })
     })
 
+    // POST /:projectId/steward/pause — the user's check-in control (D29).
+    routeHandlers.set('POST /:projectId/steward/pause', async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const id = url.searchParams.get('projectId')
+      if (!id) return json({ error: 'Missing projectId' }, 400)
+      if (callerFromRequest(req).kind === 'agent') {
+        return json({ error: 'Pausing check-ins is the user\'s decision.', code: 'agent_steward_pause' }, 403)
+      }
+      const body = await readBody<{ paused?: unknown }>(req).catch(() => ({} as { paused?: unknown }))
+      if (typeof body.paused !== 'boolean') return json({ error: 'Missing paused', code: 'invalid_request' }, 400)
+      try {
+        await projectService.setStewardPaused(id, body.paused)
+        return json({ ok: true, paused: body.paused })
+      } catch (error) {
+        return mutationFailure(error)
+      }
+    })
+
     /** A project counts as unread when agent activity landed after the last view. */
     function hasUnseenBrainstormReply(id: string): boolean {
       const lastAgentTs = repo.readLastAgentActivityTs(id)
       if (!lastAgentTs) return false
-      const seenAt = repo.readBrainstormSeen(id)
+      const seenAt = repo.readSeen(id).lastSeenAt
       return !seenAt || lastAgentTs > seenAt
     }
 
@@ -719,8 +986,24 @@ const projectsPlugin: BakinPlugin = {
       const id = url.searchParams.get('projectId')
       if (!id) return json({ error: 'Missing projectId' }, 400)
       if (!readProject(id)) return json({ error: 'Project not found' }, 404)
-      repo.writeBrainstormSeen(id, new Date().toISOString())
+      repo.updateSeen(id, { lastSeenAt: new Date().toISOString() })
       return json({ ok: true })
+    })
+
+    // POST /:projectId/plan/seen — viewing the Plan tab marks the revision it
+    // showed as seen (D15). Monotonic: a stale tab never rewinds the baseline.
+    routeHandlers.set('POST /:projectId/plan/seen', async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const id = url.searchParams.get('projectId')
+      if (!id) return json({ error: 'Missing projectId' }, 400)
+      const project = readProject(id)
+      if (!project) return json({ error: 'Project not found' }, 404)
+      const body = await readBody<{ revision?: unknown }>(req).catch(() => ({} as { revision?: unknown }))
+      if (!Number.isInteger(body.revision) || (body.revision as number) < 0) return json({ error: 'Missing revision', code: 'invalid_request' }, 400)
+      const revision = Math.min(body.revision as number, project.planRevision)
+      const seen = repo.readSeen(id)
+      if (revision > seen.planSeenRevision) repo.updateSeen(id, { planSeenRevision: revision })
+      return json({ ok: true, planSeenRevision: Math.max(revision, seen.planSeenRevision) })
     })
 
     // GET /:projectId/history — plan snapshots, oldest first (bakin#703).
@@ -746,7 +1029,7 @@ const projectsPlugin: BakinPlugin = {
       const body = await readBody<{ expectedTs?: string }>(req).catch(() => ({} as { expectedTs?: string }))
       if (!id || !Number.isInteger(index) || index < 0) return json({ error: 'Missing projectId or index' }, 400)
       try {
-        const { changed } = await projectService.restorePlanVersion(id, index, body.expectedTs)
+        const { changed } = await projectService.restorePlanVersion(id, index, callerFromRequest(req), body.expectedTs)
         indexProject(id).catch(() => {})
         return json({ ok: true, changed })
       } catch (err) {
@@ -776,7 +1059,8 @@ const projectsPlugin: BakinPlugin = {
         if (params.status) {
           projects = projects.filter(p => p.status === params.status)
         }
-        return { ok: true, projects: projects.map(projectToSummary) }
+        const board = await boardIndex()
+        return { ok: true, projects: projects.map(p => projectToSummary(deriveChecklist(p, board))) }
       },
     })
 
@@ -788,7 +1072,7 @@ const projectsPlugin: BakinPlugin = {
         projectId: z.string().describe('Project ID'),
       },
       handler: async (params: Record<string, unknown>) => {
-        const project = readProject(params.projectId as string)
+        const project = await projectService.reconcileLinks(params.projectId as string)
         if (!project) return { ok: false, error: `Project not found: ${params.projectId}` }
         return { ok: true, project: await resolveLinkedTaskStatuses(project) }
       },
@@ -807,6 +1091,7 @@ const projectsPlugin: BakinPlugin = {
       handler: async (params: Record<string, unknown>, agent: string) => {
         const result = await createProject({
           title: params.title as string,
+          titleSource: 'agent',
           body: params.body as string | undefined,
           owner: (params.owner as string) || agent,
           tasks: params.tasks as string[] | undefined,
@@ -819,11 +1104,10 @@ const projectsPlugin: BakinPlugin = {
     ctx.registerExecTool({
       name: 'bakin_exec_projects_update',
       label: 'Updated a project',
-      description: 'Update a project\'s title, status, body, or owner. Lifecycle status is independent of checklist completion; completed may contain unchecked work.',
+      description: 'Update a project\'s title, body, or owner. Lifecycle status (start, complete, archive) is the user\'s decision and cannot be changed by agents. A title the user typed cannot be overwritten.',
       parameters: {
         projectId: z.string().describe('Project ID'),
-        title: z.string().optional().describe('New title'),
-        status: z.enum(['draft', 'active', 'completed', 'archived']).optional().describe('New status'),
+        title: z.string().optional().describe('New title (refused when the user named the project)'),
         body: z.string().optional().describe('New markdown body'),
         owner: z.string().optional().describe('New owner'),
       },
@@ -831,10 +1115,9 @@ const projectsPlugin: BakinPlugin = {
         try {
           await updateProject(params.projectId as string, {
             title: params.title as string | undefined,
-            status: params.status as ProjectStatus | undefined,
             body: params.body as string | undefined,
             owner: params.owner as string | undefined,
-          }, agent)
+          }, { kind: 'agent', agentId: agent })
           indexProject(params.projectId as string).catch(() => {})
           return { ok: true }
         } catch (err: unknown) {
@@ -849,8 +1132,7 @@ const projectsPlugin: BakinPlugin = {
       description: 'Apply a confirmed project plan update in one operation. Use this after the user confirms exact body/checklist changes so agents do not need shell scripts or multiple low-level calls.',
       parameters: {
         projectId: z.string().describe('Project ID'),
-        title: z.string().optional().describe('Optional new project title'),
-        status: z.enum(['draft', 'active', 'completed', 'archived']).optional().describe('Optional new status'),
+        title: z.string().optional().describe('Optional new project title (refused when the user named the project)'),
         body: z.string().optional().describe('Replacement markdown body for the project plan'),
         appendBody: z.string().optional().describe('Markdown to append to the existing project body; cannot be combined with body'),
         owner: z.string().optional().describe('Optional new owner'),
@@ -860,32 +1142,13 @@ const projectsPlugin: BakinPlugin = {
         try {
           const result = await applyProjectPlan(params.projectId as string, {
             title: params.title as string | undefined,
-            status: params.status as ProjectStatus | undefined,
             body: params.body as string | undefined,
             appendBody: params.appendBody as string | undefined,
             owner: params.owner as string | undefined,
             checklistItems: params.checklistItems as string[] | undefined,
-          }, agent)
+          }, { kind: 'agent', agentId: agent })
           indexProject(params.projectId as string).catch(() => {})
           return { ok: true, ...result }
-        } catch (err: unknown) {
-          return { ok: false, error: (err as Error).message }
-        }
-      },
-    })
-
-    ctx.registerExecTool({
-      name: 'bakin_exec_projects_delete',
-      label: 'Deleted a project',
-      description: 'Delete a project by ID.',
-      parameters: {
-        projectId: z.string().describe('Project ID'),
-      },
-      handler: async (params: Record<string, unknown>, agent: string) => {
-        try {
-          await deleteProject(params.projectId as string, agent)
-          ctx.search.remove(params.projectId as string).catch(() => {})
-          return { ok: true }
         } catch (err: unknown) {
           return { ok: false, error: (err as Error).message }
         }
@@ -910,38 +1173,24 @@ const projectsPlugin: BakinPlugin = {
     ctx.registerExecTool({
       name: 'bakin_exec_projects_mark_item',
       label: 'Marked project item',
-      description: 'Mark a checklist item as checked (done) or unchecked. Returns updated progress percentage.',
+      description: 'Mark a standalone checklist item as checked (done) or unchecked. Steps linked to a board task complete from that task and are refused (linked_step). Returns updated progress percentage.',
       parameters: {
         projectId: z.string().describe('Project ID'),
         taskItemId: z.string().describe('Checklist item ID (e.g., t001)'),
         checked: z.boolean().describe('true to mark as done, false to uncheck'),
       },
       handler: async (params: Record<string, unknown>) => {
-        const result = await markChecklistItem(
-          params.projectId as string,
-          params.taskItemId as string,
-          params.checked as boolean,
-        )
-        indexProject(params.projectId as string).catch(() => {})
-        return { ok: true, ...result }
-      },
-    })
-
-    ctx.registerExecTool({
-      name: 'bakin_exec_projects_remove_item',
-      label: 'Removed project item',
-      description: 'Remove a checklist item from a project.',
-      parameters: {
-        projectId: z.string().describe('Project ID'),
-        taskItemId: z.string().describe('Checklist item ID to remove'),
-      },
-      handler: async (params: Record<string, unknown>) => {
         try {
-          await removeChecklistItem(params.projectId as string, params.taskItemId as string)
+          await projectService.reconcileLinks(params.projectId as string)
+          const result = await markChecklistItem(
+            params.projectId as string,
+            params.taskItemId as string,
+            params.checked as boolean,
+          )
           indexProject(params.projectId as string).catch(() => {})
-          return { ok: true }
+          return { ok: true, ...result }
         } catch (err: unknown) {
-          return { ok: false, error: (err as Error).message }
+          return { ok: false, error: (err as Error).message, ...(err instanceof ProjectMutationError ? { code: err.code } : {}) }
         }
       },
     })
@@ -1063,7 +1312,7 @@ const projectsPlugin: BakinPlugin = {
       name: 'bakin_exec_projects_toggle_item',
       label: 'Toggled project item',
       activityDuplicate: true,
-      description: 'Toggle a checklist item checked/unchecked by item ID. Returns updated progress percentage.',
+      description: 'Toggle a standalone checklist item checked/unchecked by item ID. Steps linked to a board task complete from that task and are refused (linked_step). Returns updated progress percentage.',
       parameters: {
         projectId: z.string().describe('Project ID'),
         itemId: z.string().describe('Checklist item ID (e.g., t001)'),
@@ -1073,10 +1322,15 @@ const projectsPlugin: BakinPlugin = {
         const projectId = params.projectId as string
         const itemId = params.itemId as string
         const checked = params.checked as boolean
-        const result = await markChecklistItem(projectId, itemId, checked)
-        ctx.activity.audit('checklist.toggled', 'system', { projectId, checked })
-        indexProject(projectId).catch(() => {})
-        return { ok: true, ...result }
+        try {
+          await projectService.reconcileLinks(projectId)
+          const result = await markChecklistItem(projectId, itemId, checked)
+          ctx.activity.audit('checklist.toggled', 'system', { projectId, checked })
+          indexProject(projectId).catch(() => {})
+          return { ok: true, ...result }
+        } catch (err: unknown) {
+          return { ok: false, error: (err as Error).message, ...(err instanceof ProjectMutationError ? { code: err.code } : {}) }
+        }
       },
     })
 
@@ -1124,7 +1378,9 @@ const projectsPlugin: BakinPlugin = {
         const project = readProject(projectId)
         if (!project) return { ok: false, error: `Project not found: ${projectId}` }
 
-        const context = buildProjectBrainstormContext(project, message)
+        // A tool reply returns to the calling agent, not the project chat —
+        // question cards would render nowhere.
+        const context = buildProjectBrainstormContext(await derive(project), message, { live: false })
 
         try {
           const agentId = (params.agent as string) || await getRuntimeMainAgentId(ctx)
@@ -1139,10 +1395,15 @@ const projectsPlugin: BakinPlugin = {
       },
     })
 
+    registerStewardTools({ ctx, repo, turns: stewardTurns, gate: inputGate })
+    stewardGates.registerTool()
+
+    steward.start()
     log.info('Projects plugin activated')
   },
 
   onReady() {
+    void resumePendingKickoffs?.()
     const projects = activeProjectRepository?.readAllProjects() ?? []
     const byStatus: Record<string, number> = {}
     for (const p of projects) {
@@ -1151,8 +1412,31 @@ const projectsPlugin: BakinPlugin = {
     log.info(`Ready — ${projects.length} projects`, byStatus)
   },
 
-  onShutdown() {
+  onSettingsChange() {
+    // The scan cadence is read when the timer starts.
+    stewardLoop?.start()
+  },
+
+  async onShutdown() {
+    stewardLoop?.stop()
+    stewardLoop = null
+    // Each activation builds its own turn service, and the next one cannot
+    // see this one's live turns: end them here (abort, then wait for each
+    // to settle — its queued out-of-turn rows flush on the way), so a hot
+    // reload never admits a turn or a steward row over a live one.
+    const turns = activeBrainstormTurns
+    activeBrainstormTurns = null
+    // Close the door, then drain admissions already preparing context.
+    admissionsOpen = false
+    await Promise.allSettled([...pendingAdmissions])
+    if (turns) {
+      await Promise.all(turns.listInFlight().map(async ({ key }) => {
+        turns.abort(key)
+        await turns.waitFor(key).catch(err => log.warn('brainstorm turn did not settle at shutdown', { projectId: key, err }))
+      }))
+    }
     activeProjectRepository = null
+    resumePendingKickoffs = null
     log.info('Projects plugin shutting down')
   },
 }

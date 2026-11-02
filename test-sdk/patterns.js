@@ -24,12 +24,33 @@ export const PageControls = ({ children, actions, as, divider, variant = 'defaul
   children,
   actions ?? null,
 )
-export const PageAside = ({ children, label, labelledBy, ...props }) => React.createElement(
-  'aside',
-  { ...props, 'aria-label': label, 'aria-labelledby': labelledBy },
-  children,
-)
-export function useCollapsedAside() { return React.useState(false) }
+export const PageAside = ({ children, label, labelledBy, collapsible, width, side, ...props }) => {
+  const collapsed = collapsible?.collapsed ?? false
+  return React.createElement(
+    'aside',
+    {
+      ...props,
+      'aria-label': label,
+      'aria-labelledby': labelledBy,
+      'data-width': collapsible ? width ?? 'session' : undefined,
+      'data-side': collapsible && side === 'end' ? 'end' : undefined,
+      'data-collapsed': collapsible ? String(collapsed) : undefined,
+    },
+    collapsible && collapsed
+      ? React.createElement('button', {
+          type: 'button',
+          'aria-expanded': 'false',
+          'aria-label': collapsible.expandLabel ?? `Expand ${(label ?? 'panel').toLowerCase()}`,
+          onClick: () => collapsible.onCollapsedChange(false),
+        }, 'Expand')
+      : children,
+    collapsible && collapsed ? collapsible.strip ?? null : null,
+  )
+}
+export function useCollapsedAside(storageKey) {
+  const override = globalThis.__bakinTestSdkHooks?.useCollapsedAside
+  return override ? override(storageKey) : React.useState(false)
+}
 export const PageCanvas = ({ children, orientation, ...props }) => React.createElement('div', props, children)
 export const PageTimeline = ({ children, live, label, labelledBy, ...props }) => React.createElement(
   'div',
