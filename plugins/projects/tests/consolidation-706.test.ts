@@ -123,7 +123,8 @@ describe('interrupted-turn boot sweep', () => {
     writeProjectFixture('settled')
     writeBrainstormFixture('settled', [userRow('hi'), assistantRow('hello')])
 
-    // The sweep runs during activate — re-activate over the fixtures.
+    // The sweep runs on a process's FIRST activation — simulate a fresh boot.
+    ;(globalThis as Record<string, unknown>).__bakinProjectsActivated = undefined
     plugin = await activatePlugin(projectsPlugin, testDir)
 
     const interrupted = JSON.parse(readFileSync(join(projectsDir, 'interrupted.brainstorm.json'), 'utf-8')) as Array<Record<string, unknown>>
