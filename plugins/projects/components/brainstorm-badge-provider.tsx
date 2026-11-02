@@ -18,6 +18,8 @@ export function BrainstormBadgeProvider() {
       started: 'projects.brainstorm.started',
       done: 'projects.brainstorm.done',
       error: 'projects.brainstorm.error',
+      // A check-in question the lead posted outside a turn announces like a reply.
+      appended: 'projects.brainstorm.appended',
       // Fires after a seen write lands — the authoritative moment to drop
       // the unread count (the chat pattern).
       refresh: ['projects.brainstorm.seen'],
