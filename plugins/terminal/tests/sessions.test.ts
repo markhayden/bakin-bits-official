@@ -1748,6 +1748,23 @@ describe('uploads', () => {
       expect(store.uploads(session.id)).toEqual([])
     }
   })
+  it('a paste that carried an image marks it sent once it went; a refused one leaves it a draft', async () => {
+    const { manager, store, later, failWrites } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const sent = await manager.upload(session.id, human, session.generation, async () => png())
+    const draft = await manager.upload(session.id, human, session.generation, async () => png())
+    await manager.writeNext(session.id, human, session.generation, sent.path, { paste: true, uploads: [sent.name] })
+    await expect(manager.writeNext(session.id, human, session.generation + 1, draft.path, { paste: true, uploads: [draft.name] })).rejects.toThrow()
+    failWrites(new Error('tmux went away'))
+    await expect(manager.writeNext(session.id, human, session.generation, draft.path, { paste: true, uploads: [draft.name] })).rejects.toThrow()
+    const byName = new Map(store.uploads(session.id).map((upload) => [upload.name, upload]))
+    expect(byName.get(sent.name)?.sentAt).toBeNumber()
+    expect(byName.get(draft.name)?.sentAt).toBeUndefined()
+    later(25 * 60 * 60 * 1000)
+    await manager.sweep()
+    expect(existsSync(sent.path)).toBe(true)
+    expect(existsSync(draft.path)).toBe(false)
+  })
   it('maintenance removes images never sent within a day; sent ones stay', async () => {
     const { manager, uploads, later } = fixture()
     const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)

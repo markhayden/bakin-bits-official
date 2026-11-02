@@ -1754,6 +1754,17 @@ declare module '@makinbakin/sdk/conversation' {
     className?: string
   }>
   export const Composer: ComponentType<Record<string, unknown>>
+  export type ComposerAttachmentStatus = 'uploading' | 'ready' | 'error'
+  export interface ComposerAttachmentItem { id: string; name: string; previewUrl?: string; status?: ComposerAttachmentStatus; errorMessage?: string }
+  export interface ComposerAttachmentTrayProps {
+    items: readonly ComposerAttachmentItem[]
+    disabled?: boolean
+    onRemove: (id: string) => void
+    itemAction?: (item: ComposerAttachmentItem) => ReactNode
+    className?: string
+  }
+  /** A draft's attachment thumbnails, as Composer shows them. */
+  export const ComposerAttachmentTray: ComponentType<ComposerAttachmentTrayProps>
   export const ThinkingIndicator: ComponentType<{ label?: string }>
 }
 

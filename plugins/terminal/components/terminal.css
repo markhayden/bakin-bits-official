@@ -176,6 +176,11 @@
   gap: 8px;
   padding: 4px 8px 12px;
 }
+/* Its images, bounded: many scroll, and the text and the sends stay in view (above a phone keyboard too). */
+[data-bakin-plugin="terminal"] .terminal-compose-images {
+  max-height: 11rem;
+  overflow-y: auto;
+}
 /* The ••• sheet: every other key, in the slot below the bar. */
 [data-bakin-plugin="terminal"] .terminal-key-sheet:focus-visible { outline: 2px solid var(--bakin-color-focus-ring); outline-offset: -2px; }
 [data-bakin-plugin="terminal"] .terminal-key-sheet {

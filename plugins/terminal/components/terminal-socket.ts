@@ -125,11 +125,11 @@ export class TerminalSocketClient {
    * before it; the server delivers it as tmux pastes (lib/paste.ts), then
    * Return if `enter`, only once the paste went.
    */
-  input(generation: number, data: string, options: { paste?: boolean; enter?: boolean } = {}): number | false {
+  input(generation: number, data: string, options: { paste?: boolean; enter?: boolean; uploads?: string[] } = {}): number | false {
     if (!this.ready || !data) return false
     if (options.paste) {
       this.flush()
-      return this.envelope(generation, data, options.enter ? { paste: true, enter: true } : { paste: true })
+      return this.envelope(generation, data, { paste: true, ...(options.enter ? { enter: true } : {}), ...(options.uploads?.length ? { uploads: options.uploads } : {}) })
     }
     if (this.pending && this.pending.generation !== generation) this.flush()
     if (this.inFlight.size === 0 && !this.pending) return this.envelope(generation, data)
@@ -162,7 +162,7 @@ export class TerminalSocketClient {
     return true
   }
 
-  private envelope(generation: number, data: string, paste: { paste: true; enter?: true } | Record<string, never> = {}): number {
+  private envelope(generation: number, data: string, paste: { paste: true; enter?: true; uploads?: string[] } | Record<string, never> = {}): number {
     const viewerSeq = ++this.viewerSeq
     this.inFlight.set(viewerSeq, generation)
     this.socket?.send(JSON.stringify({ type: 'input', generation, viewerSeq, data, ...paste }))

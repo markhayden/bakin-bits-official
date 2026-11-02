@@ -117,6 +117,15 @@ export function Composer({ onSend, placeholder }) {
   })
 }
 
+export function ComposerAttachmentTray({ items = [], disabled, onRemove, itemAction }) {
+  return React.createElement('div', { 'data-composer-attachments': '' }, ...items.map(item => React.createElement('div', { key: item.id },
+    item.status === 'uploading' ? React.createElement('div', { role: 'status', 'aria-label': `Uploading ${item.name}` })
+      : item.status === 'error' ? React.createElement('div', { role: 'alert' }, item.name, ' ', item.errorMessage ?? 'Upload failed')
+        : item.previewUrl ? React.createElement('img', { src: item.previewUrl, alt: item.name }) : React.createElement('span', null, item.name),
+    React.createElement('button', { type: 'button', disabled, 'aria-label': `Remove ${item.name}`, onClick: () => onRemove(item.id) }),
+    itemAction ? itemAction(item) : null)))
+}
+
 export function ConversationEmptyState({ title, description }) {
   return React.createElement('div', { 'data-testid': 'conversation-empty' }, title, description)
 }

@@ -93,7 +93,12 @@ export interface ProcessDriver {
 /** Shown inside the terminal app as it attaches (tmux status line, five seconds). */
 export const ATTACH_HINT = 'Detach: Ctrl-b d · Scrollback: Ctrl-b [ · Closing the window also detaches'
 
-export interface WriteOptions { paste?: boolean; enter?: boolean }
+export interface WriteOptions {
+  paste?: boolean
+  enter?: boolean
+  /** A paste carrying images' paths (lib/uploads.ts): their names, marked sent once it went (never abandoned). */
+  uploads?: string[]
+}
 
 /** The tmux buffers Bakin's pastes use (lib/paste.ts). */
 const PASTE_BUFFER_PREFIX = 'bakin-paste-'

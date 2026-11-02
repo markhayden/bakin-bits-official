@@ -3,7 +3,8 @@
  * binary frames are terminal output.
  *
  * client → server: hello { clientId } (first, binds identity) · input
- *   { generation, viewerSeq, data } · claim { cols, rows, device } (this
+ *   { generation, viewerSeq, data, paste?, enter?, uploads? (a paste's image
+ *   names: marked sent once it went) } · claim { cols, rows, device } (this
  *   screen sizes the session from now on) · resize { epoch, cols, rows } (the
  *   claiming screen changed size; stale for anyone else or an older epoch) ·
  *   restore-size { epoch } (back to the authority before the last handoff,
@@ -80,7 +81,7 @@ export interface ViewerManager {
 const message = z.discriminatedUnion('type', [
   z.object({ type: z.literal('hello'), clientId: z.string().regex(CLIENT_ID) }),
   // `paste`: the data is one paste (lib/paste.ts), delivered as tmux pastes; `enter`: then Return, once it went.
-  z.object({ type: z.literal('input'), generation: z.number().int().nonnegative(), viewerSeq: z.number().int().positive(), data: z.string().max(65536), paste: z.boolean().optional(), enter: z.boolean().optional() }),
+  z.object({ type: z.literal('input'), generation: z.number().int().nonnegative(), viewerSeq: z.number().int().positive(), data: z.string().max(65536), paste: z.boolean().optional(), enter: z.boolean().optional(), uploads: z.array(z.string().min(1).max(100)).max(20).optional() }),
   z.object({ type: z.literal('restore-size'), epoch: z.number().int().nonnegative() }),
   z.object({ type: z.literal('claim'), cols: z.number().int().min(1).max(400), rows: z.number().int().min(1).max(150), device: screenDevice }),
   z.object({ type: z.literal('resize'), epoch: z.number().int().nonnegative(), cols: z.number().int().min(1).max(400), rows: z.number().int().min(1).max(150) }),
@@ -212,7 +213,7 @@ export class TerminalViewer {
     if (!this.principal && parsed.type !== 'hello') { this.close(SOCKET_CLOSE.protocol, 'hello must come first'); return }
     switch (parsed.type) {
       case 'hello': return this.hello(parsed.clientId)
-      case 'input': return this.input(parsed.generation, parsed.viewerSeq, parsed.data, { paste: parsed.paste ?? false, enter: (parsed.paste ?? false) && (parsed.enter ?? false) })
+      case 'input': return this.input(parsed.generation, parsed.viewerSeq, parsed.data, { paste: parsed.paste ?? false, enter: (parsed.paste ?? false) && (parsed.enter ?? false), ...(parsed.paste && parsed.uploads ? { uploads: parsed.uploads } : {}) })
       case 'claim':
       case 'resize':
       case 'restore-size':

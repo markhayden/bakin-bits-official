@@ -406,6 +406,8 @@ export class Sessions {
     } catch (error) {
       throw new DeliveryUncertainError(error instanceof Error ? error.message : String(error))
     }
+    // The images it carried reached the program: kept with the session now, never swept as abandoned.
+    for (const name of options.uploads ?? []) this.options.uploads?.markSent(id, name, this.now())
     return session
   }
   /** Make `principal`'s screen the size authority and fit the grid to it (any human; spec D2). */
