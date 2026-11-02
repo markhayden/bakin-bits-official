@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./index.ts",
   "scripts": {
-    "test": "bun test tests --isolate --preload ./tests/setup-dom.ts",
+    "test": "bun test tests --isolate",
     "typecheck": "tsc --noEmit",
     "test:ui": "bakin-plugin-test-ui"
   },
