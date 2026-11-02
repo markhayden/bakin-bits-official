@@ -34,15 +34,25 @@ function snapshotLabel(snapshot: PlanSnapshot): string {
   return `${formatDateTime(snapshot.ts)} · ${snapshot.author === 'agent' ? 'agent edit' : 'your edit'}`
 }
 
-export function PlanHistoryPanel({ projectId, currentBody, onRestored, historyState }: {
+export function PlanHistoryPanel({ projectId, currentBody, onRestored, historyState, compareRevision, baselineSnapshot }: {
   projectId: string
   historyState: ProjectHistory
   /** The live plan body (diff target). */
   currentBody: string
+  /** Compare against the snapshot of this revision by default ("Review changes" since last seen, D15). */
+  compareRevision?: number
+  /** The last-seen body kept by the page — shown even if retention evicted it (not restorable). */
+  baselineSnapshot?: PlanSnapshot
   /** Fired after a successful restore so the host refetches the project. */
   onRestored: () => void | Promise<void>
 }) {
-  const { history, loading, error, refresh } = historyState
+  const { history: serverHistory, loading, error, refresh } = historyState
+  // A kept baseline the server no longer lists rides first, compare-only.
+  const keptBaseline = baselineSnapshot && serverHistory && !serverHistory.some(snapshot => snapshot.revision === baselineSnapshot.revision)
+    ? baselineSnapshot : undefined
+  const history = serverHistory && keptBaseline ? [keptBaseline, ...serverHistory] : serverHistory
+  /** The server's index for a listed snapshot (restore addresses the server list). */
+  const serverIndex = (index: number) => keptBaseline ? index - 1 : index
   const [selectedTs, setSelectedTs] = useState<string | null>(null)
   const [confirmRestore, setConfirmRestore] = useState<{ projectId: string; index: number; snapshot: PlanSnapshot } | null>(null)
   const [restoring, setRestoring] = useState(false)
@@ -55,7 +65,10 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored, historySt
     return () => { owner.current = '' }
   }, [projectId])
   const selectedIndex = history?.findIndex(snapshot => snapshot.ts === selectedTs) ?? -1
-  const selected = history?.length ? (selectedIndex < 0 ? history.length - 1 : selectedIndex) : null
+  const baselineIndex = compareRevision === undefined ? -1 : history?.findIndex(snapshot => snapshot.revision === compareRevision) ?? -1
+  const selected = history?.length
+    ? selectedIndex >= 0 ? selectedIndex : baselineIndex >= 0 ? baselineIndex : history.length - 1
+    : null
   const snapshot = selected !== null ? history?.[selected] : undefined
 
   const restore = async () => {
@@ -121,7 +134,7 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored, historySt
             <SelectContent>
               {[...history.keys()].reverse().map((index) => (
                 <SelectItem key={index} value={String(index)}>
-                  {snapshotLabel(history[index])}{index === history.length - 1 ? ' (previous)' : ''}
+                  {snapshotLabel(history[index])}{index === baselineIndex ? ' (last seen)' : index === history.length - 1 ? ' (previous)' : ''}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -132,8 +145,8 @@ export function PlanHistoryPanel({ projectId, currentBody, onRestored, historySt
             variant="outline"
             size="sm"
             data-testid="plan-history-restore"
-            disabled={loading || !!error || restoring}
-            onClick={() => { if (selected !== null && snapshot) { setRestoreError(null); setConfirmRestore({ projectId, index: selected, snapshot }) } }}
+            disabled={loading || !!error || restoring || serverIndex(selected ?? 0) < 0}
+            onClick={() => { if (selected !== null && snapshot && serverIndex(selected) >= 0) { setRestoreError(null); setConfirmRestore({ projectId, index: serverIndex(selected), snapshot }) } }}
           >
             Restore this version
           </Button>

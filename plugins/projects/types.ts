@@ -20,17 +20,116 @@ export interface ProjectAsset {
   label?: string          // optional human label / summary
 }
 
+/**
+ * Who named the project (D9). `fallback` = the start screen's first-message
+ * trim, `agent` = the lead named it, `user` = a human typed it. Agents may
+ * rename only `fallback`/`agent` titles. Absent (pre-revamp files) reads as
+ * `user`: those titles were typed by hand.
+ */
+export const TITLE_SOURCES = ['fallback', 'agent', 'user'] as const
+export type TitleSource = (typeof TITLE_SOURCES)[number]
+
+/** Who is writing: agent tool calls are held to the authority rules (D9a). */
+export type MutationCaller = { kind: 'user' } | { kind: 'agent'; agentId: string }
+
+/**
+ * Kickoff receipt (D8): the start screen's first send. `requestId` dedupes a
+ * retried create for the project's whole life; `message`/`agentId` ride along
+ * until the first turn settles, then drop (the transcript holds them).
+ */
+export interface ProjectKickoff {
+  requestId: string
+  state: 'pending' | 'started' | 'settled'
+  message?: string
+  agentId?: string
+}
+
+/**
+ * Steward loop bookkeeping (D22). `openTaskId` + `phase` are the reservation:
+ * written under the project lock with the frozen create inputs BEFORE the
+ * board task exists, so a crash between reserve and create recovers the
+ * identical task once. Bookkeeping writes never bump `project.updated`.
+ */
+export interface ProjectStewardState {
+  openTaskId?: string
+  phase?: 'reserved' | 'created'
+  frozen?: { title: string; assignee: string; description: string }
+  reservedAt?: string
+  /** The digest fingerprint the open run was reserved for. */
+  fingerprint?: string
+  /** Work-task columns as the open run's brief saw them (what it was shown). */
+  briefColumns?: Record<string, string>
+  /** Work-task columns as the last FINISHED run left them — "newly done" is a column change, never an edit. */
+  handledColumns?: Record<string, string>
+  /** Work that transitioned INTO done (task id → when) since a run last consumed it — catches done → reopened → done. */
+  completions?: Record<string, string>
+  /** The fingerprint the last FINISHED run handled — the D20a gate. */
+  lastFingerprint?: string
+  lastStewardAt?: string
+  /** Daily cap counter, local calendar day (server tz). */
+  runs?: { date: string; count: number }
+  /** The day a cap skip was last audited (one audit event per day). */
+  capNotedOn?: string
+  /**
+   * The next eligible scan runs regardless of the fingerprint: Start's
+   * hand-off, or a sign-off decision the lead must follow up on. Durable, so
+   * a failed or crashed attempt retries; cleared when a run is reserved.
+   */
+  runNext?: 'handoff' | 'decision'
+}
+
+/** The steward asked the user something (D25); scans pause until they reply. */
+export interface ProjectWaitingOn {
+  kind: 'input'
+  questionId: string
+  question: string
+  /** The steward's bounded reasoning (≤ 1 KB), replayed into the reply turn. */
+  context?: string
+  options?: string[]
+  since: string
+}
+
+/** One sign-off gate per gateKind+subject (D26). */
+export interface ProjectGateState {
+  approvalId: string
+  generation: number
+  state: 'pending' | 'approved' | 'rejected' | 'cancelled'
+  /** The check-in task that asked — closed once the decision lands. */
+  stewardTaskId?: string
+  /** That check-in's frozen assignee: later notes speak as it (D24). */
+  stewardAgentId?: string
+}
+
 export interface ProjectFrontmatter {
   id: string
   title: string
+  titleSource: TitleSource
   status: ProjectStatus
   created: string
   updated: string
   owner: string
   tasks: ProjectTask[]
   assets: ProjectAsset[]
+  kickoff?: ProjectKickoff
+  /**
+   * Plan revision (D15): bumps on every COMMITTED body change (no-op writes
+   * never do; restores do). Absent in pre-revamp files ⇒ 0.
+   */
+  planRevision: number
+  /** The status an archive left (D11) — Unarchive returns to it. */
+  archivedFrom?: Exclude<ProjectStatus, 'archived'>
+  planUpdatedBy?: 'agent' | 'user'
+  planUpdatedAt?: string
   /** Private durable mutation receipts; omitted from browser projections. */
   operations?: (ChecklistAddOperation | ChecklistPromotionOperation)[]
+  /** Check-ins paused by the user (D29); status stays active. */
+  stewardPaused?: boolean
+  steward?: ProjectStewardState
+  waitingOn?: ProjectWaitingOn
+  /** The reply turn carrying the pending question is running (D25). */
+  replyPending?: { questionId: string }
+  /** Keyed `<gateKind>:<subject>`. */
+  gates?: Record<string, ProjectGateState>
 }
 
 export interface Project extends ProjectFrontmatter {
@@ -51,6 +150,16 @@ export interface PlanSnapshot {
   ts: string
   author: 'agent' | 'user'
   body: string
+  /** The plan revision this body WAS (D15); absent on pre-revamp snapshots. */
+  revision?: number
+}
+
+/** Per-project "what the user has seen" sidecar; fields merge on write. */
+export interface ProjectSeen {
+  /** Last view of the brainstorm (unread replies). */
+  lastSeenAt: string | null
+  /** Plan revision the user last viewed — the "Plan updated" baseline (D15). */
+  planSeenRevision: number
 }
 
 export interface ProjectSummary {
@@ -65,8 +174,35 @@ export interface ProjectSummary {
   /** Brainstorm attention (bakin#703): unseen agent reply / turn running. */
   brainstormUnread?: boolean
   brainstormStreaming?: boolean
+  /** Resume signals (D18). */
+  doneCount?: number
+  /** The lead asked a question the user has not answered. */
+  waitingForYou?: boolean
+  /** An agent revised the plan since the user last looked. */
+  planUpdated?: boolean
+  /** Steward signals (D29): a sign-off is pending, work is stuck, the daily cap was hit, the user paused check-ins. */
+  needsApproval?: boolean
+  stuck?: boolean
+  checkinsPausedToday?: boolean
+  stewardPaused?: boolean
 }
 
+
+/** A file one of the project's board tasks produced (D17) — derived, never stored. */
+export interface ProducedFile {
+  assetId: string
+  type: string
+  description: string
+  taskId: string
+}
+
+/** A linked step's board task as the detail projection shows it. */
+export interface ResolvedBoardTask {
+  column: string
+  title: string
+  /** The assignee, when the task has one. */
+  agent?: string
+}
 
 export interface ResolvedProjectAsset extends ProjectAsset {
   type: string
@@ -77,13 +213,16 @@ export interface ResolvedProjectAsset extends ProjectAsset {
 
 /** Hydrated detail projection; checklist descriptions retain their shared type. */
 export interface ProjectDetailData extends Project {
-  resolvedTasks: Record<string, { column: string; title: string } | null>
+  /** The plan revision the user last viewed (D15). */
+  planSeenRevision?: number
+  /** An agent reply landed after the user last viewed the conversation. */
+  brainstormUnread?: boolean
+  resolvedTasks: Record<string, ResolvedBoardTask | null>
   resolvedAssets: ResolvedProjectAsset[]
   brainstormMessages?: ProjectBrainstormMessage[]
 }
 
-export type ProjectEditableValues = Pick<Project, 'title' | 'owner' | 'status' | 'body'>
-export type ProjectPatch = Partial<ProjectEditableValues>
+export type ProjectPatch = Partial<Pick<Project, 'title' | 'owner' | 'status' | 'body'>>
 export type ChecklistPatch = Partial<Pick<ProjectTask, 'title' | 'description'>>
 
 export interface ChecklistAddOperation {
@@ -106,4 +245,6 @@ export interface ChecklistPromotionOperation {
   workflowId?: string
   skipWorkflowReason?: string
   phase: 'reserved' | 'complete'
+  /** The board task was deleted: a retry of THIS request conflicts, a fresh one may promote again. */
+  retired?: true
 }
