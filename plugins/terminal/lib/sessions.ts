@@ -259,6 +259,14 @@ export class Sessions {
       })
     } finally { this.uploadsReading-- }
   }
+  /** Bookkeeping after delivery: a failure here never turns a delivered paste into a refused one. */
+  private markUploadsSent(id: string, names: string[] | undefined): void {
+    for (const name of names ?? []) {
+      try { this.options.uploads?.markSent(id, name, this.now()) } catch (error) {
+        this.options.log?.info('Terminal could not record an image as sent', { sessionId: id, name, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+  }
   /** The operator took an image out of the draft. */
   removeUpload(id: string, principal: Principal, generation: number, name: string): Promise<{ removed: boolean }> {
     return this.run(async () => {
@@ -397,6 +405,11 @@ export class Sessions {
     // No attachment (a resize could not be reconciled): refuse before consuming, so nothing is uncertain.
     // Input health is the control client's (spec D13).
     if (!this.driver.connected(id)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
+    // Every image a paste names is still kept: one swept since its draft was made (a day unsent) is refused
+    // before anything is consumed, so its missing path never reaches the program.
+    for (const name of options.uploads ?? []) {
+      if (!this.options.uploads?.exists(id, name)) throw new TerminalError('An image in this draft is no longer kept (unsent images go after a day); remove it and add it again', 410)
+    }
     // Consume the sequence before delivery. A transport failure is never auto-retried.
     session.inputSequence = sequence
     session.lastActivityAt = this.now()
@@ -404,10 +417,12 @@ export class Sessions {
     try {
       await this.driver.write(id, data, options)
     } catch (error) {
+      // It may have arrived: its images are kept as sent (never swept out from under the program).
+      this.markUploadsSent(id, options.uploads)
       throw new DeliveryUncertainError(error instanceof Error ? error.message : String(error))
     }
     // The images it carried reached the program: kept with the session now, never swept as abandoned.
-    for (const name of options.uploads ?? []) this.options.uploads?.markSent(id, name, this.now())
+    this.markUploadsSent(id, options.uploads)
     return session
   }
   /** Make `principal`'s screen the size authority and fit the grid to it (any human; spec D2). */

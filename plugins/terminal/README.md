@@ -27,15 +27,16 @@ or API billing.
 
 ## Setup and Access
 
-1. Run Bakin `0.0.1-rc.42` or newer and install this plugin, or use
+1. Run Bakin `0.0.1-rc.45` or newer and install this plugin, or use
    `bakin plugins link <checkout>/plugins/terminal` for hot reload.
    An existing dev instance can use its normal Bakin home; a disposable home is
    only needed for isolated testing.
 2. Open Terminal and choose **Set up service**. This explicitly installs a
    plugin-private launchd LaunchAgent using the managed tmux first. No service
    starts merely by importing the plugin. Linux service installation is not implemented.
-3. Enable each allowed agent under plugin settings (`enabledAgents`, a list of
-   `{ "id": "patch" }` entries). The default is no agent access.
+3. Choose which agents may use Terminal under plugin settings (`enabledAgents`,
+   a list of agent ids such as `["main", "patch"]`). Until you set it, the main
+   agent is enabled; an empty list turns agent access off.
 4. Create a session. Coding CLIs default to an isolated Git worktree; **Existing
    checkout** is explicit. Shell sessions use the supplied working directory
    unless `--worktree` (CLI) or the agent tool asks for an isolated one.
@@ -327,7 +328,10 @@ left out); an ended session's comes from its saved final screen.
   Only whoever drives the session can add one, checked again once the image
   has arrived. They are deleted with the session's history (by hand, or 30
   days after it completed) and with the session; one never sent to the
-  program is deleted after 24 hours.
+  program is deleted after 24 hours (so is an image file left without its
+  record by a crash), and a draft that still names it is refused when sent:
+  add the image again. Bakin itself reads an upload's body (up to its 100 MB
+  request limit) before the plugin applies its own 10 MB limit.
 
 ## Security and Privacy
 

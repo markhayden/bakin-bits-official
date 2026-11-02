@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sniffImage, UPLOAD_LIMITS, Uploads } from '../lib/uploads'
@@ -100,6 +100,48 @@ describe('Uploads', () => {
     expect(() => uploads.save('s3', png(1, 1), 1)).toThrow('This session already holds 100 MB of images')
     // Another session has its own.
     expect(() => uploads.save('s4', big, 1)).not.toThrow()
+  })
+  test('files left without a record (a crash before it) go after a day; recorded, young or foreign files stay', () => {
+    const base = mkdtempSync(join(root, 'orphans-'))
+    const records = new Store(':memory:')
+    const sweeping = new Uploads(base, records)
+    const kept = sweeping.save('s1', png(2, 2), 1)
+    const dir = sweeping.dir('s1')
+    const old = join(dir, '00000000-0000-4000-8000-000000000001.png')
+    const young = join(dir, '00000000-0000-4000-8000-000000000002.png')
+    const foreign = join(dir, 'notes.txt')
+    for (const path of [old, young, foreign]) writeFileSync(path, 'x')
+    const now = Date.now()
+    const dayAgo = new Date(now - UPLOAD_LIMITS.abandonedMs - 1000)
+    utimesSync(old, dayAgo, dayAgo)
+    utimesSync(foreign, dayAgo, dayAgo)
+    // Mark the recorded one sent, so only the unrecorded files are in question.
+    sweeping.markSent('s1', kept.name, now)
+    expect(sweeping.sweepAbandoned(now)).toEqual([])
+    expect(existsSync(old)).toBe(false)
+    expect(existsSync(young)).toBe(true)
+    expect(existsSync(foreign)).toBe(true)
+    expect(existsSync(sweeping.path(kept))).toBe(true)
+    // A session folder holding only an old orphan goes with it.
+    const empty = join(base, 'uploads', 's2')
+    mkdirSync(empty)
+    const lone = join(empty, '00000000-0000-4000-8000-000000000003.webp')
+    writeFileSync(lone, 'x')
+    utimesSync(lone, dayAgo, dayAgo)
+    sweeping.sweepAbandoned(now)
+    expect(existsSync(empty)).toBe(false)
+    // An unreadable session folder is answered; another session's orphan still goes.
+    const locked = join(base, 'uploads', 's3')
+    const other = join(base, 'uploads', 's4')
+    mkdirSync(locked); mkdirSync(other)
+    const otherOrphan = join(other, '00000000-0000-4000-8000-000000000004.png')
+    writeFileSync(otherOrphan, 'x')
+    utimesSync(otherOrphan, dayAgo, dayAgo)
+    chmodSync(locked, 0o000)
+    try {
+      expect(sweeping.sweepAbandoned(now).map((failure) => failure.sessionId)).toEqual(['s3'])
+      expect(existsSync(otherOrphan)).toBe(false)
+    } finally { chmodSync(locked, 0o700) }
   })
   test('a symlink in place of the image folders is never followed: writes refuse, deletions remove the link only', () => {
     const base = mkdtempSync(join(root, 'links-'))

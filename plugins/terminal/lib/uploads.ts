@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { chmodSync, lstatSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { TerminalError } from './contracts'
 import type { Store } from './store'
@@ -93,6 +93,8 @@ export function sniffImage(bytes: Uint8Array): { kind: ImageKind; width: number;
 }
 
 const EXTENSIONS: Record<ImageKind, string> = { png: 'png', jpeg: 'jpg', webp: 'webp' }
+/** The names save() generates (anything else in a session folder is not this plugin's to delete). */
+const GENERATED_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:png|jpg|webp)$/
 
 export class Uploads {
   constructor(private root: string, private store: Store) {}
@@ -149,6 +151,11 @@ export class Uploads {
     }
     return true
   }
+  /** A recorded upload whose file is there (a paste may name it). */
+  exists(session: string, name: string): boolean {
+    if (!this.store.uploads(session).some((upload) => upload.name === name)) return false
+    try { return lstatSync(join(this.dir(session), name)).isFile() } catch { return false }
+  }
   /** It reached the program (a paste delivered): no longer a draft that can be abandoned. */
   markSent(session: string, name: string, now: number): void { this.store.markUploadSent(session, name, now) }
   /** Remove one the operator took out of the draft: only a recorded upload (never a path a caller made up). */
@@ -157,6 +164,36 @@ export class Uploads {
     // The file first: its record stays (counted, swept again) until the bytes are gone.
     if (this.sessionDirExists(session)) rmSync(join(this.dir(session), name), { force: true })
     return this.store.deleteUpload(session, name)
+  }
+  /**
+   * Generated files no record names, older than UPLOAD_LIMITS.abandonedMs:
+   * removed (never followed through a symlink), and session folders left
+   * empty with them.
+   */
+  private sweepUnrecorded(now: number): Array<{ sessionId: string; name: string; error: string }> {
+    const failed: Array<{ sessionId: string; name: string; error: string }> = []
+    const fail = (sessionId: string, name: string, error: unknown) => failed.push({ sessionId, name, error: error instanceof Error ? error.message : String(error) })
+    const base = join(this.root, 'uploads')
+    let sessions: string[]
+    try { if (!lstatSync(base).isDirectory()) return failed; sessions = readdirSync(base) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') fail('', 'uploads', error)
+      return failed
+    }
+    // One that cannot be read or deleted is answered and tried again next sweep; the rest still go.
+    for (const session of sessions) {
+      const dir = join(base, session)
+      try {
+        if (!lstatSync(dir).isDirectory()) continue
+        const recorded = new Set(this.store.uploads(session).map((upload) => upload.name))
+        for (const name of readdirSync(dir)) {
+          if (recorded.has(name) || !GENERATED_NAME.test(name)) continue
+          const path = join(dir, name)
+          try { if (now - lstatSync(path).mtimeMs >= UPLOAD_LIMITS.abandonedMs) rmSync(path, { force: true }) } catch (error) { fail(session, name, error) }
+        }
+        if (readdirSync(dir).length === 0 && recorded.size === 0) rmSync(dir, { recursive: true, force: true })
+      } catch (error) { fail(session, '', error) }
+    }
+    return failed
   }
   /** Every upload of the session goes (its session or its history was deleted): the files first, then the records. */
   removeSession(session: string): void {
@@ -170,6 +207,8 @@ export class Uploads {
    */
   sweepAbandoned(now: number): Array<{ sessionId: string; name: string; error: string }> {
     const failed: Array<{ sessionId: string; name: string; error: string }> = []
+    // Files without a record (a crash between the write and the record) older than a day go too.
+    failed.push(...this.sweepUnrecorded(now))
     for (const upload of this.store.abandonedUploads(now - UPLOAD_LIMITS.abandonedMs)) {
       try { this.remove(upload.session, upload.name) } catch (error) {
         failed.push({ sessionId: upload.session, name: upload.name, error: error instanceof Error ? error.message : String(error) })

@@ -1749,14 +1749,13 @@ describe('uploads', () => {
     }
   })
   it('a paste that carried an image marks it sent once it went; a refused one leaves it a draft', async () => {
-    const { manager, store, later, failWrites } = fixture()
+    const { manager, store, later } = fixture()
     const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
     const sent = await manager.upload(session.id, human, session.generation, async () => png())
     const draft = await manager.upload(session.id, human, session.generation, async () => png())
     await manager.writeNext(session.id, human, session.generation, sent.path, { paste: true, uploads: [sent.name] })
+    // A refused paste (a stale generation) leaves its image a draft.
     await expect(manager.writeNext(session.id, human, session.generation + 1, draft.path, { paste: true, uploads: [draft.name] })).rejects.toThrow()
-    failWrites(new Error('tmux went away'))
-    await expect(manager.writeNext(session.id, human, session.generation, draft.path, { paste: true, uploads: [draft.name] })).rejects.toThrow()
     const byName = new Map(store.uploads(session.id).map((upload) => [upload.name, upload]))
     expect(byName.get(sent.name)?.sentAt).toBeNumber()
     expect(byName.get(draft.name)?.sentAt).toBeUndefined()
@@ -1764,6 +1763,35 @@ describe('uploads', () => {
     await manager.sweep()
     expect(existsSync(sent.path)).toBe(true)
     expect(existsSync(draft.path)).toBe(false)
+  })
+  it('a draft naming an image swept since is refused before anything is consumed', async () => {
+    const { manager, later, writes } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const image = await manager.upload(session.id, human, session.generation, async () => png())
+    later(25 * 60 * 60 * 1000)
+    await manager.sweep()
+    const before = manager.get(session.id, human).inputSequence
+    await expect(manager.writeNext(session.id, human, session.generation, image.path, { paste: true, uploads: [image.name] })).rejects.toThrow('no longer kept')
+    expect(manager.get(session.id, human).inputSequence).toBe(before)
+    expect(writes).not.toContain(image.path)
+  })
+  it('a delivery that may have arrived keeps its images as sent; a bookkeeping failure after delivery never refuses it', async () => {
+    const { manager, store, later, failWrites, uploads } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const maybe = await manager.upload(session.id, human, session.generation, async () => png())
+    failWrites(new Error('tmux went away'))
+    await expect(manager.writeNext(session.id, human, session.generation, maybe.path, { paste: true, uploads: [maybe.name] })).rejects.toThrow('may have been delivered')
+    expect(store.uploads(session.id).find((upload) => upload.name === maybe.name)?.sentAt).toBeNumber()
+    later(25 * 60 * 60 * 1000)
+    await manager.sweep()
+    expect(existsSync(maybe.path)).toBe(true)
+    failWrites(undefined as unknown as Error)
+    const delivered = await manager.upload(session.id, human, session.generation, async () => png())
+    const original = uploads.markSent.bind(uploads)
+    uploads.markSent = () => { throw new Error('database is locked') }
+    try {
+      await expect(manager.writeNext(session.id, human, session.generation, delivered.path, { paste: true, uploads: [delivered.name] })).resolves.toMatchObject({ id: session.id })
+    } finally { uploads.markSent = original }
   })
   it('maintenance removes images never sent within a day; sent ones stay', async () => {
     const { manager, uploads, later } = fixture()
