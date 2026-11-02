@@ -145,6 +145,7 @@ const fixtureProjects = [
   {
     id: 'p1',
     title: 'Alpha Launch',
+    owner: 'main',
     status: 'active',
     progress: 50,
     taskCount: 3,
@@ -155,6 +156,7 @@ const fixtureProjects = [
   {
     id: 'p2',
     title: 'Beta Roadmap',
+    owner: 'scout',
     status: 'active',
     progress: 25,
     taskCount: 2,
@@ -164,16 +166,25 @@ const fixtureProjects = [
   {
     id: 'p3',
     title: 'Gamma Cleanup',
+    owner: 'main',
     status: 'draft',
     progress: 10,
     taskCount: 1,
+    doneCount: 0,
     updated: '2026-04-08T00:00:00Z',
   },
 ]
 
+// The mock server forgets a project once its DELETE succeeds.
+const deletedIds = new Set<string>()
+
 const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === 'string' ? input : String(input)
-  if (init?.method === 'DELETE') return deleteResponse()
+  if (init?.method === 'DELETE') {
+    const response = await deleteResponse()
+    if (response.ok) deletedIds.add(decodeURIComponent(url.split('/').pop() ?? ''))
+    return response
+  }
   if (url === '/api/plugins/projects/' && init?.method === 'POST') {
     return {
       ok: true,
@@ -181,14 +192,16 @@ const fetchMock = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
       text: async () => '',
     }
   }
+  const status = new URL(url, 'http://localhost').searchParams.get('status')
   return {
     ok: true,
-    json: async () => ({ projects: fixtureProjects }),
+    json: async () => ({ projects: fixtureProjects.filter(project => !deletedIds.has(project.id) && (!status || project.status === status)) }),
     text: async () => '',
   }
 }) as unknown as typeof fetch
 
 beforeEach(() => {
+  deletedIds.clear()
   for (const k of Object.keys(queryState)) delete queryState[k]
   for (const k of Object.keys(querySetters)) delete querySetters[k]
   stubSearchResults = []
@@ -354,46 +367,61 @@ describe('ProjectList', () => {
     })
   })
 
-  it('creates a titled project before opening the edit view', async () => {
+  it('New project opens the start screen — no modal, nothing created', async () => {
     render(<ProjectList />)
-
-    await waitFor(() => {
-      expect(screen.getByText('New Project')).toBeDefined()
-    })
-
-    fireEvent.click(screen.getByText('New Project'))
-    const titleInput = screen.getByPlaceholderText('Project title...')
-    const createButton = screen.getByText('Create Project') as HTMLButtonElement
-    expect(createButton.disabled).toBe(true)
-
-    fireEvent.change(titleInput, { target: { value: 'Website Refresh' } })
-    expect((screen.getByText('Create Project') as HTMLButtonElement).disabled).toBe(false)
-    fireEvent.click(screen.getByText('Create Project'))
-
-    await waitFor(() => {
-      expect(routerPushSpy).toHaveBeenCalledWith('/projects/created-project/edit')
-    })
-
+    fireEvent.click(await screen.findByRole('button', { name: 'New project' }))
+    expect(routerPushSpy).toHaveBeenCalledWith('/projects/new')
+    expect(screen.queryByRole('dialog')).toBeNull()
     const fetchCalls = (fetchMock as unknown as { mock: { calls: unknown[][] } }).mock.calls
-    const createCall = fetchCalls.find(([url, init]) => (
-      url === '/api/plugins/projects/'
-      && (init as RequestInit | undefined)?.method === 'POST'
-    ))
-    expect(createCall).toBeDefined()
-    expect(JSON.parse(String((createCall?.[1] as RequestInit).body))).toEqual({ title: 'Website Refresh' })
+    expect(fetchCalls.some(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toBe(false)
   })
 
-  it('preserves progress, item counts, and live brainstorm attention in each row', async () => {
+  it('the empty-list start screen stays mounted when the new project appears mid-create', async () => {
+    const saved = fixtureProjects.splice(0, fixtureProjects.length)
+    try {
+      render(<ProjectList />)
+      await screen.findByRole('heading', { name: 'What kind of project is on your mind?' })
+      // The create's projects.changed refresh reveals the project before its POST resolves.
+      fixtureProjects.push(saved[0]!)
+      await act(async () => { emitPluginEvent({ event: 'projects.changed', projectId: saved[0]!.id }) })
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+      expect(screen.getByRole('heading', { name: 'What kind of project is on your mind?' })).toBeDefined()
+      expect(screen.queryByRole('list', { name: 'Projects' })).toBeNull()
+    } finally {
+      fixtureProjects.splice(0, fixtureProjects.length, ...saved)
+    }
+  })
+
+  it('an empty filter never latches the start screen', async () => {
+    render(<ProjectList />)
+    await screen.findByRole('list', { name: 'Projects' })
+    await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Completed' })) })
+    await screen.findByText('No completed projects')
+    await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'All' })) })
+    expect(await screen.findByRole('list', { name: 'Projects' })).toBeDefined()
+    expect(screen.queryByRole('heading', { name: 'What kind of project is on your mind?' })).toBeNull()
+  })
+
+  it('All leaves archived projects out', async () => {
+    fixtureProjects.push({ id: 'p4', title: 'Old Archive', owner: 'main', status: 'archived', progress: 0, taskCount: 0, updated: '2026-01-01T00:00:00Z' } as typeof fixtureProjects[number])
+    try {
+      render(<ProjectList />)
+      const rows = within(await screen.findByRole('list', { name: 'Projects' })).getAllByRole('listitem')
+      expect(rows).toHaveLength(3)
+      expect(screen.queryByText('Old Archive')).toBeNull()
+    } finally {
+      fixtureProjects.pop()
+    }
+  })
+
+  it('each row shows ONE resume signal by priority', async () => {
     render(<ProjectList />)
     const rows = within(await screen.findByRole('list', { name: 'Projects' })).getAllByRole('listitem')
-    expect(within(rows[0]).getByRole('progressbar', { name: 'Alpha Launch progress' }).getAttribute('value')).toBe('50')
-    expect(within(rows[0]).getByText('50% complete')).toBeDefined()
-    expect(within(rows[0]).getByText('3 items')).toBeDefined()
-    expect(within(rows[0]).getByText(/^Updated /)).toBeDefined()
-    expect(within(rows[0]).getByRole('img', { name: 'Brainstorm reply in progress' })).toBeDefined()
-    expect(within(rows[0]).queryByRole('img', { name: 'Unseen brainstorm reply' })).toBeNull()
-    expect(within(rows[1]).getByRole('img', { name: 'Unseen brainstorm reply' })).toBeDefined()
-    expect(within(rows[2]).queryByRole('img')).toBeNull()
+    // Working outranks the unseen reply on the same project.
+    expect(within(rows[0]!).getByText('Main is working')).toBeDefined()
+    expect(within(rows[0]!).queryByText(/New reply/)).toBeNull()
+    expect(within(rows[1]!).getByText('New reply from Scout')).toBeDefined()
+    expect(within(rows[2]!).getByText('0 of 1 steps done')).toBeDefined()
   })
 
   it('shows row-shaped loading placeholders until the request finishes', () => {
@@ -507,16 +535,19 @@ describe('ProjectList', () => {
   it('does not restore a deleted row when an earlier background refresh settles late', async () => {
     render(<ProjectList />)
     await screen.findByRole('list', { name: 'Projects' })
-    let finishRefresh!: (response: Response) => void
+    const refreshes: ((response: Response) => void)[] = []
     globalThis.fetch = mock((input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === 'DELETE') return deleteResponse()
-      return new Promise<Response>(resolve => { finishRefresh = resolve })
+      return new Promise<Response>(resolve => { refreshes.push(resolve) })
     }) as unknown as typeof fetch
     act(() => emitPluginEvent({ event: 'projects.brainstorm.done', projectId: 'p1' }))
     const dialog = await requestDelete()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete project' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    await act(async () => finishRefresh(Response.json({ projects: fixtureProjects })))
+    // The refresh started BEFORE the delete settles late with the old list…
+    await act(async () => refreshes[0]!(Response.json({ projects: fixtureProjects })))
+    // …while the post-delete refresh reflects the server.
+    await act(async () => refreshes.at(-1)!(Response.json({ projects: fixtureProjects.filter(project => project.id !== 'p1') })))
     expect(screen.queryByRole('button', { name: 'Open project: Alpha Launch' })).toBeNull()
     expect(screen.getByText('2 shown')).toBeDefined()
   })
@@ -531,7 +562,17 @@ describe('ProjectList', () => {
     expect((within(dialog).getByRole('button', { name: 'Delete project' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('shows the standard empty state after deleting the final project', async () => {
+  it('deleting the last project in a filter shows that filter empty, not the start screen', async () => {
+    render(<ProjectList />)
+    await screen.findByRole('list', { name: 'Projects' })
+    await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Draft' })) })
+    const dialog = await requestDelete('Gamma Cleanup')
+    await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Delete project' })) })
+    expect(await screen.findByText('No draft projects')).toBeDefined()
+    expect(screen.queryByRole('heading', { name: 'What kind of project is on your mind?' })).toBeNull()
+  })
+
+  it('shows the start screen after deleting the final project', async () => {
     render(<ProjectList />)
     for (const project of fixtureProjects) {
       const dialog = await requestDelete(project.title)
@@ -540,8 +581,8 @@ describe('ProjectList', () => {
       })
       expect(screen.queryByRole('dialog')).toBeNull()
     }
-    expect(screen.getByText('0 shown')).toBeDefined()
-    expect(screen.getByText('No projects yet')).toBeDefined()
+    // With no projects left, the list IS the start screen (D18).
+    expect(screen.getByRole('heading', { name: 'What kind of project is on your mind?' })).toBeDefined()
     expect(screen.queryByRole('list', { name: 'Projects' })).toBeNull()
   })
 })
