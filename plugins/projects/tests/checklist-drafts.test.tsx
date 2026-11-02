@@ -67,3 +67,13 @@ it('does not transfer a legacy item draft to a reused display ID', async () => {
   expect(writes).toBe(0)
   expect(view.result.current.descriptions.t001?.value).toBe('Old item draft')
 })
+
+it('a confirmed promotion spends its request id; the next Send to board is a new request', async () => {
+  const requests: any[] = []
+  globalThis.fetch = (async (_url, init) => { requests.push(JSON.parse(String(init?.body))); return Response.json({ ok: true, taskId: 'task-1' }) }) as typeof fetch
+  const view = renderHook(() => useChecklistDrafts('p1', tasks, async () => null))
+  await act(async () => { await view.result.current.mutate(tasks[0]!, 'promote') })
+  await act(async () => { await view.result.current.mutate(tasks[0]!, 'promote') })
+  expect(requests).toHaveLength(2)
+  expect(requests[0].requestId).not.toBe(requests[1].requestId)
+})

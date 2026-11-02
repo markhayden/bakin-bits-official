@@ -12,11 +12,12 @@ concurrency:
 
 env:
   # The ONE compatible Bakin SDK source both jobs build and verify against.
-  # Terminal multi-device (bakin #1028/#1029): the reviewed H2 stack tip
-  # whose SDK adds plugin socket routes and interactive CLI launch; repinned
-  # to the rc.45 release commit before this stack merges.
-  # Pin a reviewed commit, never a moving branch.
-  BAKIN_SDK_REF: 0928763608e1f8c66974d5e58ead2f19a09c4f04
+  # Terminal multi-device (bakin #1028/#1029 + H3): the reviewed bakin stack
+  # tip, which carries main (the Projects revamp SDK pins #1034/#1038) plus
+  # plugin socket routes, interactive CLI launch, useFullscreen and the
+  # canonical stylesheet for this stack; repinned to the release commit before
+  # this stack merges. Pin a reviewed commit, never a moving branch.
+  BAKIN_SDK_REF: 4f0da194e7db041d50a14baf6705e62f122d69b5
 
 jobs:
   check:
