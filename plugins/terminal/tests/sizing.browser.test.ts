@@ -123,7 +123,8 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     await controlsInTopCorner(phone)
     const panned = await pane(phone)
     expect(panned.scrollLeft).toBeGreaterThan(100)
-    expect(panned.scrollTop).toBeLessThan(start.maxTop - 100)
+    // Up by as much as the grid allows (the phone's pane is tall with the keyboard down).
+    expect(panned.scrollTop).toBeLessThan(start.scrollTop - Math.min(100, start.maxTop / 2))
 
     // Follow cursor brings the cursor back into view.
     await phone.getByRole('button', { name: 'Follow cursor', exact: true }).tap()
@@ -175,8 +176,9 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     await desk.waitForFunction(() => document.querySelector('.terminal-pane')?.getAttribute('data-fit') === 'width')
     expect(await font(desk)).toBeGreaterThan(13)
 
-    // On the desktop the phone's grid overflows vertically: the wheel pans the pane
-    // (never xterm's history or arrow keys), Ctrl+wheel zooms, and neither types.
+    // On the desktop the phone's grid overflows vertically: the wheel scrolls
+    // the history first and then pans the pane (plan T36, never arrow keys),
+    // Ctrl+wheel zooms, and neither types.
     const deskInputs = deskSocket.inputs().length
     const deskBox = (await desk.locator('.terminal-pane').boundingBox())!
     await desk.mouse.move(deskBox.x + deskBox.width / 2, deskBox.y + deskBox.height / 2)
@@ -187,7 +189,10 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     await desk.mouse.wheel(0, -300)
     await desk.getByRole('button', { name: 'Follow cursor', exact: true }).waitFor()
     await controlsInTopCorner(desk)
+    // Past the history's top (80 lines and the prompt), the rest pans the pane up.
+    for (let n = 0; n < 12 && (await pane(desk)).scrollTop >= beforeWheel.scrollTop; n++) { await desk.mouse.wheel(0, -600); await desk.waitForTimeout(50) }
     expect((await pane(desk)).scrollTop).toBeLessThan(beforeWheel.scrollTop)
+    expect(deskSocket.inputs().length).toBe(deskInputs)
     const deskFont = await font(desk)
     await desk.keyboard.down('Control')
     await desk.mouse.wheel(0, 100)
@@ -200,6 +205,25 @@ browserTest('one screen sizes the session; another renders the real grid, pans, 
     expect(await desk.getByRole('button', { name: 'Follow cursor', exact: true }).isVisible()).toBe(true)
     expect(await desk.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea'))).toBe(true)
     expect(deskSocket.inputs().length).toBe(deskInputs)
+    await phone.waitForFunction(() => document.querySelector('.terminal-pane')?.getAttribute('data-fit') === 'pane')
+
+    // A phone's header shows the size as an icon alone; the desktop shows the grid too.
+    expect(await sizeButton(phone).locator('.terminal-size-grid').isVisible()).toBe(false)
+    expect(await sizeButton(desk).locator('.terminal-size-grid').isVisible()).toBe(true)
+    // Going back hands the size to the desktop; it then offers going back to the phone, and the phone
+    // (whose own fit is already offered) shows no going back. Fitting again takes it back.
+    // (The phone's size popover is still open from its fit above.)
+    await phone.getByRole('button', { name: 'Back to desktop', exact: true }).tap()
+    const restore = await phoneSocket.waitFor((frame) => frame.type === 'restore-size')
+    expect(typeof restore.epoch).toBe('number')
+    await desk.waitForFunction(() => document.querySelector('[aria-label^="Terminal size"]')?.getAttribute('aria-label')?.includes('sized by this device'))
+    await phone.getByRole('button', { name: 'Back to desktop', exact: true }).waitFor({ state: 'detached' })
+    expect(await phone.getByRole('button', { name: /^Back to / }).count()).toBe(0)
+    await sizeButton(desk).click()
+    await desk.getByRole('button', { name: 'Back to phone', exact: true }).waitFor()
+    await desk.keyboard.press('Escape')
+    await phone.getByRole('button', { name: 'Fit to this device', exact: true }).tap()
+    await desk.waitForFunction(() => document.querySelector('[aria-label^="Terminal size"]')?.getAttribute('aria-label')?.includes('sized by phone'))
     await phone.waitForFunction(() => document.querySelector('.terminal-pane')?.getAttribute('data-fit') === 'pane')
 
     // The phone leaving freezes the size; the desktop says so and can take it back.

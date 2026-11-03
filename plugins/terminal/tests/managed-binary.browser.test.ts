@@ -20,7 +20,7 @@ browserTest('managed tmux serves a real shell across reconnect, and the creating
     await page.getByRole('button', { name: 'Start terminal', exact: true }).click()
     id = (await (await creation).json()).id
     // Typing before the viewer socket syncs is refused, never queued.
-    await page.getByRole('status').filter({ hasText: "You're driving", visible: true }).first().waitFor()
+    await page.getByRole('status').filter({ hasText: 'Driving', visible: true }).first().waitFor()
     await page.locator('.xterm-helper-textarea').focus()
     await page.keyboard.type('printf "MANAGED_%s_OK\\n" TMUX')
     await page.keyboard.press('Enter')

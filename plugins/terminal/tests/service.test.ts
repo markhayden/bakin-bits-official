@@ -6,7 +6,7 @@ import { join } from 'node:path'
 const home = mkdtempSync(join(tmpdir(), 'terminal-service-test-'))
 mock.module('node:os', () => ({ homedir: () => home, tmpdir }))
 const { TerminalService, terminalEnvironment } = await import('../lib/service')
-const { tmuxConfig } = await import('../lib/tmux-config')
+const { tmuxConfig, VERIFIED_OPTIONS } = await import('../lib/tmux-config')
 afterAll(() => rmSync(home, { recursive: true, force: true }))
 const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!
 let root: string
@@ -15,6 +15,8 @@ let running: boolean
 let loaded: boolean
 let panes: string
 let paneError: boolean
+/** The running server's options: the generated configuration's, unless a test says otherwise. */
+let serverOptions: Record<string, string>
 let commands: string[][]
 let restoreSpawn: () => void
 const managedTmux = join(home, '.bakin/bin/tmux')
@@ -27,7 +29,7 @@ beforeEach(() => {
   Object.defineProperty(process, 'platform', { value: 'darwin' })
   root = mkdtempSync(join(home, 'data-'))
   installManagedTmux()
-  running = true; loaded = true; panes = ''; paneError = false; commands = []
+  running = true; loaded = true; panes = ''; paneError = false; commands = []; serverOptions = { ...VERIFIED_OPTIONS }
   const spawn = spyOn(Bun, 'spawn').mockImplementation(((args: string[]) => {
     commands.push(args)
     let output = '', error = '', exit = 0
@@ -38,7 +40,10 @@ beforeEach(() => {
       if (args[1] === 'print') exit = loaded ? 0 : 113
       if (args[1] === 'bootout') { running = false; loaded = false }
       if (args[1] === 'bootstrap') { running = true; loaded = true }
-    } else if (args.includes('show-options')) exit = running ? 0 : 1
+    } else if (args.includes('show-options')) {
+      exit = running ? 0 : 1
+      if (running && args.includes('-gv')) output = `${serverOptions[args.at(-1)!] ?? ''}\n`
+    }
     else if (args.includes('list-sessions')) output = panes ? [...new Set(panes.trim().split('\n').map(line => line.split(' ')[0]))].join('\n') + '\n' : ''
     else if (args.includes('list-panes')) {
       output = panes
@@ -125,10 +130,30 @@ describe('terminal service managed binary', () => {
       if (args.includes('show-options') && commands.some(c => c[1] === 'bootstrap')) { commands.push(args); return { stdout: new Response('').body, stderr: new Response('').body, exited: Promise.resolve(1) } }
       return original(args)
     })
-    await expect(service.install()).rejects.toThrow('did not become ready')
+    await expect(service.install()).rejects.toThrow('did not become ready with its configuration (it did not answer); no fingerprint was recorded.')
     expect(existsSync(join(root, 'service.json'))).toBe(false)
     expect(await service.updateRequired()).toBe(true)
   })
+  it('records nothing when the restarted server runs without the generated configuration', async () => {
+    oldPlist()
+    // An old configuration (no stamp), another configuration's stamp, and one that loaded but still scrolls on clear.
+    for (const [options, found] of [
+      [{ 'scroll-on-clear': 'off' }, '@bakin_config is unset'],
+      [{ ...VERIFIED_OPTIONS, '@bakin_config': 'another' }, "@bakin_config is 'another'"],
+      [{ ...VERIFIED_OPTIONS, 'scroll-on-clear': 'on' }, "scroll-on-clear is 'on'"],
+    ] as const) {
+      serverOptions = options
+      // The error names what the last attempt found wrong.
+      await expect(service.install()).rejects.toThrow(`did not become ready with its configuration (${found})`)
+      expect(existsSync(join(root, 'service.json'))).toBe(false)
+      expect(await service.updateRequired()).toBe(true)
+      running = false; loaded = false
+    }
+    // The configuration verified: recorded.
+    serverOptions = { ...VERIFIED_OPTIONS }
+    await service.install()
+    expect(await service.updateRequired()).toBe(false)
+  }, 15_000) // each refusal polls the restarted server for its full ~2 s window
   it('leaves the service and plist untouched when any live pane remains, naming the sessions', async () => {
     oldPlist(); panes = 'terminal-a 0\nterminal-b 1\nterminal-c 0\n'
     const before = readFileSync(plistPath(), 'utf8')

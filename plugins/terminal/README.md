@@ -8,8 +8,9 @@ and normal permission prompts. Bakin does not disable CLI safety controls.
 ## Development Status
 
 This is a macOS-first implementation. It requires Bakin and `@makinbakin/sdk`
-`>=0.0.1-rc.42`: the client bundle is built for the host-provided zod contract
-(`react19-sdk-focused-v2`, rc.42), and rc.40 added consent, verified downloads, and repair for
+`>=0.0.1-rc.45`: it uses the host's full screen (`useFullscreen`, rc.45); the
+client bundle is built for the host-provided zod contract (`react19-sdk-focused-v2`,
+rc.42), and rc.40 added consent, verified downloads, and repair for
 plugin-managed binaries.
 That release includes verified invocation context, local plugin storage, Git
 session-worktree hooks, and required uninstall preflight. The version used to
@@ -26,33 +27,48 @@ or API billing.
 
 ## Setup and Access
 
-1. Run Bakin `0.0.1-rc.42` or newer and install this plugin, or use
+1. Run Bakin `0.0.1-rc.45` or newer and install this plugin, or use
    `bakin plugins link <checkout>/plugins/terminal` for hot reload.
    An existing dev instance can use its normal Bakin home; a disposable home is
    only needed for isolated testing.
 2. Open Terminal and choose **Set up service**. This explicitly installs a
    plugin-private launchd LaunchAgent using the managed tmux first. No service
    starts merely by importing the plugin. Linux service installation is not implemented.
-3. Enable each allowed agent under plugin settings (`enabledAgents`, a list of
-   `{ "id": "patch" }` entries). The default is no agent access.
-4. Create a session. Coding CLIs default to an isolated Git worktree; **Existing
-   checkout** is explicit. Shell sessions use the supplied working directory
-   unless `--worktree` (CLI) or the agent tool asks for an isolated one.
+3. Choose which agents may use Terminal under plugin settings (`enabledAgents`,
+   a list of agent ids such as `["main", "patch"]`). Until you set it, the main
+   agent is enabled; an empty list turns agent access off.
+4. Create a session. Claude Code and Codex sessions started in the browser or
+   by an agent default to an isolated Git worktree; **Existing checkout** is
+   explicit. Shell sessions use the working directory unless an isolated one is
+   asked for. `bakin terminal new` uses the current checkout unless you add
+   `--worktree`.
 
-Terminal runs only Bakin's managed tmux (`~/.bakin/bin/tmux`); a tmux on
-`PATH` (Homebrew or manual) is never used. If it is missing or damaged, open
+Terminal runs only Bakin's managed tmux (in Bakin's `bin` folder:
+`~/.bakin/bin/tmux`, or under `$BAKIN_HOME` when you set it); a tmux on `PATH`
+(Homebrew or manual) is never used. Sessions find that folder first on their
+`PATH`. If it is missing or damaged, open
 Health and run the plugin assets repair, or run `bakin install plugin-assets`.
 Terminal picks up the repaired executable without a Bakin restart.
 
 The service's configuration comes from the plugin (`lib/tmux-config.ts`), and
 setup records a fingerprint of the binary pin, configuration and program
-arguments only after the restarted service is verified ready. When the
+arguments only after the restarted service is verified running it (it reports
+the configuration's stamp and its options). A `clear` erases the screen
+without copying it into scrollback (`scroll-on-clear off`), in tmux as in the
+browser. When the
 running service is not the one this plugin version sets up (another binary,
 another configuration, or no verified fingerprint), Terminal and Health show
-**Terminal service update available**: end live sessions, then choose **Set up
-service** (or Health's **Apply update**). Setup refuses while any session is
-live, naming those sessions, and refuses a service whose process state cannot
-be verified. Restarting the service drops retained tmux panes and their
+**Terminal service update available**. It is a recommendation: sessions keep
+working on the running service until you apply it. **Apply update** (on the
+Terminal list) opens a confirmation that lists any live sessions and offers to
+end them first (setup needs none running), then restarts the service. Bakin
+ends exactly the sessions you were shown: if one started or the update was
+applied elsewhere meanwhile, nothing ends and the dialog says so; if one
+cannot be ended, the update is not applied and the dialog names what did end.
+Restarting drops tmux's own scrollback for ended sessions; output Bakin saved
+and retained worktrees are kept. Health offers **Apply update** directly when
+no session is live, and **Open Terminal** when some are. Setup also refuses a
+service whose process state cannot be verified. Restarting the service drops retained tmux panes and their
 in-memory scrollback; output Bakin stored and worktree records are kept. Linux
 is not supported by this release.
 
@@ -62,6 +78,13 @@ be assigned. It defaults to the most recent valid non-worktree directory or the
 host working directory, and the recent enabled agent or sole enabled agent.
 Selecting an agent suggests its workspace; selecting a task fills available
 agent/project links. Manually edited titles and directories are preserved.
+**Browse…** beside the working directory lists this Mac's folders (a browser's
+own picker can only name files on the device it runs on): open folders, go up,
+filter, show hidden ones, and pick from recent session folders; **Use this
+folder** fills the field (it waits while a folder is still loading). It lists
+folder names only (never files), filters on the server before its 500-folder
+cap, and is guarded like Terminal's other browser routes (same origin, a
+Terminal client id): not a barrier against other programs running as you.
 
 Task/project links are optional. Task IDs are checked against the task service;
 project IDs are navigation metadata, not ownership or cleanup authority. A
@@ -69,35 +92,104 @@ project link requires the Projects plugin. Completing a task never terminates
 its shell.
 
 The human sees all sessions. Agents can only see sessions assigned to them while
-enabled. Take Control revokes agent input until Return Control; simply viewing
-or disconnecting does not change ownership. Another browser tab must explicitly
-take control. Reassignment revokes the previous agent's reads and writes.
+enabled. While you drive a session, every one of your tabs and devices can
+type in it. **Take over** stops the agent's input; typing while you watch an
+agent asks to take over first (you are not asked again for 15 minutes).
+Viewing or disconnecting alone does not change who drives. When you drive a
+session that has an assigned agent, after two idle minutes a 20-second
+warning offers **Keep driving**, then control goes back to the agent; it also goes back as soon as you
+leave the session; **Hand back** returns it at once. Reassignment revokes the
+previous agent's reads and writes.
 
 ## Sizing across devices
 
 A session has one real grid. Exactly one screen sizes it, by an explicit
 claim: the browser (or terminal app) that created it, or the last one where
-someone chose **Fit to this device** in the header's size control
-(`200×60 · Sized by this device | desktop | phone | terminal app`). That
+someone chose **Fit to this device** in the header's size control. The
+control is an icon for who sizes the grid (a phone, a desktop, a terminal
+app, or a snowflake when frozen); wide screens add the grid and
+`Sized by this device | desktop | phone | terminal app`. That
 screen keeps the grid fitted to its pane: height changes apply at once,
 width changes after 100 ms. Viewing, typing, rotating, opening a keyboard, or
-Take/Return control on any other screen never resizes anything. When the
-sizing screen disconnects the header says **Size frozen** and the grid holds
-until someone fits it again.
+taking over or handing back on any other screen never resizes anything. When the
+sizing screen disconnects the header says **Size frozen** and the grid holds.
+Sizing resumes when that screen reconnects (a reloaded page counts as a new
+screen), or when another screen chooses **Fit to this device**.
+
+**Fit to this device** is always offered. After a handoff to this device
+the control also offers **Back to desktop** (or phone, or terminal app): the
+screen that sized the session before. A connected one fits the grid to its
+own window again; one that is not connected gets the grid it left, and the
+size holds. Going back is a toggle, so the other screen offers it next.
+Two screens going back at once: the second is refused, as the size moved.
 
 Every other screen renders the real grid locally. Its font is fitted to the
-pane's width (never below 10px on touch screens, 8px elsewhere) and the pane
-pans natively in both directions. Pinch (or Ctrl+scroll on a trackpad) sets a
-font for this device, remembered in this browser; **Reset view** returns to
-the fitted font. The view follows the cursor after each update; panning or
-selecting text pauses that until **↓ Live** (Follow cursor). Both controls
-sit small in the pane's top-right corner, never over the bottom rows where
-the program's input line is, and tapping them keeps the keyboard where it
-is. Panning never opens the keyboard or sends input.
+pane's width, never below the smallest text set for this device (10px on touch
+screens and 8px elsewhere by default; choose 8, 10, 12 or 14px in the size
+control) and the pane
+pans natively in both directions. Scrolling up or down (a wheel, a trackpad,
+one finger) moves through the terminal's history while there is history that
+way, and pans the grid otherwise; sideways scrolling pans. A finger drag
+keeps going after it lifts. Pinch (or Ctrl+scroll on a trackpad) sets a font
+for this device, remembered in this browser; **Reset view** returns to the
+fitted font. The view follows the cursor after each update; panning,
+scrolling into the history or selecting text pauses that until **↓ Live**
+(Follow cursor) or focusing the terminal to type — reaching the bottom by
+itself does not. Both controls sit small in the pane's top-right corner,
+never over the bottom rows where the program's input line is, and tapping
+them keeps the keyboard where it is. Scrolling and panning never open the
+keyboard or send input, with one exception that matches native terminals: a
+full-screen program that asked for the mouse (Claude Code, vim with mouse on)
+scrolls itself, so the wheel and vertical drags reach it as scroll events
+once the grid has panned to its edge, for programs that use the SGR mouse
+encoding, as Claude Code does. A full-screen program that did not ask
+for the mouse gets no arrow keys from scrolling, and a tap never reaches a
+program as a mouse click (a mouse click on a desktop still does, as in any
+terminal).
+
+A session's grid is always between 40×10 and 400×150.
 
 Session actions › **Use this size as the default** saves the current grid as
 the Default columns/rows for new sessions nobody's screen sized yet (agent
 sessions).
+
+## The terminal viewer
+
+Every device shows the same picture, reflowed exactly as tmux does when a
+width changes. If the view ever has to be refreshed from tmux (very fast
+output, a lost connection to tmux, a difference the safety net found), it does
+so on its own, without a notice. When a session ends Bakin saves its last
+screen, so an ended session opens to what it showed. If that save failed, the
+saved screen was removed for space, or it cannot be read, the ended session
+says which.
+
+When a program in the session offers text for the clipboard (OSC 52 —
+Neovim with OSC 52 clipboard, or `… | base64 | xargs -0 printf
+'\033]52;c;%s\a'`), the viewer shows **Text to copy** in the pane's corner
+with its first line that has text and a **Copy** button. Nothing writes your
+clipboard until you tap it; a newer offer replaces the last, a copied one goes
+after its check, a refused copy keeps it to try again, and **×** dismisses it.
+Opening, reloading or reconnecting never brings an old offer back. tmux's own
+copy mode sends its copies to attached terminal apps, not to this viewer.
+
+**Full screen** (the ⤢ button in the session header) hides Bakin's header,
+sidebar and activity rail and, where the browser can (desktop browsers,
+Android), puts the whole page in the browser's full screen; menus, dialogs,
+sheets and notifications keep working. On an iPhone, Bakin's chrome goes but
+Safari has no full screen (the Home Screen app has no browser bar anyway).
+Esc stays the terminal's where the browser allows it (Chrome: hold Esc to
+leave); in Safari Esc also leaves full screen. Leaving the session leaves full
+screen too.
+
+To copy terminal text on a phone (the terminal has no touch selection),
+choose Session actions › **Copy text…**: the history and screen open as plain
+text in a sheet, where the system's own long-press selection works, with
+**Copy all** (everything kept, even past what is shown: the newest 2,000 lines,
+up to 400,000 characters) and **Refresh**. The browser keeps up to 10,000
+lines of history per session; tmux keeps up to 50,000 for terminal apps.
+
+A program's query (its cursor position, colours, device attributes) is
+answered once, by tmux; viewers never answer.
 
 ## Continue in a terminal app
 
@@ -116,8 +208,9 @@ this Mac, and vice versa:
 - `bakin terminal ls --as human` lists sessions: id, title, program, owner,
   state, size, directory, and how many terminal apps are attached.
 
-While attached, `Ctrl-b d` detaches, `Ctrl-b [` scrolls back, and closing the
-window also detaches; the session keeps running in Bakin. Attaching makes the
+While attached, `Ctrl-b d` detaches, `Ctrl-b [` scrolls back, `Ctrl-b ]`
+pastes, `Ctrl-b Ctrl-b` sends Ctrl-b to the program, `Ctrl-b ?` lists these
+keys, and closing the window also detaches; the session keeps running in Bakin. Attaching makes the
 terminal app the screen that sizes the session (the header says **Sized by
 terminal app**), and its window resizes are followed until another screen
 chooses **Fit to this device**. The browser shows **Open in a terminal app**
@@ -125,11 +218,25 @@ while one is attached.
 
 Only the operator attaches, from a terminal (not inside tmux, an agent shell,
 or a remote `BAKIN_URL`). An agent-driven session refuses with "Take control
-first", and **Return control** detaches terminal apps before the agent types
+first", and handing back to the agent detaches terminal apps before the agent types
 again. Every attach is a single-use reservation the CLI confirms within 15
-seconds; any other tmux client on a session, including a hand-typed
-`tmux attach`, is detached at once. A Bakin restart detaches attached terminal
+seconds. Any other tmux client on a session, including a hand-typed
+`tmux attach`, is detached; while an attach waits for its confirmation, other
+terminal apps are held unable to type instead. A Bakin restart detaches attached terminal
 apps; attach again.
+
+## Attention
+
+Claude Code and Codex sessions report their turn: **needs you** (a permission or question prompt), **working**, or **your turn** (the turn finished). Bakin launches them with its own hooks, which set the session's state in tmux; the plugin never edits `~/.claude` or `~/.codex`.
+
+- **Claude Code** gets them through `--settings` (a generated file under the plugin's data directory). They merge with your own, project and plugin hooks. An idle prompt is not "needs you".
+- **Codex** gets them as `-c hooks.…` overrides. Codex runs a new hook only after it is trusted: the first Codex session opens Codex's hook review, where `t` trusts them; Codex records that itself, once (the hooks are the same in every session). Until then a Codex session's state is unknown. Bakin never bypasses hook trust.
+- A subagent's tool runs never change the main agent's state. An interrupted turn clears: Codex says so at once; Claude Code reports no interrupt, so its idle prompt about a minute later clears a leftover "working" or "needs you".
+- **Shell** sessions have no turn state.
+
+Sessions show their state as a chip in the list and the session header (solid until seen, then outlined). The **Terminal** nav item counts sessions that need you or whose turn finished and that you have not seen yet. Each new one, and each bell, raises a toast in every visible Bakin tab and an OS notification (when notifications are on and no Bakin tab has focus): one per browser where it can keep track (IndexedDB), otherwise one per tab — except for the session you have open and focused on this device, which instead marks the state as seen, on every device. Seen and resolved are separate: a seen state stays on the chip until the program moves on.
+
+Every session also has an activity — active (it printed in the last 5 seconds), quiet, or exited — and a bell (as tmux counts them: not the BEL that ends a title) is recorded at most once every 30 seconds.
 
 ## Agent Tool
 
@@ -144,9 +251,11 @@ cannot invoke this protected tool. Existing runtime tool allowlists still apply.
 
 List/read the session before writing. Supply `id`, its current `generation`, and
 `sequence: inputSequence + 1`. Input is at most 64 KiB. A stale generation or
-sequence fails; never retry ambiguous input. Screen reads return bounded plain
-text. Output reads accept a cursor and return base64 terminal bytes, the next
-cursor, and an explicit truncation flag.
+sequence fails; never retry ambiguous input. `screen` returns the visible pane
+as plain text. `output` returns the session's text, history then screen, as
+plain lines (`lines`: only the last that many; `truncated` says some were
+left out), from the up to 10,000 lines of history Bakin keeps; an ended
+session's comes from its saved final screen.
 
 ## Lifecycle and Retention
 
@@ -156,29 +265,50 @@ cursor, and an explicit truncation flag.
   never treated as permission to delete work.
 - Complete refuses a live process. Terminate explicitly stops it. Dead tmux
   sessions are removed on completion. Bakin shutdown detaches only its clients.
-- Bakin holds two tmux clients per live session:
-  - an attached client whose redraw stream is the output, and from which a reconnect recovers;
-  - a control-mode client (`tmux -C`) that carries input, resizes and queries.
+- Bakin holds one tmux client per live session: a control-mode client
+  (`tmux -C`) that carries input, resizes and queries, and the program's own
+  output (`%output`, read as bytes). It feeds the session's ordered event log
+  (output and layout changes, batched, bounded at 8 MiB queued; a lost
+  connection or a stalled reader invalidates it), and the log feeds the
+  session's server replica, the picture every viewer and agent read. A
+  replica starts from a seed: one grouped command (history, screen and modes
+  in one capture) whose reply places it in the log, so no output is lost or
+  repeated around it. It keeps a checkpoint plus the output since (bounded at
+  4 MiB or 4096 events): Bakin's own serializer (every cell, both buffers,
+  saved cursors, charsets, modes, links, the grapheme join state), accepted
+  only when restoring it into a fresh terminal reproduces the full state, and
+  taken in slices of a few milliseconds that never hold up input. tmux can
+  deliver a flood (`yes`) about twice as fast as the replica parses it; past
+  4 MiB behind, the replica skips the output and rebuilds from tmux (at most
+  once a second while the flood lasts). During a flood the picture is the
+  screen alone; once output has been quiet for a second, the history comes
+  back. If the log still overflows, the session is recovered from tmux. A lost
+  control client or replica is rebuilt from tmux by the next viewer or read.
 
-  Neither one sizes the window (`window-size manual`): only Bakin's explicit
+  It never sizes the window (`window-size manual`): only Bakin's explicit
   resize does, so an extra client, such as a terminal app, never reshapes a
-  session. Input is delivered byte-exact with `send-keys -H` and never passes
-  through tmux key bindings. A pane left in copy mode is returned to its
+  session. Typed input is delivered byte-exact with `send-keys -H` and never
+  passes through tmux key bindings; a paste is handed to tmux as a paste
+  (`paste-buffer -p`, byte-exact), so tmux brackets it only when the program
+  asked for bracketed paste. A pane left in copy mode is returned to its
   program first.
 - **Each browser holds one WebSocket to the session** (`/api/plugins/terminal/socket`).
-  - The connection opens with a sync: a snapshot of the screen, the cursor it
-    reflects, and the session's ownership, input sequence and size.
-  - Output follows as binary frames as soon as it is stored. The browser
-    acknowledges what it has drawn, and the server never runs more than
-    256 KiB ahead of a viewer. A viewer stuck behind for 10 s is disconnected
-    and resyncs, so a stalled phone never slows a desktop.
+  - The connection opens with a join: the replica's checkpoint, the output
+    since, and a barrier, with the session's ownership, input sequence and
+    size. The browser replays it off screen and shows it at the barrier; input
+    is accepted once the replay is applied.
+  - Live output follows as binary frames. The browser reports what it has
+    applied, and the server stops sending once a viewer is 256 KiB behind. A
+    viewer stuck behind for 10 s is disconnected and joins again, so a stalled
+    phone never slows a desktop. A rebuild from tmux reaches a viewer as a
+    rebase: a fresh picture, with input still flowing.
   - Keystrokes are batched while one is in flight. Every input batch gets an
     answer: an error reads **Input not sent** when it was refused, or **May
     have been delivered** when the connection dropped mid-delivery. Input is
     never replayed.
   - The browser reconnects by itself with backoff. After the page has been in
     the background for more than a few seconds, or when the network comes back,
-    it takes a fresh connection and sync, so a phone returning from the
+    it takes a fresh connection and picture, so a phone returning from the
     background picks up where it left off, even if its old socket only looked
     open. Input that was mid-flight when a connection dropped reads **May have
     been delivered**; input still queued reads **Input not sent**. Opening the
@@ -189,18 +319,48 @@ cursor, and an explicit truncation flag.
   ignored changes, and the checkout's actual HEAD merged into its original base
   branch. Uncertain ancestry, squash merges, submodule changes, and unavailable
   checks retain work for review. Existing checkouts are never managed/deleted;
-  Git branches are preserved.
+  Git branches are preserved. **Delete session** is different: it removes the
+  session's record, output and images, and tries to force-remove its retained
+  worktree even if cleanup would keep it (the branch and its commits stay; a
+  Git failure does not stop the session being deleted).
 - Maintenance runs at startup and hourly, with completion/capacity/task-done
-  checks. An exited session idle for 30 days becomes cleanup-eligible, never
-  forcibly discarded. `idleDays` is configurable. Live processes always block.
-- Output payloads roll at 10 MiB/session and 250 MiB total. Screen parsing and
-  output pages are also bounded. Completed output expires after 30 days or can
-  be deleted manually. SQLite page/WAL overhead is outside the payload budget;
-  session metadata remains for ownership and retained-work review.
-- Health reports unavailable service, maintenance failure, and retained work.
+  checks. An exited session idle for `idleDays` (default 30) is completed (its
+  dead pane removed; a retained worktree is released only when Git proves it
+  safe); its saved output and images are deleted 30 days after it completed.
+  A live process is never ended by maintenance.
+- An ended session's final screen (its replica's last checkpoint and the
+  output after it) is saved when it ends, if it can be (a failed save is
+  shown as **Output not saved**); all saved screens together are held
+  within 250 MiB, the oldest going first. A completed session's saved screen
+  expires after 30 days or can be deleted manually. SQLite page/WAL overhead
+  is outside that budget; session metadata remains for ownership and
+  retained-work review.
+- Upgrading from a Terminal that still had the old viewer (0.4.0-dev.23 or
+  earlier): end every session first. Sessions that ended under the old
+  viewer and never saved a final screen open with **Output not saved**.
+  Going back to such a version afterwards deletes every saved final screen,
+  and upgrading again does not bring them back.
+- Health reports unavailable service, maintenance failure, retained work,
+  and live sessions holding more than 640 MB of Bakin's memory (estimated
+  each minute from the emulators' structure; a session of 10,000 rows of
+  ordinary output is about 23 MB, more with an emoji or link in every cell).
+- A cell keeps at most 32 bytes of text, as tmux does; titles past 4 KiB
+  are ignored.
   Removal requires active preflight, no unfinished sessions or retained
   worktrees, and successful service shutdown. Linked plugins must use
   `bakin plugins remove terminal`, not bypass preflight through unlink.
+
+- Images pasted into a session are kept in the plugin's own data folder,
+  `<plugin data>/uploads/<session>/<generated name>` (folder `0700`, files
+  `0600`): PNG, JPEG or WebP only, recognised by their bytes, at most 10 MB
+  each, 40 megapixels (as the image's header says) and 100 MB per session.
+  Only whoever drives the session can add one, checked again once the image
+  has arrived. They are deleted with the session's history (by hand, or 30
+  days after it completed) and with the session; one never sent to the
+  program is deleted after 24 hours (so is an image file left without its
+  record by a crash), and a draft that still names it is refused when sent:
+  add the image again. Bakin itself reads an upload's body (up to its 100 MB
+  request limit) before the plugin applies its own 10 MB limit.
 
 ## Security and Privacy
 
@@ -224,7 +384,8 @@ not a secure disk wipe or removal from external agent transcripts/backups.
 
 ## Verification and Preview
 
-From the Bits root: `bun run test plugins/terminal/tests`, `bun run typecheck`,
+From the Bits root: `FUZZ_SHARD=skip bun test --isolate --preload ./test/setup-dom.ts plugins/terminal/tests`
+(the fuzz suite runs in four shards: `FUZZ_SHARD=1/4` … `4/4`), `bun run typecheck`,
 `bun run lint`. Build with `BAKIN_SDK_DIR=<assembled matching SDK> bun run build`.
 Browser fixtures require the assembled real SDK, not the repository's ambient
 test SDK; use the repository's `ui:conformance` workflow. From this plugin, run
@@ -249,18 +410,25 @@ printed `tmux`) to attach a terminal app.
 
 The `/terminal` index uses `storybook/public/pages/page.stories.tsx` /
 `CanonicalUsage` and `lists/data-table.stories.tsx` / `ActivatableRows`.
-The index has Session, Program, Agent, Status, and Working directory columns;
+The index shows **Active** (running and exited sessions), **Completed**,
+**All**, and **Needs review** while any worktree needs review. Its Session,
+Program, Agent, Status and Last activity columns sort (newest activity first
+by default); Working directory is shown;
 flexible cells wrap to fill the available width instead of forcing horizontal
 scrolling. Explicit widths and intrinsic controls may still require local
 scrolling on narrow screens. The kit owns keyboard row activation and excludes
 nested menu, link, and portalled events from it. Each row has a tooltip-labelled
-actions menu for taking control, completing an exited session, terminating, or
-deleting completed output. Destructive confirmations name and retain the target
-session ID; deletion retains session metadata. Ownership checks still apply.
+actions menu: Drive, Mark ended (an exited session), Terminate, Delete session
+(an ended one) and Delete output only (a completed one). Destructive
+confirmations name and retain the target session ID; Delete output only keeps
+the session's details, Delete session removes it. Ownership checks still apply.
 Session detail uses `pages/workspace-page.stories.tsx` / `ImmersiveCanvas`:
 full-width output, a compact Back link, and no session rail or navigation select.
 Session controls occupy the right-hand title-row actions in both full and compact
-headers. New terminal is available on the index, not inside a session.
+headers. New terminal is available on the index, not inside a session. An
+ended session offers **Reopen**: a new session in the same directory with the
+same program, assignment and links. It does not resume the old process and
+never creates another worktree.
 `overlays/popover.stories.tsx` / `CanonicalUsage` holds assignment and details;
 `overlays/dropdown-menu.stories.tsx` / `CanonicalUsage` holds completion actions.
 All icon tools use `overlays/tooltip.stories.tsx` / `CanonicalUsage`, with
@@ -299,10 +467,16 @@ No design-system exception is used; the shared workspace extension is defined in
 
 Terminal automatically uses xterm's WebGL renderer when available. GPU startup failure, context loss, or inconsistent browser pixel-scale measurements fall back to the normal renderer; reconnecting creates a fresh renderer. Pixel measurements are refreshed when display density changes, including mobile emulation changes that leave the pane the same size. No setting or separate transport is needed.
 
-Phones and touch-capable tablets keep a centered strip of Esc, Tab, one-shot Ctrl, and arrow keys below the output, above the software keyboard. Wrapped rows and expanded keys stay centered. More reveals Enter, Backspace, Delete, Shift+Tab, Home/End, Page Up/Down, and Ctrl+C/D/Z/R/L/A/E/U/K/W. Tap Ctrl again to cancel it. The next key consumes it; paste, composition, disconnection, ownership changes, and leaving the interaction cancel it. Ordinary terminal resizing preserves an armed Ctrl. Explicit combinations always send their named keys. Pointer taps preserve existing editor focus and do not open the keyboard when it is closed.
+Phones and tablets show a key bar while you are typing in the terminal: tap the terminal, or the corner **Show keyboard** button. The bar is one row of keys styled like the iOS keyboard: **esc**, **⇥**, **⌃** (Control), **⌥** (Option, the terminal's Meta: it sends ESC first), the arrow joystick (tap an edge for one step; drag toward a direction and hold to repeat), **•••**, and **Hide keyboard**, which is always there and ends the typing session. Return sends the line and, when Bakin judges an on-screen keyboard is showing (it can only estimate this), puts the keyboard away so the response has the screen. It stays up for a modified Return (with ⌃, ⌥, ⇧ or ⌘), a line ending in `\`, or while an input method is composing. Tap ⌃ or ⌥ to apply it to the next key; lock it from the key sheet to hold it until you tap it again. **•••** puts the keyboard away and shows the key sheet in its place: Esc, Tab, ⇧Tab, Enter, Backspace, Delete, all four arrows, Home/End, Page Up/Down, `|` `~` `/` `-`, the Control shortcuts with plain labels (^C Interrupt, ^R Search history, …), and the Control and Option locks. **abc** brings the keyboard back. Keys keep focus on the terminal, so the keyboard stays up while you use them. ⌃ and ⌥ apply to the next single key the terminal receives (a letter typed, dictated or committed by an input method, an arrow, Escape); words, longer dictation and paste are sent as typed, and a typed Backspace is always a plain Backspace (use the sheet's ⌫ for ⌥⌫); a disconnection, a change of who is driving, or leaving the page releases every modifier. Desktops show no key bar. Opened from the Home Screen (Share › Add to Home Screen), the bar sits right on the keyboard; in a Safari tab, Safari keeps its own address bar between them.
 
-Keys are disabled while watching, disconnected, or changing ownership; use Take over to drive. Ended sessions and deleted output have no key strip. Normal/application cursor modes use the current xterm mode. All keys pass through the viewer connection's ordered input. A screen that sizes the session never shrinks it below 40×10; a shorter pane (a phone keyboard) pans over the floored grid. Physical Tab follows Capture Tab while input is available.
+Web addresses in the output are links (plain-text URLs as well as the hyperlinks programs print): open one and the browser asks first, then opens it in a new tab that cannot reach back to Bakin. Only http, https and mailto links open.
 
-The shared references are `pages/workspace-page.stories.tsx — KeyboardAwareInput` and `recipes/terminal-input.stories.tsx — CompactAndExpanded`. The kit owns viewport measurement and the reserved accessory slot; the plugin owns key encoding, Ctrl state, and ownership.
+**Compose** (in the key sheet) opens a text box in place of the keys, for dictation, an input method, or a longer edit before sending: **Paste** sends it to the program as one paste and puts you back in the terminal; **Paste + Enter** sends it with Return and puts the keyboard away. Each session keeps its own draft text in this browser (when the browser lets it store it) until the paste is accepted; one that is refused or may not have arrived stays, so you can check it and send it again yourself. A paste is at most 64 KB. A paste from the terminal or the compose sheet reaches the program bracketed (the markers a shell or editor uses to tell pasted text from typing) only when the program asked for them: tmux, which knows the program's mode, delivers it.
 
-Browser checks against a disposable preview: `TERMINAL_PREVIEW_URL=<url> bun test tests/mobile-input.browser.test.ts tests/renderer.browser.test.ts --isolate`. Set `TERMINAL_BROWSER=webkit` to repeat with WebKit. The installed-SDK UI fixture now exercises session detail and disabled keys. A physical iPhone Safari and Android Chrome keyboard check is still required; desktop emulation does not prove native keyboard behavior.
+**Images.** The compose draft can hold images: **Add image** (the photo or file picker), an image pasted into the text box, or one dropped on it. On a desktop, compose opens on its own when you drop or paste an image on the terminal (or choose **Compose…** in the session menu; Escape closes it and keeps the draft); a text paste still goes straight to the terminal. Each image is uploaded as it is added and shown as a thumbnail, with remove and copy-path once it is kept; nothing can be sent while one is still on its way. A draft holds at most 20 images; they stay when you close compose, but not when the page reloads. Each part of a send that was accepted leaves the draft; what was not sent stays. Sending pastes each image's path for the program to read: for Claude Code and Codex each path is its own paste, as is, which they turn into an attached image (then the text follows); a shell gets one paste of the text followed by each path, shell-quoted. An image whose upload was overtaken by a change of driver is refused and shown so. Images are kept as described under Lifecycle and Retention.
+
+Sending keys are disabled while watching, disconnected, or changing ownership (Hide keyboard still works); use Take over to drive. Ended sessions and deleted output have no key bar. Normal/application cursor modes use the current xterm mode. All keys pass through the viewer connection's ordered input. A screen that sizes the session never shrinks it below 40×10 (or grows it past 400×150); a shorter pane (a phone keyboard) pans over the floored grid. Physical Tab follows Capture Tab while input is available.
+
+The shared references are `pages/workspace-page.stories.tsx — KeyboardAwareInput` and `recipes/terminal-input.stories.tsx — BarAndSheet` (the v2 key bar and key sheet). The kit owns viewport measurement and the reserved accessory slot; the plugin owns key encoding, the editing session and modifier state, and ownership.
+
+Browser checks against a disposable preview: `TERMINAL_PREVIEW_URL=<url> bun test tests/mobile-input.browser.test.ts tests/renderer.browser.test.ts tests/links.browser.test.ts --isolate`. Set `TERMINAL_BROWSER=webkit` to repeat with WebKit. The installed-SDK UI fixture now exercises session detail and disabled keys. A physical iPhone Safari and Android Chrome keyboard check is still required; desktop emulation does not prove native keyboard behavior.

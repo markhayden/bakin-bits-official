@@ -22,4 +22,3 @@ test('defaultSize reads the two default fields within bounds, else 200x60', () =
   expect(terminalSettings({ defaultCols: 160, defaultRows: 48 }).defaultSize).toEqual({ cols: 160, rows: 48 })
   expect(terminalSettings({ defaultCols: 20, defaultRows: 999 }).defaultSize).toEqual({ cols: 200, rows: 60 })
 })
-

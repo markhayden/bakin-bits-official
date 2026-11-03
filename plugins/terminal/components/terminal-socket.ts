@@ -1,11 +1,14 @@
 /**
  * Browser side of the terminal viewer socket (lib/socket.ts has the
- * protocol). Owns: hello → sync, ACK-after-write batching, input
- * coalescing with per-connection sequences, results, heartbeats and
- * reconnect. Input is never replayed: whatever was in flight when a socket
+ * protocol). Owns: hello → the picture (components/raw-picture.ts) and its
+ * batched retired reports, input coalescing with per-connection sequences,
+ * results, heartbeats and reconnect. Input is never replayed: whatever was in flight when a socket
  * dropped is the caller's "may have been delivered".
  */
 import type { Session } from '../lib/contracts'
+import type { Fidelity } from '../lib/raw-display'
+import type { UnavailableReason } from '../lib/socket'
+import { RawPicture, type DisplayState, type PictureHeader, type PictureTarget } from './raw-picture'
 import type { ScreenDevice } from './terminal-view'
 
 export interface SocketLike {
@@ -13,14 +16,13 @@ export interface SocketLike {
   readyState: number
   onopen: (() => void) | null
   onmessage: ((event: { data: unknown }) => void) | null
-  onclose: ((event: { code: number }) => void) | null
+  onclose: ((event: { code: number; reason?: string }) => void) | null
   send(data: string): void
   close(code?: number): void
 }
 
 /** Who is around a session besides this screen: whether its size is frozen (the sizing screen or app is away) and how many terminal apps are attached. */
 export interface Presence { sizeFrozen: boolean; nativeClients: number }
-export interface SyncMessage extends Presence { epoch: number; session: Session; snapshot: string; cursor: number }
 export interface InputResult { viewerSeq: number; status: 'accepted' | 'rejected' | 'uncertain'; error?: string }
 
 /** Server close codes (lib/socket.ts SOCKET_CLOSE) that must not auto-reconnect. */
@@ -29,14 +31,20 @@ const TERMINAL_CLOSES: Record<number, string> = { 4001: 'Opened in another tab',
 export interface TerminalSocketOptions {
   url: string
   clientId: string
-  onSync(sync: SyncMessage): void
-  /** Write the bytes to xterm and call `done` from its write callback. */
-  onOutput(bytes: Uint8Array, done: () => void): void
   onSession(session: Session): void
-  /** The screen that sizes the session disconnected (true) or is back (false); every sync says it too. */
+  /** The screen that sizes the session disconnected (true) or is back (false); every picture header says it too. */
   onPresence(presence: Presence): void
   onResult(result: InputResult): void
+  /** Connection status: `Connected` once input may flow (the first applied replay). */
   onStatus(status: string): void
+  /** A terminal for each picture (components/raw-picture.ts). */
+  onPicture(header: PictureHeader): PictureTarget
+  /** The display state (a rebase or rebuild never changes the connection status). */
+  onDisplay(state: DisplayState, detail?: Record<string, unknown>): void
+  /** The session's fidelity, as every picture header and rebuilding notice carries it (server-held, so a reconnect restates it). */
+  onFidelity(fidelity: Fidelity): void
+  /** An ended session has no output to show (lib/socket.ts UnavailableReason); the client does not reconnect. */
+  onUnavailable(reason: UnavailableReason): void
   createSocket?: (url: string) => SocketLike
   ackBytes?: number
   ackMs?: number
@@ -47,19 +55,24 @@ export interface TerminalSocketOptions {
 
 export class TerminalSocketClient {
   private socket: SocketLike | undefined
-  private synced = false
+  /** Input may flow: the connection's first replay is applied. */
+  private ready = false
   private stopped = false
   private viewerSeq = 0
+  private connections = 0
+  /** Which connection this is: sequences restart with each one, so a result means nothing without it. */
+  get connection(): number { return this.connections }
   /** Sent envelopes awaiting their result: viewerSeq → generation. */
   private inFlight = new Map<number, number>()
   private pending: { generation: number; data: string } | undefined
-  private epoch = -1
   private flushTimer: ReturnType<typeof setTimeout> | undefined
-  private written = 0
-  private ackedSent = 0
-  private ackTimer: ReturnType<typeof setTimeout> | undefined
   private retry = 0
   private retryTimer: ReturnType<typeof setTimeout> | undefined
+  /** The picture on this connection (set by its first join). */
+  private raw: RawPicture | undefined
+  private retiredTotal = 0
+  private retiredSent = 0
+  private retireTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor(private options: TerminalSocketOptions) {}
 
@@ -72,9 +85,10 @@ export class TerminalSocketClient {
     const socket = (this.options.createSocket ?? ((url) => new WebSocket(url) as unknown as SocketLike))(this.options.url)
     socket.binaryType = 'arraybuffer'
     this.socket = socket
+    this.connections++
     socket.onopen = () => { socket.send(JSON.stringify({ type: 'hello', clientId: this.options.clientId })) }
     socket.onmessage = (event) => { if (this.socket === socket) this.receive(event.data) }
-    socket.onclose = (event) => { if (this.socket === socket) this.dropped(event.code) }
+    socket.onclose = (event) => { if (this.socket === socket) this.dropped(event.code, event.reason) }
   }
 
   /** A reconnect is already scheduled: run it now instead of waiting. */
@@ -85,7 +99,7 @@ export class TerminalSocketClient {
 
   /**
    * Replace the connection now, even one that looks open (a phone back from
-   * the background may hold a dead socket): fresh hello, fresh sync.
+   * the background may hold a dead socket): fresh hello, fresh picture.
    */
   reconnect(): void {
     if (this.stopped) return
@@ -104,38 +118,55 @@ export class TerminalSocketClient {
     this.socket = undefined
   }
 
-  /** Queue input for `generation`; false when it cannot be sent (not synced). */
-  input(generation: number, data: string): boolean {
-    if (!this.synced || !data) return false
-    if (this.pending && this.pending.generation !== generation) this.flush()
-    if (this.inFlight.size === 0 && !this.pending) {
-      this.envelope(generation, data)
-      return true
+  /**
+   * Queue input for `generation`: the sequence of the envelope that carries
+   * it on this connection (its result names it), or false when it cannot be
+   * sent (no replay applied yet). A `paste` travels alone, after everything queued
+   * before it; the server delivers it as tmux pastes (lib/paste.ts), then
+   * Return if `enter`, only once the paste went.
+   */
+  input(generation: number, data: string, options: { paste?: boolean; enter?: boolean; uploads?: string[] } = {}): number | false {
+    if (!this.ready || !data) return false
+    if (options.paste) {
+      this.flush()
+      return this.envelope(generation, data, { paste: true, ...(options.enter ? { enter: true } : {}), ...(options.uploads?.length ? { uploads: options.uploads } : {}) })
     }
+    if (this.pending && this.pending.generation !== generation) this.flush()
+    if (this.inFlight.size === 0 && !this.pending) return this.envelope(generation, data)
     this.pending = this.pending ? { generation, data: this.pending.data + data } : { generation, data }
+    // Pending input travels in the next envelope.
+    const carrier = this.viewerSeq + 1
     if (this.pending.data.length >= (this.options.coalesceBytes ?? 4096)) this.flush()
     else this.flushTimer ??= setTimeout(() => this.flush(), this.options.coalesceMs ?? 8)
-    return true
+    return carrier
   }
 
   /** Make this screen the session's size authority at `cols`×`rows`. */
   claim(cols: number, rows: number, device: ScreenDevice): boolean {
-    if (!this.synced || !this.socket) return false
+    if (!this.ready || !this.socket) return false
     this.socket.send(JSON.stringify({ type: 'claim', cols, rows, device }))
+    return true
+  }
+
+  /** Hand the size back to whoever sized it before the last handoff, as of size `epoch`. True when sent. */
+  restoreSize(epoch: number): boolean {
+    if (!this.ready || !this.socket) return false
+    this.socket.send(JSON.stringify({ type: 'restore-size', epoch }))
     return true
   }
 
   /** The authority's pane changed: follow it at the current size `epoch`. True when sent. */
   resize(epoch: number, cols: number, rows: number): boolean {
-    if (!this.synced || !this.socket) return false
+    if (!this.ready || !this.socket) return false
     this.socket.send(JSON.stringify({ type: 'resize', epoch, cols, rows }))
     return true
   }
 
-  private envelope(generation: number, data: string): void {
+  private envelope(generation: number, data: string, paste: { paste: true; enter?: true; uploads?: string[] } | Record<string, never> = {}): number {
     const viewerSeq = ++this.viewerSeq
     this.inFlight.set(viewerSeq, generation)
-    this.socket?.send(JSON.stringify({ type: 'input', generation, viewerSeq, data }))
+    this.socket?.send(JSON.stringify({ type: 'input', generation, viewerSeq, data, ...paste }))
+    return viewerSeq
   }
 
   private flush(): void {
@@ -143,30 +174,31 @@ export class TerminalSocketClient {
     this.flushTimer = undefined
     const pending = this.pending
     this.pending = undefined
-    if (pending && this.synced) this.envelope(pending.generation, pending.data)
+    if (pending && this.ready) this.envelope(pending.generation, pending.data)
   }
 
   private receive(raw: unknown): void {
-    if (raw instanceof ArrayBuffer) {
-      const bytes = new Uint8Array(raw)
-      const epoch = this.epoch
-      // A write finishing after a resync belongs to a discarded picture.
-      this.options.onOutput(bytes, () => { if (epoch === this.epoch) this.written_(bytes.byteLength) })
-      return
-    }
-    const message = JSON.parse(String(raw)) as { type: string } & Record<string, unknown>
+    if (raw instanceof ArrayBuffer) { this.raw?.binary(new Uint8Array(raw)); return }
+    const text = String(raw)
+    const message = JSON.parse(text) as { type: string } & Record<string, unknown>
     switch (message.type) {
-      case 'sync':
-        this.synced = true
-        this.retry = 0
-        this.epoch = Number(message.epoch)
-        this.written = 0
-        this.ackedSent = 0
-        clearTimeout(this.ackTimer)
-        this.ackTimer = undefined
-        this.options.onSync(message as unknown as SyncMessage)
+      case 'join':
+      case 'rebase':
+        this.picture().message(message, text)
+        if (message.fidelity) this.options.onFidelity(message.fidelity as Fidelity)
+        this.options.onSession(message.session as Session)
         this.options.onPresence(presenceOf(message))
-        this.options.onStatus((message.session as Session).state === 'completed' ? 'Completed' : 'Connected')
+        return
+      case 'layout':
+      case 'geometry':
+      case 'barrier':
+      case 'digest-point':
+        this.raw?.message(message, text)
+        return
+      // A rebuild can be told before the first picture (the join waits for the seed): still counted.
+      case 'rebuilding':
+        this.picture().message(message, text)
+        if (message.fidelity) this.options.onFidelity(message.fidelity as Fidelity)
         return
       case 'session': this.options.onSession(message.session as Session); return
       case 'presence': this.options.onPresence(presenceOf(message)); return
@@ -192,30 +224,57 @@ export class TerminalSocketClient {
     }
   }
 
-  private written_(bytes: number): void {
-    this.written += bytes
-    if (this.written - this.ackedSent >= (this.options.ackBytes ?? 16 * 1024)) this.ack()
-    else this.ackTimer ??= setTimeout(() => this.ack(), this.options.ackMs ?? 50)
+  /** The picture for this connection, made on its first join. */
+  private picture(): RawPicture {
+    if (this.raw) return this.raw
+    this.raw = new RawPicture({
+      create: (header) => this.options.onPicture(header),
+      retired: (total) => this.retired(total),
+      applied: (epoch) => {
+        this.socket?.send(JSON.stringify({ type: 'replay-applied', epoch }))
+        // The first applied replay lets input flow; later ones change only the display.
+        if (!this.ready) {
+          this.ready = true
+          this.retry = 0
+          this.options.onStatus('Connected')
+        }
+      },
+      display: (state, detail) => this.options.onDisplay(state, detail),
+      // A fresh connection joins with a fresh picture.
+      failed: () => this.reconnect(),
+      report: (epoch, seq, digest) => { this.socket?.send(JSON.stringify({ type: 'digest', epoch, seq, digest })) },
+    })
+    return this.raw
   }
 
-  private ack(): void {
-    clearTimeout(this.ackTimer)
-    this.ackTimer = undefined
-    if (this.written === this.ackedSent) return
-    this.ackedSent = this.written
-    this.socket?.send(JSON.stringify({ type: 'ack', epoch: this.epoch, bytes: this.written }))
+  /** Report the retired total, batched: at `ackBytes` or after `ackMs`. */
+  private retired(total: number): void {
+    this.retiredTotal = total
+    if (total - this.retiredSent >= (this.options.ackBytes ?? 16 * 1024)) this.sendRetired()
+    else this.retireTimer ??= setTimeout(() => this.sendRetired(), this.options.ackMs ?? 50)
+  }
+
+  private sendRetired(): void {
+    clearTimeout(this.retireTimer)
+    this.retireTimer = undefined
+    if (this.retiredTotal === this.retiredSent) return
+    this.retiredSent = this.retiredTotal
+    this.socket?.send(JSON.stringify({ type: 'retired', bytes: this.retiredTotal }))
   }
 
   private reset(): void {
-    this.synced = false
+    this.ready = false
+    this.raw?.close()
+    this.raw = undefined
+    this.retiredTotal = 0
+    this.retiredSent = 0
+    clearTimeout(this.retireTimer)
+    this.retireTimer = undefined
     this.viewerSeq = 0
     this.inFlight.clear()
     this.pending = undefined
-    this.epoch = -1
     clearTimeout(this.flushTimer)
-    clearTimeout(this.ackTimer)
     this.flushTimer = undefined
-    this.ackTimer = undefined
   }
 
   /** Tell the caller about input a lost connection leaves unresolved — never resend it. */
@@ -233,10 +292,15 @@ export class TerminalSocketClient {
     this.reset()
   }
 
-  private dropped(code: number): void {
+  private dropped(code: number, reason?: string): void {
     this.lost()
     this.socket = undefined
     if (this.stopped) return
+    if (code === 4005) {
+      this.options.onStatus('Output unavailable')
+      this.options.onUnavailable(reason === 'evicted' || reason === 'unreadable' ? reason : 'not-saved')
+      return
+    }
     const terminal = TERMINAL_CLOSES[code]
     if (terminal) { this.options.onStatus(terminal); return }
     const delays = this.options.reconnectMs ?? [500, 1000, 2000, 5000, 10000]
