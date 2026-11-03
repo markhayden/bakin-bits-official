@@ -13,6 +13,14 @@ on a per-plugin basis: each plugin tags its own releases as
   `/projects/[id]/edit` route.
 
 ### Changed
+- `messaging` (0.12.3), `projects` (0.13.1): every dispatched `bakin`
+  CLI command declares its complete `args` (positionals plus every flag,
+  generated from the exec tool's own schema). Bakin's next release parses
+  plugin CLI arguments strictly from these declarations: strings stay literal
+  (no comma-splitting or JSON coercion), and unknown flags and extra arguments
+  are refused (markhayden/bakin#1028). Current Bakin ignores the field, so
+  install these before upgrading Bakin. A drift test pins each declaration to
+  its exec tool's zod parameters.
 - `projects` (0.12.0, requires Bakin `>=0.0.1-rc.45`): the projects revamp
   (Bakin `.claude/specs/projects-revamp.md`).
   New projects start from a conversation, not a form: `/projects/new` asks
