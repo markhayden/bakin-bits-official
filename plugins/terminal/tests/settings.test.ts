@@ -22,11 +22,3 @@ test('defaultSize reads the two default fields within bounds, else 200x60', () =
   expect(terminalSettings({ defaultCols: 160, defaultRows: 48 }).defaultSize).toEqual({ cols: 160, rows: 48 })
   expect(terminalSettings({ defaultCols: 20, defaultRows: 999 }).defaultSize).toEqual({ cols: 200, rows: 60 })
 })
-
-
-test('the new viewer (plan T38a) is off unless the setting is exactly true', () => {
-  expect(terminalSettings({}).rawPath).toBe(false)
-  expect(terminalSettings({ rawPath: 'yes' }).rawPath).toBe(false)
-  expect(terminalSettings({ rawPath: 1 }).rawPath).toBe(false)
-  expect(terminalSettings({ rawPath: true }).rawPath).toBe(true)
-})

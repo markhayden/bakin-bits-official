@@ -1,19 +1,26 @@
 import { afterEach, describe, expect, it, test } from 'bun:test'
-import { Sessions } from '../lib/sessions'
+import { MAX_UPLOADS_READING, Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
-import { DAY, type Session } from '../lib/contracts'
-import type { NativeClient, ProcessDriver } from '../lib/processes'
+import { DAY, TerminalError, type Session } from '../lib/contracts'
+import type { AttachEvents, NativeClient, ProcessDriver } from '../lib/processes'
+import type { AttentionEvent } from '../lib/attention'
 import { MAX_BACKLOG_BYTES, Replica, type Cut } from '../lib/replica'
 import { OutputLog } from '../lib/output-log'
 import { drainFinal } from '../lib/processes'
-import { rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { Uploads } from '../lib/uploads'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { makeBundle } from '../lib/bundle'
 
 const managers: Sessions[] = []
-afterEach(async () => { for (const manager of managers.splice(0)) await manager.shutdown() })
-function fixture(options: { raw?: boolean; storePath?: string; setting?: { raw: boolean } } = {}) {
+/** Temporary upload directories, removed after each test. */
+const roots: string[] = []
+afterEach(async () => {
+  for (const manager of managers.splice(0)) await manager.shutdown()
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
+function fixture(options: { storePath?: string } = {}) {
   let now = 1000
   let enabled = [{ id: 'patch' }, { id: 'chef' }]
   const writes: string[] = []
@@ -21,9 +28,7 @@ function fixture(options: { raw?: boolean; storePath?: string; setting?: { raw: 
   const attached = new Set<string>()
   const terminated: string[] = []
   const forgotten: string[] = []
-  /** Sessions whose bridge PTY is gone while the control client stays. */
-  const bridgeLost = new Set<string>()
-  /** Sessions whose control client closed while the bridge stays; every attach, in order. */
+  /** Sessions whose control client closed; every attach, in order. */
   const controlLost = new Set<string>()
   const attaches: string[] = []
   /** Each final picture asked for, in order with terminations; what the next one gives (a cut, none, or a throw). */
@@ -36,23 +41,30 @@ function fixture(options: { raw?: boolean; storePath?: string; setting?: { raw: 
   let resizeFailure: Error | undefined
   let readBackFailure: Error | undefined
   const tmuxSizes = new Map<string, { cols: number; rows: number }>()
-  const outputs = new Map<string, (data: Uint8Array) => void>()
   /** Terminal apps attached in tmux, per session, and each session's "clients changed" signal. */
   const natives = new Map<string, NativeClient[]>()
   const clientsChanged = new Map<string, () => void>()
+  /** Each session's attach events, as the driver gives them (attention, bells). */
+  const attachEvents = new Map<string, AttachEvents>()
+  /** What was announced to browsers (lib/attention.ts). */
+  const announced: AttentionEvent[] = []
   const vanishing = new Set<number>()
   const detachedClients: string[] = []
-  /** Raw-path replicas, by session (none until a test makes one). */
+  /** Replicas, by session (none until a test makes one). */
   const replicas = new Map<string, Replica>()
+  /** Sessions whose kill fails (the program runs on). */
+  const unkillable = new Set<string>()
+  /** While set, tmux's new-session waits on it (a creation held in the manager's queue). */
+  const createHold: { until?: Promise<void> } = {}
   const driver: ProcessDriver = {
     // Like TmuxProcesses.replica: an ended replica is no source.
     replica: (id) => { const replica = replicas.get(id); return replica?.ended ? undefined : replica },
-    create: async (s) => { live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, output, changed, died) { attaches.push(s.id); controlLost.delete(s.id); attached.add(s.id); outputs.set(s.id, output); clientsChanged.set(s.id, changed); if (died) paneDied.set(s.id, died) }, connected: (id) => attached.has(id) && !bridgeLost.has(id), controlConnected: (id) => attached.has(id) && !controlLost.has(id),
+    create: async (s) => { await createHold.until; live.add(s.id); tmuxSizes.set(s.id, { cols: s.cols, rows: s.rows }) }, attach(s, events) { attaches.push(s.id); controlLost.delete(s.id); attached.add(s.id); clientsChanged.set(s.id, events.clientsChanged); if (events.died) paneDied.set(s.id, events.died); attachEvents.set(s.id, events) }, connected: (id) => attached.has(id) && !controlLost.has(id),
     write: async (_id, data) => { if (writeFailure) throw writeFailure; writes.push(data) },
     resize: async (id, cols, rows) => { if (resizeFailure) { tmuxSizes.set(id, { cols: 77, rows: 22 }); throw resizeFailure } tmuxSizes.set(id, { cols, rows }) },
     windowSize: async (id) => { if (readBackFailure) throw readBackFailure; return tmuxSizes.get(id)! },
-    title: async () => {}, alive: async (id) => live.has(id), screen: async () => '',
-    terminate: async (id) => { terminated.push(id); finals.push(`terminate ${id}`); live.delete(id) },
+    title: async () => {}, alive: async (id) => live.has(id),
+    terminate: async (id) => { if (unkillable.has(id)) throw new Error('kill-session failed'); terminated.push(id); finals.push(`terminate ${id}`); live.delete(id) },
     finalCut: async (id, options) => { finals.push(`final ${id} boundary=${options.boundary}`); return finalCut.next() }, inUse: async () => false, detach: async (id) => { if (id) attached.delete(id); else attached.clear() },
     // Like tmux: a client in `vanishing` is listed once, then gone before anyone acts on it.
     clients: async (id) => {
@@ -74,15 +86,19 @@ function fixture(options: { raw?: boolean; storePath?: string; setting?: { raw: 
   }
   const releases: Array<{ sessionId: string; worktreePath: string; teardown?: boolean }> = []
   const store = new Store(options.storePath ?? ':memory:')
+  const uploadRoot = mkdtempSync(join(tmpdir(), 'bakin-terminal-uploads-'))
+  roots.push(uploadRoot)
+  const uploads = new Uploads(uploadRoot, store)
   const manager = new Sessions(store, driver, {
+    uploads,
     settings: () => ({ enabledAgents: enabled }), now: () => now,
     prepare: async () => ({ ok: false }),
     release: async (input) => { releases.push(input); return releasable ? { ok: true } : { ok: false, error: 'Unmerged work' } },
-    rawPathForNew: () => options.setting?.raw ?? options.raw ?? false,
+    announce: (event) => { announced.push(event) },
   })
   managers.push(manager)
   return {
-    manager, store, writes, live, attached, terminated, forgotten, bridgeLost, controlLost, attaches, finals, finalCut, paneDied, releases, outputs, natives, detachedClients, vanishing, replicas,
+    manager, store, writes, live, attached, attachEvents, announced, uploads, uploadRoot, terminated, unkillable, createHold, forgotten, controlLost, attaches, finals, finalCut, paneDied, releases, natives, detachedClients, vanishing, replicas,
     /** A terminal app attaches (or resizes) in tmux; the control client notices. */
     nativeAttach: async (id: string, client: NativeClient) => {
       natives.set(id, [...(natives.get(id) ?? []).filter((entry) => entry.pid !== client.pid), client])
@@ -101,6 +117,14 @@ function fixture(options: { raw?: boolean; storePath?: string; setting?: { raw: 
     tmuxSizes,
     allowRelease: () => { releasable = true }, disable: () => { enabled = [] }, advance: () => { now += 31 * DAY },
   }
+}
+/** An ended session's saved picture with `text` on its screen. */
+async function picture(text: string) {
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode(`\x1bc${text}`), cols: 80, rows: 24, reason: 'test', history: true })
+  const cut = replica.cut()!
+  replica.close()
+  return makeBundle(cut, { rebuilds: {} }, 1)
 }
 const agent = { kind: 'agent', id: 'patch' } as const
 const human = { kind: 'human', id: 'browser-123456789' } as const
@@ -124,7 +148,7 @@ test('reassignment and disabling revoke reads as well as writes', async () => {
   const { manager, disable } = fixture()
   const session = await manager.create({ title: 'Test', cwd: '/tmp' }, agent)
   await manager.control(session.id, human, 'assign', 'chef')
-  expect(() => manager.output(session.id, agent, 0)).toThrow()
+  await expect(manager.outputText(session.id, agent)).rejects.toThrow('not available to this agent')
   expect(manager.list(agent)).toHaveLength(0)
   disable()
   expect(() => manager.list({ kind: 'agent', id: 'chef' })).toThrow()
@@ -136,12 +160,12 @@ test('completion refuses live processes; age expires output but preserves unmerg
   await expect(manager.finish(session.id, agent, 1, false)).rejects.toThrow('running')
   session.worktreePath = '/tmp/retained'
   manager.store.save(session)
-  manager.store.append(session.id, Buffer.from('retained output'))
+  await manager.store.saveBundle(session.id, await picture('retained output'))
   await manager.finish(session.id, agent, 1, true)
   expect(manager.get(session.id, human).cleanupReason).toBe('Unmerged work')
   advance()
   await manager.sweep()
-  expect(manager.store.bytes()).toBe(0)
+  expect(manager.store.hasBundle(session.id)).toBe(false)
   expect(manager.get(session.id, human).worktreePath).toBe('/tmp/retained')
   await expect(manager.beforeUninstall(async () => {})).rejects.toThrow('retained')
 })
@@ -160,13 +184,183 @@ test('completion removes dead panes and does not extend retention on repeat', as
   expect((await manager.finish(session.id, human, 1, false)).completedAt).toBe(completed.completedAt)
   expect(terminated).toHaveLength(1)
 })
-test('disconnected output fails honestly and a snapshot restores the attachment', async () => {
-  const { manager, attached } = fixture()
+test('a read of a disconnected session attaches it again first', async () => {
+  const { manager, attached, replicas } = fixture()
   const session = await manager.create({ title: 'Reconnect', cwd: '/tmp' }, human)
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bcback'), cols: 80, rows: 24, reason: 'test', history: true })
+  replicas.set(session.id, replica)
   attached.delete(session.id)
-  expect(() => manager.output(session.id, human, 0)).toThrow('reconnect')
-  await manager.screen(session.id, human)
+  expect((await manager.outputText(session.id, human)).text).toBe('back')
   expect(attached.has(session.id)).toBe(true)
+  replica.close()
+})
+test('outputText (the agent tool\'s output): history then screen as lines, the last `lines` when asked; an ended session\'s from its saved picture', async () => {
+  const { manager, replicas, live } = fixture()
+  const session = await manager.create({ title: 'Text', cwd: '/tmp' }, agent)
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bcone\r\ntwo\r\nthree'), cols: 80, rows: 24, reason: 'test', history: true })
+  replicas.set(session.id, replica)
+  expect(await manager.outputText(session.id, agent)).toMatchObject({ text: 'one\ntwo\nthree', lines: 3, truncated: false })
+  expect(await manager.outputText(session.id, agent, 2)).toMatchObject({ text: 'two\nthree', lines: 2, truncated: true })
+  replica.close()
+  // Ended: its bundle, or why there is none.
+  live.delete(session.id)
+  await manager.refreshStates()
+  manager.store.markOutput(session.id, false)
+  await expect(manager.outputText(session.id, agent)).rejects.toThrow('without its output being saved')
+  await manager.store.saveBundle(session.id, await picture('final words'))
+  expect((await manager.outputText(session.id, agent)).text).toBe('final words')
+})
+test('a reassignment while a read waits revokes it: access is checked again when the read runs', async () => {
+  const { manager, replicas } = fixture()
+  const session = await manager.create({ title: 'Revoked', cwd: '/tmp' }, agent)
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bcsecret'), cols: 80, rows: 24, reason: 'test', history: true })
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  let waiting = 0
+  const read = replica.read.bind(replica)
+  replica.read = (async (fn: Parameters<typeof read>[0]) => { waiting++; await gate; return read(fn) }) as typeof replica.read
+  replicas.set(session.id, replica)
+  const screen = manager.readScreen(session.id, agent)
+  const text = manager.outputText(session.id, agent)
+  for (let n = 0; n < 50 && waiting < 2; n++) await Bun.sleep(2)
+  expect(waiting).toBe(2)
+  await manager.control(session.id, human, 'assign', 'chef')
+  release()
+  const results = await Promise.allSettled([screen, text])
+  expect(results.map((result) => result.status === 'rejected' && String(result.reason))).toEqual(['Error: Session not available to this agent', 'Error: Session not available to this agent'])
+  replica.close()
+})
+test('a natural exit registers its final save with the exit: a viewer joining while the refresh still checks another session waits for it', async () => {
+  const { manager, live, finalCut } = fixture()
+  const first = await manager.create({ title: 'First', cwd: '/tmp' }, human)
+  const second = await manager.create({ title: 'Second', cwd: '/tmp' }, human)
+  let releaseSave!: () => void
+  finalCut.next = () => new Promise((resolve) => { releaseSave = () => resolve(undefined) })
+  // The refresh publishes the first exit, then waits on the second's liveness check.
+  let releaseCheck!: () => void
+  const check = new Promise<void>((resolve) => { releaseCheck = resolve })
+  const alive = manager['driver'].alive.bind(manager['driver'])
+  manager['driver'].alive = async (id: string) => { if (id === second.id) await check; return alive(id) }
+  live.delete(first.id)
+  const refresh = manager.refreshStates()
+  for (let n = 0; n < 50 && manager.get(first.id, human).state !== 'exited'; n++) await Bun.sleep(2)
+  expect(manager.get(first.id, human).state).toBe('exited')
+  let settled = false
+  const saved = manager.finalSaved(first.id).then(() => { settled = true })
+  await Bun.sleep(20)
+  expect(settled).toBe(false)
+  releaseCheck()
+  releaseSave()
+  await saved
+  await refresh
+  expect(manager.get(first.id, human).outputSaved).toBe(false)
+})
+test('setup finds a session that exited while nothing watched (a restart): it attaches to the retained pane first, and its save is registered with the exit', async () => {
+  const { manager, live, finalCut, attaches, finals } = fixture()
+  const session = await manager.create({ title: 'Restarted', cwd: '/tmp' }, human)
+  // As after a restart: nothing attached, and the program has exited meanwhile.
+  ;(manager as unknown as { attached: Set<string> }).attached.clear()
+  live.delete(session.id)
+  let releaseSave!: () => void
+  finalCut.next = () => new Promise((resolve) => { releaseSave = () => resolve(undefined) })
+  const setup = manager.setupService(async () => {})
+  for (let n = 0; n < 50 && !finals.some((entry) => entry.startsWith(`final ${session.id}`)); n++) await Bun.sleep(2)
+  expect(attaches.filter((id) => id === session.id)).toHaveLength(2)
+  expect(manager.get(session.id, human).state).toBe('exited')
+  let settled = false
+  void manager.finalSaved(session.id).then(() => { settled = true })
+  await Bun.sleep(20)
+  expect(settled).toBe(false)
+  releaseSave()
+  await setup
+  expect(settled).toBe(true)
+})
+test('a sweep retry replaces an unusable attachment (its control client connected, its replica ended) before saving', async () => {
+  const { manager, live, replicas, attaches, finals, store, attached } = fixture()
+  const session = await manager.create({ title: 'Overflowed', cwd: '/tmp' }, human)
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  replicas.set(session.id, replica)
+  live.delete(session.id)
+  await manager.refreshStates()
+  store.markOutput(session.id, false)
+  // The replica ended (a log overflow) while the control client stayed connected.
+  replica.close()
+  expect(attached.has(session.id)).toBe(true)
+  const before = attaches.length
+  finals.length = 0
+  await manager.sweep()
+  expect(attaches.length).toBe(before + 1)
+  expect(finals[0]).toStartWith(`final ${session.id}`)
+})
+test('a sweep started while a save is in flight waits for it; when it fails, the retry saves from a replaced attachment before maintenance completes the session', async () => {
+  const { manager, live, finalCut, finals, terminated, advance, store, attaches } = fixture()
+  const session = await manager.create({ title: 'Overlap', cwd: '/tmp' }, human)
+  const source = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  await source.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bclast words'), cols: 80, rows: 24, reason: 'test', history: true })
+  const cut = source.cut()!
+  source.close()
+  let failFirst!: () => void
+  const cuts: Array<() => Promise<Cut | undefined>> = [
+    () => new Promise((resolve) => { failFirst = () => resolve(undefined) }),
+    async () => cut,
+  ]
+  finalCut.next = () => cuts.shift()!()
+  live.delete(session.id)
+  const refresh = manager.refreshStates()
+  for (let n = 0; n < 50 && !failFirst; n++) await Bun.sleep(2)
+  advance()
+  const before = attaches.length
+  const sweep = manager.sweep()
+  await Bun.sleep(20)
+  // Nothing was decided while the first save ran.
+  expect(terminated).toEqual([])
+  expect(attaches.length).toBe(before)
+  failFirst()
+  await refresh
+  await sweep
+  expect(finals.filter((entry) => entry.startsWith('final'))).toHaveLength(2)
+  expect(store.session(session.id)?.outputSaved).toBe(true)
+  expect(terminated).toEqual([session.id])
+  expect(finals.at(-1)).toBe(`terminate ${session.id}`)
+})
+test('a maintenance pass that did not retry an unsaved session leaves it for one that does', async () => {
+  const { manager, live, terminated, advance, store } = fixture()
+  const session = await manager.create({ title: 'Unsaved', cwd: '/tmp' }, human)
+  live.delete(session.id)
+  await manager.refreshStates()
+  store.markOutput(session.id, false)
+  advance()
+  await manager['run'](() => manager['sweepUnlocked'](), true)
+  expect(terminated).toEqual([])
+  await manager.sweep()
+  expect(terminated).toEqual([session.id])
+})
+test('sweep reserves every retried save before waiting on any: a later one is never completed (its pane killed) while an earlier one saves', async () => {
+  const { manager, live, finalCut, terminated, store, advance } = fixture()
+  const first = await manager.create({ title: 'First', cwd: '/tmp' }, human)
+  const second = await manager.create({ title: 'Second', cwd: '/tmp' }, human)
+  for (const id of [first.id, second.id]) live.delete(id)
+  await manager.refreshStates()
+  for (const id of [first.id, second.id]) store.markOutput(id, false)
+  advance()
+  const releases: Array<() => void> = []
+  finalCut.next = () => new Promise((resolve) => { releases.push(() => resolve(undefined)) })
+  const sweep = manager.sweep()
+  for (let n = 0; n < 50 && releases.length === 0; n++) await Bun.sleep(2)
+  let settled = false
+  void manager.finalSaved(second.id).then(() => { settled = true })
+  await Bun.sleep(20)
+  expect(settled).toBe(false)
+  // Maintenance run meanwhile (a creation's) leaves both reserved sessions alone.
+  await manager['run'](() => manager['sweepUnlocked'](), true)
+  expect(terminated).toEqual([])
+  for (let n = 0; n < 50 && releases.length < 2; n++) { for (const release of releases.splice(0)) release(); await Bun.sleep(2) }
+  for (const release of releases.splice(0)) release()
+  await sweep
+  expect(terminated.sort()).toEqual([first.id, second.id].sort())
 })
 test('delete always removes the session — a retained worktree tears down, never blocks', async () => {
   const { manager, live, releases, forgotten } = fixture()
@@ -176,7 +370,7 @@ test('delete always removes the session — a retained worktree tears down, neve
   manager.store.save(session)
   live.delete(session.id)
   await manager.finish(session.id, agent, 1, false)
-  manager.store.append(session.id, Buffer.from('history'))
+  await manager.store.saveBundle(session.id, await picture('history'))
   await expect(manager.deleteSession(session.id, agent)).rejects.toThrow('human')
   // The fixture release fails ("Unmerged work"), yet the session is gone: the
   // worktree teardown is best-effort and never blocks removing the record.
@@ -188,7 +382,7 @@ test('delete always removes the session — a retained worktree tears down, neve
   expect(releases.at(-1)).toEqual({ sessionId: session.id, worktreePath: '/tmp/retained', teardown: true })
   expect(releases.some((r) => !r.teardown)).toBe(true)
   expect(manager.list(human)).toHaveLength(0)
-  expect(manager.store.bytes()).toBe(0)
+  expect(manager.store.hasBundle(session.id)).toBe(false)
   expect(() => manager.get(session.id, human)).toThrow('not found')
   await manager.beforeUninstall(async () => {})
 })
@@ -218,41 +412,12 @@ test('completed work is rechecked immediately after merge without a 30-day delay
   expect(manager.get(session.id, human).worktreePath).toBeUndefined()
 })
 
-test('output subscribers hear each parsed chunk once it is stored, and can unsubscribe', async () => {
-  const { manager, outputs } = fixture()
-  const session = await manager.create({ title: 'Live', cwd: '/tmp', program: 'shell' }, human)
-  const heard: number[] = []
-  const unsubscribe = manager.onOutput(session.id, () => { heard.push(manager.output(session.id, human, 0).cursor) })
-  outputs.get(session.id)!(new TextEncoder().encode('hello'))
-  for (let attempt = 0; attempt < 50 && heard.length === 0; attempt++) await Bun.sleep(5)
-  expect(heard).toEqual([1])
-  unsubscribe()
-  outputs.get(session.id)!(new TextEncoder().encode(' again'))
-  await Bun.sleep(30)
-  expect(heard).toEqual([1])
-})
-
 test('a failed delivery surfaces and still consumes the sequence (never retried)', async () => {
   const { manager, failWrites } = fixture()
   const session = await manager.create({ title: 'Input', cwd: '/tmp', program: 'shell' }, human)
   failWrites(new Error('Terminal control connection closed'))
   await expect(manager.write(session.id, human, session.generation, 1, 'ls\r')).rejects.toThrow('control connection closed')
   await expect(manager.write(session.id, human, session.generation, 1, 'ls\r')).rejects.toThrow('sequence')
-})
-
-test('nextOutput resolves on new output, on output that landed before it subscribed, and on abort', async () => {
-  const { manager, outputs } = fixture()
-  const session = await manager.create({ title: 'Wait', cwd: '/tmp', program: 'shell' }, human)
-  const controller = new AbortController()
-  const waiting = manager.nextOutput(session.id, manager.latestCursor(session.id), controller.signal, 5000)
-  outputs.get(session.id)!(new TextEncoder().encode('x'))
-  await waiting
-  expect(manager.latestCursor(session.id)).toBe(1)
-  // Output already past the cursor resolves at once.
-  await manager.nextOutput(session.id, 0, controller.signal, 5000)
-  const aborted = manager.nextOutput(session.id, manager.latestCursor(session.id), controller.signal, 5000)
-  controller.abort()
-  await aborted
 })
 
 test('service setup runs in the same queue as creation, never in the middle of one', async () => {
@@ -324,6 +489,54 @@ test('any human may claim, even while an agent drives; a former authority is sta
   await expect(manager.claim(session.id, agent, 100, 30, { kind: 'browser', device: 'desktop' })).rejects.toThrow()
 })
 
+test('going back restores the previous grid and the screen that sized it; only a human may', async () => {
+  const { manager, tmuxSizes } = fixture()
+  const session = await manager.create({ title: 'Shared', cwd: '/tmp', program: 'shell' }, human)
+  const desk = { kind: 'human', id: 'desk-0123456789abcdef' } as const
+  const phone = { kind: 'human', id: 'phone-0123456789abcdef' } as const
+  await expect(manager.restoreSize(session.id, desk, session.sizeEpoch)).rejects.toThrow('There is no previous size to go back to')
+  await manager.claim(session.id, desk, 180, 50, { kind: 'browser', device: 'desktop' })
+  const handedOff = await manager.claim(session.id, phone, 44, 30, { kind: 'browser', device: 'phone' })
+  const epoch = handedOff.sizeEpoch
+  expect(handedOff.previousSize).toEqual({ cols: 180, rows: 50, authority: { viewer: desk.id, kind: 'browser', device: 'desktop' } })
+  await expect(manager.restoreSize(session.id, agent, epoch)).rejects.toThrow('Only the human sizes terminal sessions')
+  // Two screens go back at once: the first wins; the second, decided at the same epoch, is refused rather than toggling back.
+  const [first, second] = await Promise.allSettled([manager.restoreSize(session.id, phone, epoch), manager.restoreSize(session.id, desk, epoch)])
+  expect(first.status).toBe('fulfilled')
+  expect(second.status === 'rejected' ? String(second.reason) : 'restored twice').toContain('The size changed meanwhile')
+  const restored = manager.get(session.id, human)
+  expect(restored.sizeAuthority).toEqual({ viewer: desk.id, kind: 'browser', device: 'desktop' })
+  expect([restored.cols, restored.rows, restored.sizeEpoch]).toEqual([180, 50, epoch + 1])
+  expect(tmuxSizes.get(session.id)).toEqual({ cols: 180, rows: 50 })
+  // The phone's former epoch is stale now; its size is the one to go back to.
+  await expect(manager.resizeAs(session.id, phone, epoch, 44, 24)).rejects.toThrow('Another device is sizing this session')
+  expect(restored.previousSize).toEqual({ cols: 44, rows: 30, authority: { viewer: phone.id, kind: 'browser', device: 'phone' } })
+})
+
+test('going back to a terminal app sizes by its window now, and only while tmux still lists it', async () => {
+  const { manager, nativeAttach, natives } = fixture()
+  const session = await manager.create({ title: 'Mac', cwd: '/tmp' }, human)
+  const reserved = await manager.reserveAttach(session.id, operator)
+  await nativeAttach(session.id, ghostty(501))
+  await manager.confirmAttach(reserved.token, 501)
+  let claimed = await manager.claim(session.id, human, 60, 20, { kind: 'browser', device: 'phone' })
+  // The app's window changed while the phone sized the session.
+  await nativeAttach(session.id, ghostty(501, 132, 44, false))
+  let restored = await manager.restoreSize(session.id, human, claimed.sizeEpoch)
+  expect(restored.sizeAuthority).toEqual({ viewer: 'native:501', kind: 'native' })
+  expect([restored.cols, restored.rows]).toEqual([132, 44])
+  // The phone sizes it again and the app's window changes (Bakin caches 140×45); then the app leaves and the
+  // restore runs before Bakin hears of it: the grid the app left (132×44), never its cached window.
+  claimed = await manager.claim(session.id, human, 60, 20, { kind: 'browser', device: 'phone' })
+  await nativeAttach(session.id, ghostty(501, 140, 45, false))
+  const cached = manager.nativeClients(session.id)[0]!
+  expect([cached.cols, cached.rows]).toEqual([140, 45])
+  natives.set(session.id, [])
+  restored = await manager.restoreSize(session.id, human, claimed.sizeEpoch)
+  expect(restored.sizeAuthority).toEqual({ viewer: 'native:501', kind: 'native' })
+  expect([restored.cols, restored.rows]).toEqual([132, 44])
+})
+
 test('claims clamp to the 40x10 floor', async () => {
   const { manager } = fixture()
   const session = await manager.create({ title: 'Tiny', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
@@ -343,7 +556,6 @@ test('a failed resize leaves every representation at tmux\'s actual window size'
 test('a resize that cannot be reconciled drops the attachment; input is refused, never marked uncertain', async () => {
   const { manager, failResizes, failReadBack, attached, writes, tmuxSizes } = fixture()
   const session = await manager.create({ title: 'Lost', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
-  await manager.readScreen(session.id, human)
   failResizes(new Error('resize-window failed'))
   failReadBack(new Error('tmux unreachable'))
   await expect(manager.resizeAs(session.id, human, session.sizeEpoch, 120, 40)).rejects.toThrow('reconnect required')
@@ -351,19 +563,17 @@ test('a resize that cannot be reconciled drops the attachment; input is refused,
   await expect(manager.writeNext(session.id, human, session.generation, 'ls\r')).rejects.toThrow('reconnect required')
   expect(manager.get(session.id, human).inputSequence).toBe(0)
   expect(writes).toEqual([])
-  // tmux moved after all; the next viewer sync reattaches and adopts its real window.
+  // tmux moved after all; the next join reattaches and adopts its real window.
   failResizes(undefined)
   failReadBack(undefined)
   tmuxSizes.set(session.id, { cols: 77, rows: 22 })
-  const screen = await manager.readScreen(session.id, human)
-  expect([screen.cols, screen.rows]).toEqual([77, 22])
-  expect(manager.get(session.id, human).sizeRevision).toBe(1)
+  await manager.ensureReplica(session.id, human)
+  expect(manager.get(session.id, human)).toMatchObject({ cols: 77, rows: 22, sizeRevision: 1 })
 })
 
 test('a record that fails to save after tmux resized is reconciled from tmux on the next attachment', async () => {
   const { manager, attached, tmuxSizes } = fixture()
   const session = await manager.create({ title: 'Disk', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
-  await manager.readScreen(session.id, human)
   const save = manager.store.save.bind(manager.store)
   let failing = true
   manager.store.save = (next) => { if (failing) throw new Error('disk full'); save(next) }
@@ -371,8 +581,8 @@ test('a record that fails to save after tmux resized is reconciled from tmux on 
   expect(tmuxSizes.get(session.id)).toEqual({ cols: 120, rows: 40 })
   expect(attached.has(session.id)).toBe(false)
   failing = false
-  const screen = await manager.readScreen(session.id, human)
-  expect([screen.cols, screen.rows]).toEqual([120, 40])
+  await manager.ensureReplica(session.id, human)
+  expect(manager.get(session.id, human)).toMatchObject({ cols: 120, rows: 40 })
   expect(manager.store.sessions().find((stored) => stored.id === session.id)).toMatchObject({ cols: 120, rows: 40 })
 })
 
@@ -383,8 +593,8 @@ test('reattaching after setup adopts tmux\'s window, even when the stored record
   tmuxSizes.set(session.id, { cols: 120, rows: 40 })
   live.add(session.id)
   await manager.setupService(async () => {})
-  const screen = await manager.readScreen(session.id, human)
-  expect([screen.cols, screen.rows]).toEqual([120, 40])
+  await manager.ensureReplica(session.id, human)
+  expect(manager.get(session.id, human)).toMatchObject({ cols: 120, rows: 40 })
   expect(manager.store.sessions().find((stored) => stored.id === session.id)).toMatchObject({ cols: 120, rows: 40 })
 })
 
@@ -520,7 +730,7 @@ test('a CLI-created session starts at the caller\'s terminal size, sized by the 
 
 test('an isolated checkout is prepared for a shell too; a shell defaults to the existing checkout', async () => {
   const prepared: string[] = []
-  const driver = { create: async () => {}, attach() {}, connected: () => true, write: async () => {}, resize: async () => {}, windowSize: async () => ({ cols: 200, rows: 60 }), title: async () => {}, alive: async () => true, screen: async () => '', terminate: async () => {}, inUse: async () => false, detach: async () => {}, clients: async () => [], detachClient: async () => {}, setReadonly: async () => {}, attachArgs: () => [] } satisfies ProcessDriver
+  const driver = { create: async () => {}, attach() {}, connected: () => true, write: async () => {}, resize: async () => {}, windowSize: async () => ({ cols: 200, rows: 60 }), title: async () => {}, alive: async () => true, terminate: async () => {}, inUse: async () => false, detach: async () => {}, clients: async () => [], detachClient: async () => {}, setReadonly: async () => {}, attachArgs: () => [] } satisfies ProcessDriver
   const manager = new Sessions(new Store(':memory:'), driver, {
     settings: () => ({ enabledAgents: [] }),
     prepare: async (input) => { prepared.push(input.sessionId); return { ok: true, worktreePath: '/tmp' } },
@@ -701,57 +911,30 @@ test('one fresh client leaving before it can type does not revoke another', asyn
   expect(natives.get(session.id)?.[0]?.readonly).toBe(false)
 })
 
-test('raw-path input needs only the control client; the bridge path needs its bridge too', async () => {
-  for (const raw of [true, false]) {
-    const { manager, bridgeLost, writes } = fixture({ raw })
-    const session = await manager.create({ title: 'Typing', cwd: '/tmp' }, agent)
-    bridgeLost.add(session.id)
-    const typed = manager.write(session.id, agent, session.generation, 1, 'ls\r')
-    if (raw) {
-      await typed
-      expect(writes).toEqual(['ls\r'])
-    } else {
-      await expect(typed).rejects.toThrow('reconnect required')
-      expect(writes).toEqual([])
-    }
-  }
+test('a join recovers a lost replica (none, ended, or its control client closed) by attaching again; a live one is left alone', async () => {
+  const { manager, attaches, replicas, controlLost } = fixture()
+  const session = await manager.create({ title: 'Raw', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
+  expect(attaches).toEqual([session.id])
+  // No replica (it ended, or a server restart left none): attached again.
+  await manager.ensureReplica(session.id, human)
+  expect(attaches).toHaveLength(2)
+  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
+  await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 64, rows: 20, reason: 'test', history: true })
+  replicas.set(session.id, replica)
+  await manager.ensureReplica(session.id, human)
+  expect(await manager.readScreen(session.id, human)).toMatchObject({ cols: 64, rows: 20 })
+  expect(attaches).toHaveLength(2)
+  // The control client closed: a replica loss too.
+  controlLost.add(session.id)
+  await manager.ensureReplica(session.id, human)
+  expect(attaches).toHaveLength(3)
+  // An ended replica (a failed reseed) likewise.
+  replica.close()
+  await manager.ensureReplica(session.id, human)
+  expect(attaches).toHaveLength(4)
 })
-
-test('raw path: a join recovers a lost replica (none, ended, or its control client closed) by attaching again; a live one, and the bridge path, are left alone', async () => {
-  for (const raw of [true, false]) {
-    const { manager, attaches, replicas, controlLost, bridgeLost } = fixture({ raw })
-    const session = await manager.create({ title: 'Raw', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
-    expect(attaches).toEqual([session.id])
-    // No replica (it ended, or a server restart left none): attached again on the raw path only.
-    await manager.ensureReplica(session.id, human)
-    expect(attaches).toHaveLength(raw ? 2 : 1)
-    const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
-    await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 64, rows: 20, reason: 'test', history: true })
-    replicas.set(session.id, replica)
-    await manager.ensureReplica(session.id, human)
-    expect(attaches).toHaveLength(raw ? 2 : 1)
-    // A failed legacy bridge (its queue overflows in a flood) never costs a live replica on the raw path:
-    // neither a join nor an agent's raw read reattaches (the bridge path's read does).
-    bridgeLost.add(session.id)
-    await manager.ensureReplica(session.id, human)
-    if (raw) expect(await manager.readScreen(session.id, human)).toMatchObject({ cols: 64, rows: 20 })
-    else await expect(manager.readScreen(session.id, human)).resolves.toBeDefined()
-    expect(attaches).toHaveLength(2)
-    if (!raw) { replica.close(); continue }
-    bridgeLost.delete(session.id)
-    // The control client closed with the bridge still up: a replica loss too.
-    controlLost.add(session.id)
-    await manager.ensureReplica(session.id, human)
-    expect(attaches).toHaveLength(3)
-    // An ended replica (a failed reseed) likewise.
-    replica.close()
-    await manager.ensureReplica(session.id, human)
-    expect(attaches).toHaveLength(4)
-  }
-})
-
-test("raw path: a join to a live replica waits for nothing, even while another session's attachment holds the queue", async () => {
-  const { manager, replicas, tmuxSizes } = fixture({ raw: true })
+test("a join to a live replica waits for nothing, even while another session's attachment holds the queue", async () => {
+  const { manager, replicas, tmuxSizes } = fixture()
   const live = await manager.create({ title: 'Live', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
   const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
   replicas.set(live.id, replica)
@@ -771,37 +954,10 @@ test("raw path: a join to a live replica waits for nothing, even while another s
   replica.close()
 })
 
-test('a session keeps the path it was created on (plan T38a): turning the setting either way never splits a live session', async () => {
-  const setting = { raw: true }
-  const { manager, bridgeLost, controlLost, attaches, replicas } = fixture({ setting })
-  const raw = await manager.create({ title: 'Raw', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
-  setting.raw = false
-  const bridge = await manager.create({ title: 'Bridge', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
-  // Each answers for its own path, whatever the setting says now.
-  expect([manager.rawPath(raw.id), manager.rawPath(bridge.id)]).toEqual([true, false])
-  setting.raw = true
-  expect([manager.rawPath(raw.id), manager.rawPath(bridge.id)]).toEqual([true, false])
-  // Input health: the raw session needs only its control client, the bridge one its bridge.
-  bridgeLost.add(raw.id)
-  const rawTaken = await manager.control(raw.id, human, 'take')
-  await manager.write(raw.id, human, rawTaken.generation, rawTaken.inputSequence + 1, 'ok\r')
-  controlLost.add(bridge.id)
-  const bridgeTaken = await manager.control(bridge.id, human, 'take')
-  await manager.write(bridge.id, human, bridgeTaken.generation, bridgeTaken.inputSequence + 1, 'ok\r')
-  // Recovery follows the session's path too: a lost bridge is the bridge session's to reattach, not the raw one's.
-  const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
-  await replica.event({ seq: 1, kind: 'seed', bytes: new TextEncoder().encode('\x1bc'), cols: 64, rows: 20, reason: 'test', history: true })
-  replicas.set(raw.id, replica)
-  const before = attaches.length
-  await manager.readScreen(raw.id, human)
-  expect(attaches.length).toBe(before)
-  replica.close()
-})
-
-test('raw path: readScreen takes the screen, the grid and the size revision from the replica in one step (adoptSize never moves it)', async () => {
-  const { manager, replicas, tmuxSizes } = fixture({ raw: true })
+test('readScreen takes the screen, the grid and the size revision from the replica in one step (adoptSize never moves it)', async () => {
+  const { manager, replicas, tmuxSizes } = fixture()
   const session = await manager.create({ title: 'Raw', cwd: '/tmp', program: 'shell' }, human, { cols: 64, rows: 20, kind: 'browser', device: 'desktop' })
-  // No replica, or one not seeded yet: not ready, never the bridge's screen.
+  // No replica, or one not seeded yet: not ready.
   await expect(manager.readScreen(session.id, human)).rejects.toThrow('not ready')
   const replica = new Replica({ reseed: async () => {}, geometry: async () => {}, idleMs: 1e9 })
   replicas.set(session.id, replica)
@@ -1260,5 +1416,396 @@ describe('final output (plan T35b)', () => {
     expect(writes).toEqual(['ls\r'])
     release(await picture())
     expect((await finishing).state).toBe('completed')
+  })
+})
+
+describe('the confirmed service update (applyServiceUpdate)', () => {
+  const setups = () => {
+    const ran: string[] = []
+    return { ran, install: async () => { ran.push('setup') } }
+  }
+  test('ends exactly the confirmed live sessions, then sets up the service', async () => {
+    const { manager, terminated } = fixture()
+    const one = await manager.create({ title: 'One', cwd: '/tmp', program: 'shell' }, human)
+    const two = await manager.create({ title: 'Two', cwd: '/tmp', program: 'shell' }, human)
+    const { ran, install } = setups()
+    expect(await manager.applyServiceUpdate([one.id, two.id], human, install, async () => true)).toEqual({ ended: ['One', 'Two'] })
+    expect(terminated.sort()).toEqual([one.id, two.id].sort())
+    expect(ran).toEqual(['setup'])
+    expect(manager.store.sessions().every((session) => session.state === 'completed')).toBe(true)
+  })
+  test('ends nothing when no update is due any more (applied elsewhere)', async () => {
+    const { manager, terminated } = fixture()
+    const one = await manager.create({ title: 'One', cwd: '/tmp', program: 'shell' }, human)
+    const { ran, install } = setups()
+    await expect(manager.applyServiceUpdate([one.id], human, install, async () => false)).rejects.toThrow('already up to date; no sessions were ended')
+    expect(terminated).toEqual([])
+    expect(ran).toEqual([])
+  })
+  test('ends nothing when the live sessions are not the confirmed ones (one started, or one the operator never saw)', async () => {
+    const { manager, terminated } = fixture()
+    const one = await manager.create({ title: 'One', cwd: '/tmp', program: 'shell' }, human)
+    const { ran, install } = setups()
+    await manager.create({ title: 'Started meanwhile', cwd: '/tmp', program: 'shell' }, human)
+    await expect(manager.applyServiceUpdate([one.id], human, install, async () => true)).rejects.toThrow('changed since you confirmed; no sessions were ended')
+    await expect(manager.applyServiceUpdate([one.id, 'not-a-session', 'other'], human, install, async () => true)).rejects.toThrow('changed since you confirmed')
+    expect(terminated).toEqual([])
+    expect(ran).toEqual([])
+  })
+  test('a creation in flight is seen before anything ends; one asked for during the update is refused', async () => {
+    const { manager, terminated, createHold } = fixture()
+    const one = await manager.create({ title: 'One', cwd: '/tmp', program: 'shell' }, human)
+    let release = () => {}
+    createHold.until = new Promise<void>((resolve) => { release = resolve })
+    const starting = manager.create({ title: 'Starting', cwd: '/tmp', program: 'shell' }, human)
+    const { ran, install } = setups()
+    const confirmed = manager.applyServiceUpdate([one.id], human, install, async () => true)
+    release()
+    createHold.until = undefined
+    await starting
+    await expect(confirmed).rejects.toThrow('changed since you confirmed; no sessions were ended')
+    expect(terminated).toEqual([])
+    expect(ran).toEqual([])
+    // Confirmed again with both. A session asked for while the update runs never starts in between: it is
+    // refused while sessions end, and waits behind setup (which holds the queue) once that has begun.
+    let installed = () => {}
+    let installing = false
+    const holding = manager.applyServiceUpdate(manager.store.sessions().filter((session) => session.state === 'running').map((session) => session.id), human,
+      () => new Promise<void>((resolve) => { installing = true; installed = resolve }), async () => true)
+    for (let tries = 0; tries < 200 && !installing; tries++) await Bun.sleep(1)
+    const late = manager.create({ title: 'Late', cwd: '/tmp', program: 'shell' }, human).then(() => 'started', (error: Error) => error.message)
+    installed()
+    expect((await holding).ended.sort()).toEqual(['One', 'Starting'])
+    const outcome = await late
+    expect(outcome === 'started' || outcome.includes('applying its service update')).toBe(true)
+    // Done: sessions start again.
+    await manager.create({ title: 'After', cwd: '/tmp', program: 'shell' }, human)
+  })
+  test('a session asked for while confirmed sessions are ending is refused', async () => {
+    const { manager, createHold, terminated } = fixture()
+    const one = await manager.create({ title: 'One', cwd: '/tmp', program: 'shell' }, human)
+    void createHold
+    const { install } = setups()
+    const updating = manager.applyServiceUpdate([one.id], human, install, async () => true)
+    // Queued right behind the update's check: it runs before the first kill's step.
+    const refused = manager.create({ title: 'Too soon', cwd: '/tmp', program: 'shell' }, human)
+    await expect(refused).rejects.toThrow('applying its service update')
+    await updating
+    expect(terminated).toEqual([one.id])
+  })
+  test('a session that cannot be ended stops it before setup, naming what did end', async () => {
+    const { manager, unkillable } = fixture()
+    const one = await manager.create({ title: 'One', cwd: '/tmp', program: 'shell' }, human)
+    const two = await manager.create({ title: 'Two', cwd: '/tmp', program: 'shell' }, human)
+    unkillable.add(two.id)
+    const { ran, install } = setups()
+    await expect(manager.applyServiceUpdate([one.id, two.id], human, install, async () => true)).rejects.toThrow('Ended One; Two could not be ended (kill-session failed). The update was not applied.')
+    expect(ran).toEqual([])
+  })
+  test('a setup that fails after sessions ended says so', async () => {
+    const { manager } = fixture()
+    const one = await manager.create({ title: 'One', cwd: '/tmp', program: 'shell' }, human)
+    const failing = async () => { throw new TerminalError('Could not bootstrap the Terminal LaunchAgent', 503) }
+    await expect(manager.applyServiceUpdate([one.id], human, failing, async () => true)).rejects.toThrow('Ended One; the update was not applied: Could not bootstrap the Terminal LaunchAgent')
+  })
+})
+
+describe('attention', () => {
+  const start = { cols: 64, rows: 20, kind: 'browser', device: 'desktop' } as const
+  it('records what the pane says, with when, and clears it; every change reaches live viewers', async () => {
+    const { manager, attachEvents, later } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const seen: Array<Session['attention']> = []
+    manager.onSessionChange(session.id, (changed) => seen.push(changed.attention))
+    later(1000)
+    attachEvents.get(session.id)!.attention!('needs-you')
+    await manager.idle()
+    const needsYou = manager.get(session.id, human).attention
+    expect(needsYou?.state).toBe('needs-you')
+    // The same state again changes nothing (subscriptions re-send on reconnect).
+    later(1000)
+    attachEvents.get(session.id)!.attention!('needs-you')
+    await manager.idle()
+    expect(manager.get(session.id, human).attention).toEqual(needsYou)
+    attachEvents.get(session.id)!.attention!(undefined)
+    await manager.idle()
+    expect(manager.get(session.id, human).attention).toBeUndefined()
+    expect(seen).toEqual([needsYou, undefined])
+  })
+  it('an exit clears it (and says so), and an ended session records none', async () => {
+    const { manager, attachEvents, live, paneDied, finalCut, announced } = fixture()
+    const session = await manager.create({ title: 'Codex', cwd: '/tmp', program: 'shell' }, human, start)
+    attachEvents.get(session.id)!.attention!('turn-finished')
+    await manager.idle()
+    finalCut.next = async () => undefined
+    live.delete(session.id)
+    paneDied.get(session.id)!()
+    for (let tries = 0; tries < 100 && manager.get(session.id, human).state !== 'exited'; tries++) await Bun.sleep(5)
+    await manager.idle()
+    expect(manager.get(session.id, human).attention).toBeUndefined()
+    expect(announced).toHaveLength(2)
+    attachEvents.get(session.id)!.attention!('needs-you')
+    attachEvents.get(session.id)!.bell!('5')
+    await manager.idle()
+    expect(manager.get(session.id, human)).toMatchObject({ state: 'exited' })
+    expect(manager.get(session.id, human).attention).toBeUndefined()
+    expect(manager.get(session.id, human).bellAt).toBeUndefined()
+  })
+  it('finishing a session clears it, and says so', async () => {
+    const { manager, attachEvents, finalCut, announced } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    attachEvents.get(session.id)!.attention!('needs-you')
+    await manager.idle()
+    finalCut.next = async () => undefined
+    await manager.finish(session.id, human, session.generation, true)
+    expect(manager.get(session.id, human)).toMatchObject({ state: 'completed' })
+    expect(manager.get(session.id, human).attention).toBeUndefined()
+    expect(announced).toEqual([{ sessionId: session.id }, { sessionId: session.id }])
+  })
+  it('every change is announced (by session id: screens re-read); a bell only when recorded', async () => {
+    const { manager, attachEvents, announced, later } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    attachEvents.get(session.id)!.attention!('needs-you')
+    await manager.idle()
+    attachEvents.get(session.id)!.bell!('1')
+    await manager.idle()
+    later(1000)
+    // Within the bell interval: counted, not announced.
+    attachEvents.get(session.id)!.bell!('2')
+    await manager.idle()
+    attachEvents.get(session.id)!.attention!(undefined)
+    await manager.idle()
+    expect(announced).toEqual([{ sessionId: session.id }, { sessionId: session.id }, { sessionId: session.id }])
+  })
+  it('each new state is a new occurrence, strictly increasing even across clears and within one millisecond', async () => {
+    const { manager, attachEvents } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const occurrences: number[] = []
+    for (const state of ['needs-you', 'turn-finished', undefined, 'needs-you'] as const) {
+      attachEvents.get(session.id)!.attention!(state)
+      await manager.idle()
+      const attention = manager.get(session.id, human).attention
+      if (attention) occurrences.push(attention.occurrence)
+    }
+    expect(occurrences).toEqual([1, 2, 3])
+  })
+  it('acknowledging marks only the occurrence shown: a newer one (even in the same millisecond) stays unacknowledged; agents cannot', async () => {
+    const { manager, attachEvents, announced } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    attachEvents.get(session.id)!.attention!('needs-you')
+    await manager.idle()
+    const shown = manager.get(session.id, human).attention!.occurrence
+    attachEvents.get(session.id)!.attention!('turn-finished')
+    await manager.idle()
+    await manager.acknowledge(session.id, human, shown)
+    expect(manager.get(session.id, human).attention).toMatchObject({ state: 'turn-finished' })
+    expect(manager.get(session.id, human).attention?.acknowledgedAt).toBeUndefined()
+    const current = manager.get(session.id, human).attention!.occurrence
+    await manager.acknowledge(session.id, human, current)
+    expect(manager.get(session.id, human).attention?.acknowledgedAt).toBeNumber()
+    expect(announced.at(-1)).toEqual({ sessionId: session.id })
+    // Acknowledging again changes nothing (and announces nothing).
+    const count = announced.length
+    await manager.acknowledge(session.id, human, current)
+    expect(announced.length).toBe(count)
+    await expect(manager.acknowledge(session.id, { kind: 'agent', id: 'main' }, current)).rejects.toThrow()
+  })
+  it('a bell is a count that differs from the last seen; recorded at most once every 30 seconds', async () => {
+    const { manager, attachEvents, later } = fixture()
+    const session = await manager.create({ title: 'Shell', cwd: '/tmp', program: 'shell' }, human, start)
+    const report = async (count: string) => { attachEvents.get(session.id)!.bell!(count); await manager.idle(); return manager.get(session.id, human).bellAt }
+    // tmux's count before any bell is empty: nothing rang.
+    expect(await report('')).toBeUndefined()
+    // The first report already counts one (a bell before tmux's first sample): it rang.
+    const first = await report('1')
+    expect(first).toBeNumber()
+    later(29_000)
+    expect(await report('2')).toBe(first)
+    // The same count again (a reconnect's first report) is no bell.
+    later(1000)
+    expect(await report('2')).toBe(first)
+    expect(await report('3')).toBe(first! + 30_000)
+    expect(manager.get(session.id, human).bellCount).toBe('3')
+  })
+})
+
+/** A PNG header of the given size (enough for sniffImage), padded to `bytes`. */
+function png(width = 4, height = 3, bytes = 64): Uint8Array {
+  const data = new Uint8Array(bytes)
+  data.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52])
+  new DataView(data.buffer).setUint32(16, width)
+  new DataView(data.buffer).setUint32(20, height)
+  return data
+}
+
+describe('uploads', () => {
+  const start = { cols: 64, rows: 20, kind: 'browser', device: 'desktop' } as const
+  it('the input owner keeps an image at the generation it holds; the path is the session folder', async () => {
+    const { manager, uploadRoot, store } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const upload = await manager.upload(session.id, human, session.generation, async () => png())
+    expect(upload).toMatchObject({ session: session.id, kind: 'png', width: 4, height: 3, bytes: 64 })
+    expect(upload.name).toMatch(/^[0-9a-f-]{36}\.png$/)
+    expect(upload.path).toBe(join(uploadRoot, 'uploads', session.id, upload.name))
+    expect(existsSync(upload.path)).toBe(true)
+    expect(store.uploads(session.id).map((entry) => entry.name)).toEqual([upload.name])
+  })
+  it('a stale generation, an agent, or an ended session keeps nothing', async () => {
+    const { manager, uploadRoot, finalCut } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    await expect(manager.upload(session.id, human, session.generation + 1, async () => png())).rejects.toThrow('Input ownership changed')
+    await expect(manager.upload(session.id, { kind: 'agent', id: 'main' }, session.generation, async () => png())).rejects.toThrow()
+    finalCut.next = async () => undefined
+    await manager.finish(session.id, human, session.generation, true)
+    await expect(manager.upload(session.id, human, manager.get(session.id, human).generation, async () => png())).rejects.toThrow('Session has exited')
+    expect(existsSync(join(uploadRoot, 'uploads'))).toBe(false)
+  })
+  it('only a few bodies are read at once; the next waits its turn by being refused', async () => {
+    const { manager } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const releases: Array<() => void> = []
+    const reading = Array.from({ length: MAX_UPLOADS_READING }, () => manager.upload(session.id, human, session.generation, () => new Promise<Uint8Array>((resolve) => { releases.push(() => resolve(png())) })))
+    await expect(manager.upload(session.id, human, session.generation, async () => png())).rejects.toThrow('Other images are still uploading')
+    // A body read but waiting on the queue still holds its slot.
+    let unblock!: () => void
+    const blocker = manager['run'](() => new Promise<void>((resolve) => { unblock = resolve }))
+    for (const release of releases) release()
+    await Bun.sleep(5)
+    await expect(manager.upload(session.id, human, session.generation, async () => png())).rejects.toThrow('Other images are still uploading')
+    unblock()
+    await blocker
+    expect((await Promise.all(reading)).length).toBe(MAX_UPLOADS_READING)
+    await expect(manager.upload(session.id, human, session.generation, async () => png())).resolves.toMatchObject({ kind: 'png' })
+  })
+  it('two uploads racing for the last of the quota: the queue lets one in', async () => {
+    const { manager, uploads } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const big = png(100, 100, 10 * 1024 * 1024)
+    for (let index = 0; index < 9; index++) uploads.save(session.id, big, 1)
+    const results = await Promise.allSettled([1, 2].map(() => manager.upload(session.id, human, session.generation, async () => big)))
+    expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected'])
+  })
+  // Root deletes regardless of permissions (CI's conformance container runs as root).
+  it.skipIf(process.getuid?.() === 0)('a history that cannot be deleted yet is tried again; other sessions are still maintained', async () => {
+    const { manager, finalCut, later, uploadRoot } = fixture()
+    finalCut.next = async () => undefined
+    const stuck = await manager.create({ title: 'Stuck', cwd: '/tmp', program: 'shell' }, human, start)
+    await manager.upload(stuck.id, human, stuck.generation, async () => png())
+    await manager.finish(stuck.id, human, stuck.generation, true)
+    const other = await manager.create({ title: 'Other', cwd: '/tmp', program: 'shell' }, human, start)
+    await manager.finish(other.id, human, other.generation, true)
+    later(30 * DAY)
+    // Its folder cannot be emptied.
+    chmodSync(join(uploadRoot, 'uploads', stuck.id), 0o000)
+    try {
+      await manager.sweep()
+      expect(manager.get(stuck.id, human).historyDeleted).toBeUndefined()
+      expect(manager.get(other.id, human).historyDeleted).toBe(true)
+    } finally { chmodSync(join(uploadRoot, 'uploads', stuck.id), 0o700) }
+    await manager.sweep()
+    expect(manager.get(stuck.id, human).historyDeleted).toBe(true)
+  })
+  it('thirty days after a session completed, its history and its images are deleted', async () => {
+    const { manager, finalCut, later, uploads } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const upload = await manager.upload(session.id, human, session.generation, async () => png())
+    uploads.markSent(session.id, upload.name, 1)
+    finalCut.next = async () => undefined
+    await manager.finish(session.id, human, session.generation, true)
+    later(30 * DAY)
+    await manager.sweep()
+    expect(manager.get(session.id, human).historyDeleted).toBe(true)
+    expect(existsSync(upload.path)).toBe(false)
+  })
+  it('a takeover while the bytes arrive keeps nothing (the generation is checked again once they are in)', async () => {
+    const { manager, uploadRoot } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    let arrive!: (bytes: Uint8Array) => void
+    const uploading = manager.upload(session.id, human, session.generation, () => new Promise((resolve) => { arrive = resolve }))
+    await manager.idle()
+    await manager.control(session.id, human, 'take')
+    arrive(png())
+    await expect(uploading).rejects.toThrow('Input ownership changed')
+    expect(existsSync(join(uploadRoot, 'uploads', session.id))).toBe(false)
+  })
+  it('removing one takes only a recorded upload (never a path a caller made up)', async () => {
+    const { manager, uploadRoot } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const upload = await manager.upload(session.id, human, session.generation, async () => png())
+    expect(await manager.removeUpload(session.id, human, session.generation, '../terminal.db')).toEqual({ removed: false })
+    expect(await manager.removeUpload(session.id, human, session.generation, upload.name)).toEqual({ removed: true })
+    expect(readdirSync(join(uploadRoot, 'uploads', session.id))).toEqual([])
+  })
+  it('deleting the history or the session deletes its images', async () => {
+    const { manager, uploadRoot, store } = fixture()
+    for (const remove of ['history', 'session'] as const) {
+      const session = await manager.create({ title: remove, cwd: '/tmp', program: 'shell' }, human, start)
+      const upload = await manager.upload(session.id, human, session.generation, async () => png())
+      await manager.finish(session.id, human, session.generation, true)
+      if (remove === 'history') await manager.deleteHistory(session.id, human)
+      else await manager.deleteSession(session.id, human)
+      expect(existsSync(upload.path)).toBe(false)
+      expect(existsSync(join(uploadRoot, 'uploads', session.id))).toBe(false)
+      expect(store.uploads(session.id)).toEqual([])
+    }
+  })
+  it('a paste that carried an image marks it sent once it went; a refused one leaves it a draft', async () => {
+    const { manager, store, later } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const sent = await manager.upload(session.id, human, session.generation, async () => png())
+    const draft = await manager.upload(session.id, human, session.generation, async () => png())
+    await manager.writeNext(session.id, human, session.generation, sent.path, { paste: true, uploads: [sent.name] })
+    // A refused paste (a stale generation) leaves its image a draft.
+    await expect(manager.writeNext(session.id, human, session.generation + 1, draft.path, { paste: true, uploads: [draft.name] })).rejects.toThrow()
+    const byName = new Map(store.uploads(session.id).map((upload) => [upload.name, upload]))
+    expect(byName.get(sent.name)?.sentAt).toBeNumber()
+    expect(byName.get(draft.name)?.sentAt).toBeUndefined()
+    later(25 * 60 * 60 * 1000)
+    await manager.sweep()
+    expect(existsSync(sent.path)).toBe(true)
+    expect(existsSync(draft.path)).toBe(false)
+  })
+  it('a draft naming an image swept since is refused before anything is consumed', async () => {
+    const { manager, later, writes } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const image = await manager.upload(session.id, human, session.generation, async () => png())
+    later(25 * 60 * 60 * 1000)
+    await manager.sweep()
+    const before = manager.get(session.id, human).inputSequence
+    await expect(manager.writeNext(session.id, human, session.generation, image.path, { paste: true, uploads: [image.name] })).rejects.toThrow('no longer kept')
+    expect(manager.get(session.id, human).inputSequence).toBe(before)
+    expect(writes).not.toContain(image.path)
+  })
+  it('a delivery that may have arrived keeps its images as sent; a bookkeeping failure after delivery never refuses it', async () => {
+    const { manager, store, later, failWrites, uploads } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const maybe = await manager.upload(session.id, human, session.generation, async () => png())
+    failWrites(new Error('tmux went away'))
+    await expect(manager.writeNext(session.id, human, session.generation, maybe.path, { paste: true, uploads: [maybe.name] })).rejects.toThrow('may have been delivered')
+    expect(store.uploads(session.id).find((upload) => upload.name === maybe.name)?.sentAt).toBeNumber()
+    later(25 * 60 * 60 * 1000)
+    await manager.sweep()
+    expect(existsSync(maybe.path)).toBe(true)
+    failWrites(undefined as unknown as Error)
+    const delivered = await manager.upload(session.id, human, session.generation, async () => png())
+    const original = uploads.markSent.bind(uploads)
+    uploads.markSent = () => { throw new Error('database is locked') }
+    try {
+      await expect(manager.writeNext(session.id, human, session.generation, delivered.path, { paste: true, uploads: [delivered.name] })).resolves.toMatchObject({ id: session.id })
+    } finally { uploads.markSent = original }
+  })
+  it('maintenance removes images never sent within a day; sent ones stay', async () => {
+    const { manager, uploads, later } = fixture()
+    const session = await manager.create({ title: 'Claude', cwd: '/tmp', program: 'shell' }, human, start)
+    const sent = await manager.upload(session.id, human, session.generation, async () => png())
+    const draft = await manager.upload(session.id, human, session.generation, async () => png())
+    uploads.markSent(session.id, sent.name, 1)
+    later(24 * 60 * 60 * 1000 - 1)
+    await manager.sweep()
+    expect(existsSync(draft.path)).toBe(true)
+    later(2)
+    await manager.sweep()
+    expect(existsSync(draft.path)).toBe(false)
+    expect(existsSync(sent.path)).toBe(true)
   })
 })

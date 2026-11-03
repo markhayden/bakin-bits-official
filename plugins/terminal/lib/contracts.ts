@@ -13,8 +13,20 @@ export const createSchema = z.object({
 export type CreateInput = z.infer<typeof createSchema>
 export type Principal = { kind: 'human'; id: string } | { kind: 'agent'; id: string }
 /** What kind of screen claims the size: it names the authority in the header ("Sized by phone"). */
+/** What a coding program says about its turn (lib/attention.ts sets it from the program's hooks). */
+export type AttentionState = 'needs-you' | 'turn-finished' | 'working'
+/**
+ * The browser event a session's attention or bell changed under (only its id:
+ * every screen re-reads `GET /attention`, so one missed while disconnected is
+ * caught up by the next read).
+ */
+export const ATTENTION_EVENT = 'terminal.attention'
+export type AttentionEvent = { sessionId: string }
+/** `GET /attention`: what the badge and the announcements are worked out from. */
+export type AttentionSummary = Pick<Session, 'id' | 'title' | 'program' | 'state' | 'attention' | 'bellAt'>
 export const screenDevice = z.enum(['desktop', 'phone'])
 export type SizeClaimant = { kind: 'browser'; device: z.infer<typeof screenDevice> } | { kind: 'native' }
+export type SizeAuthority = { viewer: string } & SizeClaimant
 export interface Session {
   revision?: number
   id: string
@@ -30,12 +42,27 @@ export interface Session {
   cols: number
   rows: number
   /** The viewer that sizes the grid (spec D2); absent until someone claims. */
-  sizeAuthority?: { viewer: string } & SizeClaimant
+  sizeAuthority?: SizeAuthority
+  /** The grid and authority before the last handoff: "go back" restores them (spec D10). */
+  previousSize?: { cols: number; rows: number; authority: SizeAuthority }
   /** Bumped by every claim; a resize must carry the current epoch. */
   sizeEpoch: number
   /** Bumped by every actual dimension change; agents re-read after it moves. */
   sizeRevision: number
   state: 'running' | 'exited' | 'completed'
+  /**
+   * What the coding program says about its turn (its hooks; lib/attention.ts),
+   * since when. Absent when unknown. `occurrence` names this state (an
+   * acknowledgement names the one it saw); `acknowledgedAt`: the operator saw
+   * it (it stops counting for the badge); a new state is unacknowledged.
+   */
+  attention?: { state: AttentionState; since: number; occurrence: number; acknowledgedAt?: number }
+  /** The last attention occurrence numbered: each new state takes the next (strictly increasing, kept across clears). */
+  attentionSeq?: number
+  /** The last bell recorded, at most one per session every BELL_INTERVAL_MS. */
+  bellAt?: number
+  /** tmux's bell count last seen (`@bakin_bell`, empty before any): a different count is a bell, even one rung while Bakin was not attached. */
+  bellCount?: string
   createdAt: number
   lastActivityAt: number
   completedAt?: number
@@ -43,15 +70,13 @@ export interface Session {
   cleanupReason?: string
   historyDeleted?: boolean
   /**
-   * The raw path's final output (plan T35b): false from the session's start
-   * until its bundle is saved, true after. Absent on sessions from before the
-   * raw path, which show their legacy retained output.
+   * Its final picture (plan T35b): false from the session's start until its
+   * bundle is saved, true after. Absent on sessions ended before bundles
+   * existed, which have no saved picture.
    */
   outputSaved?: boolean
   /** Its saved bundle was removed to keep every bundle within the store's limit (oldest first). */
   outputEvicted?: boolean
-  /** Its viewers take the raw path (spec D13), set at creation from the setting and kept for its life (plan T38a). */
-  rawPath?: true
 }
 export interface TerminalSettings {
   enabledAgents?: Array<{ id: string }>
@@ -60,12 +85,6 @@ export interface TerminalSettings {
   maxSessions?: number
   maxWorktrees?: number
   idleDays?: number
-  /**
-   * Viewers render the server replica's stream (spec D13's raw path, plan
-   * T38a) instead of the bridge; off by default, the bridge is the
-   * rollback path until T38b.
-   */
-  rawPath?: boolean
 }
 export function terminalSettings(raw: Record<string, unknown>): TerminalSettings {
   const bounded = (value: unknown, fallback: number, max: number) => Number.isInteger(value) && (value as number) >= 1 && (value as number) <= max ? (value as number) : fallback
@@ -83,7 +102,6 @@ export function terminalSettings(raw: Record<string, unknown>): TerminalSettings
     maxSessions: bounded(raw.maxSessions, 10, 100),
     maxWorktrees: bounded(raw.maxWorktrees, 10, 100),
     idleDays: bounded(raw.idleDays, 30, 365),
-    rawPath: raw.rawPath === true,
   }
 }
 /** The eight characters after `terminal-`: enough to tell sessions apart, short enough to type. */

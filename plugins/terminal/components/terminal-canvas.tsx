@@ -2,12 +2,16 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 're
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
-import { Button } from '@makinbakin/sdk/ui'
-import { ArrowDown, Keyboard, ZoomOut } from 'lucide-react'
+import { Button, Text } from '@makinbakin/sdk/ui'
+import { Panel } from '@makinbakin/sdk/layout'
+import { CopyButton } from '@makinbakin/sdk/patterns'
+import { ArrowDown, Keyboard, X, ZoomOut } from 'lucide-react'
 import type { Session } from '../lib/contracts'
-import type { Fidelity } from '../lib/raw-display'
 import type { UnavailableReason } from '../lib/socket'
 import { installGeometry } from '../lib/geometry'
+import { routeScroll } from './scroll-route'
+import { offerCaption, offerPreview } from '../lib/offer-preview'
+import { bufferText } from '../lib/buffer-text'
 import { screenDigest } from '../lib/digest'
 import { clampSize } from '../lib/sizing'
 import { trackCursorVisibility } from '../lib/cursor-visibility'
@@ -23,7 +27,17 @@ import { BASE_FONT, clampFont, fitWidthFont, minFont, pinchFont, resizePlan, rev
 import '@xterm/xterm/css/xterm.css'
 
 /** What the page asks of the canvas: "Fit to this device" claims the size; refit applies a new smallest-text choice. */
-export interface TerminalViewHandle { fitToDevice(): boolean; refit(): void }
+export interface TerminalViewHandle {
+  fitToDevice(): boolean
+  /** Back to the size before the last handoff; false while reconnecting. */
+  restoreSize(): boolean
+  refit(): void
+  /** The terminal's text now (Copy text): history and screen, plain; undefined until its first picture is shown. */
+  text(): { text: string; lines: number } | undefined
+}
+
+/** How long a copied offer shows its check before it goes (the kit CopyButton's own acknowledgement time). */
+const OFFER_DONE_MS = 1500
 
 /**
  * Links the profile keeps (http, https, mailto) — OSC 8 hyperlinks, and
@@ -42,16 +56,14 @@ const LINK_HANDLER = {
   },
 }
 
-export function TerminalCanvas({ session, writable, captureTab, attempt, offerKeyboard = false, inputEnabled, inputHandle, viewHandle, onModifiersChange, onStatus, onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity, onUnavailable }: {
+export function TerminalCanvas({ session, writable, captureTab, attempt, offerKeyboard = false, inputEnabled, inputHandle, viewHandle, onModifiersChange, onStatus, onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onUnavailable }: {
   /** Show the corner keyboard button (a touch screen with the keyboard down). */
   offerKeyboard?: boolean
   inputEnabled: boolean; inputHandle: RefObject<TerminalInputHandle | null>; viewHandle: RefObject<TerminalViewHandle | null>; onModifiersChange(state: ModifierState): void;
   session: Session; writable: boolean; captureTab: boolean; attempt: number; onStatus(status: string): void; onInput(data: string, paste?: boolean): void; onClaim(data: string): void; onSession(session: Session): void; onPresence(presence: Presence): void; onResult(result: InputResult): void
   /** The renderer hit a parser exception: this screen has stopped and must be rebuilt. */
   onRendererFailed(): void
-  /** The raw path: the session's fidelity from the server (lib/fidelity-notice.ts says what to show). */
-  onFidelity?(fidelity: Fidelity): void
-  /** An ended raw-path session has no output to show. */
+  /** An ended session has no output to show. */
   onUnavailable?(reason: UnavailableReason): void
 }) {
   const pane = useRef<HTMLDivElement>(null)
@@ -66,8 +78,24 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   const [zoom, setZoom] = useState(() => storedFont())
   // Manual pans, selections (and History) stop the view chasing the cursor.
   const [paused, setPaused] = useState(false)
-  const callbacks = useRef({ onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity, onUnavailable, writable, authority, inputEnabled, onModifiersChange, captureTab: false, sizeEpoch: session.sizeEpoch, zoom, paused })
-  callbacks.current = { onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onFidelity, onUnavailable, writable, authority, inputEnabled, onModifiersChange, captureTab, sizeEpoch: session.sizeEpoch, zoom, paused }
+  /**
+   * The program's latest clipboard offer (OSC 52), live only; `rev` tells
+   * offers apart (even the same text twice), so a copy that settles after a
+   * newer offer arrived neither clears nor confirms it.
+   */
+  const [offer, setOffer] = useState<{ text: string; rev: number }>()
+  const offerRev = useRef(0)
+  /** Whether a picture has been shown: before it the terminal is merely empty. */
+  const shown = useRef(false)
+  const offerPanel = useRef<HTMLDivElement>(null)
+  const focusOffer = useRef(false)
+  useLayoutEffect(() => {
+    if (!focusOffer.current) return
+    focusOffer.current = false
+    offerPanel.current?.querySelector<HTMLButtonElement>('[data-slot="copy-button"]')?.focus({ preventScroll: true })
+  }, [offer?.rev])
+  const callbacks = useRef({ onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onUnavailable, writable, authority, inputEnabled, onModifiersChange, captureTab: false, sizeEpoch: session.sizeEpoch, zoom, paused })
+  callbacks.current = { onInput, onClaim, onSession, onPresence, onResult, onRendererFailed, onUnavailable, writable, authority, inputEnabled, onModifiersChange, captureTab, sizeEpoch: session.sizeEpoch, zoom, paused }
   const [status, setStatus] = useState('Connecting')
   useEffect(() => { onStatus(status) }, [status, onStatus])
   const terminal = useRef<Terminal | null>(null)
@@ -75,10 +103,10 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   const socket = useRef<TerminalSocketClient | null>(null)
   const sentSize = useRef('')
   const ready = useRef(false)
-  /** This connection takes the raw path (a join, not a sync). */
-  const rawPath = useRef(false)
   // Re-plan the sizing screen's grid (pane changes and acknowledged sizes both ask).
   const replan = useRef<() => void>(() => {})
+  /** Stops a touch fling and drops the scroll remainder (a deliberate return to Live). */
+  const gestureReset = useRef<() => void>(() => {})
 
   function screen(): HTMLElement | null { return element.current?.querySelector('.xterm-screen') ?? null }
   function paneBox(): { width: number; height: number } | undefined {
@@ -133,7 +161,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     // Never resend a size within one claim; the session update the server pushes resizes xterm.
     const key = `${callbacks.current.sizeEpoch} ${cols}x${rows}`
     if ((term.cols === cols && term.rows === rows) || sentSize.current === key) return
-    // Only a size that actually left counts; a disconnected one is retried after the next sync.
+    // Only a size that actually left counts; a disconnected one is retried after the next picture.
     if (socket.current?.resize(callbacks.current.sizeEpoch, cols, rows)) sentSize.current = key
   }
   function resizeToViewport() {
@@ -209,23 +237,29 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
      * A terminal and everything that belongs to it: the shared profile, the
      * parser guard, the cursor tracker and its own listeners, made before it
      * is shown; `attach` opens it in the pane with its addons and renderer.
-     * The bridge path keeps one per connection. The raw path (spec D13)
-     * replays each picture into a fresh one (components/raw-picture.ts) and
-     * shows it only at the picture's barrier: the one shown until then stays,
-     * and the screen-reader rows of the new one start from the whole picture.
+     * Each picture (spec D13) replays into a fresh one
+     * (components/raw-picture.ts), shown only at the picture's barrier: the
+     * one shown until then stays, and the screen-reader rows of the new one
+     * start from the whole picture.
      */
     const create = (cols: number, rows: number) => {
       const term = new Terminal({ cols, rows, ...TERMINAL_OPTIONS, fontSize: terminal.current?.options.fontSize ?? callbacks.current.zoom ?? BASE_FONT, screenReaderMode: true, convertEol: false, theme: { background }, linkHandler: LINK_HANDLER })
-      // Show/hide cursor as the output sets it; a sync's snapshot ends with it too.
+      // Show/hide cursor as the output sets it (a picture's side state restores it too).
       const cursor = trackCursorVisibility(term)
       // The shared profile (spec D13): queries are tmux's to answer (a viewer's
       // replies would be typed into the pane), links and clipboard are policed,
       // and the xterm 6.0.0 workarounds apply.
-      const profile = applyTerminalProfile(term)
+      // OSC 52: the latest offer replaces any earlier one (one pending per session); only a tap copies it.
+      // Replays are silent (setLive): only live output offers.
+      const profile = applyTerminalProfile(term, { clipboardOffer: (text) => {
+        // A keyboard user on the offer being replaced moves to the new one (its button is a new element).
+        focusOffer.current = Boolean(offerPanel.current?.contains(document.activeElement))
+        setOffer({ text, rev: ++offerRev.current })
+      } })
       // Shown, or replaying to be shown next (a failure of either counts).
       let active = true
       // A parser exception would wedge every later write: the screen is
-      // rebuilt (a fresh connection and sync) instead. Failed, it stops: no
+      // rebuilt (a fresh connection and picture) instead. Failed, it stops: no
       // input, and its socket closes (a failed screen never reconnects
       // itself; only a rebuild does).
       const parser = guardParser(term, () => {
@@ -266,12 +300,31 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
           // No QuickType suggestions inserted into the terminal (spec D9 item 2); compose has its own textarea.
           textarea.setAttribute('autocomplete', 'off')
           // Focusing the terminal to type goes back to the cursor (like ↓ Live).
-          const typing = () => resumeFollow()
+          // Focus that only bounced — away and back in one synchronous turn,
+          // through an element now gone (a copy's hidden textarea, which gives
+          // it back) — is not a return: the view stays. Any later focus is.
+          let lostTo: Element | null = null
+          const left = (event: FocusEvent) => {
+            const target = event.relatedTarget instanceof Element ? event.relatedTarget : null
+            lostTo = target
+            if (target) queueMicrotask(() => { if (lostTo === target) lostTo = null })
+          }
+          const typing = () => {
+            const bounced = lostTo !== null && !lostTo.isConnected
+            lostTo = null
+            if (!bounced) resumeFollow()
+          }
+          textarea.addEventListener('blur', left)
           textarea.addEventListener('focus', typing)
+          // However the view got into the history (xterm's scrollbar too), it stays paused there.
+          const scrolled = term.onScroll(() => { if (term.buffer.active.viewportY < term.buffer.active.baseY) pause(true) })
+          // A gesture (its fling, its remainder) belongs to the buffer it began on: a new picture or a buffer switch ends it.
+          gestureReset.current()
+          const switched = term.buffer.onBufferChange(() => gestureReset.current())
           terminal.current = term
           fit.current = fitAddon
           cursorVisibility.current = cursor
-          detach = () => { textarea.removeEventListener('focus', typing); disposeRenderer() }
+          detach = () => { textarea.removeEventListener('focus', typing); textarea.removeEventListener('blur', left); scrolled.dispose(); switched.dispose(); disposeRenderer() }
         },
         dispose() {
           active = false
@@ -281,11 +334,11 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       }
     }
     let bundle = create(session.cols, session.rows)
+    // A fresh terminal (a mount or Reconnect terminal) has shown nothing yet.
+    shown.current = false
     bundle.attach()
-    /** The raw path's picture being replayed, not shown yet. */
+    /** The picture being replayed, not shown yet. */
     let pending: ReturnType<typeof create> | undefined
-    // The raw path sizes this screen from the picture and its ordered layouts, never from session updates.
-    rawPath.current = false
     inputHandle.current = {
       focus: () => bundle.term.focus(),
       blur: () => bundle.term.blur(),
@@ -307,6 +360,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       },
     }
     viewHandle.current = {
+      text: () => shown.current ? bufferText(bundle.term.buffer.active) : undefined,
       fitToDevice() {
         const term = bundle.term
         const box = paneBox()
@@ -319,6 +373,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
         const { cols, rows } = clampSize(Math.floor(box.width / cell.width), Math.floor(box.height / cell.height))
         return socket.current?.claim(cols, rows, screenDevice()) ?? false
       },
+      restoreSize: () => socket.current?.restoreSize(callbacks.current.sizeEpoch) ?? false,
       refit: () => applyView(),
     }
     const leave = (event: Event) => {
@@ -338,22 +393,9 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
     const client = new TerminalSocketClient({
       url: url.href, clientId: clientId(),
-      onSync: (sync) => {
-        // A sync is a complete picture: the snapshot, then output after its cursor.
-        rawPath.current = false
-        bundle.term.reset()
-        if (sync.snapshot) bundle.term.write(Uint8Array.from(atob(sync.snapshot), (value) => value.charCodeAt(0)))
-        callbacks.current.onSession(sync.session)
-        ready.current = sync.session.state !== 'completed'
-        // Every sync re-fits: the server may hold any size by now.
-        sentSize.current = ''
-        requestAnimationFrame(applyView)
-      },
-      // A failed screen stops acknowledging: its output is discarded, not shown.
-      onOutput: (bytes, done) => { const { term, parser } = bundle; term.write(bytes, () => { if (!parser.failed) done() }) },
-      // The raw path: every picture in a fresh terminal at its own size (keyboard focus kept).
+      // Every picture in a fresh terminal at its own size (keyboard focus kept); this screen is sized
+      // from the picture and its ordered layouts, never from session updates.
       onPicture: (header) => {
-        rawPath.current = true
         pending?.dispose()
         const next = create(header.checkpoint.cols, header.checkpoint.rows)
         pending = next
@@ -385,6 +427,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
           // The barrier: this picture replaces the one shown (keyboard focus kept), and goes live.
           live: () => {
             if (discarded || pending !== next) return
+            shown.current = true
             const focused = document.activeElement === bundle.term.textarea
             bundle.dispose()
             bundle = next
@@ -406,7 +449,8 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
         }
       },
       onDisplay: (state) => { pane.current?.setAttribute('data-display', state) },
-      onFidelity: (fidelity) => callbacks.current.onFidelity?.(fidelity),
+      // Recoveries stay quiet (Mark, 2026-10-29: the notice was noise); the count is kept on the pane for tests and debugging.
+      onFidelity: (fidelity) => { pane.current?.setAttribute('data-recoveries', String(fidelity.recoveries ?? 0)) },
       onUnavailable: (reason) => callbacks.current.onUnavailable?.(reason),
       onSession: (next) => callbacks.current.onSession(next),
       onPresence: (presence) => callbacks.current.onPresence(presence),
@@ -415,7 +459,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
         if (next !== 'Connected') { ready.current = false; reset() }
         else {
           ready.current = true
-          // Ready (the sync, or the first applied replay): fit again; a size asked for before was refused while joining.
+          // Ready (the first applied replay): fit again; a size asked for before was refused while joining.
           sentSize.current = ''
           requestAnimationFrame(applyView)
         }
@@ -426,7 +470,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     client.connect()
     // Phones suspend backgrounded pages and may leave a socket that looks open
     // but is dead: after a real absence (or a network change) take a fresh
-    // connection and sync; otherwise just run any pending reconnect now.
+    // connection and picture; otherwise just run any pending reconnect now.
     let hiddenAt = 0
     const visibility = () => {
       if (document.hidden) { hiddenAt = Date.now(); return }
@@ -462,8 +506,7 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   // A new grid: other screens refit their font to it; the authority re-plans
   // against its pane (which may have moved again before this answer came).
   useEffect(() => {
-    // The raw path's grid follows its picture and layouts, in order (components/raw-picture.ts).
-    if (!rawPath.current) terminal.current?.resize(session.cols, session.rows)
+    // The grid follows its picture and layouts, in order (components/raw-picture.ts).
     if (callbacks.current.authority) replan.current()
     else requestAnimationFrame(applyView)
   }, [session.cols, session.rows])
@@ -471,11 +514,17 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
   // A new claim (by anyone) starts a fresh exchange: what this screen sent before is no longer known to the server.
   useEffect(() => { sentSize.current = '' }, [authority, session.sizeEpoch])
 
-  // Pinch (two fingers, or Ctrl+wheel on a trackpad) sets this device's font;
-  // one-finger drags, wheels and scrollbar or arrow-key scrolling pan natively
-  // and pause cursor-follow. None of it focuses the keyboard or sends input:
-  // wheels are taken in the capture phase, before xterm can turn them into
-  // scrollback scrolling or (in full-screen programs) arrow keys.
+  // Pinch (two fingers, or Ctrl+wheel on a trackpad) sets this device's font.
+  // A vertical wheel or one-finger drag scrolls xterm's history when there is
+  // history to scroll, and pans the grid otherwise (components/scroll-route.ts,
+  // plan T36); horizontal ones pan. Every one pauses cursor-follow. None of it
+  // focuses the keyboard or sends input: wheels are always taken in the capture
+  // phase, before xterm can turn them into mouse reports or (in full-screen
+  // programs) arrow keys; history is scrolled here, never by xterm; and a
+  // touch never becomes a mouse report (a mouse is the operator's own input).
+  // The exception: a full-screen program that asked for the mouse scrolls
+  // itself (it has no terminal history), so vertical scrolling reaches it as
+  // wheel reports, once the grid has panned to its edge — as a native terminal does.
   useEffect(() => {
     const el = pane.current
     if (!el) return
@@ -483,21 +532,157 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     let frame = 0
     let commit: ReturnType<typeof setTimeout> | undefined
     const distance = (touches: TouchList) => Math.hypot(touches[0]!.clientX - touches[1]!.clientX, touches[0]!.clientY - touches[1]!.clientY)
+    /** A vertical scroll of `delta` px, routed to the history or the pane; false when nothing could move. */
+    let carry = 0
+    const scrollVertical = (delta: number): boolean => {
+      const term = terminal.current
+      const rendered = screen()
+      if (!term || !rendered?.clientHeight) { el.scrollBy(0, delta); return false }
+      const buffer = term.buffer.active
+      const route = routeScroll(delta, el, { viewportY: buffer.viewportY, baseY: buffer.baseY, alternate: buffer.type === 'alternate' }, rendered.clientHeight / term.rows, carry)
+      carry = route.carry
+      if (route.pan) el.scrollBy(0, route.pan)
+      if (route.lines) term.scrollLines(route.lines)
+      // Above the live screen the view stays put until a deliberate return (↓ Live).
+      if (term.buffer.active.viewportY < term.buffer.active.baseY) pause(true)
+      else if (route.pan) pause()
+      return Boolean(route.pan || route.lines || route.carry)
+    }
+    /**
+     * A full-screen program that asked for the mouse (Claude Code, vim with
+     * mouse on) scrolls itself: it has no terminal history, and a native
+     * terminal sends it the wheel. Then vertical scrolling is its input (a
+     * wheel report); everything else stays the view's.
+     */
+    const programScrolls = () => {
+      const term = terminal.current
+      if (!term || term.buffer.active.type !== 'alternate') return false
+      // Only modes that report the wheel (X10 has none: xterm would send arrow keys), and only SGR reports:
+      // the viewer's input carries text, and an older encoding's coordinates are raw bytes.
+      const mouse = (term as unknown as { _core: { coreMouseService: { activeProtocol: string; activeEncoding: string } } })._core.coreMouseService
+      return ['VT200', 'DRAG', 'ANY'].includes(mouse.activeProtocol) && mouse.activeEncoding === 'SGR'
+    }
+    /** How far the pane can pan that way: an overflowing grid pans to its edge before the program scrolls. */
+    const panRoom = (dy: number) => dy < 0 ? -el.scrollTop : Math.max(0, el.scrollHeight - el.clientHeight - el.scrollTop)
+    /**
+     * A touch drag's distance to the program, as the trackpad-style pixel
+     * wheel xterm turns into reports itself (its own accumulation and
+     * damping — what VS Code sends, and what Claude Code is tuned for: one
+     * report scrolls it a few lines, and a fast stream accelerates).
+     * Following pauses: the program's repaint must not pan back.
+     */
+    const passing = new WeakSet<Event>()
+    const scrollProgram = (pixels: number, x: number, y: number) => {
+      const term = terminal.current
+      if (!term?.element) return
+      pause()
+      const report = new WheelEvent('wheel', { deltaY: pixels, deltaMode: WheelEvent.DOM_DELTA_PIXEL, clientX: x, clientY: y, bubbles: true, cancelable: true })
+      passing.add(report)
+      term.element.dispatchEvent(report)
+    }
+    /** A drag's vertical move for a program that scrolls itself: what the pane can pan, then the rest to the program. */
+    const programMove = (dy: number, x: number, y: number) => {
+      const room = panRoom(dy)
+      const pan = dy < 0 ? Math.max(dy, room) : Math.min(dy, room)
+      if (pan) { el.scrollBy(0, pan); pause() }
+      if (dy - pan) scrollProgram(dy - pan, x, y)
+    }
+    /** The rendered row height: a line-mode wheel moves this far per line. */
+    const rowHeight = () => {
+      const term = terminal.current
+      const rendered = screen()
+      return term && rendered?.clientHeight ? rendered.clientHeight / term.rows : 16
+    }
+    const hasHistory = () => {
+      const buffer = terminal.current?.buffer.active
+      return Boolean(buffer && buffer.type !== 'alternate' && buffer.baseY > 0)
+    }
+    /**
+     * A one-finger drag: who owns it is decided on its first move (the only
+     * one whose cancel reliably stops the browser's own scroll) and kept to
+     * the end. A vertical drag with history is ours (history, then the pan,
+     * in one motion, with a fling); anything else is the browser's native pan.
+     */
+    let drag: { x: number; y: number; lastX?: number; lastY?: number; owner?: 'ours' | 'native' | 'program' | 'ended'; samples: { at: number; dy: number }[] } | undefined
+    let fling = 0
+    const stopFling = () => { cancelAnimationFrame(fling); fling = 0 }
+    /** After a release: momentum through `move` (the view's history and pan, or a program that scrolls itself), until it stops. */
+    const startFling = (samples: { at: number; dy: number }[], move: (pixels: number) => boolean = scrollVertical) => {
+      const recent = samples.filter((sample) => sample.at >= performance.now() - 100)
+      if (recent.length < 2) return
+      let velocity = recent.reduce((sum, sample) => sum + sample.dy, 0) / Math.max(16, recent[recent.length - 1]!.at - recent[0]!.at)
+      let last = performance.now()
+      const step = (now: number) => {
+        const elapsed = now - last
+        last = now
+        velocity *= Math.pow(0.95, elapsed / 16)
+        fling = Math.abs(velocity) > 0.02 && move(velocity * elapsed) ? requestAnimationFrame(step) : 0
+      }
+      if (Math.abs(velocity) > 0.2) fling = requestAnimationFrame(step)
+    }
+    // A deliberate return (or a new picture) also ends a drag still under the finger: its release flings nothing.
+    gestureReset.current = () => { stopFling(); carry = 0; if (drag) drag = { ...drag, owner: drag.owner === 'native' ? 'native' : 'ended', samples: [] } }
     const preview = (size: number) => {
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(() => setFont(size))
     }
     const start = (event: TouchEvent) => {
+      stopFling()
+      carry = 0
+      drag = undefined
       if (event.touches.length === 2) pinch = { distance: distance(event.touches), font: terminal.current?.options.fontSize ?? BASE_FONT }
+      else if (event.touches.length === 1) drag = { x: event.touches[0]!.clientX, y: event.touches[0]!.clientY, samples: [] }
     }
     const move = (event: TouchEvent) => {
       if (pinch && event.touches.length === 2) {
         event.preventDefault()
         pinch.next = pinchFont(pinch.font, pinch.distance, distance(event.touches), minFont())
         preview(pinch.next)
-      } else if (event.touches.length === 1) pause()
+        return
+      }
+      if (!drag || event.touches.length !== 1) return
+      const { clientX: x, clientY: y } = event.touches[0]!
+      // The finger moving down shows what is above: a negative scroll.
+      const dx = drag.x - x
+      const dy = drag.y - y
+      drag.x = x
+      drag.y = y
+      if (!drag.owner) {
+        if (!dx && !dy) return
+        const vertical = Math.abs(dy) >= Math.abs(dx)
+        // A program that scrolls itself takes a vertical drag only once the grid is at its edge that way: until
+        // then the browser pans it natively, momentum and all (nested scrolling, as iOS does it).
+        drag.owner = vertical && programScrolls() ? (panRoom(dy) ? 'native' : 'program') : vertical && hasHistory() ? 'ours' : 'native'
+      }
+      if (drag.owner === 'native') { pause(); return }
+      // The browser's scroll was cancelled from the first move: an ended drag stays still.
+      event.preventDefault()
+      if (drag.owner === 'ended') return
+      if (drag.owner === 'program') {
+        // The program stopped taking the mouse (or left the full screen) mid-drag: the drag ends.
+        if (!programScrolls()) { drag.owner = 'ended'; return }
+        if (dx) { el.scrollBy(dx, 0); pause() }
+        if (dy) programMove(dy, x, y)
+        drag.lastX = x
+        drag.lastY = y
+        drag.samples.push({ at: performance.now(), dy })
+        if (drag.samples.length > 20) drag.samples.shift()
+        return
+      }
+      if (dx) { el.scrollBy(dx, 0); pause() }
+      if (dy) scrollVertical(dy)
+      drag.samples.push({ at: performance.now(), dy })
+      if (drag.samples.length > 20) drag.samples.shift()
     }
     const end = (event: TouchEvent) => {
+      // Only a release flings; a cancelled touch (the system took it) stops where it was.
+      if (event.touches.length === 0 && drag?.owner === 'ours' && event.type === 'touchend') startFling(drag.samples)
+      // A program's drag glides on too (the program still decides how far each report scrolls).
+      if (event.touches.length === 0 && drag?.owner === 'program' && event.type === 'touchend') {
+        const at = { x: drag.lastX ?? drag.x, y: drag.lastY ?? drag.y }
+        startFling(drag.samples, (pixels) => { if (!programScrolls()) return false; programMove(pixels, at.x, at.y); return true })
+      }
+      if (event.touches.length === 0) { drag = undefined; if (event.type === 'touchcancel') carry = 0 }
       if (!pinch || event.touches.length >= 2) return
       // The last move may still be waiting for its frame: commit what it asked for.
       const size = pinch.next
@@ -508,16 +693,20 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
       zoomTo(size)
     }
     const wheel = (event: WheelEvent) => {
+      stopFling()
       if (!event.ctrlKey) {
-        // A pane that overflows pans; one that fits leaves the wheel to the terminal.
-        // The pane scrolls itself: left alone, the browser would scroll xterm's
-        // own history viewport under the pointer instead.
-        if (!overflows()) return
+        // Our own (a drag's), on their way to xterm.
+        if (passing.has(event)) return
+        // A program that scrolls itself gets a mostly vertical wheel exactly as xterm reports it (one report per
+        // event, its own trackpad accumulation, Alt kept — as VS Code sends it), once the grid has panned to its
+        // edge. Shift+wheel stays the view's; Ctrl+wheel is zoom, below.
+        if (programScrolls() && !event.shiftKey && Math.abs(event.deltaY) >= Math.abs(event.deltaX) && !panRoom(event.deltaY)) { pause(); return }
+        // Otherwise never xterm's own: no arrow keys, no history it scrolls itself.
         event.preventDefault()
         event.stopPropagation()
-        const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? el.clientHeight : 1
-        el.scrollBy(event.deltaX * unit, event.deltaY * unit)
-        pause()
+        const unit = event.deltaMode === 1 ? rowHeight() : event.deltaMode === 2 ? el.clientHeight : 1
+        if (event.deltaX) { el.scrollBy(event.deltaX * unit, 0); pause() }
+        if (event.deltaY) scrollVertical(event.deltaY * unit)
         return
       }
       event.preventDefault()
@@ -529,24 +718,44 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     }
     const key = (event: KeyboardEvent) => { if (event.target === el && /^(Arrow|Page|Home|End)/.test(event.key)) pause() }
     // Pressing the pane itself (not the terminal) is a scrollbar drag.
-    const press = (event: PointerEvent) => { if (event.target === el) pause() }
+    let pointer = 'mouse'
+    const press = (event: PointerEvent) => {
+      pointer = event.pointerType
+      stopFling()
+      if (event.target === el) pause()
+    }
+    const hover = (event: PointerEvent) => { pointer = event.pointerType }
+    // The mouse events a browser makes from a tap reach a mouse-reporting
+    // program as clicks: they stop here (a tap still focuses the terminal).
+    const touchMouse = (event: MouseEvent) => {
+      const term = terminal.current
+      if (pointer !== 'touch' || !term || term.modes.mouseTrackingMode === 'none') return
+      event.stopPropagation()
+      if (event.type === 'mousedown') { event.preventDefault(); term.focus() }
+    }
     el.addEventListener('touchstart', start, { passive: true })
     el.addEventListener('touchmove', move, { passive: false })
     el.addEventListener('touchend', end)
     el.addEventListener('touchcancel', end)
     el.addEventListener('wheel', wheel, { passive: false, capture: true })
     el.addEventListener('keydown', key)
-    el.addEventListener('pointerdown', press)
+    el.addEventListener('pointerdown', press, { capture: true })
+    el.addEventListener('pointermove', hover, { capture: true })
+    for (const type of ['mousedown', 'mousemove', 'mouseup'] as const) el.addEventListener(type, touchMouse, { capture: true })
     return () => {
       cancelAnimationFrame(frame)
+      stopFling()
       clearTimeout(commit)
+      gestureReset.current = () => {}
       el.removeEventListener('touchstart', start)
       el.removeEventListener('touchmove', move)
       el.removeEventListener('touchend', end)
       el.removeEventListener('touchcancel', end)
       el.removeEventListener('wheel', wheel, { capture: true })
       el.removeEventListener('keydown', key)
-      el.removeEventListener('pointerdown', press)
+      el.removeEventListener('pointerdown', press, { capture: true })
+      el.removeEventListener('pointermove', hover, { capture: true })
+      for (const type of ['mousedown', 'mousemove', 'mouseup'] as const) el.removeEventListener(type, touchMouse, { capture: true })
     }
   }, [session.id, attempt])
 
@@ -579,9 +788,28 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     return () => { disposed = true; clearTimeout(timer); observer.disconnect(); replan.current = () => {} }
   }, [session.id, authority, session.sizeEpoch, attempt])
 
+  /** Not wanted: the offer goes (focus to the pane if it was on the offer), unless a newer one replaced it. */
+  function dismissOffer(rev: number) {
+    if (offerPanel.current?.contains(document.activeElement)) pane.current?.focus({ preventScroll: true })
+    setOffer((current) => current?.rev === rev ? undefined : current)
+  }
+  /** The offer was copied: its check shows for a moment (the kit's acknowledgement), then it goes — unless a newer one replaced it. */
+  function offerCopied(rev: number) {
+    setTimeout(() => {
+      if (offerRev.current !== rev) return
+      // A keyboard user's focus was on the button: give it to the terminal output, not the page.
+      if (offerPanel.current?.contains(document.activeElement)) pane.current?.focus({ preventScroll: true })
+      setOffer((current) => current?.rev === rev ? undefined : current)
+    }, OFFER_DONE_MS)
+  }
   function resumeFollow() {
     callbacks.current.paused = false
     setPaused(false)
+    // Out of the history to the live screen (D10), then to the cursor; a
+    // selection would inhibit following, so the deliberate return clears it.
+    gestureReset.current()
+    terminal.current?.clearSelection()
+    terminal.current?.scrollToBottom()
     // After the browser has applied any layout change (the keyboard opening).
     requestAnimationFrame(followCursor)
   }
@@ -591,11 +819,21 @@ export function TerminalCanvas({ session, writable, captureTab, attempt, offerKe
     </div>
     {/* Top-right, outside the scrolling content: the bottom rows hold the program's input line.
         Pressing a control never takes focus from the terminal (no keyboard flicker). */}
-    {(paused || zoom !== undefined || offerKeyboard) && <div ref={actions} className="terminal-view-actions" onMouseDown={(event) => event.preventDefault()}>
+    {(paused || zoom !== undefined || offerKeyboard || offer !== undefined) && <div ref={actions} className="terminal-view-actions" onMouseDown={(event) => event.preventDefault()}>
       {/* Touch screens with the keyboard down: one tap brings it back (spec D9 item 9). */}
       {offerKeyboard && <Button size="icon-sm" variant="secondary" aria-label="Show keyboard" title="Show keyboard" onClick={() => terminal.current?.focus()}><Keyboard /></Button>}
       {zoom !== undefined && <Button size="icon-sm" variant="secondary" aria-label="Reset view" title="Reset view" onClick={() => zoomTo(undefined)}><ZoomOut /></Button>}
       {paused && <Button size="sm" variant="secondary" aria-label="Follow cursor" title="Follow cursor" onClick={resumeFollow}><ArrowDown />Live</Button>}
+      {/* A program's clipboard offer (OSC 52): written only on this tap, and kept until it is (a refused write leaves it). */}
+      {offer !== undefined && <Panel ref={offerPanel} variant="code" padding="compact" className="terminal-view-offer flex min-w-0 items-center gap-bakin-2">
+        {/* What it is, then its first line with text (the whole text is copied). */}
+        <span className="min-w-0 flex-1">
+          <Text size="meta" tone="muted" className="block">{offerCaption(offer.text)}</Text>
+          <code className="block min-w-0 text-bakin-text-primary">{offerPreview(offer.text)}</code>
+        </span>
+        <CopyButton key={offer.rev} size="touch" text={offer.text} label="Copy offered text" onCopied={() => offerCopied(offer.rev)} />
+        <Button size="icon-sm" variant="ghost" aria-label="Dismiss the offered text" title="Dismiss" onClick={() => dismissOffer(offer.rev)}><X /></Button>
+      </Panel>}
     </div>}
   </div>
 }

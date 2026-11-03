@@ -231,7 +231,8 @@ export async function runSliced<T>(steps: Generator<void, T>, abandon: () => boo
   }
 }
 
-function profileTerminal(cols: number, rows: number): { terminal: Term; links: LinkLifetime } {
+/** A headless terminal with the one terminal profile (spec D13), its effects silent. */
+export function profileTerminal(cols: number, rows: number): { terminal: Term; links: LinkLifetime } {
   const terminal = new headless.Terminal({ cols, rows, ...TERMINAL_OPTIONS })
   const profile = applyTerminalProfile(terminal)
   profile.setLive(false)
@@ -315,7 +316,7 @@ export class Replica implements LogConsumer {
     return this.serial(async () => { if (this.links && this.links.orphans() > 0) await runSliced(this.links.sweepSteps()) })
   }
   /**
-   * The raw path's size revision: moves once per dimension change the
+   * The size revision: moves once per dimension change the
    * replica applied, in order (read it in `read` for one step with the
    * screen). Its own count: the session record's (`adoptSize`) never moves it.
    */

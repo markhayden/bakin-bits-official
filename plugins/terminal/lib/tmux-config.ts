@@ -16,7 +16,7 @@ const BODY = [
     'set -g remain-on-exit on',
     'set -g history-limit 50000',
     // Only Bakin's explicit resize-window sizes a window; attaching clients
-    // (bridge, control, native) never do.
+    // (Bakin's control client, terminal apps) never do.
     'set -g window-size manual',
     'set -g status off',
     'set -g mouse off',

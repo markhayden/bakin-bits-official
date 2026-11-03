@@ -28,7 +28,7 @@ export const MAX_CONTROL_LINE = 4 * 1024 * 1024
 /**
  * A reply that never comes means a wedged connection. Replies correlate by
  * order, so one cannot be skipped: the connection is closed (every waiter
- * fails, the attachment drops) and the next viewer sync reattaches.
+ * fails, the attachment drops) and the next join or read reattaches.
  */
 export const COMMAND_TIMEOUT_MS = 5000
 

@@ -15,8 +15,8 @@ import type { Term } from '../lib/terminal-state'
 import type { Bundle } from '../lib/bundle'
 import { TEST_WIDTH_ENTRIES } from '../lib/unicode-widths'
 
-// Spec D13 / T32c against the managed tmux: the shadow replica beside the
-// bridge. Run with TERMINAL_PROCESS_TEST=1 TERMINAL_TMUX=~/.bakin/bin/tmux.
+// Spec D13 against the managed tmux: the replica, its rebuilds and its
+// recoveries. Run with TERMINAL_PROCESS_TEST=1 TERMINAL_TMUX=~/.bakin/bin/tmux.
 const processTest = process.env.TERMINAL_PROCESS_TEST === '1' ? test : test.skip
 
 const bakinHome = mkdtempSync(join(tmpdir(), 'bakin-terminal-home-'))
@@ -36,7 +36,7 @@ const until = async (check: () => boolean | Promise<boolean>, label: string, ms 
 }
 const percentile = (values: number[], p: number) => [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.floor(values.length * p))]!
 
-async function harness(root: string, options: { raw?: boolean; processes?: ConstructorParameters<typeof TmuxProcesses>[2] } = {}) {
+async function harness(root: string, options: { processes?: ConstructorParameters<typeof TmuxProcesses>[2] } = {}) {
   const service = new TerminalService(root)
   // The generated configuration: no status line, manual window sizes, deep history.
   const config = join(root, 'tmux.conf')
@@ -47,7 +47,7 @@ async function harness(root: string, options: { raw?: boolean; processes?: Const
   const driver = new TmuxProcesses(service, { info: (message, data) => logs.push({ message, data }) }, options.processes)
   const manager = new Sessions(new Store(join(root, 'terminal.db')), driver, {
     settings: () => ({}), prepare: async () => undefined, release: async () => undefined,
-    log: { info: (message, data) => logs.push({ message, data }) }, shadowQuietMs: 300, rawPathForNew: () => options.raw ?? false,
+    log: { info: (message, data) => logs.push({ message, data }) },
   })
   let sequence = 0
   const session = await manager.create({ title: 'Replica', cwd: root }, human, { cols: 100, rows: 30, kind: 'browser', device: 'desktop' })
@@ -63,31 +63,9 @@ async function harness(root: string, options: { raw?: boolean; processes?: Const
   }
 }
 
-processTest('the shadow replica agrees with the bridge at quiet points', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'bakin-replica-'))
-  const h = await harness(root)
-  try {
-    await until(async () => (await h.manager.readScreen(h.session.id, human)).screen.trim().length > 0, 'prompt')
-    await until(() => Boolean(h.driver.replica(h.session.id)?.cut()), 'seeded')
-    // Colours, a wide character, a cursor move, a region, and the alternate screen and back.
-    await h.type(`printf '\\033[31mred\\033[0m wide:\\343\\201\\202 tab:\\there\\n\\033[5;10Hplaced\\n'; seq 1 60\r`)
-    await until(() => (h.manager.shadow.get(h.session.id)?.compared ?? 0) > 0, 'first comparison')
-    await h.type(`printf '\\033[?1049h\\033[2J\\033[Halternate screen\\033[3;5Hmoved'; sleep 1; printf '\\033[?1049l'\r`)
-    await until(() => (h.manager.shadow.get(h.session.id)?.compared ?? 0) > 1, 'alternate comparison')
-    await Bun.sleep(1500)
-    await until(() => (h.manager.shadow.get(h.session.id)?.compared ?? 0) > 2, 'after the alternate screen')
-    const stats = h.manager.shadow.get(h.session.id)!
-    expect({ mismatched: stats.mismatched, last: stats.last }).toEqual({ mismatched: 0, last: undefined })
-    expect(h.logs).toEqual([])
-  } finally {
-    await h.close()
-    rmSync(root, { recursive: true, force: true })
-  }
-}, 40_000)
-
-processTest('raw path: the size revision continues across a reattachment, and the new attachment\'s other size moves it once; each replacement is a recovery', async () => {
+processTest('the size revision continues across a reattachment, and the new attachment\'s other size moves it once; each replacement is a recovery', async () => {
   const root = mkdtempSync(join(tmpdir(), 'bakin-replica-revision-'))
-  const h = await harness(root, { raw: true })
+  const h = await harness(root)
   // Ready once the attachment's replica has its seed (readScreen answers 503 until then).
   const ready = async () => { try { return await h.manager.readScreen(h.session.id, human) } catch { return undefined } }
   try {
@@ -128,8 +106,10 @@ processTest('a flood faster than the replica parses: it rebuilds from tmux inste
     const log = h.driver.outputLog(h.session.id)!
     let worstBacklog = 0
     const watch = setInterval(() => { worstBacklog = Math.max(worstBacklog, log.pendingBytes) }, 2)
+    // When tmux last sent the pane's output.
     let outputAt = 0
-    h.manager.onOutput(h.session.id, () => { outputAt = performance.now() })
+    const output = log.output.bind(log)
+    log.output = (bytes) => { outputAt = performance.now(); output(bytes) }
     await h.type('yes "flood line with some width to it, as programs print"\r')
     // Input every 20 ms for 10 s (yes ignores it). Measured: until tmux acknowledged it
     // (send-keys answered). That is not keystroke-to-render latency (a browser test's).
@@ -148,18 +128,15 @@ processTest('a flood faster than the replica parses: it rebuilds from tmux inste
     await h.type('\x03')
     await until(() => outputAt > 0 && performance.now() - outputAt > 500, 'flood stopped', 10_000)
     const stopped = outputAt - interrupted
-    // Converged: a valid replica again, and the bridge agrees with it at the next quiet point.
+    // Converged: a valid replica again, following the pane.
     await until(() => Boolean(replica.cut()), 'converged', 10_000)
-    const compared = h.manager.shadow.get(h.session.id)?.compared ?? 0
-    const mismatched = h.manager.shadow.get(h.session.id)?.mismatched ?? 0
     await h.type('echo settled\r')
-    await until(() => (h.manager.shadow.get(h.session.id)?.compared ?? 0) > compared, 'post-flood comparison', 10_000)
+    await until(async () => (await h.manager.readScreen(h.session.id, human).catch(() => undefined))?.screen.includes('settled') ?? false, 'post-flood output', 10_000)
     clearInterval(watch)
-    const shadow = h.manager.shadow.get(h.session.id)!
     console.log('flood', {
       inputAcks: all.length, duringHeavyWork: during.length, ackP95: percentile(all, 0.95).toFixed(1),
       heavyP95: during.length ? percentile(during, 0.95).toFixed(1) : '-', stopMs: stopped.toFixed(0),
-      worstBacklog, stats: replica.stats, shadow,
+      worstBacklog, stats: replica.stats,
     })
     expect(replica.ended).toBeUndefined()
     expect(replica.stats.rebuilds.overload).toBeGreaterThan(0)
@@ -169,8 +146,6 @@ processTest('a flood faster than the replica parses: it rebuilds from tmux inste
     expect(percentile(during, 0.95)).toBeLessThan(50)
     expect(percentile(all, 0.95)).toBeLessThan(50)
     expect(stopped).toBeLessThan(1000)
-    // After convergence the bridge and the replica agree (earlier comparisons may not: the bridge redraws while the replica waits).
-    expect(shadow.mismatched).toBe(mismatched)
     expect(h.logs.filter((entry) => entry.message === 'Terminal replica ended')).toEqual([])
     // The overload's pictures were the screen alone; once quiet, a full seed brought the history back.
     await until(() => h.driver.fidelity(h.session.id).history === 'reloaded', 'history restored', 10_000)
@@ -371,8 +346,7 @@ processTest("width changes install tmux's geometry: rapid resizes converge, the 
     const tmuxLines = async (args: string[]) => trimmed((await h.service.command(['capture-pane', '-p', ...args, '-t', h.session.id])).split('\n'))
     expect(await replicaLines('screen')).toEqual(await tmuxLines([]))
     expect(await replicaLines('history')).toEqual(await tmuxLines(['-J', '-S', '-', '-E', '-']))
-    // (Not the shadow comparison: the bridge's own emulator keeps cells from its old width after a resize,
-    // which the bridge path, retired by T38b, never fixed. tmux's captures are the oracle.)
+    // tmux's captures are the oracle.
   } finally {
     await h.close()
     rmSync(root, { recursive: true, force: true })
@@ -427,6 +401,26 @@ processTest('final output (plan T35b): a terminate right after the last output, 
     // No poll: tmux's pane_dead subscription tells the manager, which confirms and saves.
     await until(() => h.manager.get(other.id, human).state === 'exited' && h.manager.get(other.id, human).outputSaved === true, 'exited and saved', 10_000)
     expect(await bundleText((await store.bundle(other.id))!)).toContain('last-before-exit')
+  } finally {
+    await h.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 60_000)
+
+processTest('final output after a restart: a session whose program exited while nothing was attached saves its last screen from the retained pane at setup', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bakin-replica-cold-'))
+  const h = await harness(root)
+  const store = (h.manager as unknown as { store: Store }).store
+  try {
+    await until(() => Boolean(h.driver.replica(h.session.id)?.cut()), 'seeded')
+    // As after a restart: Bakin's client gone, then the program prints and exits unwatched.
+    await h.driver.detach(h.session.id)
+    ;(h.manager as unknown as { attached: Set<string> }).attached.clear()
+    await h.service.command(['send-keys', '-t', h.session.id, "printf '%s-%s\\n' last before-restart; exit", 'Enter'])
+    await until(async () => (await h.service.command(['display-message', '-p', '-t', h.session.id, '#{pane_dead}'])).trim() === '1', 'pane dead')
+    await h.manager.setupService(async () => {})
+    expect(h.manager.get(h.session.id, human)).toMatchObject({ state: 'exited', outputSaved: true })
+    expect(await bundleText((await store.bundle(h.session.id))!)).toContain('last-before-restart')
   } finally {
     await h.close()
     rmSync(root, { recursive: true, force: true })

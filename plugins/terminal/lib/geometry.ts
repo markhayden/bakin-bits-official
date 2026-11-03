@@ -1,5 +1,5 @@
 /**
- * A width change on the raw path (spec D13, plan T34a): tmux reflows its
+ * A width change (spec D13, plan T34a): tmux reflows its
  * history and cursor line and xterm does not, so the picture's geometry is
  * taken from tmux while everything else stays the live terminal's own.
  *

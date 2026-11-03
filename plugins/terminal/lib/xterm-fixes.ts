@@ -1,6 +1,6 @@
 /**
  * Workarounds for bugs in the pinned xterm 6.0.0, applied identically to
- * the browser terminal and the server's headless Screen. Each has a test
+ * the browser terminal and the server's profile terminals. Each has a test
  * that fails once upstream fixes the bug (drop the patch then).
  */
 
@@ -344,7 +344,7 @@ export function patchChunkedPrintClear(terminal: object): void {
 /**
  * xterm 6.0.0 places its input textarea (IME, the software keyboard, focus
  * scrolling) only when the cursor moves after `open()`. A terminal written
- * before it is opened (the raw path's picture, replayed unseen and shown at
+ * before it is opened (a picture, replayed unseen and shown at
  * its barrier) leaves it unplaced until new output moves the cursor: place
  * it once, from the cursor the picture left.
  */

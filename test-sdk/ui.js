@@ -128,6 +128,11 @@ export const SelectTrigger = () => null
 export const SelectValue = () => null
 export const Separator = createElement('hr')
 export const Sheet = createElement('div')
+export const SheetContent = createElement('div')
+export const SheetDescription = createElement('p')
+export const SheetFooter = createElement('div')
+export const SheetHeader = createElement('div')
+export const SheetTitle = createElement('h2')
 export const Skeleton = createElement('div')
 export const Switch = createElement('button')
 export const Table = createElement('table')

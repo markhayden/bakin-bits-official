@@ -7,58 +7,29 @@ import { makeBundle, type Bundle } from '../lib/bundle'
 import { Replica } from '../lib/replica'
 const stores: Store[] = []
 afterEach(() => { for (const store of stores.splice(0)) store.close() })
-test('output rolls at session and global byte limits and reports gaps', () => {
-  const store = new Store(':memory:', 8, 12)
-  stores.push(store)
-  store.append('one', Buffer.from('123456'))
-  store.append('one', Buffer.from('abcdef'))
-  expect(store.output('one', 0).truncated).toBe(true)
-  expect(store.output('one', 0).data.toString()).toBe('abcdef')
-  store.append('two', Buffer.from('ABCDEF'))
-  store.append('three', Buffer.from('uvwxyz'))
-  expect(store.output('one', 0).data.length).toBe(0)
-  expect(store.output('one', 0).truncated).toBe(true)
-  expect(store.bytes()).toBeLessThanOrEqual(12)
-})
-test('deleteSession removes the row, its output, and its cursor', () => {
-  const store = new Store(':memory:')
-  stores.push(store)
-  store.save({ id: 'gone', title: 'Gone', cwd: '/tmp', program: 'shell', owner: { kind: 'human', id: 'h' }, generation: 1, inputSequence: 0, cols: 80, rows: 24, sizeEpoch: 0, sizeRevision: 0, state: 'completed', createdAt: 1, lastActivityAt: 1 })
-  store.append('gone', Buffer.from('output'))
-  store.deleteSession('gone')
-  expect(store.sessions()).toHaveLength(0)
-  expect(store.bytes('gone')).toBe(0)
-  expect(store.output('gone', 0)).toMatchObject({ cursor: 0, truncated: false })
-})
-test('appending at the retention limit costs the same as appending below it (no scans of retained output)', () => {
-  const store = new Store(':memory:')
-  stores.push(store)
-  const chunk = new Uint8Array(400).fill(0x41)
-  const start = performance.now()
-  // 16 MB through a 10 MiB session limit: most appends trim.
-  for (let i = 0; i < 40_000; i++) store.append('busy', chunk)
-  const elapsed = performance.now() - start
-  expect(store.bytes('busy')).toBeLessThanOrEqual(10 * 1024 * 1024)
-  expect(store.bytes('busy')).toBeGreaterThan(10 * 1024 * 1024 - 400)
-  expect(store.bytes()).toBe(store.bytes('busy'))
-  // Measured on the M4: about 0.5 s with running totals; the per-append SUM took 88 s.
-  expect(elapsed).toBeLessThan(5000)
-})
-test('retained totals survive a reopen: they are rebuilt from the output', () => {
-  const path = join(tmpdir(), `bakin-store-${Date.now()}-${Math.random()}.db`)
-  const first = new Store(path, 100, 1000)
-  first.append('a', Buffer.from('x'.repeat(60)))
-  first.append('a', Buffer.from('y'.repeat(60)))
-  first.append('b', Buffer.from('z'.repeat(30)))
-  const kept = first.bytes('a')
-  first.close()
-  const second = new Store(path, 100, 1000)
-  stores.push(second)
-  expect(second.bytes('a')).toBe(kept)
-  expect(second.bytes()).toBe(kept + 30)
-  second.deleteOutput('a')
-  expect(second.bytes()).toBe(30)
-  for (const file of [path, `${path}-wal`, `${path}-shm`]) rmSync(file, { force: true })
+test('opening a database the bridge viewer wrote drops its retained output and rollback marks (plan T38b)', () => {
+  const path = join(tmpdir(), `terminal-legacy-${crypto.randomUUID()}.db`)
+  try {
+    const { Database } = require('bun:sqlite') as typeof import('bun:sqlite')
+    const old = new Database(path)
+    old.exec(`CREATE TABLE output (id INTEGER PRIMARY KEY, session TEXT, cursor INTEGER, data BLOB);
+      CREATE TABLE cursors (session TEXT PRIMARY KEY, value INTEGER);
+      CREATE TABLE sizes (session TEXT PRIMARY KEY, bytes INTEGER);
+      CREATE TABLE session_marks (session TEXT PRIMARY KEY, revision INTEGER);
+      INSERT INTO output VALUES (1, 'a', 1, x'41');`)
+    old.close()
+    new Store(path).close()
+    const reopened = new Database(path)
+    const tables = (reopened.query("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map((row) => row.name)
+    reopened.close()
+    expect(tables).not.toContain('output')
+    expect(tables).not.toContain('cursors')
+    expect(tables).not.toContain('sizes')
+    expect(tables).not.toContain('session_marks')
+    expect(tables).toContain('bundles')
+  } finally {
+    for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true })
+  }
 })
 
 /** A bundle whose checkpoint text is about `chars` long (a picture as big as the test needs). */
@@ -87,14 +58,14 @@ test('bundles (plan T35b): one per session, replaced whole, deleted with its his
   expect(text(await store.bundle('a'))).toContain('second')
   expect(text(await store.bundle('a'))).not.toContain('first')
   expect((await store.bundle('a'))!.cut.tail).toHaveLength(1)
-  store.deleteOutput('a')
+  store.deleteBundle('a')
   expect(await store.bundle('a')).toBeUndefined()
   store.deleteSession('b')
   expect(await store.bundle('b')).toBeUndefined()
   expect(store.bundleBytes()).toBe(0)
 })
 test('bundles fit their own limit: whole ones go, oldest first; one that cannot fit alone is not kept', async () => {
-  const store = new Store(':memory:', 10 * 1024 * 1024, 250 * 1024 * 1024, 300_000)
+  const store = new Store(':memory:', 300_000)
   stores.push(store)
   for (const id of ['old', 'mid', 'new', 'huge']) store.save(sessionRow(id))
   await store.saveBundle('old', await bundle('old', 1, 120_000))
@@ -113,7 +84,7 @@ test('bundles fit their own limit: whole ones go, oldest first; one that cannot 
   expect(text(await store.bundle('new'))).toContain('new')
 })
 test('bundle bytes are what SQLite stores: UTF-8 text and every part\'s metadata', async () => {
-  const store = new Store(':memory:', 10 * 1024 * 1024, 250 * 1024 * 1024, 25_000)
+  const store = new Store(':memory:', 25_000)
   stores.push(store)
   store.save(sessionRow('wide'))
   // 10,000 three-byte characters: 30 kB stored, though only 10,000 JavaScript characters.
@@ -128,7 +99,7 @@ test('a bundle replaced or deleted while it is read is never returned incomplete
   await store.saveBundle('moving', await bundle('moving', 1, 8 * 1024 * 1024))
   const reading = store.bundle('moving')
   // At the read's first yield, the history is deleted.
-  store.deleteOutput('moving')
+  store.deleteBundle('moving')
   expect(await reading).toBeUndefined()
   const again = await bundle('again', 2, 8 * 1024 * 1024)
   const third = await bundle('third', 3, 9 * 1024 * 1024)
@@ -171,28 +142,23 @@ test('a large bundle is written and read in slices: the event loop is never held
   // 50 ms tells the two apart on a slow or coverage-instrumented CI runner too.
   expect(worst).toBeLessThan(50)
 })
-test('on open: a rollback\'s deletions are reconciled and an interrupted write is dropped', async () => {
+test('on open: an interrupted write is dropped', async () => {
   const path = join(tmpdir(), `terminal-bundles-${crypto.randomUUID()}.db`)
   try {
     const first = new Store(path)
-    for (const id of ['kept', 'gone', 'erased']) { first.save(sessionRow(id, { outputSaved: false })); await first.saveBundle(id, await bundle(id)) }
+    first.save(sessionRow('kept', { outputSaved: false }))
+    await first.saveBundle('kept', await bundle('kept'))
     first.close()
     const { Database } = require('bun:sqlite') as typeof import('bun:sqlite')
     const old = new Database(path)
-    // What a rolled-back version does: it removes the session row and the history, never the bundle.
-    old.query('DELETE FROM sessions WHERE id=?').run('gone')
-    old.query('UPDATE sessions SET value=? WHERE id=?').run(JSON.stringify({ ...(sessionRow('erased') as object), historyDeleted: true }), 'erased')
     // A write that never committed: parts of a generation no bundle names.
     old.query("INSERT INTO bundle_parts VALUES ('kept', 99, 0, 'piece', NULL, 'orphan')").run()
     old.close()
     const reopened = new Store(path)
     stores.push(reopened)
     expect(text(await reopened.bundle('kept'))).toContain('kept')
-    expect(await reopened.bundle('gone')).toBeUndefined()
-    expect(await reopened.bundle('erased')).toBeUndefined()
     const leftover = new Database(path)
     expect(leftover.query("SELECT COUNT(*) AS n FROM bundle_parts WHERE generation=99").get()).toEqual({ n: 0 })
-    expect(leftover.query("SELECT COUNT(*) AS n FROM bundle_parts WHERE session IN ('gone','erased')").get()).toEqual({ n: 0 })
     leftover.close()
     expect(reopened.session('kept')?.outputSaved).toBe(true)
   } finally {
@@ -225,7 +191,7 @@ test('a generation is never used twice, even across deletion: a reader across a 
   const fresh = await bundle('new', 2, 8 * 1024 * 1024)
   await store.saveBundle('reused', await bundle('old', 1, 8 * 1024 * 1024))
   const reading = store.bundle('reused')
-  store.deleteOutput('reused')
+  store.deleteBundle('reused')
   await store.saveBundle('reused', fresh)
   const read = await reading
   // Whole: none, or the new one read again; never a mix of the two.
@@ -265,22 +231,6 @@ test('a stored bundle damaged on disk reads as none (an output event that lost i
     const reopened = new Store(path)
     stores.push(reopened)
     expect(await reopened.bundle('damaged')).toBeUndefined()
-  } finally {
-    for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true })
-  }
-})
-test('recording a failed save is one write with its mark: interrupted, the session still says not saved after a reopen', async () => {
-  const path = join(tmpdir(), `terminal-bundles-${crypto.randomUUID()}.db`)
-  try {
-    const first = new Store(path)
-    first.save(sessionRow('failing', { outputSaved: false }))
-    // The mark fails after the flag was written: the transaction must take the flag back with it.
-    ;(first as unknown as { mark: () => void }).mark = () => { throw new Error('interrupted') }
-    expect(() => first.markOutput('failing', false)).toThrow('interrupted')
-    first.close()
-    const reopened = new Store(path)
-    stores.push(reopened)
-    expect(reopened.session('failing')?.outputSaved).toBe(false)
   } finally {
     for (const suffix of ['', '-wal', '-shm']) rmSync(path + suffix, { force: true })
   }

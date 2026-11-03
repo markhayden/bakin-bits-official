@@ -137,7 +137,8 @@ test("the compose sheet shows the page's draft, reports every edit, and sends th
   const view = render(<Page />)
   const textarea = view.getByRole('textbox', { name: 'Text to send' }) as HTMLTextAreaElement
   expect(textarea.value).toBe('echo one')
-  fireEvent.change(textarea, { target: { value: 'echo one\necho two' } })
+  // As typing does: the value set, then an input event (React's own path for a textarea's onChange).
+  fireEvent.input(textarea, { target: { value: 'echo one\necho two' } })
   const mousedown = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
   view.getByRole('button', { name: 'Paste + Enter' }).dispatchEvent(mousedown)
   expect(mousedown.defaultPrevented).toBe(true)
