@@ -762,6 +762,69 @@ declare module '@makinbakin/sdk/types' {
     autoFix?: boolean
   }
 
+  // Repair actions (bakin explicit repair protocol): plan → canonical items → apply inside an operation.
+  export interface HealthRepairEffects {
+    deletesUserContent: boolean
+    spendsMoney: boolean
+    widensAuthorization: boolean
+    restartsService?: 'search-engine' | 'bakin' | 'runtime'
+    resolves?: string[]
+  }
+  export type HealthRepairMutation = 'upgrade' | 'sync' | 'reinstall' | 'restart' | 'rebuild' | 'delete' | 'policy' | 'none'
+  export interface HealthRepairChange {
+    kind: 'file' | 'setting' | 'service' | 'runtime' | 'task' | 'other'
+    target: string
+    action: 'create' | 'update' | 'delete' | 'install' | 'invoke'
+    description: string
+  }
+  export type HealthRepairTarget =
+    | { type: 'incidents' | 'observations'; reportId: string; ids: [string, ...string[]] }
+    | { type: 'all_actionable'; reportId: string }
+  export interface HealthRepairPlanItemInput {
+    id: string
+    actionId: string
+    title: string
+    reason: string
+    effects?: HealthRepairEffects
+    incidentIds: string[]
+    observationIds: string[]
+    preconditions: unknown[]
+    changes: HealthRepairChange[]
+  }
+  export interface HealthRepairPlanItem extends Omit<HealthRepairPlanItemInput, 'effects'> {
+    localId: string
+    effects: HealthRepairEffects
+    mode: 'self-heal' | 'one-click'
+  }
+  export interface HealthRepairApplyResult {
+    itemId: string
+    actionId: string
+    status: 'applied' | 'skipped' | 'failed'
+    message: string
+    affectedCheckIds: string[]
+    changes: HealthRepairChange[]
+  }
+  export interface OperationPlan {
+    stages: Array<{ id: string; kind: string; label: string }>
+    pointOfNoReturn?: string
+  }
+  /** The operation context a repair reports through (stage order follows its plan). */
+  export interface RepairOperationContext {
+    stage(id: string): void
+    skip(id: string, reason: string): void
+    item(stage: string, item: { id: string; label: string; status: string }): void
+  }
+  export interface HealthRepairActionDefinition {
+    id: string
+    name: string
+    effects: HealthRepairEffects
+    mutation: HealthRepairMutation
+    plan(target: HealthRepairTarget): Promise<HealthRepairPlanItemInput[]>
+    operationPlan(items: HealthRepairPlanItem[]): OperationPlan
+    resources?: string[]
+    apply(items: HealthRepairPlanItem[], op: RepairOperationContext): Promise<HealthRepairApplyResult[]>
+  }
+
   export type FormFieldType = 'string' | 'text' | 'number' | 'boolean' | 'select' | 'agent' | 'agent-toggles' | 'skill' | 'list'
   export interface PluginSettingsSchema {
     fields: Array<Record<string, unknown> & { type: FormFieldType; key: string; label: string }>
@@ -952,6 +1015,8 @@ declare module '@makinbakin/sdk/types' {
     registerNodeType<T = unknown>(def: PluginNodeTypeInput<T>): string
     registerNotificationChannel(def: PluginNotificationChannelInput): string
     registerHealthCheck(def: PluginHealthCheckInput): string
+    /** Register an owner-local repair action — BEFORE any check whose incidents name it. */
+    registerHealthRepairAction(def: HealthRepairActionDefinition): string
     watchFiles(patterns: string[]): void
     getSettings<T = Record<string, unknown>>(): T
     updateSettings(patch: Record<string, unknown>): void
@@ -980,6 +1045,25 @@ declare module '@makinbakin/sdk/types' {
     contentFiles?: ContentFile[]
     /** Declarative HTTP routes, registered before activate() (host #642). */
     routes?: APIRoute[]
+    /** Declarative WebSocket routes (bakin #1029), registered like `routes`. */
+    socketRoutes?: SocketRoute[]
+  }
+
+  /** One accepted plugin WebSocket connection (bakin #1029). No host send bound: acknowledge at the protocol level. */
+  export interface PluginSocket {
+    /** `false` once the connection is closed. */
+    send(data: string | Uint8Array): boolean
+    onMessage(listener: (data: string | Uint8Array) => void): void
+    onClose(listener: (code: number, reason: string) => void): void
+    close(code?: number, reason?: string): void
+  }
+  export interface SocketRoute {
+    /** Plugin-relative; served at /api/plugins/{pluginId}{path}. */
+    path: string
+    summary: string
+    /** After the host's same-origin check; return a Response to refuse the upgrade. */
+    admit?(request: Request): Response | void | Promise<Response | void>
+    open(socket: PluginSocket, request: Request): void | Promise<void>
   }
 }
 
@@ -1005,6 +1089,8 @@ declare module '@makinbakin/sdk' {
   export function defineRoute<R extends import('@makinbakin/sdk/types').APIRoute>(route: R): R
   /** Plugin author helper preserving per-route inference — identity at runtime. */
   export function definePlugin<P extends import('@makinbakin/sdk/types').BakinPlugin>(plugin: P): P
+  /** Declare a plugin WebSocket route (bakin #1029) — identity at runtime. */
+  export function defineSocketRoute(route: import('@makinbakin/sdk/types').SocketRoute): import('@makinbakin/sdk/types').SocketRoute
   export function unregisterPlugin(id: string): void
   export function getAllNavItems(): NavItem[]
   /** Set or clear a runtime badge on a plugin-owned nav item (bakin #265). */
@@ -1087,6 +1173,11 @@ declare module '@makinbakin/sdk/ui' {
   export const SelectValue: UIComponent
   export const Separator: UIComponent
   export const Sheet: UIComponent
+  export const SheetContent: UIComponent
+  export const SheetHeader: UIComponent
+  export const SheetTitle: UIComponent
+  export const SheetDescription: UIComponent
+  export const SheetFooter: UIComponent
   export const Skeleton: UIComponent
   export const Switch: UIComponent
   export const Table: UIComponent
@@ -1103,6 +1194,8 @@ declare module '@makinbakin/sdk/ui' {
   export const Tooltip: UIComponent
   export const SubmitButton: UIComponent
   export const SystemState: UIComponent
+  /** Persistent surface-level context (storybook/public/feedback/banner.stories.tsx). */
+  export const Banner: ComponentType<{ tone?: 'info' | 'success' | 'attention' | 'danger'; title?: ReactNode; description?: ReactNode; action?: ReactNode; announce?: 'off' | 'polite' | 'assertive'; headingLevel?: 2 | 3 | 4; className?: string }>
   export function buttonVariants(options?: Record<string, unknown>): string
   // ── Pass-four conformance additions ───────────────────────────────────
   export type TextSize = 'body' | 'meta'
@@ -1238,6 +1331,8 @@ declare module '@makinbakin/sdk/patterns' {
   export const AgentFilter: PatternComponent
   export const FacetFilter: PatternComponent
   export const SegmentedControl: PatternComponent
+  /** The one copy affordance (CLI commands, ids, paths). */
+  export const CopyButton: ComponentType<{ text: string; label?: string; className?: string; size?: 'default' | 'touch'; onCopied?: () => void }>
   export const WorkspacePage: PatternComponent
   export const WorkspacePageBody: PatternComponent
   export const WorkspacePageHeader: PatternComponent
@@ -1801,6 +1896,17 @@ declare module '@makinbakin/sdk/conversation' {
     className?: string
   }>
   export const Composer: ComponentType<Record<string, unknown>>
+  export type ComposerAttachmentStatus = 'uploading' | 'ready' | 'error'
+  export interface ComposerAttachmentItem { id: string; name: string; previewUrl?: string; status?: ComposerAttachmentStatus; errorMessage?: string }
+  export interface ComposerAttachmentTrayProps {
+    items: readonly ComposerAttachmentItem[]
+    disabled?: boolean
+    onRemove: (id: string) => void
+    itemAction?: (item: ComposerAttachmentItem) => ReactNode
+    className?: string
+  }
+  /** A draft's attachment thumbnails, as Composer shows them. */
+  export const ComposerAttachmentTray: ComponentType<ComposerAttachmentTrayProps>
   /** Seed a composer's persisted draft for a storage key. */
   export function writeComposerDraft(storageKey: string, value: string): void
   export const ThinkingIndicator: ComponentType<{ label?: string }>
@@ -1822,6 +1928,16 @@ declare module '@makinbakin/sdk/content' {
     renderInternalLink?: (props: MarkdownInternalLinkProps) => ReactNode
   }
   export const MarkdownContent: ComponentType<MarkdownContentProps>
+  export interface CodeBlockProps {
+    code: string
+    language?: 'json' | 'text' | string
+    label?: string
+    copyable?: boolean
+    onCopied?: () => void
+    wrap?: boolean
+    className?: string
+  }
+  export const CodeBlock: ComponentType<CodeBlockProps>
 
   export type MarkdownEditorFormat = 'markdown' | 'yaml' | 'json' | 'text'
   export type MarkdownEditorHeight = 'compact' | 'document' | 'viewport' | 'fill'
@@ -1911,9 +2027,13 @@ declare module '@makinbakin/sdk/hooks' {
   export function useAgentIds(): string[]
   export function useMainAgentId(): string | null
   export function useDebug(): [boolean]
+  export interface FullscreenControls { active: boolean; browser: boolean; enter(): void; exit(): void; toggle(): void }
+  export function useFullscreen(): FullscreenControls
   export function useNotificationChannels(): NotificationChannel[]
   export function getChannelLabel(channelId: string, channels?: NotificationChannel[]): string
-  export function toast(message: string, type?: 'success' | 'error' | 'info' | 'warning'): void
+  export function toast(message: import('react').ReactNode, type?: 'success' | 'error' | 'info' | 'warning', duration?: number): string
+  /** An OS notification when the operator enabled them and no Bakin tab has focus (a click opens `url`). */
+  export function sendBrowserNotification(title: string, body: string, url?: string): void
 
   export type PluginEventPayload = Record<string, unknown> & { event?: string }
   export function emitPluginEvent(payload: PluginEventPayload): void

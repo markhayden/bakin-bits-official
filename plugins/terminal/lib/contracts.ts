@@ -4,13 +4,29 @@ export const createSchema = z.object({
   title: z.string().trim().min(1).max(100),
   cwd: z.string().min(1).max(4096),
   program: z.enum(['shell', 'claude', 'codex']).default('shell'),
-  checkout: z.enum(['isolated', 'existing']).default('isolated'),
+  /** Default: an isolated worktree for coding programs, the existing checkout for a shell. */
+  checkout: z.enum(['isolated', 'existing']).optional(),
   agentId: z.string().min(1).max(100).optional(),
   taskId: z.string().min(1).max(100).optional(),
   projectId: z.string().min(1).max(100).optional(),
 })
 export type CreateInput = z.infer<typeof createSchema>
 export type Principal = { kind: 'human'; id: string } | { kind: 'agent'; id: string }
+/** What kind of screen claims the size: it names the authority in the header ("Sized by phone"). */
+/** What a coding program says about its turn (lib/attention.ts sets it from the program's hooks). */
+export type AttentionState = 'needs-you' | 'turn-finished' | 'working'
+/**
+ * The browser event a session's attention or bell changed under (only its id:
+ * every screen re-reads `GET /attention`, so one missed while disconnected is
+ * caught up by the next read).
+ */
+export const ATTENTION_EVENT = 'terminal.attention'
+export type AttentionEvent = { sessionId: string }
+/** `GET /attention`: what the badge and the announcements are worked out from. */
+export type AttentionSummary = Pick<Session, 'id' | 'title' | 'program' | 'state' | 'attention' | 'bellAt'>
+export const screenDevice = z.enum(['desktop', 'phone'])
+export type SizeClaimant = { kind: 'browser'; device: z.infer<typeof screenDevice> } | { kind: 'native' }
+export type SizeAuthority = { viewer: string } & SizeClaimant
 export interface Session {
   revision?: number
   id: string
@@ -25,16 +41,47 @@ export interface Session {
   inputSequence: number
   cols: number
   rows: number
+  /** The viewer that sizes the grid (spec D2); absent until someone claims. */
+  sizeAuthority?: SizeAuthority
+  /** The grid and authority before the last handoff: "go back" restores them (spec D10). */
+  previousSize?: { cols: number; rows: number; authority: SizeAuthority }
+  /** Bumped by every claim; a resize must carry the current epoch. */
+  sizeEpoch: number
+  /** Bumped by every actual dimension change; agents re-read after it moves. */
+  sizeRevision: number
   state: 'running' | 'exited' | 'completed'
+  /**
+   * What the coding program says about its turn (its hooks; lib/attention.ts),
+   * since when. Absent when unknown. `occurrence` names this state (an
+   * acknowledgement names the one it saw); `acknowledgedAt`: the operator saw
+   * it (it stops counting for the badge); a new state is unacknowledged.
+   */
+  attention?: { state: AttentionState; since: number; occurrence: number; acknowledgedAt?: number }
+  /** The last attention occurrence numbered: each new state takes the next (strictly increasing, kept across clears). */
+  attentionSeq?: number
+  /** The last bell recorded, at most one per session every BELL_INTERVAL_MS. */
+  bellAt?: number
+  /** tmux's bell count last seen (`@bakin_bell`, empty before any): a different count is a bell, even one rung while Bakin was not attached. */
+  bellCount?: string
   createdAt: number
   lastActivityAt: number
   completedAt?: number
   worktreePath?: string
   cleanupReason?: string
   historyDeleted?: boolean
+  /**
+   * Its final picture (plan T35b): false from the session's start until its
+   * bundle is saved, true after. Absent on sessions ended before bundles
+   * existed, which have no saved picture.
+   */
+  outputSaved?: boolean
+  /** Its saved bundle was removed to keep every bundle within the store's limit (oldest first). */
+  outputEvicted?: boolean
 }
 export interface TerminalSettings {
   enabledAgents?: Array<{ id: string }>
+  /** Grid for sessions nobody's screen sized yet (agents, CLI without a TTY size). */
+  defaultSize?: { cols: number; rows: number }
   maxSessions?: number
   maxWorktrees?: number
   idleDays?: number
@@ -48,16 +95,30 @@ export function terminalSettings(raw: Record<string, unknown>): TerminalSettings
   const enabledAgents = Array.isArray(stored)
     ? stored.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 100).map((id) => ({ id }))
     : [{ id: 'main' }]
+  const within = (value: unknown, fallback: number, min: number, max: number) => Number.isInteger(value) && (value as number) >= min && (value as number) <= max ? (value as number) : fallback
   return {
     enabledAgents,
+    defaultSize: { cols: within(raw.defaultCols, 200, 40, 400), rows: within(raw.defaultRows, 60, 10, 150) },
     maxSessions: bounded(raw.maxSessions, 10, 100),
     maxWorktrees: bounded(raw.maxWorktrees, 10, 100),
     idleDays: bounded(raw.idleDays, 30, 365),
   }
 }
+/** The eight characters after `terminal-`: enough to tell sessions apart, short enough to type. */
+export function shortId(session: Pick<Session, 'id'>): string {
+  return session.id.replace(/^terminal-/, '').slice(0, 8)
+}
+/** Continue a session in a terminal app (spec D6): the full id, so it never becomes ambiguous. */
+export function attachCommand(session: Pick<Session, 'id'>): string {
+  return `bakin terminal attach ${session.id} --as human`
+}
 export const DAY = 86_400_000
 export class TerminalError extends Error {
   constructor(message: string, readonly status = 409) { super(message) }
+}
+/** Input whose sequence was consumed but whose delivery failed: never retry it. */
+export class DeliveryUncertainError extends TerminalError {
+  constructor(message: string) { super(`${message}; the input may have been delivered — do not retry it`, 503) }
 }
 
 export function authorize(session: Session, principal: Principal, enabled: string[], write = false, generation?: number): void {

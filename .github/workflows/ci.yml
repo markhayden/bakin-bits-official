@@ -12,14 +12,12 @@ concurrency:
 
 env:
   # The ONE compatible Bakin SDK source both jobs build and verify against.
-  # Projects revamp: Bakin P1 (structured questions, the conversation-width
-  # PageAside rail; #1031) plus the kit a11y fixes (#1032 — empty-state
-  # headingLevel, aria-hidden composer file input), and #1034, whose
-  # styles.css/census are regenerated against this repo's Projects revamp
-  # (so the stylesheet-identity checks match). Includes the zod
-  # externalization contract (#948). Pin a reviewed commit, never a moving
-  # branch.
-  BAKIN_SDK_REF: 7cac03d9e7e2c7df3211d842a432e1b1b3b7d141
+  # Terminal multi-device (bakin #1028/#1029 + H3): the reviewed bakin stack
+  # tip, which carries main (the Projects revamp SDK pins #1034/#1038) plus
+  # plugin socket routes, interactive CLI launch, useFullscreen and the
+  # canonical stylesheet for this stack; repinned to the release commit before
+  # this stack merges. Pin a reviewed commit, never a moving branch.
+  BAKIN_SDK_REF: fd65b5cd53ca70afab04d8fd2a960201d6aa9b18
 
 jobs:
   check:
@@ -98,7 +96,10 @@ jobs:
       # compile check; artifacts are produced + published by publish.yml on a
       # `<id>-v<semver>` tag, not committed to the repo.
 
+      # The checkpoint fuzz runs in the fuzz job's shards.
       - name: Tests with coverage
+        env:
+          FUZZ_SHARD: skip
         run: bun run test:coverage
 
       - name: Upload coverage to Codecov
@@ -107,6 +108,36 @@ jobs:
           files: ./coverage/lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+  # Terminal checkpoint fuzz (plan T32b): the full seed x size matrix, split
+  # into parallel shards so each stays well inside its budget.
+  fuzz:
+    name: Terminal checkpoint fuzz ${{ matrix.shard }}/4
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Fuzz shard
+        env:
+          FUZZ_SHARD: ${{ matrix.shard }}/4
+        run: bun test plugins/terminal/tests/checkpoint-fuzz.test.ts --isolate --preload ./test/setup-dom.ts
 
   ui:
     name: Official plugin UI conformance

@@ -90,7 +90,8 @@ export const Input = createElement('input')
 export const InputGroup = createElement('div')
 export const Label = createElement('label')
 export const Popover = createElement('div')
-export const PopoverTrigger = createElement('button')
+// Like the kit's Base UI trigger: `render` is the element that becomes the trigger.
+export const PopoverTrigger = ({ render, children, ...props }) => render ? React.cloneElement(render, props, children) : React.createElement('button', props, children)
 export const PopoverContent = createElement('div')
 export const PopoverTitle = createElement('h2')
 export const Progress = createElement('progress')
@@ -127,6 +128,11 @@ export const SelectTrigger = () => null
 export const SelectValue = () => null
 export const Separator = createElement('hr')
 export const Sheet = createElement('div')
+export const SheetContent = createElement('div')
+export const SheetDescription = createElement('p')
+export const SheetFooter = createElement('div')
+export const SheetHeader = createElement('div')
+export const SheetTitle = createElement('h2')
 export const Skeleton = createElement('div')
 export const Switch = createElement('button')
 export const Table = createElement('table')
@@ -195,6 +201,18 @@ export function SystemState({ action, description, title, headingLevel = 2, prev
     React.createElement(`h${headingLevel}`, null, title),
     description ? React.createElement('p', null, description) : null,
     preview ? React.createElement('div', { 'aria-hidden': 'true' }, preview) : null,
+    action,
+  )
+}
+
+// The kit Banner's shape: a section with a heading, its description and action; live only when announced.
+export function Banner({ action, description, title, tone = 'info', headingLevel = 2, announce = 'off', ...props }) {
+  const live = announce === 'off' ? {} : { role: announce === 'assertive' ? 'alert' : 'status', 'aria-live': announce }
+  return React.createElement(
+    'section',
+    { ...props, ...live, 'data-slot': 'banner', 'data-tone': tone },
+    React.createElement(`h${headingLevel}`, { 'data-slot': 'banner-title' }, title),
+    description ? React.createElement('p', null, description) : null,
     action,
   )
 }

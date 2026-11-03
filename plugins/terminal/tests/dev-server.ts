@@ -1,24 +1,41 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { listDirectories, recentDirectories } from '../lib/directories'
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { heapStats } from 'bun:jsc'
 import { transformPluginCss } from '@makinbakin/sdk/testing/ui/conformance'
 import { TerminalService, terminalEnvironment } from '../lib/service'
+import { tmuxConfig } from '../lib/tmux-config'
 import { TmuxProcesses } from '../lib/processes'
 import { Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
-import { command, failure, human, stream } from '../lib/http'
+import type { PluginSocket } from '@makinbakin/sdk/types'
+import { command, creatingScreen, failure, human, uploadImage } from '../lib/http'
+import { Uploads } from '../lib/uploads'
+import { TerminalViewer, viewersRetainedSteps } from '../lib/socket'
+import { drain } from '../lib/terminal-state'
+import { attachBody, confirmBody, launch, operator, resolveRef } from '../lib/cli'
+import { ATTENTION_EVENT, attentionSummary } from '../lib/attention'
 
 const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-preview-'))
+// Terminal runs only the managed tmux: give the disposable home one
+// (TERMINAL_TMUX, else the tmux on PATH) and the generated configuration.
+const managed = process.env.TERMINAL_TMUX ?? Bun.which('tmux')
+if (!managed) throw new Error('tmux is required for the local Terminal preview (set TERMINAL_TMUX)')
+process.env.BAKIN_HOME = join(root, 'home')
+mkdirSync(join(root, 'home', 'bin'), { recursive: true })
+symlinkSync(managed, join(root, 'home', 'bin', 'tmux'))
 const service = new TerminalService(root)
-if (!service.tmux) throw new Error('tmux is required for the local Terminal preview')
-const tmux = Bun.spawn([service.tmux, '-D', '-S', service.socket, '-f', '/dev/null'], { env: terminalEnvironment(), stdout: 'ignore', stderr: 'ignore' })
+writeFileSync(join(root, 'tmux.conf'), tmuxConfig())
+const tmux = Bun.spawn([service.tmux!, '-D', '-S', service.socket, '-f', join(root, 'tmux.conf')], { env: terminalEnvironment(), stdout: 'ignore', stderr: 'ignore' })
 for (let i = 0; i < 40 && !await service.ready(); i++) await Bun.sleep(50)
 if (!await service.ready()) { tmux.kill(); await tmux.exited; throw new Error('Preview tmux service failed to start') }
-await service.command(['set-option', '-g', 'exit-empty', 'off'])
-await service.command(['set-option', '-g', 'remain-on-exit', 'on'])
-await service.command(['set-option', '-g', 'status', 'off'])
-await service.command(['set-option', '-g', 'prefix', 'None'])
-const manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProcesses(service), {
+// The host's event stream for plugin events (`/__events`): attention announcements, as ctx.events relays them.
+const listeners = new Set<ReadableStreamDefaultController<string>>()
+const store = new Store(join(root, 'terminal.db'))
+const manager = new Sessions(store, new TmuxProcesses(service), {
+  uploads: new Uploads(root, store),
+  announce: (event) => { for (const listener of listeners) listener.enqueue(`data: ${JSON.stringify({ event: ATTENTION_EVENT, ...event })}\n\n`) },
   settings: () => ({ enabledAgents: [{ id: 'patch' }] }),
   prepare: async () => ({ ok: false, error: 'Preview has no Git plugin. Use an existing checkout.' }),
   release: async () => ({ ok: false }),
@@ -35,24 +52,83 @@ if (!built.success) throw new Error(built.logs.join('\n'))
 const css = transformPluginCss({ pluginId: 'terminal', css: readFileSync(join(root, 'preview.css'), 'utf8'), from: 'preview.css' }).css
 writeFileSync(join(root, 'preview.css'), css)
 const sdkCss = readFileSync(Bun.resolveSync('@makinbakin/sdk/styles.css', import.meta.dir), 'utf8')
-const server = Bun.serve({
+type ViewerData = { id: string; message: Array<(data: string | Uint8Array) => void>; close: Array<(code: number, reason: string) => void> }
+const server = Bun.serve<ViewerData>({
   hostname: '127.0.0.1', port: Number(process.env.TERMINAL_PREVIEW_PORT ?? 0),
   idleTimeout: 0,
-  async fetch(request) {
+  // The host serves plugin socket routes (bakin #1029); the preview adapts
+  // Bun's native WebSocket to the same PluginSocket the viewer expects.
+  websocket: {
+    open(ws) {
+      const socket: PluginSocket = {
+        send: (data) => { if (ws.readyState !== 1) return false; ws.send(data); return true },
+        onMessage: (listener) => { ws.data.message.push(listener) },
+        onClose: (listener) => { ws.data.close.push(listener) },
+        close: (code, reason) => { ws.close(code, reason) },
+      }
+      new TerminalViewer(manager, socket, ws.data.id)
+    },
+    message(ws, data) { for (const listener of ws.data.message) listener(typeof data === 'string' ? data : new Uint8Array(data)) },
+    close(ws, code, reason) { for (const listener of ws.data.close) listener(code, reason) },
+  },
+  async fetch(request, preview) {
     const url = new URL(request.url)
+    if (url.pathname === '/api/plugins/terminal/socket') {
+      // The same cross-site guard the host applies before any plugin socket.
+      const origin = request.headers.get('origin')
+      if (!origin || new URL(origin).host !== url.host) return new Response('Cross-origin socket refused', { status: 403 })
+      const id = url.searchParams.get('id') ?? ''
+      if (preview.upgrade(request, { data: { id, message: [], close: [] } })) return undefined
+      return new Response('Upgrade required', { status: 426 })
+    }
     try {
+      // The preview's memory for the bounded-load gate: the heap after a collection, and resident memory.
+      if (url.pathname === '/__events') {
+        let mine: ReadableStreamDefaultController<string> | undefined
+        const stream = new ReadableStream<string>({ start(controller) { mine = controller; listeners.add(controller); controller.enqueue(': open\n\n') }, cancel() { if (mine) listeners.delete(mine) } })
+        return new Response(stream, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } })
+      }
+      if (url.pathname === '/__memory') {
+        Bun.gc(true)
+        return Response.json({ heap: heapStats().heapSize, rss: process.memoryUsage.rss(), estimate: { sessions: drain(manager.retainedSteps()), viewers: drain(viewersRetainedSteps()) } })
+      }
       if (url.pathname === '/api/plugins/projects/') return Response.json({ projects: [{ id: 'project-1', title: 'Bakin' }] })
+      // The CLI's launch routes (the terminal app side of a handoff), as the plugin serves them.
+      if (url.pathname === '/api/plugins/terminal/cli/attach') {
+        const principal = operator(request)
+        const { params } = attachBody.parse(await request.json())
+        return Response.json(await launch(manager, resolveRef(manager.list(principal), params.ref).id, principal))
+      }
+      if (url.pathname === '/api/plugins/terminal/cli/confirm') {
+        operator(request)
+        const { token, pid } = confirmBody.parse(await request.json())
+        await manager.confirmAttach(token, pid)
+        return Response.json({ admitted: true })
+      }
       if (url.pathname.startsWith('/api/plugins/terminal/')) {
         const principal = human(request)
         const path = url.pathname.slice('/api/plugins/terminal'.length)
         if (path === '/options') return Response.json({ agents: [{ id: 'patch', name: 'Patch', enabled: true, workspace: '/tmp' }, { id: 'chef', name: 'Chef', enabled: false }], tasks: [{ id: 'task-1', title: 'Terminal development', agentId: 'patch', projectId: 'project-1' }], defaults: { cwd: process.cwd(), agentId: 'patch' } })
+        if (path === '/directories') {
+          const listing = await listDirectories(url.searchParams.get('path') ?? undefined, { hidden: url.searchParams.get('hidden') === '1', filter: url.searchParams.get('filter') ?? undefined })
+          return Response.json({ ...listing, recent: recentDirectories(manager.list(principal)) })
+        }
         if (path === '/sessions' && request.method === 'GET') {
           await manager.refreshStates()
-          return Response.json({ sessions: manager.list(principal), serviceReady: true })
+          return Response.json({ sessions: manager.list(principal).map((session) => ({ ...session, nativeClients: manager.nativeClients(session.id).length, activity: manager.activity(session) })), serviceReady: true })
         }
-        if (path === '/sessions' && request.method === 'POST') return Response.json(await manager.create(await request.json(), principal))
-        if (path === '/session' && request.method === 'POST') return Response.json(await command(manager, await request.json(), principal))
-        if (path === '/stream') return stream(manager, request)
+        if (path === '/upload' && request.method === 'POST') return Response.json(await uploadImage(manager, request, principal))
+        if (path === '/attention') return Response.json({ sessions: manager.list(principal).map(attentionSummary) })
+        if (path === '/sessions' && request.method === 'POST') {
+          const body = await request.json() as Record<string, unknown>
+          return Response.json(await manager.create(body, principal, creatingScreen(body.size)))
+        }
+        if (path === '/session' && request.method === 'POST') {
+          const body = await request.json() as { id?: string; operation?: string }
+          // The plugin saves this into settings; the preview just answers.
+          if (body.operation === 'default-size') { const session = manager.get(body.id ?? '', principal); return Response.json({ defaultSize: { cols: session.cols, rows: session.rows } }) }
+          return Response.json(await command(manager, body, principal))
+        }
         return new Response('Not found', { status: 404 })
       }
       if (url.pathname === '/preview.js' || url.pathname === '/preview.css') return new Response(Bun.file(join(root, url.pathname.slice(1))))
@@ -62,7 +138,7 @@ const server = Bun.serve({
     } catch (error) { return failure(error) }
   },
 })
-console.log(JSON.stringify({ url: `http://127.0.0.1:${server.port}`, workingDirectory: root }))
+console.log(JSON.stringify({ url: `http://127.0.0.1:${server.port}`, workingDirectory: root, tmux: service.tmux, pid: process.pid }))
 let stopping = false
 async function shutdown() {
   if (stopping) return

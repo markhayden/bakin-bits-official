@@ -1,5 +1,66 @@
-[data-bakin-plugin="terminal"] .terminal-xterm .xterm {
+/*
+ * The pane pans natively on both axes (spec D10; never CSS transforms, xterm
+ * #6023). touch-action leaves one-finger panning to the browser and hands
+ * two-finger pinches to the canvas, which turns them into a font size.
+ */
+[data-bakin-plugin="terminal"] .terminal-pane {
+  overflow: auto;
+  /* No rubber-band past the grid's edges (and no chaining to the page). */
+  overscroll-behavior: none;
+  touch-action: pan-x pan-y;
+  /* xterm's layers carry z-indexes; keep them below the view actions. */
+  isolation: isolate;
+}
+/* Phones and tablets without the key bar: a touch more room at the bottom,
+   so the last line clears the screen's rounded corner. */
+@media (pointer: coarse) {
+  [data-bakin-plugin="terminal"] [data-slot="workspace-page-body"]:not(:has(.terminal-key-bar)) .terminal-pane {
+    padding-bottom: var(--bakin-layout-space-8);
+  }
+}
+[data-bakin-plugin="terminal"] .terminal-pane:focus-visible {
+  outline: 2px solid var(--bakin-color-focus-ring);
+  outline-offset: -2px;
+}
+
+/* The sizing screen: the grid is fitted to the pane. */
+[data-bakin-plugin="terminal"] .terminal-pane[data-fit="pane"] .terminal-xterm,
+[data-bakin-plugin="terminal"] .terminal-pane[data-fit="pane"] .terminal-xterm .xterm {
   height: 100%;
+}
+
+/* Every other screen: the real grid at its own size; the pane pans over it. */
+[data-bakin-plugin="terminal"] .terminal-pane[data-fit="width"] .terminal-xterm {
+  width: max-content;
+  height: max-content;
+}
+
+/* The corner view controls sit top-right, over the pane but outside its
+   scrolling content: the bottom rows hold the program's input line. */
+[data-bakin-plugin="terminal"] .terminal-view-actions {
+  position: absolute;
+  top: var(--bakin-layout-space-2);
+  right: var(--bakin-layout-space-2);
+  display: flex;
+  /* Never wider than the pane: on a small phone the offer wraps to its own row below the buttons. */
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: calc(100% - 2 * var(--bakin-layout-space-2));
+  gap: var(--bakin-layout-gap-dense);
+}
+
+/* A program's clipboard offer: its first line, cut to fit the corner (the whole text is copied). */
+[data-bakin-plugin="terminal"] .terminal-view-offer { order: 1; max-width: min(20rem, 100%); }
+[data-bakin-plugin="terminal"] .terminal-view-offer code { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* 32 px to look at, 44 px to hit on touch. */
+@media (pointer: coarse) {
+  [data-bakin-plugin="terminal"] .terminal-view-actions > button { position: relative; }
+  [data-bakin-plugin="terminal"] .terminal-view-actions > button::after {
+    content: "";
+    position: absolute;
+    inset: -6px;
+  }
 }
 
 [data-bakin-plugin="terminal"] .terminal-xterm .xterm-viewport {
@@ -11,10 +72,204 @@
   outline-offset: -2px;
 }
 
-/* Compact input follows the public TerminalInput recipe on phones and tablets. */
-@media (min-width: 48rem) {
-  [data-bakin-plugin="terminal"] .terminal-input-controls { display: none; }
+/* Narrow screens drop who sizes it; phones and narrow screens show the icon
+   alone. The popover (and the trigger's label) carry the rest. */
+@media (max-width: 64rem) {
+  [data-bakin-plugin="terminal"] .terminal-size-detail { display: none; }
 }
-@media (any-pointer: coarse) {
-  [data-bakin-plugin="terminal"] .terminal-input-controls { display: flex; }
+@media (max-width: 48rem), (pointer: coarse) {
+  [data-bakin-plugin="terminal"] .terminal-size-grid,
+  [data-bakin-plugin="terminal"] .terminal-size-detail { display: none; }
+}
+
+/* The phone key bar v2 (spec D9 item 9): iOS-style keycaps in one row above
+   the keyboard, and the ••• sheet below it in the same accessory slot. Caps
+   are filled (no outlines), 40 px tall with a 44 px hit area, glyph faces,
+   built from the kit's colour tokens so light and dark both read as keys. */
+[data-bakin-plugin="terminal"] .terminal-key-accessory {
+  --terminal-keycap: color-mix(in srgb, var(--bakin-color-text-primary) 20%, var(--bakin-color-canvas-default));
+  --terminal-keycap-function: color-mix(in srgb, var(--bakin-color-text-primary) 11%, var(--bakin-color-canvas-default));
+  --terminal-keycap-pressed: color-mix(in srgb, var(--bakin-color-text-primary) 34%, var(--bakin-color-canvas-default));
+  --terminal-keycap-size: 44px;
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--bakin-color-text-primary) 5%, var(--bakin-color-canvas-default));
+  border-top: 1px solid var(--bakin-color-border-subtle);
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+[data-bakin-plugin="terminal"] .terminal-key-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 54px;
+  padding: 0 6px;
+  box-sizing: border-box;
+}
+/* The keys are kit Buttons (focus ring, disabled state); this draws them as keycaps. */
+[data-bakin-plugin="terminal"] .terminal-keycap {
+  position: relative;
+  flex-shrink: 0;
+  width: auto;
+  min-width: var(--terminal-keycap-size);
+  height: 40px;
+  min-height: 0;
+  /* A long label wraps inside its key on a narrow phone. */
+  white-space: normal;
+  padding: 0 10px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--terminal-keycap);
+  color: var(--bakin-color-text-primary);
+  font: 500 17px/1 -apple-system, "SF Pro Text", var(--bakin-typography-family-ui), system-ui, sans-serif;
+  box-shadow: 0 1px 0 color-mix(in srgb, black 40%, transparent);
+  touch-action: manipulation;
+  cursor: pointer;
+}
+/* The hit area reaches halfway into each gap (6 px gaps: 3 px a side), so
+   neighbouring keys' areas meet without overlapping; 40 px caps + 2 px above
+   and below make 44 px tall targets. */
+[data-bakin-plugin="terminal"] .terminal-keycap::after { content: ""; position: absolute; inset: -2px -3px; }
+[data-bakin-plugin="terminal"] .terminal-keycap[data-tone="function"] { background: var(--terminal-keycap-function); }
+[data-bakin-plugin="terminal"] .terminal-keycap:active:not(:disabled) { background: var(--terminal-keycap-pressed); }
+[data-bakin-plugin="terminal"] .terminal-keycap:disabled { cursor: default; }
+/* Glyphs keep their drawn sizes (the kit sizes unclassed icons for text buttons). */
+[data-bakin-plugin="terminal"] .terminal-key-accessory .terminal-keycap svg { width: 22px; height: 22px; }
+[data-bakin-plugin="terminal"] .terminal-key-accessory .terminal-keycap-hide svg { width: 24px; height: 24px; }
+/* A modifier on for the next key is inverted; locked adds a bar under its glyph. */
+[data-bakin-plugin="terminal"] .terminal-keycap[data-state="once"],
+[data-bakin-plugin="terminal"] .terminal-keycap[data-state="locked"] {
+  background: var(--bakin-color-text-primary);
+  color: var(--bakin-color-canvas-default);
+}
+[data-bakin-plugin="terminal"] .terminal-keycap-lock {
+  position: absolute;
+  left: 50%;
+  bottom: 5px;
+  width: 14px;
+  height: 2px;
+  margin-left: -7px;
+  border-radius: 1px;
+  background: currentColor;
+}
+[data-bakin-plugin="terminal"] .terminal-keycap-hide { min-width: 52px; }
+/* ••• (or abc) and Hide keyboard sit at the right end. */
+[data-bakin-plugin="terminal"] .terminal-key-push { margin-left: auto; }
+/* The joystick takes the drag itself (no page or strip scrolling under it). */
+[data-bakin-plugin="terminal"] .terminal-joystick { min-width: 48px; touch-action: none; }
+[data-bakin-plugin="terminal"] .terminal-key-divider {
+  flex-shrink: 0;
+  width: 1px;
+  height: 26px;
+  background: var(--bakin-color-border-subtle);
+}
+/* The compose sheet: a textarea and its two sends, in the slot below the bar. */
+[data-bakin-plugin="terminal"] .terminal-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 8px 12px;
+}
+/* The desktop sheet's title row: what it is for, and its close button. */
+[data-bakin-plugin="terminal"] .terminal-compose-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+/* A kept image's copy-path button, named in words (the icon alone said nothing). */
+[data-bakin-plugin="terminal"] .terminal-compose-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+/* From the host's md width the Live Activity button floats in the
+   bottom-right corner (40px, 16px in) on any pointer; the sends end before it. */
+@media (min-width: 48rem) {
+  [data-bakin-plugin="terminal"] .terminal-compose-actions { padding-inline-end: 3.5rem; }
+}
+/* Its images, bounded: many scroll, and the text and the sends stay in view (above a phone keyboard too). */
+[data-bakin-plugin="terminal"] .terminal-compose-images {
+  max-height: 11rem;
+  overflow-y: auto;
+}
+/* The ••• sheet: every other key, in the slot below the bar. */
+[data-bakin-plugin="terminal"] .terminal-key-sheet:focus-visible { outline: 2px solid var(--bakin-color-focus-ring); outline-offset: -2px; }
+[data-bakin-plugin="terminal"] .terminal-key-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(300px, 45dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 8px 12px;
+  box-sizing: border-box;
+}
+[data-bakin-plugin="terminal"] .terminal-key-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+}
+[data-bakin-plugin="terminal"] .terminal-key-grid .terminal-keycap { min-width: 0; height: 44px; }
+[data-bakin-plugin="terminal"] .terminal-key-grid-labelled { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+[data-bakin-plugin="terminal"] .terminal-keycap-wide { justify-content: flex-start; padding: 0 12px; }
+[data-bakin-plugin="terminal"] .terminal-keycap-face { font-family: var(--bakin-typography-family-mono, ui-monospace, monospace); font-size: 15px; min-width: 26px; text-align: left; }
+[data-bakin-plugin="terminal"] .terminal-keycap-label { font-size: 15px; font-weight: 400; color: var(--bakin-color-text-muted); }
+[data-bakin-plugin="terminal"] .terminal-keycap[data-state="locked"] .terminal-keycap-label { color: inherit; }
+/* Narrow phones (the full row needs 375 px; 320 px included): smaller caps, the same 44 px hit areas. */
+@media (max-width: 379px) {
+  /* 40 px caps in 4 px gaps: hit areas reach 2 px a side, 44 px wide, never overlapping. */
+  [data-bakin-plugin="terminal"] .terminal-key-accessory { --terminal-keycap-size: 40px; }
+  [data-bakin-plugin="terminal"] .terminal-key-bar { gap: 4px; padding: 0 2px; }
+  [data-bakin-plugin="terminal"] .terminal-joystick { min-width: 42px; }
+  [data-bakin-plugin="terminal"] .terminal-key-divider { display: none; }
+  [data-bakin-plugin="terminal"] .terminal-key-bar .terminal-keycap { padding: 0 6px; }
+  [data-bakin-plugin="terminal"] .terminal-key-bar .terminal-keycap::after { inset: -2px -2px; }
+  [data-bakin-plugin="terminal"] .terminal-keycap-hide { min-width: 40px; }
+  [data-bakin-plugin="terminal"] .terminal-key-grid:not(.terminal-key-grid-labelled) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+
+/* Copy text: the terminal's text scrolls between the sheet's fixed header and footer. */
+[data-bakin-plugin="terminal"] .terminal-copy-text-body,
+.terminal-copy-text-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-inline: var(--bakin-layout-space-6);
+  display: grid;
+  align-content: start;
+  gap: var(--bakin-layout-gap-dense);
+}
+
+/* The folder picker: one steady size while browsing (no jumping as folders change), the list scrolling inside it.
+   Its dialog is portalled: the plugin-scoped selector serves the host (which wraps portals), the bare one the preview. */
+[data-bakin-plugin="terminal"] .terminal-folder-dialog,
+.terminal-folder-dialog {
+  max-width: 42rem;
+  height: min(85dvh, 46rem);
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+[data-bakin-plugin="terminal"] .terminal-folder-picker,
+.terminal-folder-picker {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: var(--bakin-layout-gap-item);
+  min-height: 0;
+}
+[data-bakin-plugin="terminal"] .terminal-folder-list,
+.terminal-folder-list {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: grid;
+  align-content: start;
+  gap: var(--bakin-layout-gap-item);
 }

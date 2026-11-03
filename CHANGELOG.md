@@ -13,6 +13,37 @@ on a per-plugin basis: each plugin tags its own releases as
   `/projects/[id]/edit` route.
 
 ### Changed
+- `terminal` (0.4.0, **breaking**; requires Bakin `>=0.0.1-rc.45`): the
+  multi-device rework. Every viewer, agent read and saved final screen now
+  comes from one path — one tmux control-mode client per session feeding a
+  server replica — and browsers stream it over a WebSocket; the old PTY
+  bridge, SSE output stream, POST input and the agent `resize` operation are
+  gone. Sessions run only on Bakin's managed tmux 3.7c (no Homebrew
+  fallback); apply the service update after upgrading. Setup refuses while
+  sessions run; Terminal's **Apply update** confirmation lists the live
+  sessions and can end them first.
+  - **Sizing:** one screen sizes a session at a time ("Fit to this device";
+    "Back to …" returns it); the others fit the width and pan. Agents never
+    resize.
+  - **Terminal apps:** `bakin terminal new | attach | ls --as human`
+    continues a session in Ghostty or any terminal (and back), with a small
+    `C-b` key table; a terminal app can size the session.
+  - **Phones:** a key bar and key sheet, a compose sheet for dictation and
+    long edits, native scrollback and scrolling that follow the program,
+    Copy text, tap-to-copy for program clipboard offers, and full screen.
+  - **Attention:** Claude Code and Codex sessions show Needs you / Your turn
+    / Working (through hooks Bakin passes at launch; Codex asks to trust them
+    once — Bakin never bypasses that), bells, and activity; the Terminal nav
+    badge counts unseen sessions that want you; each new Needs you or Your
+    turn, and each bell, toasts in visible tabs and sends one OS notification
+    per browser where IndexedDB works (subject to notification and focus
+    rules).
+  - **Images:** pasted, dropped or picked images join the compose draft and
+    reach Claude Code and Codex as attached images (a shell gets quoted
+    paths); kept privately and deleted with the session's history.
+  - Saved final screens for ended sessions (best effort; an ended session
+    says when its screen was not saved); Active / Completed / All / Needs
+    review views with sortable columns, Last activity among them.
 - `messaging` (0.12.3), `projects` (0.13.1): every dispatched `bakin`
   CLI command declares its complete `args` (positionals plus every flag,
   generated from the exec tool's own schema). Bakin's next release parses

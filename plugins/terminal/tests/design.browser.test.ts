@@ -2,6 +2,7 @@ import { expect } from 'bun:test'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { browserTest, launchChromium } from './browser'
+import { joinFrames } from './fixture-socket'
 
 browserTest('HTTP browsers load terminals and empty and error states own the full workspace', async () => {
   const browser = await launchChromium()
@@ -50,23 +51,28 @@ browserTest('HTTP browsers load terminals and empty and error states own the ful
   } finally { await browser.close() }
 }, 30000)
 
-browserTest('an agent-controlled terminal fills the pane without resizing the shared session', async () => {
+browserTest('a screen that does not size the session fits the font to its width without resizing it', async () => {
   const browser = await launchChromium()
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
   let resizes = 0
   const session = { id: 'agent-view', title: 'Agent-owned session', program: 'shell', state: 'running', cwd: '/tmp', createdAt: 1, generation: 1, revision: 1, inputSequence: 0, cols: 80, rows: 24, owner: { kind: 'agent', id: 'patch' } }
   try {
-    page.on('request', (request) => {
-      if (request.method() === 'POST' && request.url().endsWith('/terminal/session') && request.postDataJSON()?.operation === 'resize') resizes++
-    })
     await page.route('**/api/plugins/terminal/sessions', (route) => route.fulfill({ json: { serviceReady: true, sessions: [session] } }))
-    await page.route('**/api/plugins/terminal/stream?*', (route) => route.fulfill({ contentType: 'text/event-stream', body: `data: ${JSON.stringify({ type: 'snapshot', session, data: btoa('$ agent work\r\n') })}\n\n` }))
+    await page.routeWebSocket('**/api/plugins/terminal/socket**', (socket) => socket.onMessage((message) => {
+      const frame = JSON.parse(String(message)) as { type: string }
+      if (frame.type === 'resize') resizes++
+      if (frame.type === 'hello') for (const sent of joinFrames(session, '$ agent work\r\n')) socket.send(typeof sent === 'string' ? sent : Buffer.from(sent))
+    }))
     await page.goto(new URL('/terminal/agent-view', process.env.TERMINAL_PREVIEW_URL!).href)
     await page.locator('.terminal-xterm .xterm').waitFor()
     await page.setViewportSize({ width: 1000, height: 740 })
     await page.waitForTimeout(250)
+    // The real 80×24 grid, its font fitted to the pane's width; height pans.
+    // Cells snap to whole pixels, so the fill is within a pixel per column.
     const pane = await page.getByRole('region', { name: 'Terminal output', exact: true }).boundingBox()
-    expect((await page.locator('.terminal-xterm .xterm').boundingBox())!.height).toBeGreaterThan(pane!.height - 40)
+    await page.waitForFunction(() => document.querySelector('.xterm-screen')!.clientWidth > document.querySelector<HTMLElement>('.terminal-pane')!.clientWidth - 32 - 80)
+    const grid = (await page.locator('.terminal-xterm .xterm-screen').boundingBox())!
+    expect(grid.width).toBeLessThanOrEqual(pane!.width - 32)
     expect(resizes).toBe(0)
   } finally { await browser.close() }
 }, 15000)
@@ -79,7 +85,9 @@ browserTest('immersive terminals use the full workspace and retain compact navig
   const session = { id: 'design-session', title: 'Review the terminal plugin implementation and retained development work', program: 'shell', state: 'running', cwd: '/workspace/bakin', createdAt: 1, lastActivityAt: 1, generation: 1, revision: 1, inputSequence: 0, cols: 80, rows: 24, owner: { kind: 'human', id: 'design-fixture-client' } }
   try {
     await page.route('**/api/plugins/terminal/sessions', (route) => route.fulfill({ json: { serviceReady: true, sessions: [session] } }))
-    await page.route('**/api/plugins/terminal/stream?*', (route) => route.fulfill({ contentType: 'text/event-stream', body: `data: ${JSON.stringify({ type: 'output', session, cursor: 0, data: btoa('$ git status\r\nWorking tree clean\r\n') })}\n\n` }))
+    await page.routeWebSocket('**/api/plugins/terminal/socket**', (socket) => socket.onMessage((message) => {
+      if ((JSON.parse(String(message)) as { type: string }).type === 'hello') for (const sent of joinFrames(session, '$ git status\r\nWorking tree clean\r\n')) socket.send(typeof sent === 'string' ? sent : Buffer.from(sent))
+    }))
     await page.goto(process.env.TERMINAL_PREVIEW_URL!)
     await page.getByRole('table', { name: 'Terminal sessions', exact: true }).waitFor()
     expect(await page.getByRole('columnheader').allTextContents()).toEqual(['Session', 'Program', 'Agent', 'Status', 'Last activity', 'Working directory', 'Actions'])
@@ -96,8 +104,9 @@ browserTest('immersive terminals use the full workspace and retain compact navig
     const width = await workspace.evaluate((element) => element.clientWidth)
     const output = await page.getByRole('region', { name: 'Terminal output', exact: true }).boundingBox()
     expect(output!.width).toBeGreaterThan(width * 0.95)
+    // Nobody sized this fixture session: the grid's font fills the width, inside the inset.
     const surface = await page.locator('.terminal-xterm .xterm').boundingBox()
-    expect(surface!.height).toBeGreaterThan(output!.height - 40)
+    expect(surface!.width).toBeGreaterThan(output!.width - 32 - 80)
     expect(surface!.x - output!.x).toBeGreaterThanOrEqual(16)
     expect(surface!.y - output!.y).toBeGreaterThanOrEqual(16)
     expect(await page.getByRole('region', { name: 'Terminal output', exact: true }).evaluate((region) => getComputedStyle(region).backgroundColor === getComputedStyle(region.querySelector('.xterm-scrollable-element')!).backgroundColor)).toBe(true)
@@ -196,18 +205,90 @@ browserTest('immersive terminals use the full workspace and retain compact navig
 }, 30000)
 
 
-browserTest('service migration remains visible and explains why live sessions block setup', async () => {
+browserTest('service update: an info banner whose confirm dialog names the live sessions and confirms exactly those; refusals stay in the dialog; an update applied elsewhere closes it; focus returns', async () => {
   const browser = await launchChromium()
   const page = await browser.newPage({ viewport: { width: 320, height: 740 } })
+  const running = { id: 'live-one', title: 'Test', program: 'shell', state: 'running', cwd: '/tmp', createdAt: 1, lastActivityAt: 1, generation: 4, revision: 1, inputSequence: 0, cols: 80, rows: 24, owner: { kind: 'human', id: 'design-fixture-client' } }
+  const state = { live: true, required: true, answer: 'refuse' as 'refuse' | 'ok' }
+  const calls: unknown[] = []
   try {
-    await page.route('**/api/plugins/terminal/sessions', route => route.fulfill({ json: { sessions: [], serviceReady: true, serviceMigrationRequired: true } }))
-    await page.route('**/api/plugins/terminal/service', route => route.fulfill({ status: 409, json: { error: "Terminal still has 2 live terminal panes. End them and press Set up service again to switch to Bakin's tmux." } }))
+    await page.route('**/api/plugins/terminal/sessions', route => route.fulfill({ json: { sessions: [state.live ? running : { ...running, state: 'completed', revision: 2 }], serviceReady: true, serviceUpdateRequired: state.required } }))
+    await page.route('**/api/plugins/terminal/service/update', async route => {
+      calls.push(route.request().postDataJSON())
+      if (state.answer === 'refuse') return route.fulfill({ status: 409, json: { error: 'Ended Test; the update was not applied: Could not bootstrap the Terminal LaunchAgent' } })
+      state.live = false
+      state.required = false
+      await route.fulfill({ json: { ended: ['Test'] } })
+    })
     await page.goto(process.env.TERMINAL_PREVIEW_URL!)
-    await page.getByText('Terminal service update available', { exact: true }).waitFor()
-    await page.getByRole('button', { name: 'Set up service', exact: true }).click()
-    await page.getByText(/2 live terminal panes/).waitFor()
-    expect(await page.getByText('Terminal service update available', { exact: true }).count()).toBe(1)
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    // A notice, not an empty state: the kit Banner, its action the only way in.
+    const banner = page.locator('[data-slot="banner"]', { hasText: 'Terminal service update available' })
+    await banner.waitFor()
+    // A recommendation: info, not attention.
+    expect(await banner.getAttribute('data-tone')).toBe('info')
+    expect(await page.getByRole('button', { name: 'Set up service', exact: true }).count()).toBe(0)
     await page.screenshot({ path: join(import.meta.dir, '../test-results/design/migration-mobile.png') })
+    const apply = banner.getByRole('button', { name: 'Apply update' })
+    const dialog = page.getByRole('dialog')
+    // Cancel returns focus to Apply update.
+    await apply.click()
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
+    await dialog.waitFor({ state: 'detached' })
+    await page.waitForFunction(() => document.activeElement?.textContent === 'Apply update')
+    // The dialog names the live session, says what restarting tmux drops, and asks for exactly it.
+    await apply.click()
+    await dialog.getByRole('list', { name: 'Sessions that will end' }).getByText('Test').waitFor()
+    expect(await dialog.textContent()).toContain("tmux's own scrollback for ended sessions is dropped")
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-confirm-dialog]')!).opacity === '1')
+    await page.screenshot({ path: join(import.meta.dir, '../test-results/design/migration-dialog-mobile.png') })
+    expect(calls).toEqual([])
+    // A refusal (what ended, why the update did not apply) stays in the dialog.
+    await dialog.getByRole('button', { name: 'End 1 session and update' }).click()
+    await dialog.getByText(/the update was not applied: Could not bootstrap/).waitFor()
+    expect(calls).toEqual([{ end: ['live-one'] }])
+    // It works: the dialog closes, the banner goes, focus goes to New terminal.
+    state.answer = 'ok'
+    await dialog.getByRole('button', { name: 'End 1 session and update' }).click()
+    await dialog.waitFor({ state: 'detached' })
+    await banner.waitFor({ state: 'detached' })
+    await page.waitForFunction(() => document.activeElement?.hasAttribute('data-terminal-new') ?? false)
+    expect(calls).toEqual([{ end: ['live-one'] }, { end: ['live-one'] }])
+    // An update applied elsewhere while the dialog is open closes it, asking nothing.
+    state.required = true
+    state.live = true
+    await page.reload()
+    await apply.click()
+    await dialog.waitFor()
+    state.required = false
+    await dialog.waitFor({ state: 'detached', timeout: 10_000 })
+    // Its trigger went with the banner: focus lands on New terminal, not the page.
+    await page.waitForFunction(() => document.activeElement?.hasAttribute('data-terminal-new') ?? false)
+    expect(calls).toHaveLength(2)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   } finally { await browser.close() }
-}, 15000)
+}, 40000)
+
+browserTest('a failed refresh above a shown list is a danger Banner with Retry, not an empty state; it clears once a refresh works', async () => {
+  const browser = await launchChromium()
+  const page = await browser.newPage({ viewport: { width: 1100, height: 700 } })
+  const shown = { id: 'shown-one', title: 'Still listed', program: 'shell', state: 'running', cwd: '/tmp', createdAt: 1, lastActivityAt: 1, generation: 1, revision: 1, inputSequence: 0, cols: 80, rows: 24, owner: { kind: 'human', id: 'design-fixture-client' } }
+  const state = { failing: false }
+  try {
+    await page.route('**/api/plugins/terminal/sessions', route => state.failing
+      ? route.fulfill({ status: 503, json: { error: 'Terminal is restarting' } })
+      : route.fulfill({ json: { sessions: [shown], serviceReady: true } }))
+    await page.goto(process.env.TERMINAL_PREVIEW_URL!)
+    await page.getByText('Still listed').first().waitFor()
+    state.failing = true
+    const banner = page.locator('[data-slot="banner"]', { hasText: 'Terminals could not be refreshed' })
+    await banner.waitFor({ timeout: 10_000 })
+    expect(await banner.getAttribute('data-tone')).toBe('danger')
+    expect(await banner.textContent()).toContain('The list shows the last refresh')
+    // The list stays; nothing renders as an empty state.
+    expect(await page.getByText('Still listed').first().isVisible()).toBe(true)
+    expect(await page.locator('[data-slot="system-state"]').count()).toBe(0)
+    state.failing = false
+    await banner.getByRole('button', { name: 'Retry' }).click()
+    await banner.waitFor({ state: 'detached' })
+  } finally { await browser.close() }
+}, 30000)
