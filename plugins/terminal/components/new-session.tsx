@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { pluginFetch } from '@makinbakin/sdk/utils'
 import { AgentSelect } from '@makinbakin/sdk/patterns'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Form, Field, FieldLabel, Input, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, FormActions, SubmitButton, Alert, AlertDescription, Button } from '@makinbakin/sdk/ui'
@@ -7,6 +7,8 @@ import type { SessionOptionsData } from '../lib/session-options'
 import { api } from './api'
 import { estimateTerminalSize } from './terminal-size'
 import { useTerminalAgents } from './use-terminal-agents'
+import { FolderPicker } from './folder-picker'
+import { Inline } from '@makinbakin/sdk/layout'
 
 const programs: Record<string, string> = { shell: 'Shell', claude: 'Claude Code', codex: 'Codex' }
 const none = '__none__'
@@ -25,11 +27,17 @@ export function NewSession({ open, onOpenChange, onCreated }: { open: boolean; o
   const [loading, setLoading] = useState(true)
   const [attempt, setAttempt] = useState(0)
   const [cwdEdited, setCwdEdited] = useState(false)
+  // Browsing the Mac's folders takes the dialog over until a folder is chosen (no second modal on a phone).
+  const [browsing, setBrowsing] = useState(false)
+  const browse = useRef<HTMLButtonElement>(null)
+  // Back from the picker returns focus to Browse… (its view replaced the form's).
+  const returning = useRef(false)
+  useEffect(() => { if (!browsing && returning.current) { returning.current = false; browse.current?.focus() } }, [browsing])
   useEffect(() => {
     if (!open) return
     let cancelled = false
     setLoading(true); setError(''); setOptions(undefined)
-    setTitle(null); setProgram('shell'); setCheckout('isolated'); setTaskId(''); setProjectId(''); setCwdEdited(false)
+    setBrowsing(false); setTitle(null); setProgram('shell'); setCheckout('isolated'); setTaskId(''); setProjectId(''); setCwdEdited(false)
     void Promise.all([
       api<SessionOptionsData>('/options'),
       pluginFetch('projects', '/').then(async (response) => {
@@ -66,25 +74,28 @@ export function NewSession({ open, onOpenChange, onCreated }: { open: boolean; o
   async function submit(event: FormEvent) {
     event.preventDefault(); setBusy(true); setError('')
     try {
-      const session = await api<Session>('/sessions', { title: (title ?? suggestedTitle).slice(0, 100), cwd, program, checkout, agentId: agentId || undefined, taskId: taskId || undefined, projectId: projectId || undefined, size: estimateTerminalSize() })
+      const session = await api<Session>('/sessions', { title: (title ?? suggestedTitle).slice(0, 100), cwd, program, checkout: program === 'shell' ? 'existing' : checkout, agentId: agentId || undefined, taskId: taskId || undefined, projectId: projectId || undefined, size: estimateTerminalSize() })
       onCreated(session); onOpenChange(false)
     } catch (error) { setError(error instanceof Error ? error.message : 'Could not create session') }
     finally { setBusy(false) }
   }
   return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent><DialogHeader><DialogTitle>New terminal</DialogTitle><DialogDescription>Commands run with your host account permissions.</DialogDescription></DialogHeader>
+    <DialogContent className={browsing ? 'terminal-folder-dialog' : undefined}>{browsing ? <>
+      <DialogHeader><DialogTitle>Choose a folder</DialogTitle><DialogDescription>Folders on this Mac. Open one, then use it as the working directory.</DialogDescription></DialogHeader>
+      <FolderPicker start={cwd} onCancel={() => { returning.current = true; setBrowsing(false) }} onChoose={(path) => { setCwd(path); setCwdEdited(true); returning.current = true; setBrowsing(false) }} />
+    </> : <><DialogHeader><DialogTitle>New terminal</DialogTitle><DialogDescription>Commands run with your host account permissions.</DialogDescription></DialogHeader>
       <Form onSubmit={submit} busy={busy}>
         {error && <Alert tone="danger"><AlertDescription>{error}</AlertDescription></Alert>}
         {!options && !loading && <Button type="button" onClick={() => setAttempt((value) => value + 1)}>Retry loading choices</Button>}
         <Field name="title"><FieldLabel>Name</FieldLabel><Input value={title ?? suggestedTitle.slice(0, 100)} disabled={loading || busy} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setTitle(e.target.value)} required maxLength={100} placeholder="Name this session" /></Field>
         <Field name="program"><FieldLabel>Program</FieldLabel><Select items={{ shell: 'Shell', claude: 'Claude Code', codex: 'Codex' }} value={program} onValueChange={(value: string | null) => { if (value) setProgram(value) }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="shell">Shell</SelectItem><SelectItem value="claude">Claude Code</SelectItem><SelectItem value="codex">Codex</SelectItem></SelectContent></Select></Field>
-        <Field name="cwd"><FieldLabel>Working directory</FieldLabel><Input value={cwd} disabled={loading || busy} onChange={(e: React.ChangeEvent<HTMLInputElement>) => { setCwd(e.target.value); setCwdEdited(true) }} required placeholder={loading ? 'Loading...' : '/absolute/path'} /></Field>
+        <Field name="cwd"><FieldLabel>Working directory</FieldLabel><Inline gap="dense" wrap={false}><Input className="min-w-0 flex-1" value={cwd} disabled={loading || busy} onChange={(e: React.ChangeEvent<HTMLInputElement>) => { setCwd(e.target.value); setCwdEdited(true) }} required placeholder={loading ? 'Loading...' : '/absolute/path'} /><Button ref={browse} type="button" variant="outline" disabled={loading || busy} onClick={() => setBrowsing(true)}>Browse…</Button></Inline></Field>
         {program !== 'shell' && <Field name="checkout"><FieldLabel>Checkout</FieldLabel><Select items={{ isolated: 'New isolated worktree', existing: 'Existing checkout' }} value={checkout} onValueChange={(value: string | null) => { if (value) setCheckout(value) }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="isolated">New isolated worktree</SelectItem><SelectItem value="existing">Existing checkout</SelectItem></SelectContent></Select></Field>}
         <Field name="agent"><FieldLabel>Assigned agent</FieldLabel><AgentSelect id="terminal-new-agent" name="agent" className="w-full" ariaLabel="Assigned agent" value={agentId} onValueChange={assignAgent} agents={agentChoices} allowNone disabled={loading || busy} /></Field>
         <Field name="task"><FieldLabel>Task</FieldLabel><Select items={{ [none]: 'No task', ...Object.fromEntries((options?.tasks ?? []).map((item) => [item.id, item.title])) }} value={taskId || none} disabled={loading || busy} onValueChange={(value: string | null) => chooseTask(value === none ? '' : value ?? '')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value={none}>No task</SelectItem>{options?.tasks.map((item) => <SelectItem key={item.id} value={item.id}>{item.title}</SelectItem>)}</SelectContent></Select></Field>
         <Field name="project"><FieldLabel>Project</FieldLabel><Select items={{ [none]: 'No project', ...Object.fromEntries(projects.map((item) => [item.id, item.title])) }} value={projectId || none} disabled={loading || busy} onValueChange={(value: string | null) => setProjectId(value === none ? '' : value ?? '')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value={none}>No project</SelectItem>{projects.map((item) => <SelectItem key={item.id} value={item.id}>{item.title}</SelectItem>)}</SelectContent></Select></Field>
         <FormActions><SubmitButton busyLabel="Starting" disabled={loading || !options || !cwd.trim() || !(title ?? suggestedTitle).trim()}>Start terminal</SubmitButton></FormActions>
       </Form>
-    </DialogContent>
+    </>}</DialogContent>
   </Dialog>
 }

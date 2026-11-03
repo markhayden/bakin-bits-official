@@ -17,5 +17,6 @@ const fixture = {
     { path: '/api/plugins/terminal/sessions', status: 200, json: { serviceReady: true, sessions: [session] } },
   ],
 } as const
-installFixtureSocket({ session, snapshot: '$ git status\r\nOn branch feat/terminal-plugin\r\n\r\nWorking tree clean\r\n$ ' })
+// The raw path, after a recovery: the conformance run covers the persistent notice (plan T35a).
+installFixtureSocket({ session, snapshot: '$ git status\r\nOn branch feat/terminal-plugin\r\n\r\nWorking tree clean\r\n$ ', fidelity: { rebuilds: {}, recoveries: 1 } })
 createRoot(document.getElementById('root')!).render(<PluginUiFixtureHost className="fixed inset-x-0 bottom-0 top-(--bakin-shell-top) [&>[data-bakin-plugin-fixture-page]]:h-full" fixture={fixture} registrations={[terminalRegistration]} />)

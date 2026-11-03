@@ -1173,6 +1173,11 @@ declare module '@makinbakin/sdk/ui' {
   export const SelectValue: UIComponent
   export const Separator: UIComponent
   export const Sheet: UIComponent
+  export const SheetContent: UIComponent
+  export const SheetHeader: UIComponent
+  export const SheetTitle: UIComponent
+  export const SheetDescription: UIComponent
+  export const SheetFooter: UIComponent
   export const Skeleton: UIComponent
   export const Switch: UIComponent
   export const Table: UIComponent
@@ -1189,6 +1194,8 @@ declare module '@makinbakin/sdk/ui' {
   export const Tooltip: UIComponent
   export const SubmitButton: UIComponent
   export const SystemState: UIComponent
+  /** Persistent surface-level context (storybook/public/feedback/banner.stories.tsx). */
+  export const Banner: ComponentType<{ tone?: 'info' | 'success' | 'attention' | 'danger'; title?: ReactNode; description?: ReactNode; action?: ReactNode; announce?: 'off' | 'polite' | 'assertive'; headingLevel?: 2 | 3 | 4; className?: string }>
   export function buttonVariants(options?: Record<string, unknown>): string
   // ── Pass-four conformance additions ───────────────────────────────────
   export type TextSize = 'body' | 'meta'
@@ -1324,6 +1331,8 @@ declare module '@makinbakin/sdk/patterns' {
   export const AgentFilter: PatternComponent
   export const FacetFilter: PatternComponent
   export const SegmentedControl: PatternComponent
+  /** The one copy affordance (CLI commands, ids, paths). */
+  export const CopyButton: ComponentType<{ text: string; label?: string; className?: string; size?: 'default' | 'touch'; onCopied?: () => void }>
   export const WorkspacePage: PatternComponent
   export const WorkspacePageBody: PatternComponent
   export const WorkspacePageHeader: PatternComponent
@@ -1887,6 +1896,17 @@ declare module '@makinbakin/sdk/conversation' {
     className?: string
   }>
   export const Composer: ComponentType<Record<string, unknown>>
+  export type ComposerAttachmentStatus = 'uploading' | 'ready' | 'error'
+  export interface ComposerAttachmentItem { id: string; name: string; previewUrl?: string; status?: ComposerAttachmentStatus; errorMessage?: string }
+  export interface ComposerAttachmentTrayProps {
+    items: readonly ComposerAttachmentItem[]
+    disabled?: boolean
+    onRemove: (id: string) => void
+    itemAction?: (item: ComposerAttachmentItem) => ReactNode
+    className?: string
+  }
+  /** A draft's attachment thumbnails, as Composer shows them. */
+  export const ComposerAttachmentTray: ComponentType<ComposerAttachmentTrayProps>
   /** Seed a composer's persisted draft for a storage key. */
   export function writeComposerDraft(storageKey: string, value: string): void
   export const ThinkingIndicator: ComponentType<{ label?: string }>
@@ -1908,6 +1928,16 @@ declare module '@makinbakin/sdk/content' {
     renderInternalLink?: (props: MarkdownInternalLinkProps) => ReactNode
   }
   export const MarkdownContent: ComponentType<MarkdownContentProps>
+  export interface CodeBlockProps {
+    code: string
+    language?: 'json' | 'text' | string
+    label?: string
+    copyable?: boolean
+    onCopied?: () => void
+    wrap?: boolean
+    className?: string
+  }
+  export const CodeBlock: ComponentType<CodeBlockProps>
 
   export type MarkdownEditorFormat = 'markdown' | 'yaml' | 'json' | 'text'
   export type MarkdownEditorHeight = 'compact' | 'document' | 'viewport' | 'fill'
@@ -1997,9 +2027,13 @@ declare module '@makinbakin/sdk/hooks' {
   export function useAgentIds(): string[]
   export function useMainAgentId(): string | null
   export function useDebug(): [boolean]
+  export interface FullscreenControls { active: boolean; browser: boolean; enter(): void; exit(): void; toggle(): void }
+  export function useFullscreen(): FullscreenControls
   export function useNotificationChannels(): NotificationChannel[]
   export function getChannelLabel(channelId: string, channels?: NotificationChannel[]): string
-  export function toast(message: string, type?: 'success' | 'error' | 'info' | 'warning'): void
+  export function toast(message: import('react').ReactNode, type?: 'success' | 'error' | 'info' | 'warning', duration?: number): string
+  /** An OS notification when the operator enabled them and no Bakin tab has focus (a click opens `url`). */
+  export function sendBrowserNotification(title: string, body: string, url?: string): void
 
   export type PluginEventPayload = Record<string, unknown> & { event?: string }
   export function emitPluginEvent(payload: PluginEventPayload): void
