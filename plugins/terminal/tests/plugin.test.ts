@@ -135,3 +135,11 @@ test('agents cannot resize, screen reads carry the grid, and the operator can sa
   } finally { await plugin.onShutdown?.(); rmSync(root, { recursive: true, force: true }) }
 })
 
+
+test('every API route the plugin registers is declared in its manifest, and every declared one exists (the host refuses an undeclared route at activation)', async () => {
+  const manifest = await Bun.file(join(import.meta.dir, '../bakin-plugin.json')).json() as { contributes: { apiRoutes: Array<{ method: string; path: string }> } }
+  const key = (route: { method: string; path: string }) => `${route.method.toUpperCase()} ${route.path}`
+  const registered = (plugin.routes ?? []).map(key).sort()
+  const declared = manifest.contributes.apiRoutes.map(key).sort()
+  expect(registered).toEqual(declared)
+})

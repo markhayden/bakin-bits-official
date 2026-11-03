@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import manifest from '../bakin-plugin.json'
 import { TerminalError } from './contracts'
-import { tmuxConfig } from './tmux-config'
+import { tmuxConfig, VERIFIED_OPTIONS } from './tmux-config'
 
 const bakinHome = () => process.env.BAKIN_HOME || join(homedir(), '.bakin')
 
@@ -139,7 +139,7 @@ export class TerminalService {
       const states = panes.trim() ? panes.trim().split('\n').map(line => line.split(' ')) : []
       if ((names.trim() && !states.length) || states.some(([, dead]) => dead !== '0' && dead !== '1')) throw new TerminalError('Terminal process state is unknown; no changes were made.', 503)
       const live = [...new Set(states.filter(([, dead]) => dead === '0').map(([name]) => name!))]
-      if (live.length) throw new TerminalError(`Terminal still has ${live.length} live terminal session${live.length === 1 ? '' : 's'} (${live.join(', ')}). End them and press Set up service again to apply the Terminal service update.`, 409)
+      if (live.length) throw new TerminalError(`Terminal still has ${live.length} live terminal session${live.length === 1 ? '' : 's'} (${live.join(', ')}). Sessions Terminal started end from Terminal's Apply update; end any other tmux session on Terminal's server in the app that started it.`, 409)
       const stopped = Bun.spawn(['launchctl', 'bootout', `gui/${process.getuid!()}/${this.label}`], { stdout: 'ignore', stderr: 'ignore' })
       if (await stopped.exited) throw new TerminalError('Could not stop the old Terminal service; no configuration was changed.', 503)
     } else if (program) {
@@ -153,15 +153,27 @@ export class TerminalService {
     writeFileSync(this.plist, this.plistXml(tmux, terminalEnvironment()), { mode: 0o600 })
     const result = Bun.spawn(['launchctl', 'bootstrap', `gui/${process.getuid!()}`, this.plist], { stdout: 'ignore', stderr: 'pipe' })
     if (await result.exited) throw new TerminalError('Could not bootstrap the Terminal LaunchAgent', 503)
+    // What the last attempt found wrong, for the error.
+    let failed = 'it did not answer'
     for (let i = 0; i < 40; i++) {
-      if (await this.ready()) {
+      const wrong = await this.ready() ? await this.configMismatch() : 'it did not answer'
+      failed = wrong ?? failed
+      if (!wrong) {
         // Recorded only now: a file on disk is not proof the daemon runs it.
         writeFileSync(this.record, JSON.stringify({ fingerprint: desired, verifiedAt: new Date().toISOString() }), { mode: 0o600 })
         return
       }
       await Bun.sleep(50)
     }
-    throw new TerminalError('Terminal service did not become ready', 503)
+    throw new TerminalError(`Terminal service did not become ready with its configuration (${failed}); no fingerprint was recorded.`, 503)
+  }
+  /** What the running server reports differently from the generated configuration (its stamp, its verified options), if anything. */
+  private async configMismatch(): Promise<string | undefined> {
+    for (const [name, value] of Object.entries(VERIFIED_OPTIONS)) {
+      const actual = (await this.execute(['show-options', '-gv', name], true)).trim()
+      if (actual !== value) return `${name} is ${actual ? `'${actual}'` : 'unset'}`
+    }
+    return undefined
   }
   async uninstall(): Promise<void> {
     if (!existsSync(this.plist)) return

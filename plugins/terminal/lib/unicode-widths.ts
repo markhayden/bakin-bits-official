@@ -14,8 +14,16 @@ interface UnicodeHost {
 
 export const TMUX_WIDTHS_VERSION = '15-graphemes-tmux'
 
+/**
+ * Test-only table entries (plan T37: an injected width difference the
+ * replica-against-tmux check must catch). Empty in production, where
+ * nothing writes it.
+ */
+export const TEST_WIDTH_ENTRIES = new Map<number, 0 | 1 | 2>()
+
 /** tmux's width for a codepoint where it differs from the grapheme provider; undefined elsewhere. */
 export function tmuxWidth(codepoint: number, table: readonly (readonly [number, number, 0 | 1 | 2])[] = TMUX_WIDTHS): 0 | 1 | 2 | undefined {
+  if (TEST_WIDTH_ENTRIES.size) { const forced = TEST_WIDTH_ENTRIES.get(codepoint); if (forced !== undefined) return forced }
   let low = 0
   let high = table.length - 1
   while (low <= high) {

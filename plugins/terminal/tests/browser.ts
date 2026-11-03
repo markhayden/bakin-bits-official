@@ -20,7 +20,7 @@ type PageLike = {
 
 /**
  * The JSON frames this page sends on the terminal viewer socket, and a switch
- * that holds new sockets off the server (they open but never sync), the way
+ * that holds new sockets off the server (they open but never join), the way
  * a dropped network looks to the client.
  */
 export async function viewerSocket(page: PageLike) {

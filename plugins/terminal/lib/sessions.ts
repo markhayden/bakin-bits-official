@@ -2,11 +2,16 @@ import { randomUUID } from 'node:crypto'
 import { realpathSync, statSync } from 'node:fs'
 import { relative, isAbsolute } from 'node:path'
 import { authorize, createSchema, DAY, DeliveryUncertainError, TerminalError, type CreateInput, type Principal, type Session, type SizeClaimant, type TerminalSettings } from './contracts'
+import { activity, type Activity, type AttentionEvent, type AttentionState } from './attention'
 import type { NativeClient, ProcessDriver, WriteOptions } from './processes'
-import { claimSize, clampSize, nextSize } from './sizing'
-import { Screen } from './screen'
-import { screenView, shadowDiff } from './shadow'
+import { claimSize, clampSize, nextSize, restoreSize } from './sizing'
+import type { Fidelity, RawSource } from './raw-display'
 import { Store } from './store'
+import type { Upload, Uploads } from './uploads'
+import { makeBundle, type Bundle } from './bundle'
+import { visibleText } from './terminal-state'
+import { bufferText } from './buffer-text'
+import { bundleText } from './bundle-text'
 
 interface WorktreeResult { ok: boolean; error?: string; worktreePath?: string }
 /** How long a launched terminal app has to confirm its pid (spec D7). */
@@ -24,7 +29,7 @@ const nativeViewer = (pid: number) => `native:${pid}`
 /** Tell every listener; one that throws never stops the rest or the caller's bookkeeping. */
 function notify<T>(listeners: Iterable<T> | undefined, call: (listener: T) => void): void {
   for (const listener of listeners ?? []) {
-    try { call(listener) } catch { /* a viewer's failure is its own (it resyncs) */ }
+    try { call(listener) } catch { /* a viewer's failure is its own (it rejoins) */ }
   }
 }
 /** The creating screen's grid and what kind of screen it is (it holds the size claim). */
@@ -35,35 +40,41 @@ export interface SessionOptions {
   prepare(input: { repoPath: string; sessionId: string; agent: string }): Promise<WorktreeResult | undefined>
   release(input: { sessionId: string; worktreePath: string; teardown?: boolean }): Promise<WorktreeResult | undefined>
   validateLinks?(input: CreateInput): Promise<void>
+  /** Images pasted into sessions (lib/uploads.ts). */
+  uploads?: Uploads
+  /** Tell every browser (lib/attention.ts ATTENTION_EVENT). */
+  announce?(event: AttentionEvent): void
   now?(): number
   log?: { info(message: string, data?: Record<string, unknown>): void }
-  /** Quiet time before the shadow replica is compared with the bridge (SHADOW_QUIET_MS). */
-  shadowQuietMs?: number
 }
 
-/** Bridge output quiet for this long is a point where the shadow replica and the bridge should agree. */
-export const SHADOW_QUIET_MS = 1000
-/** Mismatches are logged at most once per session in this window (each is counted). */
-export const SHADOW_LOG_MS = 10 * 60 * 1000
-/** What shadow mode has seen for a session. */
-export interface ShadowStats { compared: number; mismatched: number; last?: string; loggedAt?: number }
+/** Image bodies read at once, every session together (each at most 10 MB). */
+export const MAX_UPLOADS_READING = 4
+
+/** Bells closer together than this are one notification (spec item 5). */
+export const BELL_INTERVAL_MS = 30_000
+
+/** How long an ending session's final picture may take (a drain, or a rebuild's seed) before its output is recorded as not saved. */
+export const FINAL_CUT_MS = 3000
 
 export class Sessions {
   private pending: Promise<unknown> = Promise.resolve()
-  private screens = new Map<string, Screen>()
-  private outputListeners = new Map<string, Set<() => void>>()
   private sessionListeners = new Map<string, Set<(session: Session) => void>>()
   private reservations = new Map<string, Reservation>()
   /** Admitted terminal apps by session, keyed by tmux client pid. */
   private natives = new Map<string, Map<number, NativeClient>>()
   private nativeListeners = new Map<string, Set<() => void>>()
   private reconciling = new Set<string>()
+  /** Final-output saves in progress, one per session (plan T35b). */
+  private ending = new Map<string, Promise<void>>()
+  /** Every finish outstanding, by session, from its reservation to its kill: input is refused, startup's bundle rule skips them. */
+  private finishing = new Map<string, Set<Promise<void>>>()
   private timers = new Set<ReturnType<typeof setTimeout>>()
-  private shadowTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  /** Bridge chunks parsed per session: a comparison spanning a new one is not a quiet point. */
-  private bridgeChunks = new Map<string, number>()
-  readonly shadow = new Map<string, ShadowStats>()
+  /** Sessions this manager has attached (its control client asked for), until detached: attach runs once per session. */
+  private attached = new Set<string>()
   private closed = false
+  /** Image bodies being read now (MAX_UPLOADS_READING at most). */
+  private uploadsReading = 0
   constructor(readonly store: Store, private driver: ProcessDriver, private options: SessionOptions) {}
   private now(): number { return this.options.now?.() ?? Date.now() }
   /** Persist and tell live viewers (ownership, size and state reach them at once). */
@@ -83,20 +94,24 @@ export class Sessions {
   /** Settles once everything queued so far has run. */
   idle(): Promise<void> { return this.pending.then(() => undefined) }
   private enabled(): string[] { return (this.options.settings().enabledAgents ?? []).map((agent) => agent.id) }
-  private run<T>(work: () => Promise<T>): Promise<T> {
+  /**
+   * The manager's queue. Once shutdown starts, a new submission is refused at once; `continuing` is
+   * for the next step of work already accepted (a finish's kill, a refresh's liveness pass), which
+   * shutdown drains.
+   */
+  private run<T>(work: () => Promise<T>, continuing = false): Promise<T> {
+    if (this.stopping && !continuing) return Promise.reject(new TerminalError('Terminal manager is shutting down', 503))
     const next = this.pending.then(() => { if (this.closed) throw new TerminalError('Terminal manager is shutting down', 503); return work() })
     this.pending = next.catch(() => {})
     return next
   }
-  /** What live sessions hold in this process (lib/memory.ts): bridge screens, replicas and their logs. Steps: run it sliced. */
+  /** What live sessions hold in this process (lib/memory.ts): replicas and their logs. Steps: run it sliced. */
   *retainedSteps(): Generator<void, number> {
-    let total = this.driver.retainedSteps ? yield* this.driver.retainedSteps() : 0
-    for (const screen of [...this.screens.values()]) total += yield* screen.retainedSteps()
-    return total
+    return this.driver.retainedSteps ? yield* this.driver.retainedSteps() : 0
   }
   /** Periodic upkeep of live sessions' emulators (link orphans erased since their last sweep). */
   async maintainEmulators(): Promise<void> {
-    await Promise.all([this.driver.maintain?.(), ...[...this.screens.values()].map((screen) => screen.maintain())])
+    await this.driver.maintain?.()
   }
   list(principal: Principal): Session[] {
     if (principal.kind === 'agent' && !this.enabled().includes(principal.id)) throw new TerminalError('Terminal is disabled for this agent', 403)
@@ -109,155 +124,191 @@ export class Sessions {
     return session
   }
   /** Boot: reattach live sessions (a restarted service may have lost titles). */
-  start(): Promise<void> { return this.setupService(async () => {}) }
-  /** The newest stored output cursor for a session (0 when none). */
-  latestCursor(id: string): number {
-    return this.store.output(id, Number.MAX_SAFE_INTEGER).cursor
-  }
+  start(): Promise<void> { return this.setupService(async () => {}, { startup: true }) }
   /**
-   * Resolve once output past `cursor` is stored, the signal aborts, or
-   * `idleMs` passes (a keepalive for long-quiet sessions). Subscribes before
-   * re-checking the store, so output landing in between is never missed.
+   * tmux says a pane died: one refresh at a time, and one more after it when
+   * hints came meanwhile (a refresh that already checked a session may have
+   * missed its death), never one per hint.
    */
-  nextOutput(id: string, cursor: number, signal: AbortSignal, idleMs = 15_000): Promise<void> {
-    return new Promise<void>((resolve) => {
-      const done = () => {
-        clearTimeout(timer)
-        unsubscribe()
-        signal.removeEventListener('abort', done)
-        resolve()
-      }
-      const unsubscribe = this.onOutput(id, done)
-      const timer = setTimeout(done, idleMs)
-      signal.addEventListener('abort', done, { once: true })
-      if (signal.aborted || this.latestCursor(id) > cursor) done()
+  private paneDied(): void {
+    // Shutting down: a hint only marks that a refresh is owed; shutdown runs one last one itself, so
+    // endless hints cannot hold it open and a death meanwhile is still saved.
+    if (this.stopping) { this.owedAtStop = true; return }
+    this.requestRefresh()
+  }
+  private owedAtStop = false
+  private requestRefresh(): void {
+    if (this.refreshing) { this.refreshAgain = true; return }
+    this.refreshing = this.trackRefresh().catch(() => undefined).finally(() => {
+      this.refreshing = undefined
+      if (!this.refreshAgain || this.closed) return
+      this.refreshAgain = false
+      // Owed when shutdown began: shutdown's own last refresh covers it.
+      if (this.stopping) this.owedAtStop = true; else this.requestRefresh()
     })
   }
-  /** Hear about newly stored output for a session (push instead of polling). */
-  onOutput(id: string, listener: () => void): () => void {
-    let listeners = this.outputListeners.get(id)
-    if (!listeners) this.outputListeners.set(id, listeners = new Set())
-    listeners.add(listener)
-    return () => {
-      listeners.delete(listener)
-      if (!listeners.size) this.outputListeners.delete(id)
-    }
-  }
+  private refreshing: Promise<void> | undefined
+  private refreshAgain = false
+  private stopping = false
   refreshStates(): Promise<void> {
-    return this.run(async () => {
+    // Shutting down: no new lifecycle work is taken (shutdown runs its own last refresh).
+    if (this.stopping) return Promise.reject(new TerminalError('Terminal is shutting down', 503))
+    return this.trackRefresh()
+  }
+  private trackRefresh(): Promise<void> {
+    // Tracked from its call: its saves start after its queue turn, and shutdown waits for them.
+    const work = this.refreshOnce()
+    const settled = work.then(() => undefined, () => undefined)
+    this.refreshes.add(settled)
+    void settled.then(() => this.refreshes.delete(settled))
+    return work
+  }
+  private refreshes = new Set<Promise<void>>()
+  private async refreshOnce(): Promise<void> {
+    const saving = await this.run(async () => {
+      const saves: Promise<void>[] = []
       for (const session of this.store.sessions()) {
-        if (session.state === 'running' && !await this.driver.alive(session.id)) {
-          session.state = 'exited'
-          this.forgetNatives(session.id)
-          this.save(session)
-        }
+        if (session.state === 'running' && !await this.driver.alive(session.id)) saves.push(this.publishExit(session))
       }
-    })
+      return saves
+    }, true)
+    await Promise.all(saving)
   }
   /**
    * Attach and adopt tmux's actual window before anything reads or writes
    * through the attachment (the record may be stale: a resize whose save
    * failed, a crash). False when tmux cannot say: the attachment is dropped
-   * again, and the next viewer sync retries.
+   * again, and the next join or read retries.
    */
   private async attach(session: Session): Promise<boolean> {
     this.attachUnreconciled(session)
     try {
       this.adoptSize(session, await this.driver.windowSize(session.id))
     } catch {
-      await this.stopScreen(session.id)
+      await this.detach(session.id)
       return false
     }
     // Terminal apps already attached (one left over from before a restart, or
-    // a raw attach while nobody watched) meet the same admission check.
+    // an attach while nobody watched) meet the same admission check.
     await this.reconcileClients(session.id).catch(() => undefined)
     return true
   }
+  /** Once per session until it is detached: a second attach would be a second control client (and a fake recovery). */
   private attachUnreconciled(session: Session): void {
-    if (this.screens.has(session.id)) return
-    const screen = new Screen(session.cols, session.rows)
-    this.screens.set(session.id, screen)
-    this.driver.attach(session, (data) => {
-      if (this.closed || this.screens.get(session.id) !== screen) return
-      for (let offset = 0; offset < data.length; offset += 65536) {
-        const chunk = data.slice(offset, offset + 65536)
-        // Screen.failed exposes bounded-parser overflow to readers; a fresh attachment recovers it.
-        void screen.write(chunk, () => {
-          this.store.append(session.id, chunk)
-          for (const listener of this.outputListeners.get(session.id) ?? []) listener()
-          // A chunk parsed after its screen was stopped (or replaced) is not this attachment's.
-          if (this.closed || this.screens.get(session.id) !== screen) return
-          this.bridgeChunks.set(session.id, (this.bridgeChunks.get(session.id) ?? 0) + 1)
-          this.shadowSoon(session.id)
-        }).catch(() => undefined)
-      }
-    }, () => this.clientsChanged(session.id))
-  }
-  /** Compare the shadow replica with the bridge once the bridge has been quiet (spec D13, R1). */
-  private shadowSoon(id: string): void {
-    if (!this.driver.replica || this.closed) return
-    clearTimeout(this.shadowTimers.get(id))
-    this.shadowTimers.set(id, setTimeout(() => {
-      this.shadowTimers.delete(id)
-      void this.compareShadow(id).catch(() => undefined)
-    }, this.options.shadowQuietMs ?? SHADOW_QUIET_MS))
-  }
-  private async compareShadow(id: string): Promise<void> {
-    const replica = this.driver.replica?.(id)
-    const screen = this.screens.get(id)
-    if (this.closed || !replica || !screen || screen.failed) return
-    const chunks = this.bridgeChunks.get(id)
-    // Read between the replica's events; undefined while it waits for a seed (or ended).
-    const raw = await replica.read((terminal) => ({ view: screenView(terminal), activity: replica.activity, quietMs: replica.quietMs }))
-    if (!raw || this.closed) return
-    const quiet = this.options.shadowQuietMs ?? SHADOW_QUIET_MS
-    // The replica moved recently: the bridge's redraw of it may not have arrived yet.
-    if (raw.quietMs < quiet) { this.shadowSoon(id); return }
-    const bridge = await screen.capture(() => screen.view())
-    // Either side moved while they were read, or the attachment changed: not a quiet point.
-    if (this.closed || this.bridgeChunks.get(id) !== chunks || replica.activity !== raw.activity || this.screens.get(id) !== screen || this.driver.replica?.(id) !== replica) {
-      this.shadowSoon(id)
-      return
-    }
-    const mismatch = shadowDiff(bridge, raw.view)
-    const stats = this.shadow.get(id) ?? { compared: 0, mismatched: 0 }
-    this.shadow.set(id, stats)
-    stats.compared++
-    if (!mismatch) return
-    stats.mismatched++
-    stats.last = mismatch.kind === 'row' ? `row ${mismatch.row}` : mismatch.kind
-    const now = this.now()
-    if (stats.loggedAt !== undefined && now - stats.loggedAt < SHADOW_LOG_MS) return
-    stats.loggedAt = now
-    // Kinds and rows only: never screen contents. Copy mode and tmux messages show on the bridge only.
-    this.options.log?.info('Terminal shadow replica differs from the bridge screen', {
-      sessionId: id, mismatch: stats.last, compared: stats.compared, mismatched: stats.mismatched, replica: { ...replica.stats },
+    if (this.attached.has(session.id)) return
+    this.attached.add(session.id)
+    this.driver.attach(session, {
+      clientsChanged: () => this.clientsChanged(session.id),
+      died: () => this.paneDied(),
+      attention: (state) => { void this.attention(session.id, state) },
+      bell: (count) => { void this.bell(session.id, count) },
     })
   }
-  private async stopScreen(id: string): Promise<void> {
-    const screen = this.screens.get(id)
-    this.screens.delete(id)
-    await this.driver.detach(id)
-    if (screen) { await screen.drain(); screen.close() }
-    // After the drain: a chunk still being parsed finds no screen and records nothing.
-    // A new attachment made meanwhile keeps its own.
-    if (this.screens.has(id)) return
-    clearTimeout(this.shadowTimers.get(id))
-    this.shadowTimers.delete(id)
-    this.shadow.delete(id)
-    this.bridgeChunks.delete(id)
+  /** The program's hooks changed its pane's attention (or a fresh attachment read it): a running session records it. */
+  private attention(id: string, state: AttentionState | undefined): Promise<void> {
+    return this.run(async () => {
+      const session = this.store.sessions().find((entry) => entry.id === id)
+      if (!session || session.state !== 'running' || session.attention?.state === state) return
+      if (state) {
+        const occurrence = (session.attentionSeq ?? 0) + 1
+        session.attentionSeq = occurrence
+        session.attention = { state, since: this.now(), occurrence }
+      } else delete session.attention
+      this.save(session)
+      this.announce({ sessionId: id })
+    }).catch(() => undefined)
   }
-  private ensureScreen(id: string, principal: Principal): Promise<Screen> {
+  /**
+   * The operator saw the session's state (it is open and focused): it stops
+   * counting. Only the occurrence shown — a newer one stays unacknowledged.
+   */
+  acknowledge(id: string, principal: Principal, occurrence: number): Promise<Session> {
+    return this.run(async () => {
+      if (principal.kind !== 'human') throw new TerminalError('Only the operator acknowledges', 403)
+      const session = this.get(id, principal)
+      if (!session.attention || session.attention.occurrence !== occurrence || session.attention.acknowledgedAt !== undefined) return session
+      session.attention = { ...session.attention, acknowledgedAt: this.now() }
+      this.save(session)
+      this.announce({ sessionId: id })
+      return session
+    })
+  }
+  /**
+   * Keep an image for the session's input (spec item 8): only its input
+   * owner, at the generation it holds — checked again once the bytes are in,
+   * in the queue, so a takeover meanwhile keeps nothing.
+   */
+  async upload(id: string, principal: Principal, generation: number, read: () => Promise<Uint8Array>): Promise<Upload & { path: string }> {
+    const uploads = this.options.uploads
+    if (!uploads) throw new TerminalError('Image paste is unavailable', 503)
+    const writable = (session: Session) => {
+      authorize(session, principal, this.enabled(), true, generation)
+      if (session.state !== 'running') throw new TerminalError('Session has exited')
+    }
+    writable(this.get(id, principal))
+    // Bodies are read outside the queue: only a few at once, so their memory stays bounded.
+    if (this.uploadsReading >= MAX_UPLOADS_READING) throw new TerminalError('Other images are still uploading; try again in a moment', 503)
+    // The slot is held until the image is kept or refused: a body waiting on the queue still counts.
+    this.uploadsReading++
+    try {
+      const bytes = await read()
+      return await this.run(async () => {
+        writable(this.get(id, principal))
+        const upload = uploads.save(id, bytes, this.now())
+        return { ...upload, path: uploads.path(upload) }
+      })
+    } finally { this.uploadsReading-- }
+  }
+  /** Bookkeeping after delivery: a failure here never turns a delivered paste into a refused one. */
+  private markUploadsSent(id: string, names: string[] | undefined): void {
+    for (const name of names ?? []) {
+      try { this.options.uploads?.markSent(id, name, this.now()) } catch (error) {
+        this.options.log?.info('Terminal could not record an image as sent', { sessionId: id, name, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+  }
+  /** The operator took an image out of the draft. */
+  removeUpload(id: string, principal: Principal, generation: number, name: string): Promise<{ removed: boolean }> {
     return this.run(async () => {
       const session = this.get(id, principal)
-      await this.ensureAttached(session)
-      return this.screens.get(id)!
+      authorize(session, principal, this.enabled(), true, generation)
+      return { removed: this.options.uploads?.remove(id, name) ?? false }
     })
+  }
+  private announce(event: AttentionEvent): void {
+    try { this.options.announce?.(event) } catch (error) {
+      this.options.log?.info('Terminal could not announce attention', { sessionId: event.sessionId, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  /**
+   * tmux's bell count: one that differs from the count last seen rang (a
+   * bell is recorded at most once every BELL_INTERVAL_MS, so every screen
+   * notifies once). The count is kept with the session, so a bell between
+   * attachments, or before tmux's first report, is never taken for the
+   * starting point.
+   */
+  private bell(id: string, count: string): Promise<void> {
+    return this.run(async () => {
+      const session = this.store.sessions().find((entry) => entry.id === id)
+      if (!session || session.state !== 'running' || session.bellCount === count) return
+      // A session from before counts were kept starts from tmux's.
+      const rang = session.bellCount !== undefined && this.now() - (session.bellAt ?? -Infinity) >= BELL_INTERVAL_MS
+      if (rang) session.bellAt = this.now()
+      session.bellCount = count
+      this.save(session)
+      if (rang) this.announce({ sessionId: id })
+    }).catch(() => undefined)
+  }
+  private async detach(id: string): Promise<void> {
+    this.attached.delete(id)
+    await this.driver.detach(id)
   }
   private async ensureAttached(session: Session): Promise<void> {
     if (session.state !== 'running') throw new TerminalError('Live terminal screen unavailable', 503)
-    if (!this.driver.connected(session.id) || this.screens.get(session.id)?.failed || !this.screens.has(session.id)) {
-      await this.stopScreen(session.id)
+    // The session's source is its replica (spec D13): its control client closed or its replica ended (a
+    // failed reseed) is a loss, recovered by attaching again.
+    if (!this.replicaLive(session.id)) {
+      await this.detach(session.id)
       if (!await this.driver.alive(session.id)) throw new TerminalError('Terminal process has exited', 409)
       if (!await this.attach(session)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
     }
@@ -269,6 +320,8 @@ export class Sessions {
    */
   create(raw: unknown, principal: Principal, size?: StartSize): Promise<Session> {
     return this.run(async () => {
+      // A confirmed service update owns the live set from its check to its setup.
+      if (this.updatingService) throw new TerminalError('Terminal is applying its service update; start the session again in a moment.', 409)
       const input = createSchema.parse(raw)
       this.list(principal)
       const agentId = principal.kind === 'agent' ? principal.id : input.agentId
@@ -282,7 +335,9 @@ export class Sessions {
         ...input, cwd, agentId, id: `terminal-${randomUUID()}`, owner: principal,
         generation: 1, inputSequence: 0, state: 'running',
         ...this.startSize(principal, size),
-        createdAt: this.now(), lastActivityAt: this.now(),
+        createdAt: this.now(), lastActivityAt: this.now(), bellCount: '',
+        // Its final output is a bundle once it ends (plan T35b); a crash before that leaves this false.
+        outputSaved: false,
       }
       if ((input.checkout ?? (input.program === 'shell' ? 'existing' : 'isolated')) === 'isolated') {
         await this.sweepUnlocked()
@@ -298,7 +353,7 @@ export class Sessions {
       await this.driver.create(session)
       session.state = 'running'
       this.save(session)
-      // Unreconciled, the session stays detached; the first viewer sync retries.
+      // Unreconciled, the session stays detached; the first join or read retries.
       await this.attach(session)
       return session
     })
@@ -315,7 +370,7 @@ export class Sessions {
         authorize(session, principal, this.enabled(), true, session.generation)
         if (!session.agentId || !this.enabled().includes(session.agentId)) throw new TerminalError('No enabled agent is assigned')
         this.dropReservations(id)
-        // The agent drives alone: terminal apps are detached first (Bakin's bridge and control clients stay).
+        // The agent drives alone: terminal apps are detached first (Bakin's control client stays).
         await this.detachNatives(id)
         session.owner = { kind: 'agent', id: session.agentId }
       } else session.owner = principal
@@ -342,11 +397,19 @@ export class Sessions {
     const session = this.get(id, principal)
     authorize(session, principal, this.enabled(), true, generation)
     if (session.state !== 'running') throw new TerminalError('Session has exited')
+    // Its final picture is being taken: nothing typed now could be in it.
+    if (this.ending.has(id) || this.finishing.has(id)) throw new TerminalError('Session is ending', 409)
     if (sequence !== session.inputSequence + 1) throw new TerminalError('Input sequence is stale or out of order; do not retry ambiguous input')
     // The Return of a Paste + Enter counts too.
     if (Buffer.byteLength(data) + (options.paste && options.enter ? 1 : 0) > 65536) throw new TerminalError('Input exceeds 64 KiB', 413)
     // No attachment (a resize could not be reconciled): refuse before consuming, so nothing is uncertain.
+    // Input health is the control client's (spec D13).
     if (!this.driver.connected(id)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
+    // Every image a paste names is still kept: one swept since its draft was made (a day unsent) is refused
+    // before anything is consumed, so its missing path never reaches the program.
+    for (const name of options.uploads ?? []) {
+      if (!this.options.uploads?.exists(id, name)) throw new TerminalError('An image in this draft is no longer kept (unsent images go after a day); remove it and add it again', 410)
+    }
     // Consume the sequence before delivery. A transport failure is never auto-retried.
     session.inputSequence = sequence
     session.lastActivityAt = this.now()
@@ -354,8 +417,12 @@ export class Sessions {
     try {
       await this.driver.write(id, data, options)
     } catch (error) {
+      // It may have arrived: its images are kept as sent (never swept out from under the program).
+      this.markUploadsSent(id, options.uploads)
       throw new DeliveryUncertainError(error instanceof Error ? error.message : String(error))
     }
+    // The images it carried reached the program: kept with the session now, never swept as abandoned.
+    this.markUploadsSent(id, options.uploads)
     return session
   }
   /** Make `principal`'s screen the size authority and fit the grid to it (any human; spec D2). */
@@ -369,6 +436,22 @@ export class Sessions {
       return this.applySize(session, size.cols, size.rows)
     })
   }
+  /** Go back to the size before the last handoff: its grid, and the screen or app that sized it (any human). */
+  restoreSize(id: string, principal: Principal, epoch: number): Promise<Session> {
+    return this.run(async () => {
+      if (principal.kind !== 'human') throw new TerminalError('Only the human sizes terminal sessions', 403)
+      const session = this.get(id, principal)
+      if (session.state !== 'running') throw new TerminalError('Session has exited')
+      const { cols, rows, ...authority } = restoreSize(session, epoch)
+      // A terminal app still attached (tmux lists it now, and it was admitted) sizes by its window now, not the grid it had.
+      const viewer = authority.sizeAuthority?.kind === 'native' ? authority.sizeAuthority.viewer : undefined
+      const admitted = this.natives.get(id)
+      const app = viewer ? (await this.driver.clients(id)).find((client) => nativeViewer(client.pid) === viewer && admitted?.has(client.pid)) : undefined
+      Object.assign(session, authority)
+      const size = app ? clampSize(app.cols, app.rows) : { cols, rows }
+      return this.applySize(session, size.cols, size.rows)
+    })
+  }
   /** The authority's screen changed size: follow it. Anyone else, or an older epoch, is stale. */
   resizeAs(id: string, principal: Principal, epoch: number, cols: number, rows: number): Promise<Session> {
     return this.run(async () => {
@@ -379,8 +462,7 @@ export class Sessions {
     })
   }
   /**
-   * tmux first (the source of truth), then the bridge PTY, the headless
-   * screen and the record. If tmux refuses, read back the window it actually
+   * tmux first (the source of truth), then the record. If tmux refuses, read back the window it actually
    * has and make everything else match. Runs inside the queue, so input
    * waits until the representations agree. When they cannot be made to
    * agree (tmux unreachable, the record unwritable), the attachment is
@@ -398,14 +480,13 @@ export class Sessions {
       this.adoptSize(session, size)
       return session
     } catch {
-      await this.stopScreen(session.id)
+      await this.detach(session.id)
       throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
     }
   }
-  /** Make the headless screen and the record match `size` (tmux's window). */
+  /** Make the record match `size` (tmux's window). */
   private adoptSize(session: Session, size: { cols: number; rows: number }): void {
     if (size.cols !== session.cols || size.rows !== session.rows) {
-      this.screens.get(session.id)?.resize(size.cols, size.rows)
       session.cols = size.cols
       session.rows = size.rows
       session.sizeRevision++
@@ -478,8 +559,37 @@ export class Sessions {
     })
     await admitted
   }
+  /** The session's replica while attached. */
+  replica(id: string): RawSource | undefined { return this.driver.replica?.(id) }
+  private replicaLive(id: string): boolean {
+    return this.driver.connected(id) && Boolean(this.driver.replica?.(id))
+  }
+  /**
+   * A raw join's first step: the session attached, its replica live (one lost is rebuilt from tmux: a
+   * recovery). A live one is the common case and waits for nothing; a recovery takes the manager's
+   * queue, as every attachment does (input to other sessions waits behind it meanwhile).
+   */
+  ensureReplica(id: string, principal: Principal): Promise<void> {
+    if (this.get(id, principal).state === 'running' && this.replicaLive(id)) return Promise.resolve()
+    return this.run(async () => { await this.ensureAttached(this.get(id, principal)) })
+  }
+  /**
+   * A viewer's picture repeatedly differed from the replica's (plan T37): the
+   * replica is rebuilt from tmux, and that is logged with positions and
+   * counts — never the screen's contents (terminal output can hold secrets).
+   */
+  diverged(id: string, detail: { category: string; seq: number; mismatches: number }): void {
+    this.options.log?.info('Terminal display diverged; rebuilding from tmux', { sessionId: id, ...detail })
+    void this.driver.replica?.(id)?.diverged().catch(() => undefined)
+  }
+  /** An ended session's saved final output, read across turns (undefined: none, or unreadable). */
+  bundle(id: string): Promise<Bundle | undefined> { return this.store.bundle(id) }
+  /** The rebuilds the session's output has been through. */
+  fidelity(id: string): Fidelity { return this.driver.fidelity?.(id) ?? { rebuilds: {} } }
   /** The terminal apps admitted to a session right now. */
   nativeClients(id: string): NativeClient[] { return [...this.natives.get(id)?.values() ?? []] }
+  /** Active, quiet or exited, from the pane's real output (lib/attention.ts). */
+  activity(session: Session): Activity { return activity(session, this.driver.lastOutputAt?.(session.id), this.now()) }
   /** Hear when a terminal app is admitted, resizes, or leaves. */
   onNatives(id: string, listener: () => void): () => void {
     let listeners = this.nativeListeners.get(id)
@@ -627,49 +737,156 @@ export class Sessions {
     this.natives.delete(id)
     if (had) notify(this.nativeListeners.get(id), (listener) => listener())
   }
-  finish(id: string, principal: Principal, _generation: number, terminate: boolean): Promise<Session> {
+  finish(id: string, principal: Principal, generation: number, terminate: boolean): Promise<Session> {
+    if (this.stopping) return Promise.reject(new TerminalError('Terminal is shutting down', 503))
+    const operation = this.finishOnce(id, principal, generation, terminate)
+    // Held from before the reservation (set synchronously) until the kill is done, and until every
+    // finish of the session settles: nothing reaches the program between its final picture and its end.
+    const held = operation.then(() => undefined, () => undefined)
+    const all = this.finishing.get(id) ?? new Set<Promise<void>>()
+    this.finishing.set(id, all)
+    all.add(held)
+    void held.then(() => { all.delete(held); if (!all.size && this.finishing.get(id) === all) this.finishing.delete(id) })
+    return operation
+  }
+  private async finishOnce(id: string, principal: Principal, _generation: number, terminate: boolean): Promise<Session> {
+    // Lifecycle, not input: get() already gates access (a human is the
+    // operator; an agent sees only its own session). Ending a session never
+    // needed to be the live input owner, so the operator can stop an agent's
+    // runaway session without seizing keyboard control first.
+    // Reserved in the queue (input to it is refused from here), saved outside it (bounded by
+    // FINAL_CUT_MS); a failed save never blocks the kill (a retained pane leaks).
+    const reserved = await this.run(async () => {
+      const session = this.get(id, principal)
+      if (session.state === 'completed') return { done: session }
+      if (await this.driver.alive(id) && !terminate) throw new TerminalError('The process is still running; exit it or explicitly terminate it first')
+      return { saving: this.saveFinal(id) }
+    })
+    if (reserved.done) return reserved.done
+    await reserved.saving
     return this.run(async () => {
-      // Lifecycle, not input: get() already gates access (a human is the
-      // operator; an agent sees only its own session). Ending a session never
-      // needed to be the live input owner, so the operator can stop an agent's
-      // runaway session without seizing keyboard control first.
       const session = this.get(id, principal)
       if (session.state === 'completed') return session
-      const alive = await this.driver.alive(id)
-      if (alive && !terminate) throw new TerminalError('The process is still running; exit it or explicitly terminate it first')
-      await this.driver.terminate(id)
-      await this.stopScreen(id)
+      try {
+        await this.driver.terminate(id)
+      } catch (error) {
+        // The kill failed and the program runs on: what was saved is not its final output.
+        if (await this.driver.alive(id).catch(() => true) && this.store.hasBundle(id)) this.store.discardProvisionalBundle(id)
+        throw error
+      }
+      await this.detach(id)
       this.forgetNatives(id)
       session.state = 'completed'
+      const had = session.attention !== undefined
+      delete session.attention
       session.completedAt = this.now()
       this.save(session)
+      if (had) this.announce({ sessionId: id })
       await this.clean(session)
       return session
-    })
+    }, true)
   }
-  async screen(id: string, principal: Principal): Promise<{ session: Session; data: string; cursor: number }> {
-    const screen = await this.ensureScreen(id, principal)
-    const snapshot = await screen.capture(() => ({ data: screen.serialize(), cursor: this.store.output(id, Number.MAX_SAFE_INTEGER).cursor }))
-    const current = this.get(id, principal)
-    return { session: current, ...snapshot }
+  /**
+   * Persist an ending session's final output (plan T35b): the replica's
+   * picture after a drain (to a control reply while the control client is
+   * connected), bounded by FINAL_CUT_MS, committed with the session's flag
+   * and any evictions in one transaction (lib/store.ts). Outside the manager
+   * queue, one at a time per session. Never throws: no picture in time, or a
+   * failed write, is `outputSaved: false`.
+   */
+  private saveFinal(id: string): Promise<void> {
+    const running = this.ending.get(id)
+    if (running) return running
+    // Registered at once: a caller in the queue reserves the session before it leaves the queue.
+    const work = this.saveFinalOnce(id).finally(() => this.ending.delete(id))
+    this.ending.set(id, work)
+    return work
   }
-  /** The visible pane as text, with the grid it was read at (captured together). */
+  /**
+   * A running session's program exited (in the queue): its final save is
+   * registered before the exit is published, so a viewer that joins the
+   * ended session waits for it (`finalSaved`). The pane stays
+   * (remain-on-exit): what the program printed last is in the replica.
+   */
+  private publishExit(session: Session): Promise<void> {
+    const saving = this.saveFinal(session.id)
+    session.state = 'exited'
+    // Nobody's turn is pending in a program that ended.
+    const had = session.attention !== undefined
+    delete session.attention
+    this.forgetNatives(session.id)
+    this.save(session)
+    if (had) this.announce({ sessionId: session.id })
+    return saving
+  }
+  /** Settles once the session's final save in flight, if any, has: its record then says whether it was saved. */
+  finalSaved(id: string): Promise<void> {
+    return this.ending.get(id) ?? Promise.resolve()
+  }
+  /** Best effort: the failure is recorded when it can be, and never stops what follows (a kill). */
+  private markNotSaved(id: string): void {
+    try { this.store.markOutput(id, false) } catch (error) {
+      this.options.log?.info('Terminal could not record that output was not saved', { sessionId: id, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  private async saveFinalOnce(id: string): Promise<void> {
+    if (this.store.session(id)?.outputSaved) return
+    let evicted: string[] = []
+    try {
+      const cut = await this.driver.finalCut?.(id, { boundary: this.driver.connected(id), timeoutMs: FINAL_CUT_MS })
+      if (cut) ({ evicted } = await this.store.saveBundle(id, makeBundle(cut, this.fidelity(id), this.now())))
+      else this.markNotSaved(id)
+    } catch (error) {
+      this.options.log?.info('Terminal final output was not saved', { sessionId: id, error: error instanceof Error ? error.message : String(error) })
+      this.markNotSaved(id)
+    }
+    // The store set the flags; viewers hear the records as they are now (evicted ones included).
+    for (const changed of [id, ...evicted]) {
+      const session = this.closed ? undefined : this.store.session(changed)
+      if (session) notify(this.sessionListeners.get(changed), (listener) => listener(session))
+    }
+  }
+  /**
+   * The visible pane as text, with the grid it was read at — all of it from
+   * the replica in one step: its screen, its dimensions and its size
+   * revision (spec D3, plan T34a).
+   */
   async readScreen(id: string, principal: Principal): Promise<{ screen: string; cols: number; rows: number; sizeRevision: number }> {
-    const screen = await this.ensureScreen(id, principal)
-    return screen.capture(() => {
-      const session = this.get(id, principal)
-      return { screen: screen.text(), cols: session.cols, rows: session.rows, sizeRevision: session.sizeRevision }
+    const replica = await this.run(async () => {
+      await this.ensureAttached(this.get(id, principal))
+      return this.driver.replica?.(id)
     })
+    // Access is checked again once the read runs: a reassignment while it waited revokes it.
+    const view = await replica?.read((terminal) => {
+      this.get(id, principal)
+      return { screen: visibleText(terminal), cols: terminal.cols, rows: terminal.rows, sizeRevision: replica.sizeRevision }
+    })
+    if (!view) throw new TerminalError('Terminal output is not ready yet; retry', 503)
+    return view
   }
-  /** One bounded page of stored output after `cursor`, as bytes (at least one stored chunk, else at most `limit` bytes). */
-  outputPage(id: string, principal: Principal, cursor: number, limit?: number): { session: Session; cursor: number; data: Buffer; truncated: boolean } {
+  /**
+   * The session's text, history and screen, as plain lines (the agent tool's
+   * `output`): the replica's while it runs, its saved final picture once it
+   * ended. `lines` keeps the last that many.
+   */
+  async outputText(id: string, principal: Principal, lines?: number): Promise<{ session: Session; text: string; lines: number; truncated: boolean }> {
     const session = this.get(id, principal)
-    if (session.state === 'running' && (!this.driver.connected(id) || this.screens.get(id)?.failed)) throw new TerminalError('Terminal attachment is unavailable; reconnect required', 503)
-    return { session, ...this.store.output(id, cursor, limit) }
-  }
-  output(id: string, principal: Principal, cursor: number) {
-    const page = this.outputPage(id, principal, cursor)
-    return { ...page, data: page.data.toString('base64') }
+    let read: { text: string; lines: number } | undefined
+    if (session.state === 'running') {
+      const replica = await this.run(async () => {
+        await this.ensureAttached(this.get(id, principal))
+        return this.driver.replica?.(id)
+      })
+      read = await replica?.read((terminal) => { this.get(id, principal); return bufferText(terminal.buffer.active) })
+      if (!read) throw new TerminalError('Terminal output is not ready yet; retry', 503)
+    } else {
+      const bundle = await this.store.bundle(id)
+      if (!bundle) throw new TerminalError(session.historyDeleted ? 'This session\'s output was deleted' : 'This session ended without its output being saved', 404)
+      read = await bundleText(bundle)
+    }
+    const all = read.text ? read.text.split('\n') : []
+    const kept = lines !== undefined && all.length > lines ? all.slice(-lines) : all
+    return { session: this.get(id, principal), text: kept.join('\n'), lines: kept.length, truncated: kept.length < all.length }
   }
   deleteHistory(id: string, principal: Principal): Promise<void> {
     return this.run(() => this.deleteHistoryUnlocked(id, principal))
@@ -678,8 +895,10 @@ export class Sessions {
     if (principal.kind !== 'human') throw new TerminalError('Only the human can delete history', 403)
     const session = this.get(id, principal)
     if (session.state !== 'completed') throw new TerminalError('Complete the session before deleting history')
-    await this.stopScreen(id)
-    this.store.deleteOutput(id)
+    await this.detach(id)
+    this.store.deleteBundle(id)
+    // Its pasted images are its history too.
+    this.options.uploads?.removeSession(id)
     session.historyDeleted = true
     this.save(session)
   }
@@ -695,8 +914,10 @@ export class Sessions {
       if (session.worktreePath) {
         await this.options.release({ sessionId: session.id, worktreePath: session.worktreePath, teardown: true }).catch(() => undefined)
       }
-      await this.stopScreen(id)
+      await this.detach(id)
       this.forgetNatives(id)
+      this.driver.forget?.(id)
+      this.options.uploads?.removeSession(id)
       this.store.deleteSession(id)
     })
   }
@@ -714,38 +935,141 @@ export class Sessions {
     }
     this.save(session)
   }
-  private async sweepUnlocked(): Promise<void> {
+  /** `retried`: the unsaved sessions whose save this sweep tried again; any other unsaved one waits for a sweep that does. */
+  private async sweepUnlocked(retried = new Set<string>()): Promise<void> {
+    for (const failure of this.options.uploads?.sweepAbandoned(this.now()) ?? []) {
+      this.options.log?.info('Terminal could not delete an abandoned image; it is tried again next sweep', failure)
+    }
     for (const session of this.store.sessions()) {
       if (this.now() - session.lastActivityAt >= (this.options.settings().idleDays ?? 30) * DAY) {
-        if (session.state === 'exited') {
+        // Not while its final save is in flight, nor before a retry of a failed one (sweep() tries it first).
+        if (session.state === 'exited' && !this.ending.has(session.id) && (session.outputSaved !== false || retried.has(session.id))) {
           await this.driver.terminate(session.id)
-          await this.stopScreen(session.id)
+          await this.detach(session.id)
           session.state = 'completed'
           session.completedAt = this.now()
           this.save(session)
         }
       }
       if (session.state === 'completed') await this.clean(session)
-      if (session.completedAt !== undefined && this.now() - session.completedAt >= 30 * DAY && !session.historyDeleted) await this.deleteHistoryUnlocked(session.id, { kind: 'human', id: 'maintenance' })
+      if (session.completedAt !== undefined && this.now() - session.completedAt >= 30 * DAY && !session.historyDeleted) {
+        // One that cannot be deleted now (an image that will not go) is tried again next sweep; the rest go on.
+        await this.deleteHistoryUnlocked(session.id, { kind: 'human', id: 'maintenance' }).catch((error: unknown) => {
+          this.options.log?.info('Terminal could not delete a session history; it is tried again next sweep', { sessionId: session.id, error: error instanceof Error ? error.message : String(error) })
+        })
+      }
     }
   }
-  sweep(): Promise<void> { return this.run(() => this.sweepUnlocked()) }
+  sweep(): Promise<void> {
+    if (this.stopping) return Promise.reject(new TerminalError('Terminal is shutting down', 503))
+    // Accepted: it runs to its end, and shutdown waits for it.
+    const work = this.sweepOnce()
+    const settled = work.then(() => undefined, () => undefined)
+    this.sweeps.add(settled)
+    void settled.then(() => this.sweeps.delete(settled))
+    return work
+  }
+  private sweeps = new Set<Promise<void>>()
+  private async sweepOnce(): Promise<void> {
+    // An exited session whose final output is not saved yet (a failed save) tries again before
+    // maintenance may complete it: every retry reserved at once (in the queue, attached to its
+    // retained pane if nothing is), then saved outside it. Saves already in flight settle first (each is
+    // bounded): a retry decided while one runs would share it, and it reads the replica it started with.
+    await Promise.allSettled([...this.ending.values()])
+    const retried = new Set<string>()
+    const retries = await this.run(async () => {
+      const saves: Promise<void>[] = []
+      for (const session of this.store.sessions()) {
+        // One that started since is in flight on a live attachment: it is its own save.
+        if (session.state !== 'exited' || session.outputSaved !== false || this.ending.has(session.id)) continue
+        // An unusable attachment (its control client closed, or its replica ended) is replaced: a new one
+        // seeds a replica from the pane.
+        if (!this.replicaLive(session.id)) await this.detach(session.id)
+        this.attachUnreconciled(session)
+        saves.push(this.saveFinal(session.id))
+        retried.add(session.id)
+      }
+      return saves
+    }, true)
+    await Promise.all(retries)
+    return this.run(() => this.sweepUnlocked(retried), true)
+  }
   /**
    * Set up (or update) the tmux service in the manager's queue, so it can
    * never land in the middle of a session's creation, then reattach.
    */
-  setupService(install: () => Promise<void>): Promise<void> {
-    return this.run(async () => {
+  async setupService(install: () => Promise<void>, options: { startup?: boolean } = {}): Promise<void> {
+    const saving = await this.run(async () => {
       await install()
+      const saves: Promise<void>[] = []
       for (const session of this.store.sessions()) {
         if (session.state !== 'running') continue
         if (await this.driver.alive(session.id)) {
+          // Alive with a bundle: it was saved, then a crash came before the kill; the session goes on. (A
+          // pane that died meanwhile keeps its bundle: that was its final output.)
+          // Only at startup: on a live server, a running session with a bundle is a finish between its save
+          // and its kill.
+          if (options.startup && !this.finishing.has(session.id) && this.store.hasBundle(session.id)) this.store.discardProvisionalBundle(session.id)
           await this.driver.title(session)
-          // Unreconciled, the session stays detached; the first viewer sync retries.
+          // Unreconciled, the session stays detached; the first join or read retries.
           await this.attach(session)
-        } else { session.state = 'exited'; this.save(session) }
+        } else {
+          // Its program exited while nothing watched (a restart): attached to its retained pane, its
+          // replica seeds from it, so the final save still has the last screen.
+          this.attachUnreconciled(session)
+          saves.push(this.publishExit(session))
+        }
       }
+      return saves
     })
+    await Promise.all(saving)
+  }
+  /**
+   * The service update a person confirmed (Terminal's Apply update): the
+   * live sessions they were shown end, then the service is set up. Refused,
+   * ending nothing, when no update is due any more or the live sessions are
+   * no longer exactly the confirmed ones. A session that cannot be ended
+   * stops it there (no setup), and the error names what did end.
+   */
+  async applyServiceUpdate(confirmed: string[], principal: Principal, install: () => Promise<void>, required: () => Promise<boolean>): Promise<{ ended: string[] }> {
+    // Checked in the queue (a creation in flight has landed by then), and reserved until setup is done:
+    // no session starts in between.
+    const live = await this.run(async () => {
+      if (this.updatingService) throw new TerminalError('The Terminal service update is already being applied.', 409)
+      if (!await required()) throw new TerminalError('The Terminal service is already up to date; no sessions were ended.', 409)
+      const running = this.store.sessions().filter((session) => session.state === 'running')
+      const asked = new Set(confirmed)
+      if (running.length !== asked.size || running.some((session) => !asked.has(session.id))) {
+        throw new TerminalError('The live sessions changed since you confirmed; no sessions were ended. Review the list and confirm again.', 409)
+      }
+      this.updatingService = true
+      return running
+    })
+    try {
+      return await this.endAndSetUp(live, principal, install)
+    } finally {
+      this.updatingService = false
+    }
+  }
+  private updatingService = false
+  private async endAndSetUp(live: Session[], principal: Principal, install: () => Promise<void>): Promise<{ ended: string[] }> {
+    const ended: string[] = []
+    const so = () => ended.length ? `Ended ${ended.join(', ')}; ` : ''
+    for (const session of live) {
+      try {
+        await this.finish(session.id, principal, session.generation, true)
+        ended.push(session.title)
+      } catch (error) {
+        throw new TerminalError(`${so()}${session.title} could not be ended (${error instanceof Error ? error.message : String(error)}). The update was not applied.`, 409)
+      }
+    }
+    try {
+      await this.setupService(install)
+    } catch (error) {
+      if (!ended.length) throw error
+      throw new TerminalError(`${so()}the update was not applied: ${error instanceof Error ? error.message : String(error)}`, error instanceof TerminalError ? error.status : 503)
+    }
+    return { ended }
   }
   async beforeUninstall(stop: () => Promise<void>): Promise<void> {
     await this.run(async () => {
@@ -757,14 +1081,27 @@ export class Sessions {
   async shutdown(): Promise<void> {
     for (const timer of this.timers) clearTimeout(timer)
     this.timers.clear()
-    for (const timer of this.shadowTimers.values()) clearTimeout(timer)
-    this.shadowTimers.clear()
     for (const token of [...this.reservations.keys()]) this.dropReservation(token, 'Terminal is shutting down')
-    await this.pending
+    // Lifecycle work outside the queue settles before replicas and the store go, until none is left (one
+    // can start another): a coalesced refresh (and the one more it owes), every finish (save, then kill),
+    // the queue, every final save.
+    // The queue first, each time: work it holds (a refresh's liveness check) can start more of it.
+    this.stopping = true
+    const drain = async () => {
+      for (;;) {
+        // Until the queue's tail stops moving: work accepted before the cutoff may still queue its next step.
+        for (let tail = this.pending; ; tail = this.pending) { await tail; if (tail === this.pending) break }
+        const outstanding = [this.refreshing, ...this.refreshes, ...this.sweeps, ...[...this.finishing.values()].flatMap((all) => [...all]), ...this.ending.values()].filter((work) => work !== undefined)
+        if (!outstanding.length) return
+        await Promise.allSettled(outstanding)
+      }
+    }
+    await drain()
+    // One last refresh for deaths heard meanwhile (bounded: hints from here on are not taken).
+    if (this.owedAtStop) { await this.trackRefresh().catch(() => undefined); await drain() }
     this.closed = true
+    this.attached.clear()
     await this.driver.detach()
-    for (const screen of this.screens.values()) { await screen.drain(); screen.close() }
-    this.screens.clear()
     this.store.close()
   }
 }

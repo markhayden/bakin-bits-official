@@ -23,21 +23,35 @@ export const SEED_FORMATS = [
 ] as const
 
 /**
+ * How much a seed carries: `full` is the pane with its history (up to the
+ * scrollback); `screen` is everything but the history (the screen, the saved
+ * normal screen under the alternate one, the visual rows, every format) —
+ * small enough to land under a flood (spec D13, plan T33e).
+ */
+export type SeedScope = 'full' | 'screen'
+
+/**
  * The commands of one seed: the formats, the newest history rows the
  * replica keeps, the screen, (on the alternate screen) the saved normal
- * screen, and the screen again as visual rows (for a pending wrap). Rows
- * are captured with attributes (-e), trailing spaces kept (-N) and, except
- * the last, wrapped lines joined (-J).
+ * screen, the screen again as visual rows (for a pending wrap), and (with
+ * history) the last history row and the first screen row joined: one line
+ * when that row continues a line wrapped from the history. Rows are
+ * captured with attributes (-e), trailing spaces kept (-N) and, except the
+ * visual rows, wrapped lines joined (-J).
  */
-export function seedCommands(target: string, history = TERMINAL_OPTIONS.scrollback): string[][] {
-  return [
-    ['display-message', '-p', '-t', target, SEED_FORMATS.map((name) => `#{${name}}`).join('\t')],
-    // -E -1 clamps to row 0 when there is no history: history_size (same group) says whether this block is real.
-    ['capture-pane', '-p', '-e', '-J', '-N', '-S', String(-history), '-E', '-1', '-t', target],
+export function seedCommands(target: string, scope: SeedScope = 'full', history = TERMINAL_OPTIONS.scrollback): string[][] {
+  const formats = ['display-message', '-p', '-t', target, SEED_FORMATS.map((name) => `#{${name}}`).join('\t')]
+  const screens = [
     ['capture-pane', '-p', '-e', '-J', '-N', '-S', '0', '-E', '-', '-t', target],
     ['capture-pane', '-p', '-e', '-J', '-N', '-a', '-q', '-t', target],
     ['capture-pane', '-p', '-e', '-N', '-S', '0', '-E', '-', '-t', target],
   ]
+  // -E -1 clamps to row 0 when there is no history: history_size (same group) says whether this block is real.
+  if (scope === 'full') {
+    const boundary = ['capture-pane', '-p', '-J', '-S', '-1', '-E', '0', '-t', target]
+    return [formats, ['capture-pane', '-p', '-e', '-J', '-N', '-S', String(-history), '-E', '-1', '-t', target], ...screens, boundary]
+  }
+  return [formats, ...screens]
 }
 
 export interface Seed {
@@ -127,6 +141,12 @@ function rows(lines: string[]): string {
   return out + '\x1b[0m'
 }
 const blocks = (...captures: string[][]) => captures.filter((capture) => capture.length).map(rows).join('\r\n')
+/**
+ * The history and the normal screen: a screen whose first row continues a
+ * line wrapped from the history follows it with no line break (the history's
+ * last row is full: the next character wraps).
+ */
+const historyAndScreen = (history: string[], screen: string[], continues: boolean) => continues && history.length && screen.length ? rows(history) + rows(screen) : blocks(history, screen)
 
 /**
  * The column a captured visual row leaves the cursor at: its characters'
@@ -165,17 +185,22 @@ export function capturedRowWidth(row: string, cols: number, stops: number[]): nu
 }
 
 /** Turn the replies of `seedCommands` into seed bytes (pure). */
-export function seedFrom(replies: string[][]): Seed {
-  if (replies.length !== 5) throw new Error(`A seed needs 5 replies, got ${replies.length}`)
+export function seedFrom(replies: string[][], scope: SeedScope = 'full'): Seed {
+  const expected = scope === 'full' ? 6 : 4
+  if (replies.length !== expected) throw new Error(`A ${scope} seed needs ${expected} replies, got ${replies.length}`)
+  // A screen seed has no history reply: the others move up by one.
+  const at = scope === 'full' ? 0 : -1
   const values = (replies[0]![0] ?? '').split('\t')
   if (values.length !== SEED_FORMATS.length) throw new Error('Seed formats are incomplete')
   const formats: Record<string, string> = Object.fromEntries(SEED_FORMATS.map((name, i) => [name, values[i]!]))
   const cols = number(formats, 'pane_width')
   const rows_ = number(formats, 'pane_height')
-  const history = number(formats, 'history_size') > 0 ? replies[1]! : []
-  const screen = replies[2]!
-  const savedNormal = replies[3]!
-  const visual = replies[4]!
+  const history = scope === 'full' && number(formats, 'history_size') > 0 ? replies[1]! : []
+  const screen = replies[2 + at]!
+  const savedNormal = replies[3 + at]!
+  const visual = replies[4 + at]!
+  // (One line: the screen's first row continues the history's last.)
+  const continues = history.length > 0 && replies[5]?.length === 1
   const cursorX = number(formats, 'cursor_x')
   const cursorY = number(formats, 'cursor_y')
   const upper = number(formats, 'scroll_region_upper')
@@ -187,11 +212,12 @@ export function seedFrom(replies: string[][]): Seed {
   let seed = '\x1bc' + tabs
   if (formats.alternate_on === '1') {
     // History plus the saved normal screen form the normal buffer; the program's screen is the alternate one.
-    // (A saved cursor in a pending wrap is placed on the last column.)
+    // (A saved cursor in a pending wrap is placed on the last column. Whether the saved screen's first row
+    // continues the history's last is not captured: a line wrapped across them is two, a recorded limit.)
     seed += blocks(history, savedNormal)
     // (Clamped, as tmux restores it on leaving the alternate screen.)
     seed += `\x1b[${number(formats, 'alternate_saved_y') + 1};${Math.min(number(formats, 'alternate_saved_x'), cols - 1) + 1}H\x1b[?1049h\x1b[H\x1b[2J` + rows(screen)
-  } else seed += blocks(history, screen)
+  } else seed += historyAndScreen(history, screen, continues)
   seed += `\x1b[${upper + 1};${number(formats, 'scroll_region_lower') + 1}r\x1b[0m`
   if (formats.keypad_cursor_flag === '1') seed += '\x1b[?1h'
   if (formats.keypad_flag === '1') seed += '\x1b='
@@ -228,6 +254,15 @@ export const RESEED_ATTEMPTS = 5
 /** The waits between attempts (one fewer than the attempts). */
 export const RESEED_BACKOFF_MS = [100, 250, 500, 1000] as const
 
+/**
+ * Thrown by an attempt's turn to give a capture up before it starts (the
+ * reason for it went away): the reseed stops at once, with no retry and
+ * without invalidating the log.
+ */
+export class SeedDeferred extends Error {
+  constructor(reason: string) { super(`seed deferred: ${reason}`) }
+}
+
 export interface ReseedOptions {
   sleep?(ms: number): Promise<void>
   /**
@@ -235,19 +270,29 @@ export interface ReseedOptions {
    * process); the waits between attempts are outside it.
    */
   attempt?<T>(capture: () => Promise<T>): Promise<T>
+  /** How much the seed carries (default `full`). */
+  scope?: SeedScope
+  /**
+   * Land the capture as a `geometry` event for this width-change generation
+   * (lib/output-log.ts) instead of a seed. Not shared with a seed in flight.
+   */
+  geometry?: number
 }
 
 /**
- * Reseed `log` from tmux. The seed lands in the log at the group's final
- * reply, synchronously, before any later output is fed. Failures retry with
+ * Reseed `log` from tmux (or, with `geometry`, capture its picture for a
+ * width change). The seed lands in the log at the group's final reply,
+ * synchronously, before any later output is fed. Failures retry with
  * backoff (one capture in flight at a time, so memory never grows with
  * retries); after RESEED_ATTEMPTS the log is invalidated. Concurrent calls
  * for one log share the attempt in flight.
  */
 export function reseed(control: ControlClient, log: OutputLog, target: string, reason: string, options: ReseedOptions = {}): Promise<Seed> {
+  const scope = options.scope ?? 'full'
   const sleep = options.sleep ?? ((ms: number) => Bun.sleep(ms))
   const turn = options.attempt ?? (<T>(capture: () => Promise<T>) => capture())
-  const running = inFlight.get(log)
+  const geometry = options.geometry
+  const running = geometry === undefined ? inFlight.get(log) : undefined
   if (running) return running
   const attempt = (async () => {
     let lastError: unknown
@@ -256,13 +301,18 @@ export function reseed(control: ControlClient, log: OutputLog, target: string, r
       if (log.invalidReason) throw new Error(`Reseed abandoned: the log is invalid (${log.invalidReason})`)
       let seed: Seed | undefined
       try {
-        await turn(() => control.group(seedCommands(target), (replies) => {
-          seed = seedFrom(replies)
+        await turn(() => control.group(seedCommands(target, scope), (replies) => {
+          seed = seedFrom(replies, scope)
           // A seed the log did not keep (no consumer, or it overflowed) is a failure.
-          if (!log.seed(seed.bytes, seed.cols, seed.rows, reason)) throw new Error(`the log did not take the seed (${log.invalidReason ?? 'no consumer'})`)
+          const kept = geometry === undefined
+            ? log.seed(seed.bytes, seed.cols, seed.rows, reason, scope === 'full')
+            : log.geometry(seed.bytes, seed.cols, seed.rows, geometry, scope === 'full')
+          if (!kept) throw new Error(`the log did not take the seed (${log.invalidReason ?? 'no consumer'})`)
         }))
         return seed!
       } catch (error) {
+        // Given up before it started (lib/replica.ts history restore): not a failure.
+        if (error instanceof SeedDeferred) throw error
         lastError = error
         // A closed connection will not answer a retry: recovery reattaches instead.
         if (control.isClosed) break
@@ -271,6 +321,7 @@ export function reseed(control: ControlClient, log: OutputLog, target: string, r
     log.invalidate(`reseed failed: ${lastError instanceof Error ? lastError.message : String(lastError)}`)
     throw lastError instanceof Error ? lastError : new Error(String(lastError))
   })()
+  if (geometry !== undefined) return attempt
   inFlight.set(log, attempt)
   void attempt.finally(() => inFlight.delete(log)).catch(() => undefined)
   return attempt

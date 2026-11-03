@@ -1,6 +1,6 @@
 /**
  * Workarounds for bugs in the pinned xterm 6.0.0, applied identically to
- * the browser terminal and the server's headless Screen. Each has a test
+ * the browser terminal and the server's profile terminals. Each has a test
  * that fails once upstream fixes the bug (drop the patch then).
  */
 
@@ -81,7 +81,8 @@ export function patchAltBufferCapacity(terminal: { onResize(listener: () => void
 // BufferLine cell layout (xterm 6.0.0): 3 words per cell; content word bit 21
 // marks combined (grapheme) content, bg word bit 28 marks extended attributes.
 const COMBINED = 0x200000
-const HAS_EXTENDED = 0x10000000
+/** A cell's (or the pen's) bg bit: it has an extended-attribute entry (xterm 6.0.0's packing). */
+export const HAS_EXTENDED = 0x10000000
 
 /**
  * xterm 6.0.0: a line's combined (grapheme) and extended-attribute maps keep
@@ -338,4 +339,43 @@ export function patchChunkedPrintClear(terminal: object): void {
     }
     try { print(data, start, end) } finally { delete (line as Partial<PrintLine>).setCellFromCodepoint }
   }
+}
+
+/**
+ * xterm 6.0.0 places its input textarea (IME, the software keyboard, focus
+ * scrolling) only when the cursor moves after `open()`. A terminal written
+ * before it is opened (a picture, replayed unseen and shown at
+ * its barrier) leaves it unplaced until new output moves the cursor: place
+ * it once, from the cursor the picture left.
+ */
+export function syncTextarea(terminal: object): void {
+  ;(core(terminal) as { _syncTextArea?(): void } | undefined)?._syncTextArea?.()
+}
+
+const altEntries = new WeakMap<object, 'saved' | 'unsaved'>()
+/**
+ * How the alternate screen now active was entered: `saved` by DECSET 1049
+ * (the normal screen's cursor was saved for the return), `unsaved` by 47 or
+ * 1047. A width rebase (lib/geometry.ts) takes the normal screen's return
+ * slot from tmux only for a saved entry.
+ */
+export const altEntry = (terminal: object): 'saved' | 'unsaved' | undefined => altEntries.get(terminal)
+/** Set by a restore (the checkpoint carries it: its serializer enters the alternate screen by 47). */
+export const setAltEntry = (terminal: object, entry: 'saved' | 'unsaved' | null): void => { if (entry) altEntries.set(terminal, entry); else altEntries.delete(terminal) }
+export function trackAltEntry(terminal: { parser: { registerCsiHandler(id: { prefix?: string; final: string }, callback: (params: (number | number[])[]) => boolean): unknown; registerEscHandler(id: { final: string }, callback: () => boolean): unknown }; buffer: { active: { type: string } } } & object): void {
+  // Runs before xterm's own handler (it still runs: false): the buffer is the one being left.
+  const record = (entering: boolean) => (params: (number | number[])[]) => {
+    const alternate = terminal.buffer.active.type === 'alternate'
+    for (const param of params) {
+      if (param !== 1049 && param !== 47 && param !== 1047) continue
+      // Entering from the normal screen (1049 saves the cursor there first); while alternate, nothing changes.
+      if (entering && !alternate) { altEntries.set(terminal, param === 1049 ? 'saved' : 'unsaved'); break }
+      if (!entering && alternate) { altEntries.delete(terminal); break }
+    }
+    return false
+  }
+  terminal.parser.registerCsiHandler({ prefix: '?', final: 'h' }, record(true))
+  terminal.parser.registerCsiHandler({ prefix: '?', final: 'l' }, record(false))
+  // RIS leaves the alternate screen without a DECRST.
+  terminal.parser.registerEscHandler({ final: 'c' }, () => { altEntries.delete(terminal); return false })
 }

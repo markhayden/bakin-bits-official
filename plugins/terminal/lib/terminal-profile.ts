@@ -1,5 +1,5 @@
 import { applyTmuxWidths } from './unicode-widths'
-import { patchAltBufferCapacity, patchChunkedPrintClear, patchEraseAbove, patchLinkLifetime, patchReflowStaleMaps, patchSharedTabStops, patchUtf8Decoder } from './xterm-fixes'
+import { patchAltBufferCapacity, patchChunkedPrintClear, patchEraseAbove, patchLinkLifetime, patchReflowStaleMaps, patchSharedTabStops, patchUtf8Decoder, trackAltEntry } from './xterm-fixes'
 
 /** The xterm surface the profile drives; both @xterm/xterm and @xterm/headless provide it. */
 export interface ProfileTerminal {
@@ -7,6 +7,7 @@ export interface ProfileTerminal {
     registerCsiHandler(id: { prefix?: string; intermediates?: string; final: string }, callback: (params: (number | number[])[]) => boolean): { dispose(): void }
     registerDcsHandler(id: { prefix?: string; intermediates?: string; final: string }, callback: (data: string, params: (number | number[])[]) => boolean): { dispose(): void }
     registerOscHandler(ident: number, callback: (data: string) => boolean): { dispose(): void }
+    registerEscHandler(id: { intermediates?: string; final: string }, callback: () => boolean): { dispose(): void }
   }
   onBell(listener: () => void): { dispose(): void }
   onTitleChange(listener: (title: string) => void): { dispose(): void }
@@ -120,6 +121,7 @@ export function applyTerminalProfile(terminal: ProfileTerminal & object, effects
   patchReflowStaleMaps(terminal)
   patchUtf8Decoder(terminal)
   patchSharedTabStops(terminal)
+  trackAltEntry(terminal)
   patchChunkedPrintClear(terminal)
   const links = patchLinkLifetime(terminal)
   return { setLive: (value) => { live = value }, links }

@@ -15,7 +15,8 @@
  */
 import headless from '@xterm/headless'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
-import { altEnteredCols, setAltEnteredCols } from './xterm-fixes'
+import { type CheckpointSideState, restoreSideState } from './side-state'
+import { altEnteredCols, altEntry } from './xterm-fixes'
 import {
   BLANK_CONTENT, cellKey, charsetName, compareSteps, drain, HAS_EXTENDED, internals, IS_COMBINED, lineWords, nullCell, rawUnderlineStyle,
   savedKey, tabStops, UNDERLINE, type Buffer, type Extended, type Term,
@@ -24,19 +25,14 @@ import {
 /** Bumped whenever the bytes or fields change meaning. */
 export const CHECKPOINT_FORMAT = 1
 
-export interface Checkpoint {
+/** The serialized terminal and the side state its bytes cannot carry (lib/side-state.ts). */
+export interface Checkpoint extends CheckpointSideState {
   format: typeof CHECKPOINT_FORMAT
   cols: number
   rows: number
   scrollback: number
   /** The serialized terminal, in pieces written in order (each one cheap to restore: see `pieces`). */
   data: readonly string[]
-  /** The parser's grapheme join state after `data` (xterm's packed character properties; 0 for none). */
-  joinState: number
-  /** The pen's HAS_EXTENDED bit: a link it holds with the bit clear is latent. */
-  penHasExtended: boolean
-  /** The width the alternate screen was entered at, while it is active (patchSharedTabStops). */
-  altEnteredCols: number | null
 }
 
 /** A terminal built the way every emulator is (the profile), live effects off. */
@@ -282,11 +278,20 @@ export function* serializeSteps(terminal: Term): Generator<void, string[]> {
   const active = alternate ? alt : normal
   let out = '\x1bc'
   // A first line that wraps from a line already scrolled away: a filler it wraps from.
-  if (normal.lines.get(0)?.isWrapped) out += '\x1b[0m' + 'x'.repeat(terminal.cols)
+  const filler = Boolean(normal.lines.get(0)?.isWrapped)
+  // A filler in a full buffer is trimmed once, as the last line is printed; xterm keeps savedY across a
+  // trim, so a slot saved before it would sit a row low: it is saved one printed line earlier.
+  const trimmed = filler && normal.lines.length + 1 > normal.lines.maxLength
+  const slot = savedKey(normal) === defaultSlot ? -1 : normal.savedY - (trimmed ? 1 : 0)
+  if (filler) {
+    out += '\x1b[0m' + 'x'.repeat(terminal.cols)
+    // Saved on the filler itself; its last cell is printed again so the first line still wraps from it.
+    if (slot === -1 && trimmed && savedKey(normal) !== defaultSlot) out += savedSlot(terminal, normal) + `\x1b[${terminal.cols}Gx`
+  }
   const text = new Text()
   text.add(out)
   out = ''
-  yield* printLines(terminal, text, normal, nonce, 0, savedKey(normal) === defaultSlot ? -1 : normal.savedY)
+  yield* printLines(terminal, text, normal, nonce, 0, slot)
   // The inactive alternate buffer's DECSC slot: 47h (switch without saving or clearing), the slot, 47l.
   if (!alternate && (alt.lines.length === 0 || savedKey(alt) !== defaultSlot)) out += '\x1b[?47h' + savedSlot(terminal, alt, alt.savedY) + '\x1b[?47l'
   if (alternate) {
@@ -364,19 +369,11 @@ export function quiescent(terminal: Term): boolean {
     && handler._stringDecoder._interim === 0
 }
 
-/** Set what the bytes cannot carry, once they are parsed. */
-function finish(terminal: Term, checkpoint: Checkpoint): void {
-  const handler = internals(terminal)._inputHandler
-  handler._parser.precedingJoinState = checkpoint.joinState
-  if (checkpoint.penHasExtended) handler._curAttrData.bg |= HAS_EXTENDED
-  else handler._curAttrData.bg &= ~HAS_EXTENDED
-  if (checkpoint.altEnteredCols !== null) setAltEnteredCols(terminal, checkpoint.altEnteredCols)
-}
 /** Rebuild `terminal` (fresh: same size and scrollback) from `checkpoint`, synchronously. */
 export function restoreCheckpointSync(terminal: Term, checkpoint: Checkpoint): void {
   const writer = internals(terminal)._writeBuffer
   for (const piece of pieces(checkpoint.data)) writer.writeSync(piece)
-  finish(terminal, checkpoint)
+  restoreSideState(terminal, checkpoint)
 }
 /** xterm discards writes past 50M pending characters: the restore keeps at most this many queued. */
 const RESTORE_PENDING_CHARS = 1024 * 1024
@@ -394,7 +391,7 @@ export async function restoreCheckpoint(terminal: Term, checkpoint: Checkpoint):
     if (pending >= RESTORE_PENDING_CHARS) { await drained(); pending = 0 }
   }
   await drained()
-  finish(terminal, checkpoint)
+  restoreSideState(terminal, checkpoint)
 }
 
 export type CheckpointResult = { checkpoint: Checkpoint } | { rejected: string }
@@ -420,6 +417,7 @@ export function* checkpointSteps(terminal: Term): Generator<void, CheckpointResu
     data: yield* serializeSteps(terminal), joinState: handler._parser.precedingJoinState,
     penHasExtended: (handler._curAttrData.bg & HAS_EXTENDED) !== 0,
     altEnteredCols: terminal.buffer.active.type === 'alternate' ? altEnteredCols(terminal) ?? null : null,
+    altEntry: terminal.buffer.active.type === 'alternate' ? altEntry(terminal) ?? null : null,
   }
   yield
   const restored = scratch(terminal.cols, terminal.rows, scrollback)
@@ -431,7 +429,7 @@ export function* checkpointSteps(terminal: Term): Generator<void, CheckpointResu
       writer.writeSync(piece)
       yield
     }
-    finish(restored, checkpoint)
+    restoreSideState(restored, checkpoint)
     const difference = yield* compareSteps(terminal, restored)
     return difference ? { rejected: difference } : { checkpoint }
   } finally {

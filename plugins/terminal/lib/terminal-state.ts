@@ -10,7 +10,7 @@
  */
 import headless from '@xterm/headless'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from './terminal-profile'
-import { altEnteredCols } from './xterm-fixes'
+import { altEnteredCols, altEntry, HAS_EXTENDED } from './xterm-fixes'
 
 export type Term = InstanceType<typeof headless.Terminal>
 
@@ -64,11 +64,16 @@ export const internals = (terminal: Term): Internals => (terminal as unknown as 
 export const nullCell = (terminal: Term): Cell => terminal.buffer.normal.getNullCell() as unknown as Cell
 
 /** BgFlags.HAS_EXTENDED and FgFlags.UNDERLINE in the pinned version. */
-export const HAS_EXTENDED = 0x10000000
+export { HAS_EXTENDED }
 export const UNDERLINE = 0x10000000
 /** ExtendedAttrs.underlineStyle reports 5 (dashed) while a link is active, whatever is stored: read the raw bits. */
 export const rawUnderlineStyle = (extended: Extended) => (extended._ext & 0x1c000000) >> 26
 
+/** The visible rows as text, one line each (trailing spaces trimmed). */
+export const visibleText = (terminal: Term): string => {
+  const buffer = terminal.buffer.active
+  return Array.from({ length: terminal.rows }, (_, index) => buffer.getLine(buffer.baseY + index)?.translateToString(true) ?? '').join('\n')
+}
 export const linkUri = (terminal: Term, id: number) => id ? internals(terminal)._oscLinkService.getLinkData(id)?.uri ?? '(dangling)' : ''
 /**
  * Links compare by grouping, not by number (ids differ between terminals):
@@ -187,7 +192,7 @@ function stateFields(terminal: Term, links: LinkNames) {
     pen: `${pen.fg},${pen.bg & ~HAS_EXTENDED},ext:${pen.bg & HAS_EXTENDED ? 1 : 0},${extendedKey(terminal, pen.fg, pen.extended, links)},remembered:${rawUnderlineStyle(pen.extended)}:${pen.extended.underlineColor}`,
     // The inactive alternate buffer is cleared on every switch except its DECSC slot, which a later 1049h + ESC 8 reads.
     // Where the alternate screen was entered (the shared tab stops' rule on leaving it).
-    altEntered: alternate ? String(altEnteredCols(terminal)) : '-',
+    altEntered: alternate ? `${altEnteredCols(terminal)}/${altEntry(terminal)}` : '-',
     altSaved: alternate ? '-' : `${savedKey(core.buffers.alt)},lines:${core.buffers.alt.lines.length}/${core.buffers.alt.lines.maxLength},tabs:${stops(core.buffers.alt.tabs)}`,
     // Parser state that changes how the next bytes are read: the state, the
     // join state, mid-sequence params and intermediates, partial UTF-8 (in

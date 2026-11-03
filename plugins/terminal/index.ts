@@ -7,12 +7,15 @@ import { Store } from './lib/store'
 import { TerminalService } from './lib/service'
 import { TmuxProcesses } from './lib/processes'
 import { Sessions } from './lib/sessions'
+import { ATTENTION_EVENT, attentionSummary } from './lib/attention'
 import { MemoryWarning, RETAINED_WARNING_BYTES } from './lib/memory'
 import { runSliced } from './lib/replica'
 import { TerminalError, terminalSettings, type Principal } from './lib/contracts'
-import { agentCommand, command, creatingScreen, failure, human } from './lib/http'
+import { agentCommand, command, creatingScreen, failure, human, uploadImage } from './lib/http'
+import { Uploads } from './lib/uploads'
 import { sessionOptions } from './lib/session-options'
-import { TerminalViewer } from './lib/socket'
+import { listDirectories, recentDirectories } from './lib/directories'
+import { TerminalViewer, viewersRetainedSteps } from './lib/socket'
 import { attachBody, confirmBody, createAndLaunch, launch, newBody, operator, resolveRef, sessionTable } from './lib/cli'
 
 let manager: Sessions | undefined
@@ -29,31 +32,46 @@ function agent(context?: PluginToolContext): Principal {
   if (!context?.invocation?.agentId) throw new TerminalError('Verified agent identity required', 403)
   return { kind: 'agent', id: context.invocation.agentId }
 }
+/** The sessions the operator saw and confirmed ending for the service update. */
+const serviceUpdateBody = z.object({ end: z.array(z.string().min(1)).max(1000) })
+
 const route = (path: string, method: 'GET' | 'POST', summary: string, handler: (request: Request) => Promise<Response>) => defineRoute({
   path, method, summary,
   handler: async (request) => { try { return await handler(request) } catch (error) { return failure(error) } },
 })
 
 export default definePlugin({
-  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.6',
+  id: 'terminal', name: 'Terminal', version: '0.4.0-dev.31',
   routes: [
     route('/options', 'GET', 'Get terminal form defaults and available agents and tasks', async (request) => {
       const principal = human(request)
       if (!context) throw new TerminalError('Terminal is unavailable', 503)
       return Response.json(await sessionOptions(context, sessions().list(principal)))
     }),
+    route('/directories', 'GET', "List one folder's subfolders for the New terminal folder picker", async (request) => {
+      const principal = human(request)
+      const url = new URL(request.url)
+      const listing = await listDirectories(url.searchParams.get('path') ?? undefined, { hidden: url.searchParams.get('hidden') === '1', filter: url.searchParams.get('filter') ?? undefined })
+      return Response.json({ ...listing, recent: recentDirectories(sessions().list(principal)) })
+    }),
     route('/sessions', 'GET', 'List terminal sessions', async (request) => {
       const principal = human(request)
       const serviceReady = await service?.ready()
       if (serviceReady) await sessions().refreshStates()
-      const list = sessions().list(principal).map((session) => ({ ...session, nativeClients: sessions().nativeClients(session.id).length }))
+      const list = sessions().list(principal).map((session) => ({ ...session, nativeClients: sessions().nativeClients(session.id).length, activity: sessions().activity(session) }))
       return Response.json({ sessions: list, serviceReady, serviceUpdateRequired: await service?.updateRequired() })
+    }),
+    // The nav badge's read: no tmux round trips (the list's state refresh is the page's).
+    route('/attention', 'GET', "Each session's attention, for the nav badge", async (request) => {
+      const principal = human(request)
+      return Response.json({ sessions: sessions().list(principal).map(attentionSummary) })
     }),
     route('/sessions', 'POST', 'Create a terminal session', async (request) => {
       const principal = human(request)
       const body = await request.json() as Record<string, unknown>
       return Response.json(await sessions().create(body, principal, creatingScreen(body.size)))
     }),
+    route('/upload', 'POST', 'Keep an image for a session draft', async (request) => Response.json(await uploadImage(sessions(), request, human(request)))),
     route('/session', 'POST', 'Operate a terminal session', async (request) => {
       const principal = human(request)
       const body = await request.json() as { id?: unknown; operation?: unknown }
@@ -87,6 +105,11 @@ export default definePlugin({
       return Response.json(sessionTable(sessions().list(principal), (id) => sessions().nativeClients(id)))
     }),
     route('/service', 'POST', 'Set up the persistent terminal service', async (request) => { human(request); await sessions().setupService(() => service!.install()); return Response.json({ ready: true }) }),
+    route('/service/update', 'POST', 'Apply the Terminal service update, ending the live sessions the operator confirmed', async (request) => {
+      const principal = human(request)
+      const { end } = serviceUpdateBody.parse(await request.json())
+      return Response.json(await sessions().applyServiceUpdate(end, principal, () => service!.install(), async () => Boolean(await service?.updateRequired())))
+    }),
   ],
   socketRoutes: [
     defineSocketRoute({
@@ -113,13 +136,16 @@ export default definePlugin({
     if (!root) throw new Error('Terminal requires Bakin with local plugin storage and verified invocation support')
     mkdirSync(root, { recursive: true, mode: 0o700 }); chmodSync(root, 0o700)
     service = new TerminalService(root)
-    manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProcesses(service, ctx.log), {
+    const store = new Store(join(root, 'terminal.db'))
+    manager = new Sessions(store, new TmuxProcesses(service, ctx.log), {
+      uploads: new Uploads(root, store),
       settings: () => terminalSettings(ctx.getSettings<Record<string, unknown>>()),
       prepare: (input) => ctx.hooks.invoke('git.prepareSessionWorktree', input),
       release: (input) => ctx.hooks.invoke('git.releaseSessionWorktree', input),
       validateLinks: async (input) => {
         if (input.taskId && !await ctx.tasks.get(input.taskId)) throw new TerminalError('Linked task was not found', 400)
       },
+      announce: (event) => ctx.events.emit(ATTENTION_EVENT, event),
       log: ctx.log,
     })
     if (await service.ready()) await manager.start()
@@ -141,7 +167,7 @@ export default definePlugin({
       try {
         const current = manager
         await current?.maintainEmulators()
-        const retained = current ? await runSliced(current.retainedSteps()) ?? 0 : 0
+        const retained = current ? await runSliced((function* () { return (yield* current.retainedSteps()) + (yield* viewersRetainedSteps()) })()) ?? 0 : 0
         memory.observe(retained)
         return retained
       } finally { reading = undefined }
@@ -186,6 +212,7 @@ export default definePlugin({
       incidents: [
         { id: 'service', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
         { id: 'service-update', subjectKind: 'plugin', resolution: { type: 'repair', actionId: 'setup-service' }, required: 'never' },
+        { id: 'service-update-live', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
         { id: 'maintenance', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
         { id: 'retention', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
         { id: 'memory', subjectKind: 'plugin', resolution: { type: 'human', needs: 'decision' }, required: 'never' },
@@ -217,9 +244,17 @@ export default definePlugin({
             resolution: { key: 'review', type: 'human', needs: 'decision', label: 'Open Terminal', href: '/terminal' },
           } })
         }
-        if (updateRequired) observations.push({ key: 'service-update', status: 'warning', summary: 'Terminal service update available', incident: {
+        // With live sessions the update ends them first: that is the operator's choice, in Terminal's confirmation.
+        const live = sessions().list({ kind: 'human', id: 'health' }).filter((session) => session.state === 'running').length
+        if (updateRequired && live) observations.push({ key: 'service-update', status: 'warning', summary: 'Terminal service update available', incident: {
+          key: 'service-update', declarationId: 'service-update-live', subject: TERMINAL_SUBJECT, title: 'Terminal service update available',
+          impact: `Terminal runs an older service setup. Applying it ends the ${live === 1 ? 'live session' : `${live} live sessions`} first; Terminal lists them before anything ends.`,
+          class: 'service_failure', disposition: 'watch',
+          resolution: { key: 'review', type: 'human', needs: 'decision', label: 'Open Terminal', href: '/terminal' },
+        } })
+        else if (updateRequired) observations.push({ key: 'service-update', status: 'warning', summary: 'Terminal service update available', incident: {
           key: 'service-update', declarationId: 'service-update', subject: TERMINAL_SUBJECT, title: 'Terminal service update available',
-          impact: 'Terminal runs an older service setup; native attach and the current terminal configuration need the update. It applies once no session is live.',
+          impact: 'Terminal runs an older service setup; native attach and the current terminal configuration need the update.',
           class: 'service_failure', disposition: 'watch',
           resolution: { key: 'apply', type: 'repair', actionId: 'setup-service', label: 'Apply update' },
         } })
@@ -242,7 +277,7 @@ export default definePlugin({
       requiresVerifiedAgent: true,
       parameters: {
         operation: z.enum(['list', 'create', 'screen', 'output', 'write', 'interrupt', 'complete', 'terminate'])
-          .describe('list: your sessions. create: start one. screen: read the visible pane and its size (start here). output: read raw output after a cursor. write: type input. interrupt: send Ctrl-C. complete: finish an exited session. terminate: stop a running process then finish.'),
+          .describe('list: your sessions. create: start one. screen: read the visible pane and its size (start here). output: read its text, history then screen (the last `lines` when given; also after it ended). write: type input. interrupt: send Ctrl-C. complete: finish an exited session. terminate: stop a running process then finish.'),
         input: z.object({
           id: z.string().optional().describe('Session id. Required for screen, output, write, interrupt, complete, terminate.'),
           title: z.string().optional().describe('create: a short human-readable name for the session.'),
@@ -253,7 +288,7 @@ export default definePlugin({
           generation: z.number().int().optional().describe('write, interrupt: the `generation` from your latest response for this session.'),
           sequence: z.number().int().optional().describe('write: the latest `inputSequence` + 1. Consumed once — never reuse or guess it.'),
           data: z.string().optional().describe('write: the exact keystrokes to send. End a command with a carriage return "\\r" to run it.'),
-          cursor: z.number().int().optional().describe('output: return output produced after this cursor (0 for all retained output).'),
+          lines: z.number().int().positive().optional().describe('output: only the last this many lines.'),
         }).default({}).describe('Operation arguments — each field notes which operations use it.'),
       },
       handler: async (params, _agent, context) => {
@@ -265,7 +300,7 @@ export default definePlugin({
           if (operation === 'create') return { ok: true, session: await sessions().create(input, principal) }
           const id = z.string().min(1).parse(input.id)
           if (operation === 'screen') return { ok: true, ...await sessions().readScreen(id, principal) }
-          if (operation === 'output') return { ok: true, ...sessions().output(id, principal, z.number().int().nonnegative().parse(input.cursor ?? 0)) }
+          if (operation === 'output') return { ok: true, ...await sessions().outputText(id, principal, z.number().int().positive().optional().parse(input.lines)) }
           return { ok: true, session: await agentCommand(sessions(), { ...input, operation }, principal) }
         } catch (error) { return { ok: false, error: error instanceof TerminalError ? error.message : 'Invalid or unavailable terminal operation' } }
       },

@@ -1,17 +1,27 @@
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { ATTENTION_OPTION, ATTENTION_SUBSCRIPTION, attentionLaunch, BELL_OPTION, BELL_SUBSCRIPTION, bellHook, parseAttention, type AttentionState } from './attention'
 import type { Session } from './contracts'
 import { TerminalError } from './contracts'
 import { ControlClient } from './control'
 import { EVENT_OVERHEAD_BYTES } from './memory'
 import { OutputLog, parseLayoutChange } from './output-log'
-import { Replica } from './replica'
+import type { Fidelity } from './raw-display'
+import { Replica, type Cut, type SizeRevision } from './replica'
 import { reseed } from './reseed'
 import { stripPasteMarkers } from './paste'
 import { TerminalService, terminalEnvironment } from './service'
 
-/** A tmux client on a session that is not Bakin's own bridge or control client: a terminal app (Ghostty and friends) or anything else that attached. */
+export interface AttachEvents {
+  clientsChanged(): void
+  died?(): void
+  attention?(state: AttentionState | undefined): void
+  /** tmux's bell count for the session, on attach and whenever it changes. */
+  bell?(count: string): void
+}
+
+/** A tmux client on a session that is not Bakin's own control client: a terminal app (Ghostty and friends) or anything else that attached. */
 export interface NativeClient {
   pid: number
   name: string
@@ -24,8 +34,15 @@ export interface NativeClient {
 
 export interface ProcessDriver {
   create(session: Session): Promise<void>
-  /** `clientsChanged` fires when a tmux client attaches to, resizes on, or detaches from the session. */
-  attach(session: Session, output: (data: Uint8Array) => void, clientsChanged: () => void): void
+  /**
+   * `clientsChanged` fires when a tmux client attaches to, resizes on, or
+   * detaches from the session; `died` when tmux reports its pane dead (a hint:
+   * the caller confirms with `alive`); `attention` with the pane's attention
+   * (lib/attention.ts) on attach and whenever it changes (lossy, at most once a
+   * second); `bell` with tmux's bell count (lib/attention.ts), likewise.
+   */
+  attach(session: Session, events: AttachEvents): void
+  /** The session's health (spec D13): its control client, which carries input, output and queries. */
   connected(id: string): boolean
   /**
    * Resolves once tmux has accepted the bytes for the pane (not that the
@@ -36,17 +53,30 @@ export interface ProcessDriver {
   write(id: string, data: string, options?: WriteOptions): Promise<void>
   /** Set the pane title native clients show (`@bakin_title`). */
   title(session: Session): Promise<void>
-  /** tmux first (resize-window), then the bridge PTY. */
+  /** tmux's window (resize-window). */
   resize(id: string, cols: number, rows: number): Promise<void>
   /** The window size tmux actually has. */
   windowSize(id: string): Promise<{ cols: number; rows: number }>
   alive(id: string): Promise<boolean>
-  screen(id: string): Promise<string>
   terminate(id: string): Promise<void>
   inUse(path: string): Promise<boolean>
   detach(id?: string): Promise<void>
-  /** The session's server replica (spec D13), while attached; shadow-only until the raw path (R2). */
+  /** The session's server replica (spec D13), while attached. */
   replica?(id: string): Replica | undefined
+  /** When the pane last printed (wall clock), since this process attached it. */
+  lastOutputAt?(id: string): number | undefined
+  /** The rebuilds the session's output has been through (outlives replica replacement, kept until `forget`). */
+  fidelity?(id: string): Fidelity
+  /**
+   * The replica's picture as the session ends (plan T35b): with `boundary`,
+   * every output tmux sent before a control reply (the control client must be
+   * connected); then every event already received parsed; a replica rebuilding
+   * meanwhile is given until `timeoutMs` for its seed. Undefined when there is
+   * none in time (no replica, ended, still rebuilding).
+   */
+  finalCut?(id: string, options: { boundary: boolean; timeoutMs: number }): Promise<Cut | undefined>
+  /** The session record is gone: drop what the driver kept for it. */
+  forget?(id: string): void
   /** What the attached sessions' replicas and event logs hold (lib/memory.ts). Steps: run it sliced. */
   retainedSteps?(): Generator<void, number>
   /** Periodic upkeep of the attached sessions' replicas (link orphans). */
@@ -63,48 +93,136 @@ export interface ProcessDriver {
 /** Shown inside the terminal app as it attaches (tmux status line, five seconds). */
 export const ATTACH_HINT = 'Detach: Ctrl-b d · Scrollback: Ctrl-b [ · Closing the window also detaches'
 
-export interface WriteOptions { paste?: boolean; enter?: boolean }
+export interface WriteOptions {
+  paste?: boolean
+  enter?: boolean
+  /** A paste carrying images' paths (lib/uploads.ts): their names, marked sent once it went (never abandoned). */
+  uploads?: string[]
+}
 
 /** The tmux buffers Bakin's pastes use (lib/paste.ts). */
 const PASTE_BUFFER_PREFIX = 'bakin-paste-'
 
 /**
- * The hybrid bridge per session: a PTY `attach-session` client whose redraw
- * stream is the output viewers render today (and the reattach-recovery
- * path), plus a control-mode client for input, resizes and queries, whose
- * `%output` and layout changes also feed the session's ordered event log
- * (spec D13; consumed by the replica). Both attach `ignore-size`: only
+ * The replica's picture once it holds every output tmux sent before a
+ * control reply (`boundary`; a reply follows all earlier %output), or, with
+ * none, every event already received: its cut's `throughSeq` reaches the
+ * log's newest event (a rebuild meanwhile reaches past it with its seed).
+ * Bounded as a whole by `timeoutMs`; undefined when it is not reached in
+ * time, or the replica ends (plan T35b).
+ */
+export async function drainFinal(replica: Replica, log: OutputLog, boundary: (() => Promise<unknown>) | undefined, timeoutMs: number): Promise<Cut | undefined> {
+  const deadline = performance.now() + timeoutMs
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), timeoutMs) })
+  try {
+    if (boundary && await Promise.race([boundary().then(() => 'ok', () => 'late'), late]) === 'late') return undefined
+    log.flush()
+    const target = log.lastSeq
+    while (performance.now() < deadline) {
+      if (replica.ended || log.invalidReason) return undefined
+      const cut = replica.cut()
+      if (cut && cut.throughSeq >= target) return cut
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    return undefined
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** How often a quiet replica's cursor is compared with tmux's (plan T37). */
+export const CURSOR_CHECK_MS = 5000
+/** Output quiet this long before the comparison. */
+export const CURSOR_QUIET_MS = 1000
+/** At most one cursor-driven rebuild per session in this long. */
+export const CURSOR_REBUILD_WINDOW_MS = 10 * 60 * 1000
+
+/** What tmux and the replica say at one position (no contents: positions and sizes only). */
+export interface CursorView { x: number; y: number; cols: number; rows: number; alternate: boolean; wrap: boolean }
+/** tmux's reply and the log's position at its boundary (taken synchronously as the reply is parsed). */
+export interface CursorReply { reply: string; target: number }
+
+/**
+ * The replica against tmux at a quiet point (plan T37): tmux's cursor,
+ * size and screen, read in a control reply that follows every earlier
+ * %output (a position barrier), against the replica's once its cut is at
+ * exactly that position. Undefined when the position cannot be compared:
+ * no picture, a rebuild or width change pending, output arriving meanwhile.
+ */
+export async function compareCursor(replica: Replica, query: () => Promise<CursorReply>, timeoutMs = 1000): Promise<{ tmux: CursorView; replica: CursorView } | undefined> {
+  if (!replica.cut() || replica.geometryOwed) return undefined
+  const { reply, target } = await query()
+  const [x, y, cols, rows, alternate, wrap] = reply.trim().split(' ').map(Number) as [number, number, number, number, number, number]
+  for (const deadline = performance.now() + timeoutMs; performance.now() < deadline; await new Promise((resolve) => setTimeout(resolve, 10))) {
+    const cut = replica.cut()
+    if (!cut || replica.ended || replica.geometryOwed) return undefined
+    // More output came after the reply: this position is gone.
+    if (cut.throughSeq > target) return undefined
+    if (cut.throughSeq < target) continue
+    const view = await replica.read((term) => ({ x: term.buffer.active.cursorX, y: term.buffer.active.cursorY, cols: term.cols, rows: term.rows, alternate: term.buffer.active.type === 'alternate', wrap: term.modes.wraparoundMode }))
+    if (!view || replica.cut()?.throughSeq !== target) return undefined
+    return { tmux: { x, y, cols, rows, alternate: alternate === 1, wrap: wrap === 1 }, replica: view }
+  }
+  return undefined
+}
+
+/** The diagnostic category of a disagreement (never the line's contents). */
+export function cursorCategory(tmux: CursorView, replica: CursorView): string | undefined {
+  if (tmux.cols !== replica.cols || tmux.rows !== replica.rows) return 'size'
+  if (tmux.alternate !== replica.alternate) return 'screen'
+  if (tmux.y !== replica.y) return 'cursor row'
+  // Autowrap off, past the last column: xterm holds the cursor at cols, tmux at the last column — the same
+  // place. Only that pair: equal positions are equal whatever the modes (autowrap turned off after a pending wrap).
+  const margin = !tmux.wrap && !replica.wrap && replica.x === replica.cols && tmux.x === tmux.cols - 1
+  if (tmux.x !== replica.x && !margin) return 'cursor column'
+  return undefined
+}
+
+/**
+ * One control-mode client per session (spec D13) for input, resizes and
+ * queries, whose `%output` and layout changes feed the session's ordered
+ * event log, consumed by its replica. It attaches `ignore-size`: only
  * Bakin's explicit `resize-window` sizes a session (window-size manual).
  */
 export class TmuxProcesses implements ProcessDriver {
-  private bridges = new Map<string, ReturnType<typeof Bun.spawn>>()
   private pastesSwept = false
   private controls = new Map<string, ControlClient>()
   private logs = new Map<string, OutputLog>()
   private replicas = new Map<string, Replica>()
-  constructor(private service: TerminalService, private log?: { info(message: string, data?: Record<string, unknown>): void }) {}
+  /** A detached session's size revision, for the replica its next attachment makes (until it is forgotten). */
+  private revisions = new Map<string, SizeRevision>()
+  private fidelities = new Map<string, Fidelity>()
+  /** Each attached session's cursor check (plan T37), and when one last rebuilt it. */
+  private cursorChecks = new Map<string, ReturnType<typeof setInterval>>()
+  private cursorRebuiltAt = new Map<string, number>()
+  /** Sessions made by this process and not attached yet: their first replica starts with the pane, losing nothing. */
+  private fresh = new Set<string>()
+  /** When each session's pane last printed (its `%output`, never a seed). */
+  private outputAt = new Map<string, number>()
+  constructor(private service: TerminalService, private log?: { info(message: string, data?: Record<string, unknown>): void }, private options: { now?: () => number; cursorCheckMs?: number } = {}) {}
+  private now(): number { return this.options.now?.() ?? performance.now() }
   async create(session: Session): Promise<void> {
     if (!await this.service.ready()) throw new TerminalError('Terminal service needs setup', 503)
     const env = terminalEnvironment()
     const executable = session.program === 'shell' ? env.SHELL || '/bin/zsh' : Bun.which(session.program, { PATH: env.PATH })
     if (!executable) throw new TerminalError(`${session.program} is not installed`, 503)
+    // A coding program's hooks report its attention to this session's pane (lib/attention.ts).
+    const attention = attentionLaunch(session.program, { root: this.service.root, tmux: this.service.tmux!, socket: this.service.socket, sessionId: session.id })
     await this.service.command(['new-session', '-d', '-s', session.id, '-x', String(session.cols), '-y', String(session.rows), '-c', session.cwd,
-      '/usr/bin/env', '-i', ...Object.entries(env).map(([key, value]) => `${key}=${value}`), executable, ...(session.program === 'shell' ? ['-l'] : [])])
+      '/usr/bin/env', '-i', ...Object.entries({ ...env, ...attention.env }).map(([key, value]) => `${key}=${value}`), executable, ...(session.program === 'shell' ? ['-l'] : attention.args),
+      // In the same command: tmux runs all of it before it reads the program's first output, so a bell at startup is counted.
+      ';', ...bellHook(session.id)])
+    this.fresh.add(session.id)
     await this.title(session)
   }
   /** Native clients title their window from this (tmux.conf set-titles-string). */
   async title(session: Session): Promise<void> {
     await this.service.command(['set-option', '-t', session.id, '@bakin_title', session.title])
   }
-  attach(session: Session, output: (data: Uint8Array) => void, clientsChanged: () => void): void {
-    if (this.bridges.has(session.id)) return
-    const process = Bun.spawn([this.service.tmux!, '-S', this.service.socket, 'attach-session', '-f', 'ignore-size', '-t', session.id], {
-      env: terminalEnvironment(),
-      terminal: { cols: session.cols, rows: session.rows, data: (_terminal, data) => output(data) },
-      stderr: 'ignore',
-    })
-    this.bridges.set(session.id, process)
-    void process.exited.then(() => { if (this.bridges.get(session.id) === process) this.bridges.delete(session.id) })
+  attach(session: Session, events: AttachEvents): void {
+    // Attached already (a live control client): once per session, never a second client (a lost one is detached first).
+    if (this.connected(session.id)) return
     // A client attaching to this session, any client leaving, or the
     // client-resized hook (tmux.conf sets @bakin_client, which this
     // subscription watches) means the set of terminal apps may have changed.
@@ -114,26 +232,66 @@ export class TmuxProcesses implements ProcessDriver {
     const control = ControlClient.attach(this.service.tmux!, this.service.socket, session.id, terminalEnvironment(), {
       notification: (line) => {
         const [kind, , , name] = line.split(' ')
-        if ((kind === '%client-session-changed' && name === session.id) || kind === '%client-detached' || line.startsWith('%subscription-changed bakin-client ')) clientsChanged()
+        if ((kind === '%client-session-changed' && name === session.id) || kind === '%client-detached' || line.startsWith('%subscription-changed bakin-client ')) events.clientsChanged()
+        // A subscription's value follows ' : '. The program exited (the pane stays: remain-on-exit).
+        const value = () => line.slice(line.indexOf(' : ') + 3)
+        if (line.startsWith('%subscription-changed bakin-dead ') && value().trim() === '1') events.died?.()
+        if (line.startsWith(`%subscription-changed ${ATTENTION_SUBSCRIPTION} `)) events.attention?.(parseAttention(value()))
+        if (line.startsWith(`%subscription-changed ${BELL_SUBSCRIPTION} `)) events.bell?.(value().trim())
         const layout = parseLayoutChange(line)
         if (layout) log.layout(layout.cols, layout.rows)
       },
       // A Bakin session has one pane.
-      output: (_pane, bytes) => log.output(bytes),
+      output: (_pane, bytes) => {
+        this.outputAt.set(session.id, Date.now())
+        log.output(bytes)
+      },
       closed: (reason) => log.invalidate(reason),
     })
     this.controls.set(session.id, control)
     this.logs.set(session.id, log)
     // The replica starts from a seed; a failed reseed invalidates the log, which ends it.
+    // Any other replica replaces a lost one (a reattachment, or the first since a server restart): its
+    // seed is tmux's reconstruction, with D13's measured degradations, so its first seed applied is a
+    // recovery in the session's fidelity (an attempt that never seeds counts nothing).
+    let recovering = !this.fresh.delete(session.id)
+    // The size revision continues across attachments: an agent compares it between reads.
+    const revision = this.replicas.get(session.id)?.revisionState ?? this.revisions.get(session.id)
+    this.revisions.delete(session.id)
     const replica = new Replica({
-      reseed: (reason, turn) => reseed(control, log, session.id, reason, { attempt: turn }),
-      // Shadow mode (R1): the replica's lifecycle is logged, never its contents.
-      diagnostic: (event) => this.log?.info(`Terminal replica ${event.kind}`, { sessionId: session.id, ...event }),
+      revision,
+      reseed: (reason, turn, scope) => reseed(control, log, session.id, reason, { attempt: turn, scope }),
+      geometry: (generation, turn, scope) => reseed(control, log, session.id, 'width', { attempt: turn, scope, geometry: generation }),
+      // The replica's lifecycle is logged, never its contents; rebuilds are the session's fidelity.
+      diagnostic: (event) => {
+        if (event.kind === 'seeded' && recovering) {
+          recovering = false
+          const before = this.fidelity(session.id)
+          this.fidelities.set(session.id, { ...before, recoveries: (before.recoveries ?? 0) + 1 })
+        }
+        const fidelity = this.fidelity(session.id)
+        if (event.kind === 'rebuilding') {
+          this.fidelities.set(session.id, { ...fidelity, rebuilds: { ...fidelity.rebuilds, [event.cause]: (fidelity.rebuilds[event.cause] ?? 0) + 1 }, lastCause: event.cause })
+        }
+        // Every committed seed says where the history is: a screen-only one leaves it incomplete; a
+        // full one after that brings back what tmux kept (earlier output may still be missing).
+        if (event.kind === 'seeded' && !event.history) this.fidelities.set(session.id, { ...fidelity, history: 'incomplete' })
+        if (event.kind === 'seeded' && event.history && fidelity.history === 'incomplete') this.fidelities.set(session.id, { ...fidelity, history: 'reloaded' })
+        // Seeds feed the fidelity only: a rebuild's episode is logged by 'rebuilding' and 'rebuilt'.
+        if (event.kind !== 'seeded') this.log?.info(`Terminal replica ${event.kind}`, { sessionId: session.id, ...event })
+      },
     })
     log.attach(replica)
     this.replicas.set(session.id, replica)
+    this.watchCursor(session.id, replica, log, control)
     void control.ready.then(async () => {
       await control.command(['refresh-client', '-B', 'bakin-client::#{@bakin_client}'])
+      await control.command(['refresh-client', '-B', 'bakin-dead::#{pane_dead}'])
+      await control.command(['refresh-client', '-B', `${ATTENTION_SUBSCRIPTION}::#{${ATTENTION_OPTION}}`])
+      // Set at creation too; again here for a session made before it was (idempotent; the hook and the count
+      // survive Bakin's restarts in the tmux server).
+      await control.command(bellHook(session.id))
+      await control.command(['refresh-client', '-B', `${BELL_SUBSCRIPTION}::#{${BELL_OPTION}}`])
       replica.start()
     }).catch(() => undefined)
   }
@@ -148,6 +306,41 @@ export class TmuxProcesses implements ProcessDriver {
   }
   /** The session's ordered event log, while its control connection is attached. */
   outputLog(id: string): OutputLog | undefined { return this.logs.get(id) }
+  fidelity(id: string): Fidelity { return this.fidelities.get(id) ?? { rebuilds: {} } }
+  lastOutputAt(id: string): number | undefined { return this.outputAt.get(id) }
+  forget(id: string): void { this.outputAt.delete(id); this.fidelities.delete(id); this.revisions.delete(id); this.fresh.delete(id); this.cursorRebuiltAt.delete(id) }
+  /** At quiet points, the replica's cursor against tmux's; a disagreement rebuilds it (bounded) and is logged without contents. */
+  private watchCursor(id: string, replica: Replica, log: OutputLog, control: ControlClient): void {
+    clearInterval(this.cursorChecks.get(id))
+    let checking = false
+    this.cursorChecks.set(id, setInterval(() => {
+      if (checking || replica.ended || control.isClosed || replica.quietMs < CURSOR_QUIET_MS) return
+      checking = true
+      // The log's position is taken as the reply is parsed (output later in the same chunk is after it).
+      const query = async (): Promise<CursorReply> => {
+        let target = -1
+        const [lines] = await control.group([['display-message', '-p', '-t', id, '#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{alternate_on} #{wrap_flag}']], () => { log.flush(); target = log.lastSeq })
+        return { reply: (lines ?? []).join('\n'), target }
+      }
+      void compareCursor(replica, query).then((views) => {
+        if (!views) return
+        const category = cursorCategory(views.tmux, views.replica)
+        if (!category) return
+        const now = this.now()
+        if (now - (this.cursorRebuiltAt.get(id) ?? -Infinity) < CURSOR_REBUILD_WINDOW_MS) return
+        this.cursorRebuiltAt.set(id, now)
+        this.log?.info('Terminal replica differs from tmux; rebuilding', { sessionId: id, category, tmux: views.tmux, replica: views.replica })
+        return replica.diverged()
+      }).catch(() => undefined).finally(() => { checking = false })
+    }, this.options.cursorCheckMs ?? CURSOR_CHECK_MS))
+  }
+  finalCut(id: string, options: { boundary: boolean; timeoutMs: number }): Promise<Cut | undefined> {
+    const replica = this.replicas.get(id)
+    const log = this.logs.get(id)
+    if (!replica || !log) return Promise.resolve(undefined)
+    const control = this.controls.get(id)
+    return drainFinal(replica, log, options.boundary && control && !control.isClosed ? () => control.command(['display-message', '-p', '']) : undefined, options.timeoutMs)
+  }
   replica(id: string): Replica | undefined {
     const replica = this.replicas.get(id)
     return replica?.ended ? undefined : replica
@@ -226,12 +419,11 @@ export class TmuxProcesses implements ProcessDriver {
     }
     return await this.deletePasteBuffers(() => true) && clean
   }
-  connected(id: string): boolean { return this.bridges.has(id) && !this.controls.get(id)?.isClosed }
+  connected(id: string): boolean { const control = this.controls.get(id); return Boolean(control && !control.isClosed) }
   async resize(id: string, cols: number, rows: number): Promise<void> {
     const control = this.control(id)
     await control.ready
     await control.command(['resize-window', '-t', id, '-x', String(cols), '-y', String(rows)])
-    this.bridges.get(id)?.terminal?.resize(cols, rows)
   }
   async windowSize(id: string): Promise<{ cols: number; rows: number }> {
     const control = this.control(id)
@@ -239,8 +431,6 @@ export class TmuxProcesses implements ProcessDriver {
     const [line] = await control.command(['display-message', '-p', '-t', id, '#{window_width} #{window_height}'])
     const [cols, rows] = (line ?? '').trim().split(' ').map(Number)
     if (!Number.isInteger(cols) || !Number.isInteger(rows)) throw new TerminalError('Terminal window size is unknown', 503)
-    // Keep the bridge PTY on the real window so its redraw stays whole.
-    this.bridges.get(id)?.terminal?.resize(cols!, rows!)
     return { cols: cols!, rows: rows! }
   }
   async alive(id: string): Promise<boolean> {
@@ -250,9 +440,6 @@ export class TmuxProcesses implements ProcessDriver {
     // pane list so activation/recovery can mark stale running rows as exited.
     const output = await this.service.command(['list-panes', '-a', '-F', '#{session_name} #{pane_dead}'], true)
     return output.split('\n').includes(`${id} 0`)
-  }
-  async screen(id: string): Promise<string> {
-    return this.service.command(['capture-pane', '-p', '-t', id])
   }
   async terminate(id: string): Promise<void> {
     const names = await this.service.command(['list-sessions', '-F', '#{session_name}'])
@@ -269,7 +456,7 @@ export class TmuxProcesses implements ProcessDriver {
   }
   async clients(id: string): Promise<NativeClient[]> {
     // Bakin's own clients by process, never by kind: a foreign control-mode client is just another client.
-    const own = new Set([this.bridges.get(id)?.pid, this.controls.get(id)?.pid])
+    const own = new Set([this.controls.get(id)?.pid])
     const output = await this.service.command(['list-clients', '-t', id, '-F', '#{client_pid} #{client_readonly} #{client_control_mode} #{client_width} #{client_height} #{client_name}'])
     return output.split('\n').flatMap((line) => {
       const [pid, readonly, control, cols, rows, ...name] = line.split(' ')
@@ -294,10 +481,16 @@ export class TmuxProcesses implements ProcessDriver {
     if (id) this.logs.delete(id); else this.logs.clear()
     for (const control of controls) control.close('detached')
     for (const log of logs) log.invalidate('detached')
-    if (id) this.replicas.delete(id); else this.replicas.clear()
-    const clients = id ? [this.bridges.get(id)].filter((client) => client !== undefined) : [...this.bridges.values()]
-    if (id) this.bridges.delete(id); else this.bridges.clear()
-    for (const client of clients) { client.kill(); client.terminal?.close() }
-    for (const client of clients) await client.exited
+    if (id) {
+      const replica = this.replicas.get(id)
+      if (replica) this.revisions.set(id, replica.revisionState)
+      this.replicas.delete(id)
+      clearInterval(this.cursorChecks.get(id))
+      this.cursorChecks.delete(id)
+    } else {
+      this.replicas.clear()
+      for (const check of this.cursorChecks.values()) clearInterval(check)
+      this.cursorChecks.clear()
+    }
   }
 }

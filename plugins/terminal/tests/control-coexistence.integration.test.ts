@@ -110,9 +110,7 @@ processTest('commands keep working while output floods the control client', asyn
     await wait(() => layouts.includes('100x30'), 'layout event')
 
     // Capture and liveness answer on the same streaming control client, with
-    // their own replies (correlation holds under output). (The bridge's own
-    // server Screen is bounded and may fail under an unthrottled flood until
-    // a reattach — B2's bounded-load design; the raw path replaces it.)
+    // their own replies (correlation holds under output).
     const streaming = (processes as unknown as { controls: Map<string, ControlClient> }).controls.get(session.id)!
     for (let round = 0; round < 20; round++) {
       const [captured, dead, size] = await Promise.all([

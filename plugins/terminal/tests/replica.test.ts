@@ -1,15 +1,21 @@
 import { describe, expect, it } from 'bun:test'
 import { restoreCheckpoint } from '../lib/checkpoint'
+import { installGeometry } from '../lib/geometry'
 import { BATCH_BYTES, type LogEvent } from '../lib/output-log'
 import {
-  CHECKPOINT_BYTES, heavyWorkRunning, MAX_BACKLOG_BYTES, MAX_TAIL_BYTES, MAX_TAIL_EVENTS, REBUILD_INTERVAL_MS, REBUILD_QUIET_MS, Replica,
-  type JoinPoint, type ReplicaDiagnostic, runSliced,
+  CHECKPOINT_BYTES, heavyWorkRunning, MAX_BACKLOG_BYTES, SEED_ABANDON_BYTES, MAX_TAIL_BYTES, MAX_TAIL_EVENTS, REBUILD_INTERVAL_MS, REBUILD_QUIET_MS, Replica,
+  type Cut, type ReplicaDiagnostic, runSliced,
 } from '../lib/replica'
 import { EVENT_OVERHEAD_BYTES, terminalBytes } from '../lib/memory'
+import { SeedDeferred } from '../lib/reseed'
 import { drain, fullState, stateDiff, type Term } from '../lib/terminal-state'
 import { emulator, settled } from './helpers/terminal-fuzz'
 
 const encode = (text: string) => new TextEncoder().encode(text)
+async function until(check: () => boolean, label: string, ms = 3000): Promise<void> {
+  for (const start = Date.now(); Date.now() - start < ms; await Bun.sleep(5)) if (check()) return
+  throw new Error(`timed out: ${label}`)
+}
 
 /** A log's events, numbered like the log numbers them. */
 function stream() {
@@ -23,33 +29,45 @@ function stream() {
       return event
     },
     layout: (cols: number, rows: number): LogEvent => ({ seq: ++seq, kind: 'layout', cols, rows }),
-    seed: (text: string, cols: number, rows: number): LogEvent => ({ seq: ++seq, kind: 'seed', bytes: encode(text), cols, rows, reason: 'test' }),
+    seed: (text: string, cols: number, rows: number, history = true): LogEvent => ({ seq: ++seq, kind: 'seed', bytes: encode(text), cols, rows, reason: 'test', history }),
+    geometry: (text: string, cols: number, rows: number, generation: number, history = true): LogEvent => ({ seq: ++seq, kind: 'geometry', bytes: encode(text), cols, rows, generation, history }),
   }
 }
 
 function replica(options: Partial<ConstructorParameters<typeof Replica>[0]> = {}) {
   const reseeds: string[] = []
+  const scopes: string[] = []
+  const geometries: string[] = []
   const diagnostics: ReplicaDiagnostic[] = []
   // Captures take their turn in the heavy-work queue, as lib/reseed.ts does.
-  const r = new Replica({ reseed: (reason, turn) => turn(async () => { reseeds.push(reason) }), diagnostic: (event) => diagnostics.push(event), ...options })
+  const r = new Replica({ reseed: (reason, turn, scope) => turn(async () => { reseeds.push(reason); scopes.push(scope) }), geometry: (generation, turn, scope) => turn(async () => { geometries.push(`${generation} ${scope}`) }), diagnostic: (event) => diagnostics.push(event), ...options })
   const ended = () => diagnostics.flatMap((event) => event.kind === 'ended' ? [event.reason] : [])
-  return { r, reseeds, diagnostics, ended }
+  return { r, reseeds, scopes, geometries, diagnostics, ended }
 }
 
 /** A viewer's join: the base restored, then the tail. */
-async function join(point: JoinPoint): Promise<Term> {
+async function join(point: Cut): Promise<Term> {
   const { checkpoint } = point
   const viewer = emulator(checkpoint.cols, checkpoint.rows, checkpoint.scrollback)
   await restoreCheckpoint(viewer, checkpoint)
   for (const event of point.tail) {
     if (event.kind === 'output') viewer.write(event.bytes)
     else if (event.kind === 'layout') viewer.resize(event.cols, event.rows)
+    else if (event.kind === 'geometry') {
+      // As a viewer installs it (plan T34a-3): parsed into a scratch emulator, its geometry installed.
+      await settled(viewer)
+      const source = emulator(event.cols, event.rows, checkpoint.scrollback)
+      source.write(event.bytes)
+      await settled(source)
+      expect(installGeometry(viewer, source)).toBe(true)
+      source.dispose()
+    }
   }
   await settled(viewer)
   return viewer
 }
-async function expectJoinable(r: Replica): Promise<JoinPoint> {
-  const point = r.joinPoint()
+async function expectJoinable(r: Replica): Promise<Cut> {
+  const point = r.cut()
   expect(point).toBeDefined()
   const viewer = await join(point!)
   expect(stateDiff(fullState(viewer), fullState(r.terminal!))).toBeNull()
@@ -74,11 +92,11 @@ describe('Replica', () => {
     const { r } = replica()
     await r.event(s.output('before the seed'))
     expect(r.terminal).toBeUndefined()
-    expect(r.joinPoint()).toBeUndefined()
+    expect(r.cut()).toBeUndefined()
     await r.event(s.seed('\x1bc\x1b[1mseeded\x1b[0m\r\n$ ', 40, 10))
     await r.event(s.output('typed'))
     const point = await expectJoinable(r)
-    expect(point.seq).toBe(2)
+    expect(point.baseSeq).toBe(2)
     expect(point.tail.map((event) => event.seq)).toEqual([3])
     expect(r.terminal!.buffer.active.getLine(1)!.translateToString(true)).toBe('$ typed')
     r.close()
@@ -103,7 +121,7 @@ describe('Replica', () => {
     const { r } = replica({ idleMs: 20 })
     await r.event(s.seed('\x1bc', 40, 10))
     await r.event(s.output('a little output'))
-    expect(r.joinPoint()!.tail.length).toBe(1)
+    expect(r.cut()!.tail.length).toBe(1)
     await Bun.sleep(60)
     await r.idle()
     expect(r.stats.accepted).toBe(1)
@@ -132,7 +150,7 @@ describe('Replica', () => {
     await r.event(s.output('\x1b]0;'))
     const payload = 'x'.repeat(65536)
     for (let sent = 0; sent <= MAX_TAIL_BYTES; sent += payload.length) await r.event(s.output(payload))
-    expect(r.joinPoint()).toBeUndefined()
+    expect(r.cut()).toBeUndefined()
     expect(reseeds).toEqual(['tail bound'])
     expect(r.tailSize).toBe(0)
     // Output while waiting is not kept; the next seed is the next base.
@@ -146,19 +164,24 @@ describe('Replica', () => {
     r.close()
   })
 
-  it('a width change asks for a reseed; a row change is an ordered tail event', async () => {
+  it('a row change is an ordered tail event; a width change asks for its geometry and stays live', async () => {
     const s = stream()
-    const { r, reseeds } = replica()
+    const { r, reseeds, geometries } = replica()
     await r.event(s.seed('\x1bc', 80, 24))
     await r.event(s.output('hello'))
     await r.event(s.layout(80, 30))
     await r.event(s.output('\r\nworld'))
     const point = await expectJoinable(r)
     expect(point.tail.map((event) => event.kind)).toEqual(['output', 'layout', 'output'])
-    expect(reseeds).toEqual([])
+    expect(geometries).toEqual([])
     await r.event(s.layout(100, 30))
-    expect(reseeds).toEqual(['width'])
-    expect(r.joinPoint()).toBeUndefined()
+    await until(() => geometries.length === 1, 'the geometry capture')
+    expect(geometries).toEqual(['1 full'])
+    expect(reseeds).toEqual([])
+    // Nothing is skipped meanwhile: output goes on into the tail.
+    await r.event(s.output('!'))
+    expect(r.geometryOwed).toBe(true)
+    expect((await expectJoinable(r)).tail.map((event) => event.kind)).toEqual(['output', 'layout', 'output', 'layout', 'output'])
     r.close()
   })
 
@@ -180,7 +203,7 @@ describe('Replica', () => {
     // The capture takes its turn once the abandoned checkpoint gives the slot up (at its next slice).
     for (let tries = 0; tries < 200 && reseeds.length === 0; tries++) await Bun.sleep(1)
     expect(reseeds).toEqual(['overload'])
-    expect(r.joinPoint()).toBeUndefined()
+    expect(r.cut()).toBeUndefined()
     // Output while rebuilding is skipped, not parsed.
     const before = r.stats.skippedBytes
     const parsed = r.terminal!.buffer.normal.length
@@ -192,7 +215,7 @@ describe('Replica', () => {
     await r.event(s.output('\r\nnext'))
     expect(r.rebuildCause).toBeUndefined()
     const point = await expectJoinable(r)
-    expect(point.seq).toBe(seed.seq)
+    expect(point.baseSeq).toBe(seed.seq)
     expect(point.tail.map((event) => event.seq)).toEqual([seed.seq + 1])
     const rebuilt = diagnostics.find((event) => event.kind === 'rebuilt')
     expect(rebuilt).toMatchObject({ kind: 'rebuilt', cause: 'overload', toSeq: seed.seq })
@@ -264,16 +287,25 @@ describe('Replica', () => {
     r.close()
   })
 
-  it('a seed too large for one step is parsed in pieces, and overload stops it', async () => {
+  it('a seed under a flood is let finish (its picture is what viewers wait for), and is given up only near the log bound', async () => {
     const s = stream()
     const { r, reseeds } = replica()
     await r.event(s.seed('\x1bc', 80, 24))
+    // Pressure while the seed is parsed: the seed lands whole, its picture joinable.
     const big = s.seed('\x1bc' + flood(2 * 1024 * 1024), 80, 24)
     const pending = r.event(big)
     await Bun.sleep(5)
     r.pressure(MAX_BACKLOG_BYTES)
     await pending
-    expect(r.joinPoint()).toBeUndefined()
+    expect(r.cut()?.baseSeq).toBe(big.seq)
+    expect(reseeds).toEqual([])
+    // Near the log's own bound, the seed is given up like any work.
+    const second = s.seed('\x1bc' + flood(2 * 1024 * 1024), 80, 24)
+    const abandoned = r.event(second)
+    await Bun.sleep(5)
+    r.pressure(SEED_ABANDON_BYTES)
+    await abandoned
+    expect(r.cut()).toBeUndefined()
     expect(r.rebuildCause).toBe('overload')
     expect(reseeds).toEqual(['overload'])
     r.close()
@@ -352,8 +384,9 @@ describe('Replica', () => {
     await r.event(s.layout(80, 31))
     await Bun.sleep(60)
     await r.idle()
+    expect(r.stats.rejected).toEqual({})
     expect(r.stats.accepted).toBe(1)
-    expect(r.joinPoint()!.tail).toEqual([])
+    expect(r.cut()!.tail).toEqual([])
     for (let i = 0; i <= MAX_TAIL_EVENTS; i++) await r.event(s.layout(80, 24 + (i % 2)))
     expect(reseeds).toEqual(['tail bound'])
     r.close()
@@ -385,12 +418,252 @@ describe('Replica', () => {
     await r.event(s.seed('\x1bc', 40, 10))
     r.invalid('overflow')
     expect(ended()).toEqual(['log invalid: overflow'])
-    expect(r.joinPoint()).toBeUndefined()
+    expect(r.cut()).toBeUndefined()
     expect(r.terminal).toBeUndefined()
     await r.event(s.output('ignored'))
     r.pressure(MAX_BACKLOG_BYTES)
     r.close()
     expect(ended()).toEqual(['log invalid: overflow'])
+  })
+})
+
+describe('Replica history after an overload', () => {
+  it('an overload asks for screen-only seeds; quiet output brings the history back with one full seed', async () => {
+    const s = stream()
+    const { r, reseeds, scopes, diagnostics } = replica({ idleMs: 1e9, historyQuietMs: 40 })
+    await r.event(s.seed('\x1bc', 40, 10))
+    r.pressure(MAX_BACKLOG_BYTES)
+    await until(() => reseeds.length === 1, 'the overload capture')
+    expect([reseeds[0], scopes[0]]).toEqual(['overload', 'screen'])
+    // The screen-only seed lands: joinable at once, history still owed.
+    await r.event(s.seed('\x1bcscreen only', 40, 10, false))
+    expect(r.cut()).toBeDefined()
+    expect(diagnostics).toContainEqual({ kind: 'seeded', reason: 'test', history: false })
+    // Output keeps coming (the log tells the replica of each event as it takes it): no restore while it does.
+    for (let i = 0; i < 5; i++) { r.pressure(0); await r.event(s.output('more')); await Bun.sleep(15) }
+    expect(reseeds).toHaveLength(1)
+    // Quiet: one full seed is asked for, and the picture stays joinable meanwhile (not a rebuild).
+    await until(() => reseeds.length === 2, 'the history restore')
+    expect([reseeds[1], scopes[1]]).toEqual(['history', 'full'])
+    expect(r.cut()).toBeDefined()
+    await r.event(s.seed('\x1bcwith history', 40, 10, true))
+    // Restored: nothing more is asked for.
+    await Bun.sleep(100)
+    expect(reseeds).toHaveLength(2)
+    r.close()
+  })
+  it('a restore whose turn comes after output resumed is given up (no capture, no failure) and tried again', async () => {
+    const s = stream()
+    const captures: string[] = []
+    let resumeOnce = true
+    const r = new Replica({
+      idleMs: 1e9, historyQuietMs: 30, geometry: (_generation, turn) => turn(async () => undefined), 
+      reseed: async (reason, turn, scope) => {
+        // Output arrives while the restore waits for its turn.
+        if (reason === 'history' && resumeOnce) { resumeOnce = false; r.pressure(0) }
+        try { await turn(async () => { captures.push(`${reason} ${scope}`) }) } catch (error) { if (!(error instanceof SeedDeferred)) throw error; throw error }
+      },
+    })
+    await r.event(s.seed('\x1bc', 40, 10))
+    r.pressure(MAX_BACKLOG_BYTES)
+    await until(() => captures.length === 1, 'the overload capture')
+    await r.event(s.seed('\x1bc', 40, 10, false))
+    // The first restore is given up at its turn; once quiet again, the second captures.
+    await until(() => captures.length === 2, 'the restore after quiet')
+    expect(captures).toEqual(['overload screen', 'history full'])
+    expect(r.ended).toBeUndefined()
+    r.close()
+  })
+  it('a restore given up at its turn asks for the capture a rebuild meanwhile was waiting for', async () => {
+    const s = stream()
+    const captures: string[] = []
+    let overloadDuringRestore = true
+    const r: Replica = new Replica({
+      idleMs: 1e9, historyQuietMs: 30, geometry: (_generation, turn) => turn(async () => undefined), 
+      reseed: async (reason, turn, scope) => {
+        if (reason === 'history' && overloadDuringRestore) {
+          overloadDuringRestore = false
+          // An overload arrives while the restore waits for its turn: the rebuild finds the slot taken.
+          r.pressure(MAX_BACKLOG_BYTES)
+        }
+        await turn(async () => { captures.push(`${reason} ${scope}`) })
+      },
+    })
+    await r.event(s.seed('\x1bc', 40, 10))
+    r.pressure(MAX_BACKLOG_BYTES)
+    await until(() => captures.length === 1, 'the overload capture')
+    await r.event(s.seed('\x1bc', 40, 10, false))
+    // The restore is given up (a rebuild began), and the rebuild's capture follows.
+    await until(() => captures.filter((capture) => capture === 'overload screen').length === 2, 'the stranded rebuild captured')
+    expect(r.rebuildCause).toBe('overload')
+    r.close()
+  })
+  it('a restore waits while an event is still being applied (its write not yet called back)', async () => {
+    const s = stream()
+    const order: string[] = []
+    const r = new Replica({ idleMs: 1e9, historyQuietMs: 20, geometry: (_generation, turn) => turn(async () => undefined), reseed: (reason, turn) => turn(async () => { order.push(reason) }) })
+    await r.event(s.seed('\x1bc', 40, 10))
+    r.pressure(MAX_BACKLOG_BYTES)
+    await until(() => order.length === 1, 'the overload capture')
+    await r.event(s.seed('\x1bc', 40, 10, false))
+    // The replica's writes call back late (a slow parse): the quiet runs out while the event is applied.
+    const term = r.terminal!
+    const write = term.write.bind(term)
+    term.write = ((data: string | Uint8Array, done?: () => void) => write(data, () => setTimeout(() => done?.(), 80))) as typeof term.write
+    await r.event(s.output('late')).then(() => order.push('parsed'))
+    await until(() => order.length === 3, 'the restore once caught up')
+    expect(order).toEqual(['overload', 'parsed', 'history'])
+    r.close()
+  })
+  it("while history is owed, a width change's geometry is the screen alone too", async () => {
+    const s = stream()
+    const { r, reseeds, scopes, geometries } = replica({ idleMs: 1e9, historyQuietMs: 5_000 })
+    await r.event(s.seed('\x1bc', 40, 10))
+    r.pressure(MAX_BACKLOG_BYTES)
+    await until(() => reseeds.length === 1, 'the overload capture')
+    await r.event(s.seed('\x1bc', 40, 10, false))
+    await r.event(s.layout(60, 10))
+    await until(() => geometries.length === 1, 'the width capture')
+    expect(scopes).toEqual(['screen'])
+    expect(geometries).toEqual(['1 screen'])
+    r.close()
+  })
+  it('a quiet restore waits for a seed in flight and for the end of a rebuild', async () => {
+    const s = stream()
+    const { r, reseeds } = replica({ idleMs: 1e9, historyQuietMs: 30 })
+    await r.event(s.seed('\x1bc', 40, 10))
+    r.pressure(MAX_BACKLOG_BYTES)
+    await until(() => reseeds.length === 1, 'the overload capture')
+    // Still rebuilding (the screen seed has not landed): the restore waits.
+    await Bun.sleep(80)
+    expect(reseeds).toHaveLength(1)
+    await r.event(s.seed('\x1bc', 40, 10, false))
+    await until(() => reseeds.length === 2, 'the restore after the seed')
+    r.close()
+  })
+})
+
+describe('Replica subscription', () => {
+  function listener() {
+    const told: string[] = []
+    const events: LogEvent[] = []
+    return {
+      told, events,
+      handle: { event: (e: LogEvent) => { events.push(e); told.push(`event ${e.seq}`) }, rebuilding: (cause: string) => told.push(`rebuilding ${cause}`), rebased: () => told.push('rebased'), ended: (reason: string) => told.push(`ended ${reason}`) },
+    }
+  }
+  it('starts seeding, is told of the seed, then of every committed event after its cut', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    const l = listener()
+    const { state } = r.subscribe(l.handle)
+    expect(state).toEqual({ kind: 'seeding' })
+    await r.event(s.seed('\x1bc', 40, 10))
+    expect(l.told).toEqual(['rebased'])
+    const cut = r.cut()!
+    expect(cut).toMatchObject({ baseSeq: 1, throughSeq: 1, tail: [] })
+    await r.event(s.output('one'))
+    await r.event(s.layout(40, 12))
+    expect(l.told).toEqual(['rebased', 'event 2', 'event 3'])
+    expect(r.cut()!.throughSeq).toBe(3)
+    r.close()
+  })
+  it('leaves no gap and no duplicate between the cut and the events after it, joined mid-apply', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 40, 10))
+    await r.event(s.output('before'))
+    // An event still being parsed is not committed: the cut leaves it out, the listener is told of it.
+    const taken = r.activity
+    const inFlight = r.event(s.output('x'.repeat(200_000)))
+    while (r.activity === taken) await Promise.resolve()
+    const l = listener()
+    const { state } = r.subscribe(l.handle)
+    if (state.kind !== 'live') throw new Error('expected a live cut')
+    const after = [r.event(s.output('after')), inFlight]
+    await Promise.all(after)
+    const seqs = [...state.cut.tail.map((e) => e.seq), ...l.events.map((e) => e.seq)]
+    expect(seqs).toEqual([2, 3, 4])
+    expect(state.cut.throughSeq).toBe(2)
+    expect(l.events.every((e) => e.seq > state.cut.throughSeq)).toBe(true)
+    r.close()
+  })
+  it('a subscription taken while a checkpoint runs misses nothing and repeats nothing', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 120, 40))
+    const crossing = (async () => { await deliver(r, s, flood(CHECKPOINT_BYTES + BATCH_BYTES)) })()
+    while (heavyWorkRunning() === 0) await new Promise((resolve) => setImmediate(resolve))
+    const l = listener()
+    const { state } = r.subscribe(l.handle)
+    if (state.kind !== 'live') throw new Error('expected a live cut')
+    await crossing
+    await r.event(s.output('after the checkpoint'))
+    await r.idle()
+    expect(r.stats.accepted).toBe(1)
+    const seqs = [...state.cut.tail.map((e) => e.seq), ...l.events.map((e) => e.seq)]
+    expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, i) => i + 2))
+    expect(seqs.at(-1)).toBe(r.cut()!.throughSeq)
+    r.close()
+  })
+  it('a cut stays whole when a checkpoint replaces the tail', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 80, 24))
+    await r.event(s.output('kept in the cut'))
+    const cut = r.cut()!
+    await deliver(r, s, flood(CHECKPOINT_BYTES + BATCH_BYTES))
+    await r.idle()
+    expect(r.stats.accepted).toBe(1)
+    expect(r.cut()!.baseSeq).toBeGreaterThan(cut.baseSeq)
+    expect(cut.tail.map((e) => e.seq)).toEqual([2])
+    r.close()
+  })
+  it('never tells of an event a rebuild interrupted, and tells of the rebuild', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 40, 10))
+    const l = listener()
+    r.subscribe(l.handle)
+    const taken = r.activity
+    const interrupted = r.event(s.output('y'.repeat(200_000)))
+    // Parsing has started (the replica took the event) when the rebuild comes.
+    while (r.activity === taken) await Promise.resolve()
+    r.pressure(MAX_BACKLOG_BYTES)
+    await interrupted
+    expect(l.told).toEqual(['rebuilding overload'])
+    expect(r.state()).toEqual({ kind: 'rebuilding', cause: 'overload' })
+    await r.event(s.output('skipped'))
+    expect(l.events).toEqual([])
+    r.close()
+  })
+  it('contains a throwing listener: the replica and the other listeners carry on', async () => {
+    const s = stream()
+    const { r, diagnostics } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 40, 10))
+    r.subscribe({ event: () => { throw new Error('viewer broke') }, rebuilding: () => undefined, rebased: () => undefined, ended: () => undefined })
+    const l = listener()
+    r.subscribe(l.handle)
+    await r.event(s.output('still parsed'))
+    expect(l.told).toEqual(['event 2'])
+    expect(diagnostics).toContainEqual({ kind: 'listener failed', error: 'viewer broke' })
+    expect(r.cut()!.throughSeq).toBe(2)
+    r.close()
+  })
+  it('tells of its end once, then forgets its listeners; unsubscribing stops the calls', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 40, 10))
+    const kept = listener()
+    const gone = listener()
+    r.subscribe(kept.handle)
+    r.subscribe(gone.handle).unsubscribe()
+    await r.event(s.output('one'))
+    r.close()
+    r.close()
+    expect(kept.told).toEqual(['event 2', 'ended closed'])
+    expect(gone.told).toEqual([])
+    expect(r.state()).toEqual({ kind: 'ended', reason: 'closed' })
   })
 })
 
@@ -438,5 +711,236 @@ describe('runSliced', () => {
     expect(closed).toBe(1)
     function* done(): Generator<void, string> { yield; return 'ok' }
     expect(await runSliced(done())).toBe('ok')
+  })
+})
+
+describe('Replica width changes (plan T34a)', () => {
+  /** What tmux would capture at the new width: a reflowed picture, distinct from xterm's own. */
+  const tmuxPicture = '\x1bctmux one\r\ntmux two\x1b[2;5H'
+  it("installs tmux's geometry: its lines and cursor, the replica's own pen and parser, and joins agree", async () => {
+    const s = stream()
+    const { r, reseeds, diagnostics } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 80, 10))
+    // A pen tmux cannot capture, and a CSI left unfinished across the width change.
+    await r.event(s.output('old text\x1b[1;35m\x1b[3'))
+    await r.event(s.layout(60, 10))
+    await r.event(s.geometry(tmuxPicture, 60, 10, 1))
+    expect(r.geometryOwed).toBe(false)
+    expect(r.stats.geometries).toBe(1)
+    expect(reseeds).toEqual([])
+    expect(diagnostics.some((event) => event.kind === 'geometry' && event.installed)).toBe(true)
+    const line = (y: number) => r.terminal!.buffer.active.getLine(y)!.translateToString(true)
+    expect([line(0), line(1)]).toEqual(['tmux one', 'tmux two'])
+    // The CSI finishes (SGR 32: green), with the pen's bold kept.
+    await r.event(s.output('2mX'))
+    const cell = r.terminal!.buffer.active.getLine(1)!.getCell(4)!
+    expect([cell.getChars(), cell.getFgColor(), Boolean(cell.isBold())]).toEqual(['X', 2, true])
+    const point = await expectJoinable(r)
+    expect(point.tail.map((event) => event.kind)).toEqual(['output', 'layout', 'geometry', 'output'])
+    r.close()
+  })
+  it('a geometry that cannot be installed (its size disagrees) is a width rebuild', async () => {
+    const s = stream()
+    const { r, reseeds, diagnostics } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 80, 10))
+    await r.event(s.layout(60, 10))
+    await r.event(s.geometry(tmuxPicture, 70, 10, 1))
+    expect(r.rebuildCause).toBe('width')
+    await until(() => reseeds.length === 1, 'the rebuild capture')
+    expect(reseeds).toEqual(['width'])
+    expect(diagnostics.some((event) => event.kind === 'geometry' && !event.installed)).toBe(true)
+    r.close()
+  })
+  it('width changes while a capture is out need one more, for the newest', async () => {
+    const s = stream()
+    let release: () => void = () => undefined
+    const asked: number[] = []
+    const r = new Replica({
+      idleMs: 1e9, reseed: (_reason, turn) => turn(async () => undefined),
+      geometry: (generation, turn) => turn(async () => { asked.push(generation); if (asked.length === 1) await new Promise<void>((resolve) => { release = resolve }) }),
+    })
+    await r.event(s.seed('\x1bc', 80, 10))
+    await r.event(s.layout(70, 10))
+    await until(() => asked.length === 1, 'the first capture')
+    await r.event(s.layout(60, 10))
+    await r.event(s.layout(50, 10))
+    expect(asked).toEqual([1])
+    release()
+    await until(() => asked.length === 2, 'the follow-up capture')
+    expect(asked).toEqual([1, 3])
+    // The first geometry (generation 1) lands after the later layouts: installed only at the size it matches.
+    await r.event(s.geometry(tmuxPicture, 50, 10, 1))
+    expect(r.geometryOwed).toBe(true)
+    await r.event(s.geometry(tmuxPicture, 50, 10, 3))
+    expect(r.geometryOwed).toBe(false)
+    expect(r.stats.geometries).toBe(2)
+    r.close()
+  })
+  it('a seed covers every width change before it; a geometry while rebuilding is superseded', async () => {
+    const s = stream()
+    const { r, geometries } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 80, 10))
+    await r.event(s.layout(60, 10))
+    await until(() => geometries.length === 1, 'the capture')
+    r.pressure(MAX_BACKLOG_BYTES)
+    expect(r.rebuildCause).toBe('overload')
+    expect(r.geometryOwed).toBe(false)
+    await r.event(s.geometry(tmuxPicture, 60, 10, 1))
+    expect(r.stats.geometries).toBe(0)
+    await r.event(s.seed('\x1bc', 60, 10, false))
+    expect(r.geometryOwed).toBe(false)
+    expect(r.cut()).toBeDefined()
+    r.close()
+  })
+  it("a screen-only geometry asked while history was owed never takes away the history a seed restored meanwhile", async () => {
+    const s = stream()
+    const { r, reseeds, geometries } = replica({ idleMs: 1e9, historyQuietMs: 20 })
+    await r.event(s.seed('\x1bc', 40, 10))
+    r.pressure(MAX_BACKLOG_BYTES)
+    await until(() => reseeds.length === 1, 'the overload capture')
+    await r.event(s.seed('\x1bcscreen only', 40, 10, false))
+    // The quiet restore's capture settles (its seed queued, not applied), then a width change asks for its geometry.
+    await until(() => reseeds.includes('history'), 'the restore capture')
+    await r.event(s.layout(60, 10))
+    await until(() => geometries.length === 1, 'the geometry capture')
+    expect(geometries).toEqual(['1 screen'])
+    // The restore's full seed lands (it covers the width change), then the screen-only geometry.
+    const history = Array.from({ length: 30 }, (_, i) => `history ${i}`).join('\r\n')
+    await r.event(s.seed('\x1bc' + history, 60, 10, true))
+    const baseY = r.terminal!.buffer.active.baseY
+    expect(baseY).toBeGreaterThan(0)
+    await r.event(s.geometry('\x1bcscreen only', 60, 10, 1, false))
+    expect(r.terminal!.buffer.active.baseY).toBe(baseY)
+    expect(r.stats.geometries).toBe(0)
+    expect(r.cut()!.history).toBe(true)
+    r.close()
+  })
+  it('a screen-only geometry landing on a picture with its history is asked again in full', async () => {
+    const s = stream()
+    const { r, geometries } = replica({ idleMs: 1e9 })
+    const history = Array.from({ length: 30 }, (_, i) => `history ${i}`).join('\r\n')
+    await r.event(s.seed('\x1bc' + history, 80, 10))
+    await r.event(s.layout(60, 10))
+    await until(() => geometries.length === 1, 'the capture')
+    await r.event(s.geometry('\x1bcscreen only', 60, 10, 1, false))
+    await until(() => geometries.length === 2, 'asked again')
+    expect(geometries).toEqual(['1 full', '1 full'])
+    expect(r.geometryOwed).toBe(true)
+    r.close()
+  })
+  it('a UTF-8 character split across the width change completes after the geometry', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 80, 10))
+    const thumbs = new TextEncoder().encode('👍')
+    await r.event(s.output(thumbs.subarray(0, 2)))
+    await r.event(s.layout(60, 10))
+    await r.event(s.geometry(tmuxPicture, 60, 10, 1))
+    await r.event(s.output(thumbs.subarray(2)))
+    const cell = r.terminal!.buffer.active.getLine(1)!.getCell(4)!
+    expect([cell.getChars(), cell.getWidth()]).toEqual(['👍', 2])
+    await expectJoinable(r)
+    r.close()
+  })
+  it('a width change moves the size revision once, at its layout (its geometry does not)', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 80, 10))
+    expect(r.sizeRevision).toBe(0)
+    await r.event(s.layout(60, 10))
+    expect(r.sizeRevision).toBe(1)
+    await r.event(s.geometry(tmuxPicture, 60, 10, 1))
+    expect(r.sizeRevision).toBe(1)
+    r.close()
+  })
+  it('layouts a rebuild skipped move the revision only by the size the seed lands at', async () => {
+    const s = stream()
+    const flooded = async (r: Replica) => {
+      await r.event(s.output('\x1b]0;'))
+      const payload = 'x'.repeat(65536)
+      for (let sent = 0; sent <= MAX_TAIL_BYTES; sent += payload.length) await r.event(s.output(payload))
+      expect(r.cut()).toBeUndefined()
+    }
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 80, 24))
+    // A→B→A while rebuilding, then a seed at A: nothing applied changed size.
+    await flooded(r)
+    await r.event(s.layout(60, 24))
+    await r.event(s.layout(80, 24))
+    await r.event(s.seed('\x1bc', 80, 24))
+    expect(r.sizeRevision).toBe(0)
+    // Skipped layouts and a seed at another size: one change.
+    await flooded(r)
+    await r.event(s.layout(60, 24))
+    await r.event(s.layout(70, 20))
+    await r.event(s.seed('\x1bc', 70, 20))
+    expect(r.sizeRevision).toBe(1)
+    r.close()
+  })
+  it('an ended replica keeps its revision and size for its replacement, and moves no more', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 80, 24))
+    await r.event(s.layout(60, 24))
+    r.close()
+    await r.event(s.layout(90, 30))
+    expect(r.revisionState).toEqual({ count: 1, cols: 60, rows: 24 })
+  })
+  it('a replacement continues the count: its first seed at the old size moves nothing, at another size once', async () => {
+    for (const [cols, rows, count] of [[60, 24, 3], [90, 30, 4]] as const) {
+      const s = stream()
+      const { r } = replica({ idleMs: 1e9, revision: { count: 3, cols: 60, rows: 24 } })
+      expect(r.sizeRevision).toBe(3)
+      await r.event(s.seed('\x1bc', cols, rows))
+      expect(r.sizeRevision).toBe(count)
+      r.close()
+    }
+    // One that replaces a replica that never had a picture starts its count without a change.
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9, revision: { count: 2 } })
+    await r.event(s.seed('\x1bc', 90, 30))
+    expect(r.sizeRevision).toBe(2)
+    r.close()
+  })
+  it('a checkpoint after a geometry is accepted and compacts the tail', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bc', 80, 10))
+    await r.event(s.layout(60, 10))
+    // A picture with a megabyte of history: the checkpoint it prompts compacts it.
+    await r.event(s.geometry('\x1bc' + flood(CHECKPOINT_BYTES) + 'end', 60, 10, 1))
+    await r.idle()
+    expect(r.stats.rejected).toEqual({})
+    expect(r.stats.accepted).toBe(1)
+    expect(r.cut()!.tail).toEqual([])
+    await expectJoinable(r)
+    r.close()
+  })
+})
+
+describe('Replica safety net (plan T37)', () => {
+  it('its digest is read between events and kept for that event; none without a picture', async () => {
+    const s = stream()
+    const { r } = replica({ idleMs: 1e9 })
+    expect(await r.digest()).toBeUndefined()
+    await r.event(s.seed('\x1bchello', 40, 10))
+    const first = (await r.digest())!
+    expect(await r.digest()).toBe(first)
+    await r.event(s.output(' world'))
+    const second = (await r.digest())!
+    expect(second.seq).toBeGreaterThan(first.seq)
+    expect(second.digest).not.toBe(first.digest)
+    r.close()
+  })
+  it('a divergence rebuilds it from tmux (counted, and asked for as a seed)', async () => {
+    const s = stream()
+    const { r, reseeds } = replica({ idleMs: 1e9 })
+    await r.event(s.seed('\x1bchello', 40, 10))
+    await r.diverged()
+    expect(r.rebuildCause).toBe('divergence')
+    expect(r.stats.rebuilds).toEqual({ divergence: 1 })
+    for (let tries = 0; tries < 200 && reseeds.length === 0; tries++) await Bun.sleep(1)
+    expect(reseeds).toEqual(['divergence'])
+    r.close()
   })
 })

@@ -2,6 +2,10 @@ import React from 'react'
 
 // Focused rich-content stubs mirroring `@makinbakin/sdk/content`.
 
+export function CodeBlock({ code, children, className }) {
+  return React.createElement('pre', { 'data-testid': 'code-block', className }, code ?? children)
+}
+
 export function MarkdownContent({ content, compareTo, className }) {
   return React.createElement('div', { 'data-testid': 'markdown-content', 'data-compare-to': compareTo, className }, content)
 }

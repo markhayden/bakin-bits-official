@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'bun:test'
 import headless from '@xterm/headless'
 import { CHECKPOINT_FORMAT, restoreCheckpoint, takeCheckpoint, type Checkpoint } from '../lib/checkpoint'
+import { restoreSideState } from '../lib/side-state'
 import { applyTerminalProfile, TERMINAL_OPTIONS } from '../lib/terminal-profile'
 import { compareSteps, drain, fullState, stateDiff, type Term } from '../lib/terminal-state'
-import { generate } from './helpers/terminal-fuzz'
+import { apply, emulator, generate, settled } from './helpers/terminal-fuzz'
 
 const enc = (text: string) => new TextEncoder().encode(text)
 const cat = (...parts: Uint8Array[]) => { const all = new Uint8Array(parts.reduce((n, part) => n + part.length, 0)); let at = 0; for (const part of parts) { all.set(part, at); at += part.length } return all }
@@ -249,11 +250,81 @@ describe('restoreCheckpoint', () => {
     const chunk = line.repeat(Math.ceil(16 * 1024 / line.length))
     const data = Array.from({ length: Math.ceil(52_000_000 / chunk.length) }, () => chunk)
     const viewer = terminal(80, 24, 10)
-    const checkpoint: Checkpoint = { format: CHECKPOINT_FORMAT, cols: 80, rows: 24, scrollback: 10, data, joinState: 0, penHasExtended: true, altEnteredCols: null }
+    const checkpoint: Checkpoint = { format: CHECKPOINT_FORMAT, cols: 80, rows: 24, scrollback: 10, data, joinState: 0, penHasExtended: true, altEnteredCols: null, altEntry: null }
     await restoreCheckpoint(viewer, checkpoint)
     // The side state is set once every piece is parsed.
     expect(((viewer as unknown as { _core: { _inputHandler: { _curAttrData: { bg: number } } } })._core._inputHandler._curAttrData.bg & 0x10000000) !== 0).toBe(true)
     expect(viewer.buffer.active.getLine(viewer.buffer.active.baseY)!.translateToString(true)).toBe('x'.repeat(78))
     viewer.dispose()
   }, 60_000)
+})
+
+describe('streamed restore (the raw path)', () => {
+  // The checkpoint's UTF-8 written in pieces of any size (inside a character
+  // too), then the side state from the last write's callback: the same full
+  // state as restoreCheckpoint, over fuzz-generated states.
+  it('equals restoreCheckpoint at every piece size, splits inside characters included', async () => {
+    const SIZES = [1, 2, 3, 7, 64, 4096]
+    let compared = 0
+    let multibyte = 0
+    for (let seed = 1; seed <= 30; seed++) {
+      const source = emulator(40, 10, 200)
+      const { events } = generate(seed, 40, 10, 80)
+      for (const event of events) apply(source, event)
+      await settled(source)
+      const result = takeCheckpoint(source)
+      if ('rejected' in result) continue
+      const { checkpoint } = result
+      // Restored at the checkpoint's own size (the stream resized its source); the reference equals the source.
+      const whole = emulator(checkpoint.cols, checkpoint.rows, checkpoint.scrollback)
+      await restoreCheckpoint(whole, checkpoint)
+      expect(stateDiff(fullState(whole), fullState(source)), `seed ${seed} reference`).toBeNull()
+      const bytes = new TextEncoder().encode(checkpoint.data.join(''))
+      compared++
+      if (bytes.length > checkpoint.data.join('').length) multibyte++
+      for (const size of SIZES) {
+        const streamed = emulator(checkpoint.cols, checkpoint.rows, checkpoint.scrollback)
+        await new Promise<void>((resolve) => {
+          for (let at = 0; at < bytes.length; at += size) {
+            const last = at + size >= bytes.length
+            streamed.write(bytes.subarray(at, at + size), last ? () => { restoreSideState(streamed, checkpoint); resolve() } : undefined)
+          }
+          if (!bytes.length) streamed.write('', () => { restoreSideState(streamed, checkpoint); resolve() })
+        })
+        expect(stateDiff(fullState(streamed), fullState(whole)), `seed ${seed} size ${size}`).toBeNull()
+        streamed.dispose()
+      }
+      whole.dispose()
+      source.dispose()
+    }
+    // Not vacuous: most seeds checkpoint, and their text has characters of several bytes to split.
+    expect(compared).toBeGreaterThanOrEqual(10)
+    expect(multibyte).toBeGreaterThanOrEqual(4)
+  }, 120000)
+})
+
+describe('checkpoint: a full buffer whose first line wraps from a trimmed one', () => {
+  // The restore prints a filler before that line, and the buffer trims it as the last line is printed:
+  // xterm keeps savedY across a trim, so the slot must be saved a printed line earlier.
+  const flood = Array.from({ length: 80 }, (_, i) => `\x1b[3${i % 8}mline ${i} ${'lorem ipsum '.repeat(3)}\x1b[0m`).join('\r\n')
+  const cases: [string, string, string][] = [
+    ['a slot on the top screen row', '', '\x1b[1;1H\x1b7'],
+    ['a slot mid-screen, with its attributes', '', '\x1b[3;3H\x1b[31m\x1b7\x1b[0m'],
+    ['a slot on the last row', '', '\x1b[5;1H\x1b7'],
+    ['a slot in the history', '\x1b[2;4H\x1b[32m\x1b7\x1b[0m\x1b[H', ''],
+    ['a slot on the first line (saved on the filler)', '\x1b[1;4H\x1b[32m\x1b7\x1b[0m\x1b[H', ''],
+  ]
+  for (const [name, head, tail] of cases) {
+    it(`restores ${name}`, async () => {
+      const source = emulator(20, 5, 30)
+      source.write('\x1bc' + head + flood + tail)
+      await settled(source)
+      expect(source.buffer.normal.getLine(0)!.isWrapped).toBe(true)
+      const result = takeCheckpoint(source)
+      expect('rejected' in result ? result.rejected : 'accepted').toBe('accepted')
+      const viewer = emulator(20, 5, 30)
+      await restoreCheckpoint(viewer, (result as { checkpoint: Checkpoint }).checkpoint)
+      expect(stateDiff(fullState(viewer), fullState(source))).toBeNull()
+    })
+  }
 })

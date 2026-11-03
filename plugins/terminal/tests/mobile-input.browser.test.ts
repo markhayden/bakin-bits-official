@@ -381,7 +381,7 @@ browserTest('a compose paste the server refuses keeps its draft, and says so', a
     const textarea = page.getByRole('textbox', { name: 'Text to send', exact: true })
     await textarea.fill('REFUSED_DRAFT')
     await page.getByRole('button', { name: 'Paste', exact: true }).tap()
-    await page.getByText(/Your compose text is kept/).waitFor()
+    await page.getByText(/Your compose draft is kept/).waitFor()
     // Back in compose (after the page refreshed the session), the text is still there.
     await page.reload()
     await page.getByRole('button', { name: 'Show keyboard', exact: true }).tap()
