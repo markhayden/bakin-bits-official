@@ -94,10 +94,10 @@ describe('revealClearOf', () => {
 
 describe('naming the size authority', () => {
   it('says this device, the other device kind, or the terminal app, and nothing for an unclaimed session', () => {
-    expect(sizedBy({ sizeAuthority: { viewer: 'me', kind: 'browser', device: 'phone' } }, 'me')).toBe('this device')
-    expect(sizedBy({ sizeAuthority: { viewer: 'desk', kind: 'browser', device: 'desktop' } }, 'me')).toBe('desktop')
-    expect(sizedBy({ sizeAuthority: { viewer: 'tmux', kind: 'native' } }, 'me')).toBe('terminal app')
-    expect(sizedBy({}, 'me')).toBeUndefined()
+    expect(sizedBy({ viewer: 'me', kind: 'browser', device: 'phone' }, 'me')).toBe('this device')
+    expect(sizedBy({ viewer: 'desk', kind: 'browser', device: 'desktop' }, 'me')).toBe('desktop')
+    expect(sizedBy({ viewer: 'tmux', kind: 'native' }, 'me')).toBe('terminal app')
+    expect(sizedBy(undefined, 'me')).toBeUndefined()
   })
 
   it('calls a coarse-pointer small screen a phone and everything else a desktop', () => {

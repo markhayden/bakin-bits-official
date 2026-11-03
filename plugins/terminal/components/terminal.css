@@ -42,8 +42,16 @@
   top: var(--bakin-layout-space-2);
   right: var(--bakin-layout-space-2);
   display: flex;
+  /* Never wider than the pane: on a small phone the offer wraps to its own row below the buttons. */
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: calc(100% - 2 * var(--bakin-layout-space-2));
   gap: var(--bakin-layout-gap-dense);
 }
+
+/* A program's clipboard offer: its first line, cut to fit the corner (the whole text is copied). */
+[data-bakin-plugin="terminal"] .terminal-view-offer { order: 1; max-width: min(20rem, 100%); }
+[data-bakin-plugin="terminal"] .terminal-view-offer code { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 
 /* 32 px to look at, 44 px to hit on touch. */
 @media (pointer: coarse) {
@@ -64,8 +72,13 @@
   outline-offset: -2px;
 }
 
-/* Compact headers show the grid alone; the popover names who sizes it. */
-@media (max-width: 48rem) {
+/* Narrow screens drop who sizes it; phones and narrow screens show the icon
+   alone. The popover (and the trigger's label) carry the rest. */
+@media (max-width: 64rem) {
+  [data-bakin-plugin="terminal"] .terminal-size-detail { display: none; }
+}
+@media (max-width: 48rem), (pointer: coarse) {
+  [data-bakin-plugin="terminal"] .terminal-size-grid,
   [data-bakin-plugin="terminal"] .terminal-size-detail { display: none; }
 }
 
@@ -163,6 +176,29 @@
   gap: 8px;
   padding: 4px 8px 12px;
 }
+/* The desktop sheet's title row: what it is for, and its close button. */
+[data-bakin-plugin="terminal"] .terminal-compose-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+/* A kept image's copy-path button, named in words (the icon alone said nothing). */
+[data-bakin-plugin="terminal"] .terminal-compose-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+/* From the host's md width the Live Activity button floats in the
+   bottom-right corner (40px, 16px in) on any pointer; the sends end before it. */
+@media (min-width: 48rem) {
+  [data-bakin-plugin="terminal"] .terminal-compose-actions { padding-inline-end: 3.5rem; }
+}
+/* Its images, bounded: many scroll, and the text and the sends stay in view (above a phone keyboard too). */
+[data-bakin-plugin="terminal"] .terminal-compose-images {
+  max-height: 11rem;
+  overflow-y: auto;
+}
 /* The ••• sheet: every other key, in the slot below the bar. */
 [data-bakin-plugin="terminal"] .terminal-key-sheet:focus-visible { outline: 2px solid var(--bakin-color-focus-ring); outline-offset: -2px; }
 [data-bakin-plugin="terminal"] .terminal-key-sheet {
@@ -199,3 +235,41 @@
   [data-bakin-plugin="terminal"] .terminal-key-grid:not(.terminal-key-grid-labelled) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
+
+/* Copy text: the terminal's text scrolls between the sheet's fixed header and footer. */
+[data-bakin-plugin="terminal"] .terminal-copy-text-body,
+.terminal-copy-text-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-inline: var(--bakin-layout-space-6);
+  display: grid;
+  align-content: start;
+  gap: var(--bakin-layout-gap-dense);
+}
+
+/* The folder picker: one steady size while browsing (no jumping as folders change), the list scrolling inside it.
+   Its dialog is portalled: the plugin-scoped selector serves the host (which wraps portals), the bare one the preview. */
+[data-bakin-plugin="terminal"] .terminal-folder-dialog,
+.terminal-folder-dialog {
+  max-width: 42rem;
+  height: min(85dvh, 46rem);
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+[data-bakin-plugin="terminal"] .terminal-folder-picker,
+.terminal-folder-picker {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: var(--bakin-layout-gap-item);
+  min-height: 0;
+}
+[data-bakin-plugin="terminal"] .terminal-folder-list,
+.terminal-folder-list {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: grid;
+  align-content: start;
+  gap: var(--bakin-layout-gap-item);
+}

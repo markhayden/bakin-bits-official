@@ -17,8 +17,26 @@ export function clampSize(cols: number, rows: number): { cols: number; rows: num
   return { cols: Math.min(MAX.cols, Math.max(FLOOR.cols, cols)), rows: Math.min(MAX.rows, Math.max(FLOOR.rows, rows)) }
 }
 
-export function claimSize(session: Pick<Session, 'sizeEpoch'>, viewer: string, claimant: SizeClaimant): Pick<Session, 'sizeAuthority' | 'sizeEpoch'> {
-  return { sizeAuthority: { viewer, ...claimant }, sizeEpoch: session.sizeEpoch + 1 }
+/** Pure: a handoff to another screen remembers the grid it leaves, so it can be restored. */
+export function claimSize(session: Pick<Session, 'cols' | 'rows' | 'sizeEpoch' | 'sizeAuthority' | 'previousSize'>, viewer: string, claimant: SizeClaimant): Pick<Session, 'sizeAuthority' | 'sizeEpoch' | 'previousSize'> {
+  const current = session.sizeAuthority
+  const previousSize = current && current.viewer !== viewer ? { cols: session.cols, rows: session.rows, authority: current } : session.previousSize
+  return { sizeAuthority: { viewer, ...claimant }, sizeEpoch: session.sizeEpoch + 1, previousSize }
+}
+
+/** Pure: hand the size back to the previous authority at its grid; the current one becomes the previous (a toggle). */
+export function restoreSize(session: Pick<Session, 'cols' | 'rows' | 'sizeEpoch' | 'sizeAuthority' | 'previousSize'>, epoch: number): Pick<Session, 'sizeAuthority' | 'sizeEpoch' | 'previousSize'> & { cols: number; rows: number } {
+  // Decided against what the screen showed: a handoff since (another screen went back first) makes it stale.
+  if (epoch !== session.sizeEpoch) throw new TerminalError('The size changed meanwhile; check who sizes it now', 409)
+  const previous = session.previousSize
+  if (!previous) throw new TerminalError('There is no previous size to go back to', 409)
+  const current = session.sizeAuthority
+  return {
+    ...clampSize(previous.cols, previous.rows),
+    sizeAuthority: previous.authority,
+    sizeEpoch: session.sizeEpoch + 1,
+    previousSize: current ? { cols: session.cols, rows: session.rows, authority: current } : undefined,
+  }
 }
 
 /** Pure: only the current authority at the current epoch may resize. */

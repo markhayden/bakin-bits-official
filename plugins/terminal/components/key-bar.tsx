@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { Button } from '@makinbakin/sdk/ui'
 import { ComposeSheet, type PasteOutcome } from './compose-sheet'
+import type { DraftImage } from './compose-images'
 import { Joystick } from './joystick'
 import { CONTROL_LABELS, CONTROL_SHORTCUTS, keyFace, SHEET_KEYS, type ArrowKey, type Modifier, type ModifierState, type TerminalKey } from './terminal-input'
 import type { EditingSession } from './editing-session'
@@ -83,10 +84,14 @@ const MORE_ICON = <svg width="22" height="22" viewBox="0 0 24 24" fill="currentC
  * touching them neither ends the editing session nor drops a modifier.
  * Hide keyboard works even while sending is disabled.
  */
-export function KeyBar({ session, disabled, modifiers, draft, onKey, onModifier, onSheet, onCompose, onDraft, onPaste, onKeyboard, onHide }: {
+export function KeyBar({ session, disabled, modifiers, draft, images = [], onKey, onModifier, onSheet, onCompose, onDraft, onPaste, onAddImages = () => {}, onRemoveImage = () => {}, onKeyboard, onHide }: {
   session: Exclude<EditingSession, 'idle'>; disabled: boolean; modifiers: ModifierState
   /** This session's compose draft, and whether this browser can keep it after the page is left. */
   draft: { text: string; kept: boolean }
+  /** The draft's images (components/compose-images.ts). */
+  images?: readonly DraftImage[]
+  onAddImages?(files: File[]): void
+  onRemoveImage?(id: string): void
   onKey(key: TerminalKey): void
   onModifier(modifier: Modifier, action: 'tap' | 'lock'): void
   /** Open the key sheet (the keyboard goes down). */
@@ -139,7 +144,7 @@ export function KeyBar({ session, disabled, modifiers, draft, onKey, onModifier,
       <span aria-hidden="true" className="terminal-key-divider" />
       <Keycap label="Hide keyboard" face={HIDE_ICON} tone="function" className="terminal-keycap-hide" onPress={onHide} />
     </div>
-    {session === 'compose' && <ComposeSheet draft={draft.text} kept={draft.kept} disabled={disabled} textarea={compose} onDraft={onDraft} onSend={onPaste} />}
+    {session === 'compose' && <ComposeSheet draft={draft.text} kept={draft.kept} disabled={disabled} textarea={compose} images={images} onDraft={onDraft} onSend={onPaste} onAddImages={onAddImages} onRemoveImage={onRemoveImage} />}
     {session === 'sheet' && <div ref={sheet} role="region" aria-label="More keys" tabIndex={-1} className="terminal-key-sheet">
       <div role="group" aria-label="Text" className="terminal-key-grid terminal-key-grid-labelled">
         <Keycap label="Compose" face={<><span className="terminal-keycap-face">✎</span><span className="terminal-keycap-label">Compose</span></>}

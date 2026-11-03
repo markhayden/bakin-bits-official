@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ControlClient } from '../lib/control'
@@ -7,6 +7,7 @@ import { Sessions } from '../lib/sessions'
 import { Store } from '../lib/store'
 import { TerminalService, terminalEnvironment } from '../lib/service'
 import { TmuxProcesses } from '../lib/processes'
+import { attentionLaunch, attentionPaths } from '../lib/attention'
 
 const processTest = process.env.TERMINAL_PROCESS_TEST === '1' ? test : test.skip
 
@@ -87,9 +88,96 @@ processTest('real shell survives manager restart, accepts input, resizes and ter
         const cli = await manager.create({ title: program, program, checkout: 'existing', cwd: root }, human)
         await wait(async () => (await manager!.readScreen(cli.id, human)).screen.trim().length > 0)
         expect(await new TmuxProcesses(service).alive(cli.id)).toBe(true)
+        // It started with its attention hooks (lib/attention.ts).
+        const cliPid = (await service.command(['display-message', '-p', '-t', cli.id, '#{pane_pid}'])).trim()
+        const commandLine = await new Response(Bun.spawn(['ps', '-o', 'args=', '-p', cliPid], { stdout: 'pipe' }).stdout).text()
+        expect(commandLine).toContain(program === 'claude' ? `--settings ${attentionPaths(root).claudeSettings}` : 'hooks.PermissionRequest=')
         await manager.finish(cli.id, human, 1, true)
       }
     }
+  } finally {
+    await manager?.shutdown()
+    await service.command(['kill-server'], true)
+    server.kill(); await server.exited
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 20000)
+
+processTest('attention: the hook helper sets the pane state the session records; a bell rings, a title BEL does not', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-attention-'))
+  const service = new TerminalService(root)
+  const server = Bun.spawn([service.tmux!, '-D', '-S', service.socket, '-f', '/dev/null'], { env: terminalEnvironment(), stdout: 'ignore', stderr: 'ignore' })
+  let manager: Sessions | undefined
+  const human = { kind: 'human', id: 'integration-browser' } as const
+  const wait = async (predicate: () => boolean | Promise<boolean>) => {
+    for (let attempt = 0; attempt < 100; attempt++) { if (await predicate()) return; await Bun.sleep(50) }
+    throw new Error('Attention probe timed out')
+  }
+  try {
+    await wait(() => service.ready())
+    await service.command(['set-option', '-g', 'exit-empty', 'off'])
+    await service.command(['set-option', '-g', 'remain-on-exit', 'on'])
+    manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProcesses(service), { settings: () => ({}), prepare: async () => undefined, release: async () => undefined })
+    const session = await manager.create({ title: 'Attention', cwd: root }, human)
+    await Bun.sleep(250)
+    // What a coding program's hook runs, with the environment its launch gets.
+    const { env } = attentionLaunch('claude', { root, tmux: service.tmux!, socket: service.socket, sessionId: session.id })
+    const hook = async (state: string) => {
+      const child = Bun.spawn([attentionPaths(root).helper, state, 'always'], { env: { PATH: '/usr/bin:/bin', ...env }, stdin: 'ignore', stdout: 'ignore' })
+      expect(await child.exited).toBe(0)
+    }
+    await hook('needs-you')
+    await wait(() => manager!.get(session.id, human).attention?.state === 'needs-you')
+    // A program that rings as it starts: the hook was set by the command that made the session.
+    const ringing = join(root, 'ringing-shell')
+    writeFileSync(ringing, "#!/bin/sh\nprintf '\\007'\nexec /bin/sh\n", { mode: 0o700 })
+    const shell = process.env.SHELL
+    process.env.SHELL = ringing
+    try {
+      const startup = await manager.create({ title: 'Rings at start', cwd: root }, human)
+      await wait(() => manager!.get(startup.id, human).bellAt !== undefined)
+    } finally { process.env.SHELL = shell }
+    await hook('turn-finished')
+    await wait(() => manager!.get(session.id, human).attention?.state === 'turn-finished')
+    await hook('')
+    await wait(() => manager!.get(session.id, human).attention === undefined)
+    // An idle prompt's clear leaves your turn alone and clears a leftover working.
+    const stale = async () => { expect(await Bun.spawn([attentionPaths(root).helper, '', 'stale'], { env: { PATH: '/usr/bin:/bin', ...env }, stdin: 'ignore', stdout: 'ignore' }).exited).toBe(0) }
+    await hook('turn-finished')
+    await wait(() => manager!.get(session.id, human).attention?.state === 'turn-finished')
+    await stale()
+    expect((await service.command(['show-options', '-pqv', '-t', session.id, '@bakin_attention'])).trim()).toBe('turn-finished')
+    await hook('working')
+    await wait(() => manager!.get(session.id, human).attention?.state === 'working')
+    await stale()
+    await wait(() => manager!.get(session.id, human).attention === undefined)
+    // A title set with a BEL terminator is no bell.
+    await manager.write(session.id, human, 1, 1, "printf '\\033]0;quiet\\007TITLE_SET\\n'\r")
+    await wait(async () => (await manager!.readScreen(session.id, human)).screen.includes('TITLE_SET'))
+    // Through a subscription cycle (tmux samples each second): tmux counted nothing, nothing was recorded.
+    await Bun.sleep(1500)
+    expect((await service.command(['show-options', '-qv', '-t', session.id, '@bakin_bell'])).trim()).toBe('')
+    expect(manager.get(session.id, human).bellAt).toBeUndefined()
+    await manager.write(session.id, human, 1, 2, "printf '\\007RANG\\n'\r")
+    await wait(() => manager!.get(session.id, human).bellAt !== undefined)
+    // Real output just arrived: the pane is active.
+    expect(manager.activity(manager.get(session.id, human))).toBe('active')
+    // A fresh attachment (a server restart) reads the state the pane holds.
+    await hook('needs-you')
+    await wait(() => manager!.get(session.id, human).attention?.state === 'needs-you')
+    await manager.shutdown()
+    await service.command(['set-option', '-p', '-t', session.id, '@bakin_attention', 'working'])
+    // A bell while Bakin is not attached: tmux counts it (its hook stays), and the next attachment records it.
+    const counted = (await service.command(['show-options', '-qv', '-t', session.id, '@bakin_bell'])).trim()
+    await service.command(['send-keys', '-t', session.id, '-l', "printf '\\007'"])
+    await service.command(['send-keys', '-t', session.id, 'Enter'])
+    await wait(async () => (await service.command(['show-options', '-qv', '-t', session.id, '@bakin_bell'])).trim() !== counted)
+    // A minute later, past the bell interval.
+    manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProcesses(service), { settings: () => ({}), prepare: async () => undefined, release: async () => undefined, now: () => Date.now() + 60_000 })
+    const rangBefore = manager.get(session.id, human).bellAt!
+    await manager.start()
+    await wait(() => (manager!.get(session.id, human).bellAt ?? 0) > rangBefore)
+    await wait(() => manager!.get(session.id, human).attention?.state === 'working')
   } finally {
     await manager?.shutdown()
     await service.command(['kill-server'], true)
@@ -107,7 +195,7 @@ processTest('control client: command round trip, quoting, subscriptions and exit
     for (let attempt = 0; attempt < 100 && !await service.ready(); attempt++) await Bun.sleep(50)
     await service.command(['new-session', '-d', '-s', 'control-probe', '-x', '80', '-y', '24', 'cat'])
     const notifications: string[] = []
-    client = ControlClient.attach(service.tmux!, service.socket, 'control-probe', terminalEnvironment(), (line) => notifications.push(line))
+    client = ControlClient.attach(service.tmux!, service.socket, 'control-probe', terminalEnvironment(), { notification: (line) => notifications.push(line) })
     await client.ready
     // Quoting survives tmux's parser: quotes, $ and backslashes stay literal.
     await client.command(['set-option', '-p', '-t', 'control-probe', '@bakin_title', 'Say "hi" $HOME \\ ok'])
@@ -139,8 +227,8 @@ processTest('control client: command round trip, quoting, subscriptions and exit
   }
 }, 20000)
 
-processTest('bridge: titles the session, cancels copy-mode before input, and sizes the window only on a claim', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-bridge-'))
+processTest('the control client titles the session, cancels copy-mode before input, and sizes the window only on a claim', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'bakin-terminal-control-'))
   const service = new TerminalService(root)
   const config = join(root, 'tmux.conf')
   await Bun.write(config, (await import('../lib/tmux-config')).tmuxConfig())
@@ -150,14 +238,14 @@ processTest('bridge: titles the session, cancels copy-mode before input, and siz
   let manager: Sessions | undefined
   const wait = async (predicate: () => Promise<boolean>) => {
     for (let attempt = 0; attempt < 100; attempt++) { if (await predicate()) return; await Bun.sleep(50) }
-    throw new Error('Bridge probe timed out')
+    throw new Error('Control probe timed out')
   }
   try {
     await wait(() => service.ready())
     manager = new Sessions(new Store(join(root, 'terminal.db')), new TmuxProcesses(service), options)
     const session = await manager.create({ title: 'Bridge "probe"', cwd: root }, human)
     expect((await service.command(['display-message', '-p', '-t', session.id, '#{@bakin_title}'])).trim()).toBe('Bridge "probe"')
-    // The bridge and control clients never size the window.
+    // The control client never sizes the window.
     expect((await service.command(['display-message', '-p', '-t', session.id, '#{window_width}x#{window_height}'])).trim()).toBe(`${session.cols}x${session.rows}`)
     // Input cancels a pane left in copy mode, then reaches the shell.
     await service.command(['copy-mode', '-t', session.id])
@@ -213,7 +301,7 @@ processTest('terminal apps: an unreserved attach is detached; an admitted one si
     await raw.exited
     expect(await attachedPids()).not.toContain(raw.pid)
     expect(manager.get(session.id, human).cols).toBe(200)
-    // So is a foreign control-mode client: only Bakin's own bridge and control clients are exempt.
+    // So is a foreign control-mode client: only Bakin's own control client is exempt.
     const foreign = Bun.spawn([service.tmux!, '-S', service.socket, '-C', 'attach-session', '-t', session.id], { env: terminalEnvironment(), stdin: 'pipe', stdout: 'ignore', stderr: 'ignore' })
     apps.push(foreign)
     await wait(async () => !(await attachedPids()).includes(foreign.pid), 'foreign control client detached')

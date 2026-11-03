@@ -16,7 +16,9 @@ export function pluginFetch(pluginId, path, init = {}) {
   const clean = path.startsWith('/') ? path.slice(1) : path
   const headers = new Headers(init.headers)
   let body = init.body
-  if (body && typeof body === 'object') {
+  // Like the SDK: only a plain object is JSON; a Blob, FormData, buffer, URLSearchParams or stream goes as is.
+  const raw = body instanceof Blob || body instanceof FormData || body instanceof ArrayBuffer || body instanceof URLSearchParams || (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream)
+  if (body && typeof body === 'object' && !raw) {
     body = JSON.stringify(body)
     headers.set('Content-Type', 'application/json')
   }
