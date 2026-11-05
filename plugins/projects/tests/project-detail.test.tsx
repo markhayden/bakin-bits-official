@@ -298,6 +298,98 @@ describe('ProjectDetail brainstorm durability (bakin#703)', () => {
   })
 })
 
+describe('Starting state (projects-grill-start D1e)', () => {
+  const pending = (over: Record<string, unknown> = {}) => ({
+    kickoff: { requestId: 'req-00000001', state: 'pending', message: 'Help me plan a trip.', agentId: 'main', attempts: 1, attempt: 'tok', ...over },
+  })
+  const recent = () => new Date(Date.now() - 1_000).toISOString()
+  const longAgo = () => new Date(Date.now() - 60_000).toISOString()
+
+  it('while the kickoff is pending the conversation is read-only with a starting notice and no composer', async () => {
+    mockFetch('proj-starting', { created: recent(), ...pending() })
+    render(<ProjectDetail projectId="proj-starting" onBack={() => {}} />)
+    expect(await screen.findByText('Starting the conversation…')).toBeDefined()
+    expect(composers()).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+  })
+
+  it('a recorded start failure shows the hasn\'t-started notice, the reason, and Retry', async () => {
+    mockFetch('proj-failed', { created: recent(), ...pending({ lastError: 'the engine did not admit the turn (not_found)' }) })
+    render(<ProjectDetail projectId="proj-failed" onBack={() => {}} />)
+    expect(await screen.findByText('The conversation hasn\'t started yet')).toBeDefined()
+    expect(screen.getByText('the engine did not admit the turn (not_found)')).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeDefined()
+    expect(composers()).toHaveLength(0)
+  })
+
+  it('a kickoff pending for longer than the stale window offers Retry even without a recorded error', async () => {
+    mockFetch('proj-stale', { created: longAgo(), ...pending() })
+    render(<ProjectDetail projectId="proj-stale" onBack={() => {}} />)
+    expect(await screen.findByText('The conversation hasn\'t started yet')).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeDefined()
+  })
+
+  it('Retry schedules the start: 202 restarts the window, and the window elapsing brings Retry back', async () => {
+    const retries: RequestInit[] = []
+    mockFetch('proj-retry', { created: longAgo(), ...pending() }, {
+      '/api/plugins/projects/proj-retry/kickoff': (init) => { retries.push(init!); return { ok: true, state: 'starting' } },
+    })
+    render(<ProjectDetail projectId="proj-retry" onBack={() => {}} kickoffStaleMs={30} />)
+    const retryButton = await screen.findByRole('button', { name: 'Retry' })
+    await act(async () => { fireEvent.click(retryButton) })
+    expect(retries).toHaveLength(1)
+    expect(retries[0]?.method).toBe('POST')
+    expect(screen.getByText('Starting the conversation…')).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 60)) })
+    expect(screen.getByText('The conversation hasn\'t started yet')).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeDefined()
+  })
+
+  it('Retry while the first attempt is still running says so and keeps waiting', async () => {
+    mockFetch('proj-inflight', { created: longAgo(), ...pending() }, {
+      '/api/plugins/projects/proj-inflight/kickoff': () => ({ ok: true, state: 'in-flight' }),
+    })
+    render(<ProjectDetail projectId="proj-inflight" onBack={() => {}} />)
+    const retryButton = await screen.findByRole('button', { name: 'Retry' })
+    await act(async () => { fireEvent.click(retryButton) })
+    expect(screen.getByText('Still starting — the first attempt is running')).toBeDefined()
+  })
+
+  it('a receipt change reaching the page clears the notice once the turn has started', async () => {
+    let state = 'pending'
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/plugins/projects/proj-flip') {
+        return Response.json(projectPayload('proj-flip', {
+          created: recent(),
+          kickoff: { requestId: 'req-00000001', state, message: 'Help me plan a trip.', agentId: 'main', attempts: 1 },
+          brainstormStreaming: state === 'started',
+          brainstormMessages: state === 'started' ? [{ kind: 'user', ts: '2026-05-09T10:00:01.000Z', content: 'Help me plan a trip.' }] : [],
+        }))
+      }
+      if (url.endsWith('/history')) return Response.json({ history: [] })
+      if (url.endsWith('/brainstorm/seen')) return Response.json({ ok: true })
+      throw new Error(`Unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+    render(<ProjectDetail projectId="proj-flip" onBack={() => {}} />)
+    expect(await screen.findByText('Starting the conversation…')).toBeDefined()
+    state = 'started'
+    await act(async () => { emitPluginEvent({ event: 'projects.changed', projectId: 'proj-flip', action: 'kickoff' }) })
+    await waitFor(() => expect(screen.queryByText('Starting the conversation…')).toBeNull())
+    expect(composers()).toHaveLength(1)
+    expect(screen.getByTestId('thinking')).toBeDefined()
+  })
+
+  it('a settled kickoff shows nothing of the sort', async () => {
+    mockFetch('proj-settled', { kickoff: { requestId: 'req-00000001', state: 'settled' } })
+    render(<ProjectDetail projectId="proj-settled" onBack={() => {}} />)
+    await screen.findByRole('tablist', { name: 'Project sections' })
+    expect(screen.queryByText('Starting the conversation…')).toBeNull()
+    expect(composers()).toHaveLength(1)
+  })
+})
+
 describe('Files tab', () => {
   it('lists what the project\'s tasks produced apart from what is attached', async () => {
     mockFetch('proj-produced', {
