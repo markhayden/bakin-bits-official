@@ -28,8 +28,8 @@ beforeEach(() => {
 })
 afterEach(() => cleanup())
 
-function renderHeader(overrides: Partial<ProjectDetailData> = {}, onReviewSteps?: () => void) {
-  return render(<ProjectHeader project={project(overrides)} agents={agents} onBack={() => {}} onChanged={onChanged} onDelete={() => {}} onReviewSteps={onReviewSteps} />)
+function renderHeader(overrides: Partial<ProjectDetailData> = {}, onReviewSteps?: () => void, onContinueShaping?: () => void) {
+  return render(<ProjectHeader project={project(overrides)} agents={agents} onBack={() => {}} onChanged={onChanged} onDelete={() => {}} onReviewSteps={onReviewSteps} onContinueShaping={onContinueShaping} />)
 }
 
 const steps = (titles: string[], checked: boolean[] = []) => titles.map((title, i) => ({ id: `t00${i + 1}`, title, checked: checked[i] ?? false }))
@@ -55,6 +55,40 @@ describe('steward controls (D27, D28, D29)', () => {
     const dialog = screen.getByRole('dialog', { name: 'Start project?' })
     expect(dialog.textContent).toContain('No steps yet — Roscoe breaks the plan down first.')
     expect(within(dialog).queryByRole('button', { name: 'Review steps first' })).toBeNull()
+  })
+
+  it('Start on a brief that still lists open questions adds the advisory; Continue shaping closes the dialog, writes nothing and returns to the conversation', async () => {
+    const onContinueShaping = mock(() => {})
+    renderHeader({ brief: { openQuestions: true }, tasks: steps(['Draft copy']) }, () => {}, onContinueShaping)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start project' })) })
+    const dialog = screen.getByRole('dialog', { name: 'Start project?' })
+    expect(dialog.textContent).toContain('The brief still lists open questions. Start anyway?')
+    expect(dialog.textContent).toContain('1 step in the plan.')
+    expect(within(dialog).queryByRole('button', { name: 'Cancel' })).toBeNull()
+    await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Continue shaping' })) })
+    expect(onContinueShaping).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('dialog', { name: 'Start project?' })).toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('Start anyway still writes active against the expected draft status', async () => {
+    renderHeader({ brief: { openQuestions: true } }, () => {}, () => {})
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start project' })) })
+    const dialog = screen.getByRole('dialog', { name: 'Start project?' })
+    await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Start project' })) })
+    expect(bodies()).toEqual([{ status: 'active', expected: { status: 'draft' } }])
+  })
+
+  it('no advisory when the brief is resolved, unreadable or absent: a plain Cancel', async () => {
+    for (const brief of [{ openQuestions: false }, { openQuestions: null }, undefined]) {
+      const { unmount } = renderHeader({ brief }, () => {}, () => {})
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start project' })) })
+      const dialog = screen.getByRole('dialog', { name: 'Start project?' })
+      expect(dialog.textContent).not.toContain('open questions')
+      expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDefined()
+      expect(within(dialog).queryByRole('button', { name: 'Continue shaping' })).toBeNull()
+      unmount()
+    }
   })
 
   it('Mark complete names the unfinished steps before completing anyway', async () => {

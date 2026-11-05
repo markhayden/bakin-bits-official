@@ -298,6 +298,26 @@ describe('ProjectDetail brainstorm durability (bakin#703)', () => {
   })
 })
 
+describe('Start dialog (projects-grill-start D5)', () => {
+  it('Continue shaping returns to the Conversation tab without a turn', async () => {
+    const asks: unknown[] = []
+    mockFetch('proj-shape', { brief: { openQuestions: true }, kickoff: { requestId: 'req-00000001', state: 'settled' } }, {
+      '/api/plugins/projects/proj-shape/ask': (init) => { asks.push(init); return { ok: true } },
+    })
+    render(<ProjectDetail projectId="proj-shape" onBack={() => {}} />)
+    await screen.findByRole('tablist', { name: 'Project sections' })
+    await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Steps' })) })
+    expect(selectedTab()).toBe('Steps')
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start project' })) })
+    const dialog = screen.getByRole('dialog', { name: 'Start project?' })
+    expect(dialog.textContent).toContain('The brief still lists open questions. Start anyway?')
+    await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Continue shaping' })) })
+    expect(screen.queryByRole('dialog', { name: 'Start project?' })).toBeNull()
+    expect(selectedTab()).toBe('Conversation')
+    expect(asks).toHaveLength(0)
+  })
+})
+
 describe('Starting state (projects-grill-start D1e)', () => {
   const pending = (over: Record<string, unknown> = {}) => ({
     kickoff: { requestId: 'req-00000001', state: 'pending', message: 'Help me plan a trip.', agentId: 'main', attempts: 1, attempt: 'tok', ...over },

@@ -460,6 +460,7 @@ export function ProjectDetail({ projectId, onBack, kickoffStaleMs = KICKOFF_STAL
         onChanged={refresh}
         onDelete={() => { setDeleteError(null); setDeleteOpen(true) }}
         onReviewSteps={() => selectTab('steps')}
+        onContinueShaping={() => selectTab('conversation')}
       />
       <PageBody gap="content">
         <div className="flex min-h-0 min-w-0 flex-1">
