@@ -50,6 +50,9 @@ describe('projectBrainstormInstructions — the shaping interview (projects-gril
     expect(text).toContain('ALWAYS set `recommended` and say why')
     expect(text).toContain('Never ask two things at once')
     expect(text).toContain('reflect it back as two or three simpler choices')
+    // Live acceptance 2026-11-04: the lead asked for the travel year, exact dates and which
+    // days count — details a draft carries as assumptions. The rule names them.
+    expect(text).toContain('Prefer a labelled assumption to a question whenever the plan would have the same shape either way')
     expect(text).toContain('Ask only questions whose answers would materially change the plan.')
     expect(text).toContain('one line that sets expectations')
     expect(text).not.toContain('brainstorm buddy')

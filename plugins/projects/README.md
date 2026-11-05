@@ -88,7 +88,9 @@ The lead's posture follows the project's stage, from one shared builder
   turn: a brief reflection, at most one challenge, and AT MOST one question
   card (`bakin_exec_ask_user`, 2–5 options, the recommended one always marked
   and justified, never preselected) — none when nothing material is open. A
-  tangled answer comes back as two or three simpler choices. The first reply
+  tangled answer comes back as two or three simpler choices, and a detail the
+  plan would carry the same way either way (a year, exact dates, a head
+  count) becomes a labelled assumption rather than a question. The first reply
   sets expectations in one line (one question at a time; "just write it"
   drafts whenever you want). The plan body is the **brief** (seeded at
   creation, see Plan): after a decision lands the lead rewrites it with
