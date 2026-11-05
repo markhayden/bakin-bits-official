@@ -1984,6 +1984,14 @@ describe('Exec Tools', () => {
   // bakin_exec_projects_create
   // -------------------------------------------------------------------------
   describe('bakin_exec_projects_create', () => {
+    it('keeps an empty body — only the start screen\'s kickoff seeds the brief', async () => {
+      const tool = findTool(plugin.execTools, 'bakin_exec_projects_create')!
+      const result = await callTool(tool, { title: 'Tool-made' })
+      expect((await readViaTool(result.id as string)).body).toBe('')
+      const plainCreate = await callRoute(findRoute(plugin.routes, 'POST', '/')!, plugin.ctx, { body: { title: 'Route-made' } })
+      expect((await readViaTool(plainCreate.body.id as string)).body).toBe('')
+    })
+
     it('creates a project and returns id', async () => {
       const tool = findTool(plugin.execTools, 'bakin_exec_projects_create')!
       expect(tool).toBeDefined()
