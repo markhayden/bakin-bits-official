@@ -1366,6 +1366,20 @@ describe('Routes', () => {
         expect(kickoffPumpRunning()).toBe(true)
       })
 
+      it('the detail reports whether the brief still lists open questions: seeded ⇒ true, cleared ⇒ false, no heading ⇒ null', async () => {
+        mockRuntimeStream(['On it.'])
+        const settled = nextSettle()
+        const { body } = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        await settled
+        const getRoute = findRoute(plugin.routes, 'GET', '/:projectId')!
+        const detail = async (id: string) => (await callRoute(getRoute, plugin.ctx, { searchParams: { projectId: id } })).body.project as Record<string, unknown>
+        expect((await detail(body.id as string)).brief).toEqual({ openQuestions: true })
+        writeProjectFixture('proj-cleared', { status: 'draft', body: '# Brief\n\n## Open questions\n\n## Plan\nGo.' })
+        expect((await detail('proj-cleared')).brief).toEqual({ openQuestions: false })
+        writeProjectFixture('proj-noheading', { status: 'draft', body: '# Plan\nGo.' })
+        expect((await detail('proj-noheading')).brief).toEqual({ openQuestions: null })
+      })
+
       it('every receipt transition is announced as projects.changed { action: kickoff }', async () => {
         mockRuntimeStream(['On it.'])
         const ids = collectKickoffChanges()

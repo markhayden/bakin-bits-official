@@ -12,6 +12,7 @@ import {
 } from './parser'
 import type { ChecklistPromotionOperation, MutationCaller, Project, ProjectKickoff, ProjectTask, ProjectStatus, ResolvedBoardTask, TitleSource } from '../types'
 import { assertItemIdentity, assertExpectedFields, ProjectMutationError, validateItemPatch, validateProjectPatch } from './project-mutations'
+import { BRIEF_SKELETON } from './brief'
 
 const log = {
   info: (...args: unknown[]) => console.info('[projects]', ...args),
@@ -338,9 +339,11 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       const id = generateProjectId()
       const now = new Date().toISOString()
       const kickoff: ProjectKickoff = { requestId: opts.requestId, state: 'pending', message, agentId: opts.owner }
+      // The brief skeleton is the initial content (revision zero, no
+      // snapshot): the Plan tab shows structure from second one (D6).
       repo.writeProject({
         id, title, titleSource: 'fallback', status: 'draft', created: now, updated: now,
-        owner: opts.owner, tasks: [], assets: [], body: '', progress: 0, kickoff, planRevision: 0,
+        owner: opts.owner, tasks: [], assets: [], body: BRIEF_SKELETON.trim(), progress: 0, kickoff, planRevision: 0,
       })
       ctx.activity.audit('created', opts.owner, { id, title })
       broadcast({ type: 'project.created', id, title })

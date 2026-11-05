@@ -221,6 +221,8 @@ export interface ResolvedProjectAsset extends ProjectAsset {
 export interface ProjectDetailData extends Project {
   /** The plan revision the user last viewed (D15). */
   planSeenRevision?: number
+  /** Whether the brief still lists open questions; null = the section can't be read (D5). */
+  brief?: { openQuestions: boolean | null }
   /** An agent reply landed after the user last viewed the conversation. */
   brainstormUnread?: boolean
   resolvedTasks: Record<string, ResolvedBoardTask | null>

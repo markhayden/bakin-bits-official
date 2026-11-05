@@ -10,6 +10,7 @@ import { createProjectRepository, PlanHistoryUnavailableError, projectToSummary 
 import { createProjectService, deriveChecklist, withProjectLock } from './lib/project-service'
 import { ProjectMutationError } from './lib/project-mutations'
 import { buildProjectBrainstormContext } from './lib/brainstorm-prompt'
+import { briefOpenQuestions } from './lib/brief'
 import { createStewardGates } from './lib/steward/gates'
 import { withAdmissionFence } from './lib/steward/admission'
 import { createInputGate } from './lib/steward/input-gate'
@@ -671,6 +672,8 @@ const projectsPlugin: BakinPlugin = {
           // mid-turn rehydrates the indicator AND the reply's beginning.
           brainstormStreaming,
           ...(brainstormPreview !== null ? { brainstormStreamingText: brainstormPreview } : {}),
+          // The Start dialog's advisory reads this, never the body (D5).
+          brief: { openQuestions: briefOpenQuestions(project.body) },
         },
       })
     }

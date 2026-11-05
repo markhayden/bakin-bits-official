@@ -27,6 +27,7 @@ function clearIndex() {
 
 import { createProjectService, deriveChecklist, type ProjectService } from '../../../plugins/projects/lib/project-service'
 import { createProjectRepository, type ProjectRepository } from '../../../plugins/projects/lib/parser'
+import { BRIEF_SKELETON } from '../../../plugins/projects/lib/brief'
 import { MarkdownStorageAdapter } from '../test-helpers'
 import type { PluginContext } from '@makinbakin/sdk/types'
 
@@ -518,6 +519,25 @@ describe('attachAsset / detachAsset', () => {
     expect(readProject(id)!.assets).toEqual([
       { assetId: '20260401-hero-e5f6g7h8', label: 'Hero' },
     ])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The brief skeleton (projects-grill-start D6)
+// ---------------------------------------------------------------------------
+
+describe('the brief skeleton', () => {
+  it('the start screen\'s kickoff seeds the brief as revision zero with no snapshot', async () => {
+    const { id } = await service.kickoffProject({ requestId: 'req-brief-0001', title: 'Trip', owner: 'main', message: 'Plan a trip.' })
+    const project = readProject(id)!
+    expect(project.body).toBe(BRIEF_SKELETON.trim())
+    expect(project.planRevision).toBe(0)
+    expect(repo.readPlanHistory(id)).toEqual([])
+  })
+
+  it('a title-only create keeps an empty body', async () => {
+    const { id } = await createProject({ titleSource: 'user', title: 'Plain' })
+    expect(readProject(id)!.body).toBe('')
   })
 })
 
