@@ -29,8 +29,16 @@ function getProjectLock(): { queue: Promise<void> } {
   return g.__bakinProjectLock as { queue: Promise<void> }
 }
 
-/** The ONE project-file lock — every read-modify-write of a project runs inside it. */
-export function withProjectLock<T>(fn: () => T | Promise<T>): Promise<T> {
+/** A body that is not a promise: the lock never holds an await (D1f). */
+type NotPromise<T> = T extends PromiseLike<unknown> ? never : T
+
+/**
+ * The ONE project-file lock — every read-modify-write of a project runs
+ * inside it, and every body is SYNCHRONOUS: anything that must be awaited
+ * (an asset lookup, the board) is resolved before the lock is taken, so a
+ * hung service can never wedge every project write behind it.
+ */
+export function withProjectLock<T>(fn: () => NotPromise<T>): Promise<T> {
   const lock = getProjectLock()
   const next = lock.queue.then(fn, fn) as Promise<T>
   lock.queue = next.then(() => {}, () => {})
@@ -548,11 +556,12 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
   }
 
   async function attachAsset(projectId: string, assetId: string, label?: string): Promise<void> {
-    return withProjectLock(async () => {
+    // Resolved BEFORE the lock: the lookup may be slow, the write is not.
+    const asset = await ctx.assets.getAsset(assetId)
+    if (!asset) throw new Error(`Asset not found: ${assetId}`)
+    return withProjectLock(() => {
       const project = repo.readProject(projectId)
       if (!project) throw new Error(`Project not found: ${projectId}`)
-      const asset = await ctx.assets.getAsset(assetId)
-      if (!asset) throw new Error(`Asset not found: ${assetId}`)
       if (project.assets.some(a => a.assetId === assetId)) return
       project.assets.push({ assetId, label })
       project.updated = new Date().toISOString()
@@ -575,13 +584,14 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
   }
 
   async function relinkAsset(projectId: string, oldAssetId: string, newAssetId: string, label?: string): Promise<void> {
-    return withProjectLock(async () => {
+    // Resolved BEFORE the lock, like attach.
+    const asset = await ctx.assets.getAsset(newAssetId)
+    if (!asset) throw new Error(`Asset not found: ${newAssetId}`)
+    return withProjectLock(() => {
       const project = repo.readProject(projectId)
       if (!project) throw new Error(`Project not found: ${projectId}`)
       const idx = project.assets.findIndex(a => a.assetId === oldAssetId)
       if (idx === -1) throw new Error(`Asset not attached: ${oldAssetId}`)
-      const asset = await ctx.assets.getAsset(newAssetId)
-      if (!asset) throw new Error(`Asset not found: ${newAssetId}`)
 
       const existingIdx = project.assets.findIndex(a => a.assetId === newAssetId)
       if (existingIdx !== -1 && existingIdx !== idx) {
@@ -829,3 +839,12 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     resolveLinkedTaskStatuses,
   }
 }
+
+/**
+ * The pin for the lock contract (projects-grill-start D1f): a lock body
+ * cannot be async. `tsc` fails the moment this line type-checks — an
+ * `await` on a service inside the lock once let a hung lookup wedge every
+ * project write, the create included.
+ */
+// @ts-expect-error — an async body must be refused by the lock's signature.
+export const ASYNC_LOCK_BODY_REFUSED = (): Promise<number> => withProjectLock(async () => 1)

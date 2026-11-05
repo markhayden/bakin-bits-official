@@ -489,6 +489,25 @@ describe('attachAsset / detachAsset', () => {
     ])
   })
 
+  it('resolves the asset before taking the lock — a slow lookup never blocks another project write', async () => {
+    const { id: attaching } = await createProject({ titleSource: 'user', title: 'Attaching' })
+    const { id: other } = await createProject({ titleSource: 'user', title: 'Other' })
+    let releaseLookup!: () => void
+    const lookup = new Promise<void>(resolve => { releaseLookup = resolve })
+    const realGetAsset = ctx.assets.getAsset
+    ctx.assets.getAsset = (async (assetId: string) => { await lookup; return realGetAsset(assetId) }) as typeof ctx.assets.getAsset
+
+    const attach = attachAsset(attaching, '20260401-logo-a1b2c3d4', 'Logo')
+    // The unrelated write lands while the lookup is still pending.
+    await updateProject(other, { title: 'Other, renamed' }, USER)
+    expect(readProject(other)!.title).toBe('Other, renamed')
+    expect(readProject(attaching)!.assets).toEqual([])
+
+    releaseLookup()
+    await attach
+    expect(readProject(attaching)!.assets).toEqual([{ assetId: '20260401-logo-a1b2c3d4', label: 'Logo' }])
+  })
+
   it('relink removes the old reference when the replacement is already attached', async () => {
     const { id } = await createProject({ titleSource: 'user', title: 'P' })
     await attachAsset(id, '20260401-deleted-a1b2c3d4', 'Deleted')
