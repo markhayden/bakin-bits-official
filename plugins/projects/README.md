@@ -46,8 +46,11 @@ Retry), it says "The conversation hasn't started yet" with **Retry**.
 `POST /:projectId/kickoff` schedules the start and answers at once
 (`202 starting` / `200 in-flight` / `409 kickoff_not_pending`), resetting
 the attempt count. A 30 s **kickoff pump** re-dispatches pending receipts
-older than 10 s up to three attempts, per project and never in sequence, so
-one hung start blocks no other; past three attempts only Retry tries again.
+older than 10 s, per project and never in sequence, so one hung start blocks
+no other. The attempt cap (three) lives in the protocol itself, after the
+transcript repair: a replayed create, the pump and the boot sweep all stop at
+it, only Retry resets it, and a capped receipt whose turn actually ran is
+still repaired from its transcript.
 `/ask` answers `409 kickoff_pending` while the kickoff is pending. The boot
 sweep still starts a crash-orphaned pending kickoff once, with the same
 per-project dispatch.

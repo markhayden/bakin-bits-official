@@ -364,6 +364,9 @@ const projectsPlugin: BakinPlugin = {
           await projectService.advanceKickoff(projectId, kickoff.requestId, 'pending', 'started')
           return 'started'
         }
+        // The attempt cap (D1d) sits here, in the ONE protocol, after the
+        // repair: every starter but the page's Retry (reset) stops at it.
+        if (!opts.reset && (kickoff.attempts ?? 0) >= kickoffTiming.maxAttempts) return 'pending'
         const attempt = await projectService.beginKickoffAttempt(projectId, opts)
         if (!attempt) return 'started'
         const fail = (error: unknown, retire: boolean) =>
@@ -428,10 +431,10 @@ const projectsPlugin: BakinPlugin = {
           // was accepted too — settle both; only a truly unstarted kickoff runs.
           if (kickoff.state === 'started' || readBrainstormMessages(project.id).length > 0) {
             await projectService.advanceKickoff(project.id, kickoff.requestId, kickoff.state, 'settled')
-          } else if ((kickoff.attempts ?? 0) < kickoffTiming.maxAttempts) {
+          } else {
             // Per project, never in sequence: one hung admission must not
-            // keep the others from starting (D1d). Past the cap only the
-            // page's Retry tries again — a restart is not a Retry.
+            // keep the others from starting (D1d). The protocol itself holds
+            // the attempt cap — a restart is not a Retry.
             dispatchKickoff(project.id, 'boot')
           }
         } catch (err) {
@@ -441,14 +444,14 @@ const projectsPlugin: BakinPlugin = {
     }
 
     // The kickoff pump (D1d): every tick re-dispatches pending receipts the
-    // create's own start left behind, up to maxAttempts; the timer never
-    // waits on a tick's attempts.
+    // create's own start left behind; the protocol repairs a receipt whose
+    // turn already ran and holds the attempt cap for new admissions; the
+    // timer never waits on a tick's attempts.
     runKickoffPump = () => {
       const now = Date.now()
       for (const project of readAllProjects()) {
         const kickoff = project.kickoff
         if (kickoff?.state !== 'pending' || !kickoff.message) continue
-        if ((kickoff.attempts ?? 0) >= kickoffTiming.maxAttempts) continue
         if (now - Date.parse(project.created) < kickoffTiming.pumpMinAgeMs) continue
         if (startingKickoffs.has(project.id)) continue
         dispatchKickoff(project.id, 'pump')

@@ -1389,6 +1389,26 @@ describe('Routes', () => {
         expect(streamMock).toHaveBeenCalledTimes(1)
       })
 
+      it('a capped receipt whose third attempt was accepted (started-write lost) is repaired from the transcript by the pump, without a new turn', async () => {
+        kickoffTiming.pumpMinAgeMs = 0
+        writeProjectFixture('proj-capped-ran', { title: 'Ran', status: 'draft', extra: { kickoff: { requestId: 'req-ran-00001', state: 'pending', message: 'Plan it', agentId: 'main', attempts: 3, attempt: 'tok-3' } } })
+        writeFileSync(join(projectsDir, 'proj-capped-ran.brainstorm.json'), JSON.stringify([{ kind: 'user', ts: '2026-11-05T00:00:00.000Z', content: 'Plan it' }]))
+        const streamMock = mockRuntimeStream(['On it.'])
+        await pumpKickoffs()
+        await waitForKickoff('proj-capped-ran', 'started')
+        expect(streamMock).not.toHaveBeenCalled()
+      })
+
+      it('a replayed create never launches a fourth attempt: the cap holds for every starter but Retry', async () => {
+        writeProjectFixture('proj-capped-replay', { title: 'Capped', status: 'draft', extra: { kickoff: { requestId: 'req-replay-0001', state: 'pending', message: 'Plan it', agentId: 'main', attempts: 3, lastError: 'board offline' } } })
+        const streamMock = mockRuntimeStream(['On it.'])
+        const replay = await callRoute(createRoute(), plugin.ctx, { body: { requestId: 'req-replay-0001', title: 'Capped', owner: 'main', firstMessage: 'Plan it' } })
+        expect(replay).toMatchObject({ status: 200, body: { id: 'proj-capped-replay', created: false } })
+        await new Promise(resolve => setTimeout(resolve, 20))
+        expect(streamMock).not.toHaveBeenCalled()
+        expect(await receipt('proj-capped-replay')).toMatchObject({ state: 'pending', attempts: 3 })
+      })
+
       it('the pump timer starts in activate and stops in onShutdown', async () => {
         expect(plugin.ctx.events.on).toBeDefined()
         expect(kickoffPumpRunning()).toBe(true)
