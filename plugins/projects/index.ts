@@ -58,6 +58,25 @@ async function admitTurn<T>(fn: () => Promise<T>): Promise<T | 'closed'> {
 export const kickoffTiming = {
   /** The bound on building a kickoff's turn context (the board read). */
   contextBuildMs: 15_000,
+  /** The pump's tick. */
+  pumpIntervalMs: 30_000,
+  /** A kickoff younger than this is the create's own detached start to finish. */
+  pumpMinAgeMs: 10_000,
+  /** After this many attempts only the page's Retry tries again. */
+  maxAttempts: 3,
+}
+
+/** Bound in activate(): one pump tick, dispatching per project without waiting. */
+let runKickoffPump: (() => void) | null = null
+let kickoffPumpTimer: ReturnType<typeof setInterval> | null = null
+
+/** One pump tick now (tests); resolves once every eligible start is DISPATCHED, never when they settle. */
+export async function pumpKickoffs(): Promise<void> {
+  runKickoffPump?.()
+}
+
+export function kickoffPumpRunning(): boolean {
+  return kickoffPumpTimer !== null
 }
 
 const CONTEXT_BUILD_TIMED_OUT = 'context build timed out'
@@ -202,6 +221,7 @@ const projectsPlugin: BakinPlugin = {
     legacyRoute('DELETE', '/:projectId/assets/:assetId', 'Detach asset'),
     legacyRoute('POST', '/:projectId/ask', 'Ask agent about project (202; streams over the plugin-event bus)'),
     legacyRoute('POST', '/:projectId/ask/abort', 'Abort the in-flight brainstorm turn'),
+    legacyRoute('POST', '/:projectId/kickoff', 'Start (or retry) a pending kickoff\'s first turn — schedules and answers at once'),
     legacyRoute('POST', '/:projectId/steward/pause', 'Pause or resume the lead\'s check-ins (operator only)'),
     legacyRoute('GET', '/brainstorm/attention', 'Brainstorm attention totals (unread + in-flight)'),
     legacyRoute('POST', '/:projectId/brainstorm/seen', 'Mark a project brainstorm as seen'),
@@ -389,6 +409,11 @@ const projectsPlugin: BakinPlugin = {
       }
     }
 
+    /** A detached start: dispatched, never awaited, its failure logged (D1b.8). */
+    const dispatchKickoff = (projectId: string, why: string) => {
+      startKickoff(projectId).catch(err => log.error(`kickoff start failed (${why})`, err, { projectId }))
+    }
+
     resumePendingKickoffs = async () => {
       for (const project of readAllProjects()) {
         const kickoff = project.kickoff
@@ -401,13 +426,32 @@ const projectsPlugin: BakinPlugin = {
           if (kickoff.state === 'started' || readBrainstormMessages(project.id).length > 0) {
             await projectService.advanceKickoff(project.id, kickoff.requestId, kickoff.state, 'settled')
           } else {
-            await startKickoff(project.id)
+            // Per project, never in sequence: one hung admission must not
+            // keep the others from starting (D1d).
+            dispatchKickoff(project.id, 'boot')
           }
         } catch (err) {
           log.error('kickoff resume failed', err, { projectId: project.id })
         }
       }
     }
+
+    // The kickoff pump (D1d): every tick re-dispatches pending receipts the
+    // create's own start left behind, up to maxAttempts; the timer never
+    // waits on a tick's attempts.
+    runKickoffPump = () => {
+      const now = Date.now()
+      for (const project of readAllProjects()) {
+        const kickoff = project.kickoff
+        if (kickoff?.state !== 'pending' || !kickoff.message) continue
+        if ((kickoff.attempts ?? 0) >= kickoffTiming.maxAttempts) continue
+        if (now - Date.parse(project.created) < kickoffTiming.pumpMinAgeMs) continue
+        if (startingKickoffs.has(project.id)) continue
+        dispatchKickoff(project.id, 'pump')
+      }
+    }
+    if (kickoffPumpTimer) clearInterval(kickoffPumpTimer)
+    kickoffPumpTimer = setInterval(() => runKickoffPump?.(), kickoffTiming.pumpIntervalMs)
 
     // ─── Search Content Type Registration ─────────────────────────────
 
@@ -647,9 +691,7 @@ const projectsPlugin: BakinPlugin = {
           if (result.created) indexProject(result.id).catch(() => {})
           // The answer never waits for the engine (D1): the first turn starts
           // detached, and the receipt tells the project page how it went.
-          if (result.kickoff.state === 'pending') {
-            startKickoff(result.id).catch(err => log.error('kickoff start failed', err, { projectId: result.id }))
-          }
+          if (result.kickoff.state === 'pending') dispatchKickoff(result.id, 'create')
           return json({ ok: true, id: result.id, created: result.created })
         } catch (error) {
           return mutationFailure(error)
@@ -997,6 +1039,25 @@ const projectsPlugin: BakinPlugin = {
       if (!id) return json({ error: 'Missing projectId' }, 400)
       if (!brainstormTurns.abort(id)) return json({ error: 'No brainstorm turn in flight' }, 409)
       return json({ ok: true })
+    })
+
+    // POST /:projectId/kickoff — Retry: schedule a pending kickoff's first
+    // turn and answer at once (D1c); the receipt's changes carry the outcome.
+    routeHandlers.set('POST /:projectId/kickoff', async (req: Request) => {
+      const url = new URL(req.url, 'http://localhost')
+      const id = url.searchParams.get('projectId')
+      if (!id) return json({ error: 'Missing projectId' }, 400)
+      const project = readProject(id)
+      if (!project) return json({ error: 'Project not found' }, 404)
+      if (project.kickoff?.state !== 'pending') return json({ error: 'There is no conversation start to retry.', code: 'kickoff_not_pending' }, 409)
+      if (startingKickoffs.has(id)) return json({ ok: true, state: 'in-flight' })
+      try {
+        await projectService.resetKickoffAttempts(id)
+      } catch (error) {
+        return mutationFailure(error)
+      }
+      dispatchKickoff(id, 'retry')
+      return json({ ok: true, state: 'starting' }, 202)
     })
 
     // POST /:projectId/steward/pause — the user's check-in control (D29).
@@ -1476,6 +1537,9 @@ const projectsPlugin: BakinPlugin = {
   async onShutdown() {
     stewardLoop?.stop()
     stewardLoop = null
+    if (kickoffPumpTimer) clearInterval(kickoffPumpTimer)
+    kickoffPumpTimer = null
+    runKickoffPump = null
     // Each activation builds its own turn service, and the next one cannot
     // see this one's live turns: end them here (abort, then wait for each
     // to settle — its queued out-of-turn rows flush on the way), so a hot

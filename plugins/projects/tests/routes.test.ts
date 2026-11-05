@@ -55,7 +55,7 @@ function clearGlobals() {
 // Plugin import (after mocks)
 // ---------------------------------------------------------------------------
 
-import projectsPlugin, { kickoffTiming } from '../../../plugins/projects'
+import projectsPlugin, { kickoffPumpRunning, kickoffTiming, pumpKickoffs } from '../../../plugins/projects'
 import { createProjectRepository } from '../../../plugins/projects/lib/parser'
 import { MarkdownStorageAdapter } from '../test-helpers'
 
@@ -192,6 +192,7 @@ function mockRuntimeStreamError(message: string) {
 beforeEach(async () => {
   clearGlobals()
   kickoffTiming.contextBuildMs = 15_000
+  kickoffTiming.pumpMinAgeMs = 10_000
   if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true })
   mkdirSync(projectsDir, { recursive: true })
   plugin = await activatePlugin(projectsPlugin, testDir)
@@ -1248,6 +1249,121 @@ describe('Routes', () => {
         const { status, body } = await callRoute(askRoute, plugin.ctx, { searchParams: { projectId: 'proj-pending' }, body: { prompt: 'hello' } })
         expect(status).toBe(409)
         expect(body.code).toBe('kickoff_pending')
+      })
+
+      // ── Retry route + pump + boot sweep (projects-grill-start D1c, D1d) ──
+
+      const retryRoute = () => findRoute(plugin.routes, 'POST', '/:projectId/kickoff')!
+      const retry = (id: string) => callRoute(retryRoute(), plugin.ctx, { searchParams: { projectId: id } })
+
+      it('Retry on a receipt that is not pending answers 409 kickoff_not_pending', async () => {
+        writeProjectFixture('proj-done', { title: 'Done', status: 'draft', extra: { kickoff: { requestId: 'req-done-00001', state: 'settled' } } })
+        writeProjectFixture('proj-plain', { title: 'Plain', status: 'draft' })
+        expect(await retry('proj-done')).toMatchObject({ status: 409, body: { code: 'kickoff_not_pending' } })
+        expect(await retry('proj-plain')).toMatchObject({ status: 409, body: { code: 'kickoff_not_pending' } })
+        expect(await retry('proj-missing')).toMatchObject({ status: 404 })
+      })
+
+      it('Retry schedules the attempt and answers at once — even when the admission it scheduled hangs', async () => {
+        const board = rejectContextBuilds('board offline')
+        const { body } = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        await waitUntil(async () => (await receipt(body.id as string)).lastError === 'board offline', { label: 'first failure' })
+        board.rejecting = false
+        const gate = hangFirstAdmission()
+        const streamMock = mockRuntimeStream(['On it.'])
+        const started = Date.now()
+        const answer = await retry(body.id as string)
+        expect(Date.now() - started).toBeLessThan(100)
+        expect(answer).toMatchObject({ status: 202, body: { state: 'starting' } })
+        // attempts reset + error cleared by the Retry, then the new attempt counted.
+        await waitUntil(async () => (await receipt(body.id as string)).attempts === 1, { label: 'attempt counted' })
+        expect((await receipt(body.id as string)).lastError).toBeUndefined()
+        // While that admission hangs, another Retry says so without waiting.
+        expect(await retry(body.id as string)).toMatchObject({ status: 200, body: { state: 'in-flight' } })
+        const settled = nextSettle()
+        gate.resolve()
+        await settled
+        await waitForKickoff(body.id as string, 'settled')
+        expect(streamMock).toHaveBeenCalledTimes(1)
+      })
+
+      it('Retry: an immediate context rejection leaves a visible error and the next Retry admits', async () => {
+        const board = rejectContextBuilds('board offline')
+        const streamMock = mockRuntimeStream(['On it.'])
+        const { body } = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        await waitUntil(async () => (await receipt(body.id as string)).lastError === 'board offline', { label: 'create failure' })
+        expect(await retry(body.id as string)).toMatchObject({ status: 202 })
+        await waitUntil(async () => (await receipt(body.id as string)).attempts === 1 && (await receipt(body.id as string)).lastError === 'board offline', { label: 'retry failure' })
+        expect((await receipt(body.id as string)).attempt).toBeUndefined()
+        board.rejecting = false
+        const settled = nextSettle()
+        expect(await retry(body.id as string)).toMatchObject({ status: 202 })
+        await settled
+        await waitForKickoff(body.id as string, 'settled')
+        expect(streamMock).toHaveBeenCalledTimes(1)
+      })
+
+      it('the pump retries a pending kickoff older than its minimum age, stops after three attempts, and Retry still works after that', async () => {
+        kickoffTiming.pumpMinAgeMs = 0
+        const board = rejectContextBuilds('board offline')
+        const streamMock = mockRuntimeStream(['On it.'])
+        const { body } = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        // An attempt is over once its token is retired (a rejection retires it).
+        const attemptOver = (n: number) => async () => { const r = await receipt(body.id as string); return r.attempts === n && r.attempt === undefined }
+        await waitUntil(attemptOver(1), { label: 'first attempt' })
+        await pumpKickoffs()
+        await waitUntil(attemptOver(2), { label: 'second attempt' })
+        await pumpKickoffs()
+        await waitUntil(attemptOver(3), { label: 'third attempt' })
+        await pumpKickoffs()
+        await new Promise(resolve => setTimeout(resolve, 10))
+        expect((await receipt(body.id as string)).attempts).toBe(3)
+        board.rejecting = false
+        const settled = nextSettle()
+        expect(await retry(body.id as string)).toMatchObject({ status: 202 })
+        await settled
+        await waitForKickoff(body.id as string, 'settled')
+        expect(streamMock).toHaveBeenCalledTimes(1)
+      })
+
+      it('the pump leaves a fresh kickoff alone until its minimum age', async () => {
+        kickoffTiming.pumpMinAgeMs = 60_000
+        const board = rejectContextBuilds('board offline')
+        const { body } = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        await waitUntil(async () => { const r = await receipt(body.id as string); return r.attempts === 1 && r.attempt === undefined }, { label: 'first attempt' })
+        await pumpKickoffs()
+        await new Promise(resolve => setTimeout(resolve, 10))
+        expect((await receipt(body.id as string)).attempts).toBe(1)
+        board.rejecting = false
+      })
+
+      it('the pump and the boot sweep dispatch per project: A\'s admission never resolves while B still starts', async () => {
+        kickoffTiming.pumpMinAgeMs = 0
+        writeProjectFixture('proj-a', { title: 'A', status: 'draft', extra: { kickoff: { requestId: 'req-aaaa-0001', state: 'pending', message: 'Plan A', agentId: 'main' } } })
+        writeProjectFixture('proj-b', { title: 'B', status: 'draft', extra: { kickoff: { requestId: 'req-bbbb-0001', state: 'pending', message: 'Plan B', agentId: 'main' } } })
+        const gate = hangFirstAdmission()
+        const streamMock = mockRuntimeStream(['On it.'])
+        const settled = nextSettle()
+        // Boot sweep: A's admission takes the hang (fixtures are read in order), B must not wait on it.
+        await projectsPlugin.onReady!()
+        await settled
+        await waitForKickoff('proj-b', 'settled')
+        expect(await receipt('proj-a')).toMatchObject({ state: 'pending' })
+        // The pump keeps running while A hangs: it reports A in flight and touches nothing else.
+        await pumpKickoffs()
+        expect(streamMock).toHaveBeenCalledTimes(1)
+        gate.resolve()
+        await waitForKickoff('proj-a', 'settled')
+        expect(streamMock).toHaveBeenCalledTimes(2)
+      })
+
+      it('the pump timer starts in activate and stops in onShutdown', async () => {
+        expect(plugin.ctx.events.on).toBeDefined()
+        expect(kickoffPumpRunning()).toBe(true)
+        await projectsPlugin.onShutdown!()
+        expect(kickoffPumpRunning()).toBe(false)
+        plugin = await activatePlugin(projectsPlugin, testDir)
+        expect(kickoffPumpRunning()).toBe(true)
       })
 
       it('every receipt transition is announced as projects.changed { action: kickoff }', async () => {

@@ -227,6 +227,15 @@
       },
       {
         "method": "POST",
+        "path": "/:projectId/kickoff",
+        "summary": "Start (or retry) a pending kickoff's first turn — schedules and answers at once",
+        "permissions": [
+          "runtime.messaging",
+          "storage.write"
+        ]
+      },
+      {
+        "method": "POST",
         "path": "/:projectId/steward/pause",
         "summary": "Pause or resume the lead's check-ins (operator only)",
         "permissions": [
