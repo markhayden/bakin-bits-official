@@ -349,8 +349,10 @@ const projectsPlugin: BakinPlugin = {
      * the boot sweep (projects-grill-start D1b). `pending` = the engine did
      * not admit the turn; the receipt records why for the page and the pump.
      */
-    async function startKickoff(projectId: string): Promise<'started' | 'in-flight' | 'pending'> {
+    async function startKickoff(projectId: string, opts: { reset?: boolean } = {}): Promise<'started' | 'in-flight' | 'pending'> {
       if (startingKickoffs.has(projectId)) return 'in-flight'
+      // Ownership is taken before the first await: a caller that dispatches
+      // this and checks the set in the same tick sees the owner.
       startingKickoffs.add(projectId)
       try {
         const kickoff = readProject(projectId)?.kickoff
@@ -362,7 +364,7 @@ const projectsPlugin: BakinPlugin = {
           await projectService.advanceKickoff(projectId, kickoff.requestId, 'pending', 'started')
           return 'started'
         }
-        const attempt = await projectService.beginKickoffAttempt(projectId)
+        const attempt = await projectService.beginKickoffAttempt(projectId, opts)
         if (!attempt) return 'started'
         const fail = (error: unknown, retire: boolean) =>
           projectService.failKickoffAttempt(projectId, attempt.attempt, error instanceof Error ? error.message : String(error), { retire })
@@ -411,8 +413,8 @@ const projectsPlugin: BakinPlugin = {
     }
 
     /** A detached start: dispatched, never awaited, its failure logged (D1b.8). */
-    const dispatchKickoff = (projectId: string, why: string) => {
-      startKickoff(projectId).catch(err => log.error(`kickoff start failed (${why})`, err, { projectId }))
+    const dispatchKickoff = (projectId: string, why: string, opts: { reset?: boolean } = {}) => {
+      startKickoff(projectId, opts).catch(err => log.error(`kickoff start failed (${why})`, err, { projectId }))
     }
 
     resumePendingKickoffs = async () => {
@@ -426,9 +428,10 @@ const projectsPlugin: BakinPlugin = {
           // was accepted too — settle both; only a truly unstarted kickoff runs.
           if (kickoff.state === 'started' || readBrainstormMessages(project.id).length > 0) {
             await projectService.advanceKickoff(project.id, kickoff.requestId, kickoff.state, 'settled')
-          } else {
+          } else if ((kickoff.attempts ?? 0) < kickoffTiming.maxAttempts) {
             // Per project, never in sequence: one hung admission must not
-            // keep the others from starting (D1d).
+            // keep the others from starting (D1d). Past the cap only the
+            // page's Retry tries again — a restart is not a Retry.
             dispatchKickoff(project.id, 'boot')
           }
         } catch (err) {
@@ -1054,12 +1057,10 @@ const projectsPlugin: BakinPlugin = {
       if (!project) return json({ error: 'Project not found' }, 404)
       if (project.kickoff?.state !== 'pending') return json({ error: 'There is no conversation start to retry.', code: 'kickoff_not_pending' }, 409)
       if (startingKickoffs.has(id)) return json({ ok: true, state: 'in-flight' })
-      try {
-        await projectService.resetKickoffAttempts(id)
-      } catch (error) {
-        return mutationFailure(error)
-      }
-      dispatchKickoff(id, 'retry')
+      // No await between the checks and the dispatch: the attempt takes
+      // ownership synchronously and resets the count under the lock itself,
+      // so two Retries at once can only ever launch one attempt.
+      dispatchKickoff(id, 'retry', { reset: true })
       return json({ ok: true, state: 'starting' }, 202)
     })
 

@@ -159,14 +159,15 @@ export interface ProjectService {
   /**
    * Lock section A of the start protocol (D1b): on a pending receipt, count
    * the attempt and mint its fence token; null when there is nothing to start.
+   * `reset` (Retry, D1c) starts the count over and drops the last error in
+   * the same write, so no caller ever yields between the two.
    */
-  beginKickoffAttempt(id: string): Promise<KickoffAttempt | null>
+  beginKickoffAttempt(id: string, opts?: { reset?: boolean }): Promise<KickoffAttempt | null>
   /** Section C, success: pending → started for exactly this request AND attempt. */
   markKickoffStarted(id: string, requestId: string, attempt: string): Promise<boolean>
   /** Section C, failure: record why, for this attempt only; `retire` drops the token. */
   failKickoffAttempt(id: string, attempt: string, error: string, opts: { retire: boolean }): Promise<boolean>
-  /** Retry: a pending receipt forgets its attempts and last error. */
-  resetKickoffAttempts(id: string): Promise<boolean>
+
   updateProject(id: string, updates: UpdateProjectOpts, caller: MutationCaller, expected?: UpdateProjectOpts): Promise<void>
   applyProjectPlan(id: string, updates: ApplyProjectPlanOpts, caller: MutationCaller): Promise<ApplyProjectPlanResult>
   /** Restore a plan snapshot by history index; snapshots the current body first (bakin#703). */
@@ -369,13 +370,16 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     })
   }
 
-  async function beginKickoffAttempt(id: string): Promise<KickoffAttempt | null> {
+  async function beginKickoffAttempt(id: string, opts: { reset?: boolean } = {}): Promise<KickoffAttempt | null> {
     return withProjectLock(() => {
       const project = repo.readProject(id)
       const kickoff = project?.kickoff
       if (!project || kickoff?.state !== 'pending' || !kickoff.message) return null
       const attempt = crypto.randomUUID()
-      writeKickoff(project, { ...kickoff, attempts: (kickoff.attempts ?? 0) + 1, attempt })
+      const { lastError, ...rest } = kickoff
+      writeKickoff(project, opts.reset
+        ? { ...rest, attempts: 1, attempt }
+        : { ...rest, ...(lastError === undefined ? {} : { lastError }), attempts: (kickoff.attempts ?? 0) + 1, attempt })
       return { requestId: kickoff.requestId, attempt, message: kickoff.message, agentId: kickoff.agentId ?? project.owner }
     })
   }
@@ -398,17 +402,6 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       if (!project || !kickoff || kickoff.state !== 'pending' || kickoff.attempt !== attempt) return false
       const { attempt: token, ...rest } = kickoff
       writeKickoff(project, { ...rest, ...(opts.retire ? {} : { attempt: token }), lastError: error.slice(0, KICKOFF_ERROR_MAX) })
-      return true
-    })
-  }
-
-  async function resetKickoffAttempts(id: string): Promise<boolean> {
-    return withProjectLock(() => {
-      const project = repo.readProject(id)
-      const kickoff = project?.kickoff
-      if (!project || kickoff?.state !== 'pending') return false
-      const { lastError: _lastError, attempts: _attempts, ...rest } = kickoff
-      writeKickoff(project, rest)
       return true
     })
   }
@@ -894,7 +887,6 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     beginKickoffAttempt,
     markKickoffStarted,
     failKickoffAttempt,
-    resetKickoffAttempts,
     getProjectForTask,
     getProjectTitleForTask,
     createProject,

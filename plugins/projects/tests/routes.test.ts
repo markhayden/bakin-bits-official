@@ -1357,6 +1357,38 @@ describe('Routes', () => {
         expect(streamMock).toHaveBeenCalledTimes(2)
       })
 
+      it('two Retries at once: one schedules (202), the other sees the owner (200 in-flight) — never two attempts', async () => {
+        const board = rejectContextBuilds('board offline')
+        const { body } = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        await waitUntil(async () => { const r = await receipt(body.id as string); return r.lastError === 'board offline' && r.attempt === undefined }, { label: 'first failure' })
+        board.rejecting = false
+        const gate = hangFirstAdmission()
+        mockRuntimeStream(['On it.'])
+        const [first, second] = await Promise.all([retry(body.id as string), retry(body.id as string)])
+        expect([first.status, second.status].sort()).toEqual([200, 202])
+        expect([first.body.state, second.body.state].sort()).toEqual(['in-flight', 'starting'])
+        await waitUntil(async () => (await receipt(body.id as string)).attempts === 1, { label: 'one attempt' })
+        const settled = nextSettle()
+        gate.resolve()
+        await settled
+        await waitForKickoff(body.id as string, 'settled')
+      })
+
+      it('the boot sweep honours the attempt cap: a receipt at three attempts waits for Retry', async () => {
+        writeProjectFixture('proj-capped', { title: 'Capped', status: 'draft', extra: { kickoff: { requestId: 'req-capped-001', state: 'pending', message: 'Plan it', agentId: 'main', attempts: 3, lastError: 'board offline' } } })
+        const streamMock = mockRuntimeStream(['On it.'])
+        await projectsPlugin.onReady!()
+        await new Promise(resolve => setTimeout(resolve, 20))
+        expect(streamMock).not.toHaveBeenCalled()
+        expect(await receipt('proj-capped')).toMatchObject({ state: 'pending', attempts: 3 })
+        // Retry is the way past the cap.
+        const settled = nextSettle()
+        expect(await retry('proj-capped')).toMatchObject({ status: 202 })
+        await settled
+        await waitForKickoff('proj-capped', 'settled')
+        expect(streamMock).toHaveBeenCalledTimes(1)
+      })
+
       it('the pump timer starts in activate and stops in onShutdown', async () => {
         expect(plugin.ctx.events.on).toBeDefined()
         expect(kickoffPumpRunning()).toBe(true)

@@ -588,15 +588,16 @@ describe('kickoff receipt helpers', () => {
     expect(await service.markKickoffStarted(id, 'req-kick-0001', attempt)).toBe(false)
   })
 
-  it('resetKickoffAttempts clears the count and the error on a pending receipt only', async () => {
+  it('a Retry attempt (reset) starts the count over and drops the last error, atomically with the mint', async () => {
     const { id } = await kickoff()
     const { attempt } = (await service.beginKickoffAttempt(id))!
     await service.failKickoffAttempt(id, attempt, 'boom', { retire: true })
-    expect(await service.resetKickoffAttempts(id)).toBe(true)
-    expect(readProject(id)!.kickoff).toEqual({ requestId: 'req-kick-0001', state: 'pending', message: 'Plan a trip.', agentId: 'main' })
-    const { attempt: next } = (await service.beginKickoffAttempt(id))!
-    await service.markKickoffStarted(id, 'req-kick-0001', next)
-    expect(await service.resetKickoffAttempts(id)).toBe(false)
+    await service.failKickoffAttempt(id, (await service.beginKickoffAttempt(id))!.attempt, 'boom again', { retire: true })
+    expect(readProject(id)!.kickoff).toMatchObject({ attempts: 2, lastError: 'boom again' })
+    const reset = (await service.beginKickoffAttempt(id, { reset: true }))!
+    expect(readProject(id)!.kickoff).toEqual({ requestId: 'req-kick-0001', state: 'pending', message: 'Plan a trip.', agentId: 'main', attempts: 1, attempt: reset.attempt })
+    await service.markKickoffStarted(id, 'req-kick-0001', reset.attempt)
+    expect(await service.beginKickoffAttempt(id, { reset: true })).toBeNull()
   })
 
   it('advanceKickoff to settled keeps only the dedupe identity and announces the change', async () => {
