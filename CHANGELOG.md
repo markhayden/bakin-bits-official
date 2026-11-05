@@ -8,6 +8,23 @@ on a per-plugin basis: each plugin tags its own releases as
 
 ## [Unreleased]
 
+### Changed
+- `projects` (0.14.0): **instant start + the shaping interview.** The start
+  screen opens the project the moment the create is written; the first turn
+  starts on the server, detached, behind one fenced start protocol
+  (counted attempts, a fence token, a bounded context build, a Retry route
+  `POST /:projectId/kickoff`, a 30 s kickoff pump, per-project boot
+  dispatch), and the project page shows "Starting the conversation…" or an
+  honest "hasn't started yet" with Retry — never a spinner that outlives the
+  request. Starter chips are complete prompts; the create times out at 10 s
+  and retries with the same request id. The lead now runs a shaping
+  interview over a brief seeded into the plan body (goal, success, scope,
+  constraints, open questions, plan), at most one card per turn with a
+  recommendation, drafting once the blocking gaps close and carrying the
+  rest as labelled assumptions; "Start project" says when the brief still
+  lists open questions and offers "Continue shaping". Lock bodies are
+  synchronous by type; the dead per-request SSE transport hook is gone.
+
 ### Fixed
 - `projects` (0.12.1): the manifest no longer declares the removed
   `/projects/[id]/edit` route.
