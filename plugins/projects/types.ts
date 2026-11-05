@@ -42,6 +42,12 @@ export interface ProjectKickoff {
   state: 'pending' | 'started' | 'settled'
   message?: string
   agentId?: string
+  /** Start attempts made so far (absent = 0; the pump stops at three, Retry resets). */
+  attempts?: number
+  /** The fence token of the attempt that owns the kickoff; absent = no owner. */
+  attempt?: string
+  /** Why the last attempt did not start the turn (trimmed to 200 chars). */
+  lastError?: string
 }
 
 /**

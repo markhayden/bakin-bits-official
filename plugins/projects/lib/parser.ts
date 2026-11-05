@@ -76,6 +76,9 @@ const kickoffSchema = z.object({
   state: z.enum(['pending', 'started', 'settled']),
   message: z.string().optional(),
   agentId: z.string().optional(),
+  attempts: z.number().int().min(0).optional(),
+  attempt: z.string().optional(),
+  lastError: z.string().max(200).optional(),
 }).strict()
 
 const operationsSchema = z.array(z.discriminatedUnion('kind', [z.object({

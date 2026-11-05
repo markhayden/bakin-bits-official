@@ -522,6 +522,75 @@ describe('attachAsset / detachAsset', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Kickoff receipt helpers (projects-grill-start D1b): every one a
+// compare-and-set under the lock, every write announced.
+// ---------------------------------------------------------------------------
+
+describe('kickoff receipt helpers', () => {
+  const kickoff = () => service.kickoffProject({ requestId: 'req-kick-0001', title: 'Trip', owner: 'main', message: 'Plan a trip.' })
+  const changes = () => (ctx.events.emit as ReturnType<typeof mock>).mock.calls.filter(([name, payload]) => name === 'projects.changed' && (payload as { action?: string }).action === 'kickoff')
+
+  it('beginKickoffAttempt counts the attempt and mints the fence token; nothing to begin once started', async () => {
+    const { id } = await kickoff()
+    const first = await service.beginKickoffAttempt(id)
+    expect(first).toMatchObject({ requestId: 'req-kick-0001', message: 'Plan a trip.', agentId: 'main' })
+    expect(readProject(id)!.kickoff).toMatchObject({ state: 'pending', attempts: 1, attempt: first!.attempt })
+    const second = await service.beginKickoffAttempt(id)
+    expect(second!.attempt).not.toBe(first!.attempt)
+    expect(readProject(id)!.kickoff).toMatchObject({ attempts: 2, attempt: second!.attempt })
+    await service.markKickoffStarted(id, 'req-kick-0001', second!.attempt)
+    expect(await service.beginKickoffAttempt(id)).toBeNull()
+    expect(changes()).toHaveLength(3)
+  })
+
+  it('markKickoffStarted is a compare-and-set on the request AND the attempt', async () => {
+    const { id } = await kickoff()
+    const { attempt } = (await service.beginKickoffAttempt(id))!
+    expect(await service.markKickoffStarted(id, 'req-kick-0001', 'stale-token')).toBe(false)
+    expect(await service.markKickoffStarted(id, 'req-other-0001', attempt)).toBe(false)
+    expect(readProject(id)!.kickoff).toMatchObject({ state: 'pending' })
+    expect(await service.markKickoffStarted(id, 'req-kick-0001', attempt)).toBe(true)
+    expect(readProject(id)!.kickoff).toMatchObject({ state: 'started', message: 'Plan a trip.', attempts: 1 })
+    expect(readProject(id)!.kickoff!.lastError).toBeUndefined()
+  })
+
+  it('failKickoffAttempt records a trimmed last error for its own token only, and can retire the token', async () => {
+    const { id } = await kickoff()
+    const { attempt } = (await service.beginKickoffAttempt(id))!
+    expect(await service.failKickoffAttempt(id, 'stale-token', 'nope', { retire: false })).toBe(false)
+    expect(readProject(id)!.kickoff!.lastError).toBeUndefined()
+    expect(await service.failKickoffAttempt(id, attempt, 'x'.repeat(250), { retire: false })).toBe(true)
+    expect(readProject(id)!.kickoff).toMatchObject({ state: 'pending', attempt, lastError: 'x'.repeat(200) })
+    expect(await service.failKickoffAttempt(id, attempt, 'context build timed out', { retire: true })).toBe(true)
+    expect(readProject(id)!.kickoff).toMatchObject({ state: 'pending', lastError: 'context build timed out' })
+    expect(readProject(id)!.kickoff!.attempt).toBeUndefined()
+    // A retired token can no longer mark the kickoff started.
+    expect(await service.markKickoffStarted(id, 'req-kick-0001', attempt)).toBe(false)
+  })
+
+  it('resetKickoffAttempts clears the count and the error on a pending receipt only', async () => {
+    const { id } = await kickoff()
+    const { attempt } = (await service.beginKickoffAttempt(id))!
+    await service.failKickoffAttempt(id, attempt, 'boom', { retire: true })
+    expect(await service.resetKickoffAttempts(id)).toBe(true)
+    expect(readProject(id)!.kickoff).toEqual({ requestId: 'req-kick-0001', state: 'pending', message: 'Plan a trip.', agentId: 'main' })
+    const { attempt: next } = (await service.beginKickoffAttempt(id))!
+    await service.markKickoffStarted(id, 'req-kick-0001', next)
+    expect(await service.resetKickoffAttempts(id)).toBe(false)
+  })
+
+  it('advanceKickoff to settled keeps only the dedupe identity and announces the change', async () => {
+    const { id } = await kickoff()
+    const { attempt } = (await service.beginKickoffAttempt(id))!
+    await service.markKickoffStarted(id, 'req-kick-0001', attempt)
+    const before = changes().length
+    expect(await service.advanceKickoff(id, 'req-kick-0001', 'started', 'settled')).toBe(true)
+    expect(readProject(id)!.kickoff).toEqual({ requestId: 'req-kick-0001', state: 'settled' })
+    expect(changes().length).toBe(before + 1)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // resolveLinkedTaskStatuses
 // ---------------------------------------------------------------------------
 
