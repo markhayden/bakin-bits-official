@@ -136,8 +136,9 @@ export function Conversation({ turns = [] }) {
     React.createElement('div', { key: i }, turn.kind === 'user' ? turn.content : null)))
 }
 
-export function Composer({ onSend, placeholder, inputLabel, busy, disabled, handleRef, leadingSlot }) {
-  const [draft, setDraft] = useState('')
+export function Composer({ onSend, placeholder, inputLabel, busy, disabled, handleRef, leadingSlot, storageKey }) {
+  // Like the real composer, a saved draft for this key comes back on mount.
+  const [draft, setDraft] = useState(() => (storageKey && composerDrafts.get(storageKey)) || '')
   const inputRef = useRef(null)
   useImperativeHandle(handleRef, () => ({
     isEmpty: () => draft.trim() === '',

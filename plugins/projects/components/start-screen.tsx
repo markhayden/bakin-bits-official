@@ -19,7 +19,8 @@ import { projectRequest } from '../lib/project-api'
 import { newRequestId } from '../lib/request-id'
 import { CREATE_TIMEOUT_MS, STARTER_PROMPTS, fallbackTitle } from '../lib/start'
 
-type PendingCreate = { requestId: string; message: string; owner: string }
+/** The unconfirmed first send; `edited` is the newer text typed before a retry. */
+type PendingCreate = { requestId: string; message: string; owner: string; edited?: string }
 const PENDING_KEY = 'projects:new:pending'
 
 /** The unconfirmed first send survives a reload, so its retry still dedupes. */
@@ -27,7 +28,7 @@ function readPending(): PendingCreate | null {
   try {
     const parsed = JSON.parse(sessionStorage.getItem(PENDING_KEY) ?? 'null') as Partial<PendingCreate> | null
     return parsed && typeof parsed.requestId === 'string' && typeof parsed.message === 'string' && typeof parsed.owner === 'string'
-      ? { requestId: parsed.requestId, message: parsed.message, owner: parsed.owner }
+      ? { requestId: parsed.requestId, message: parsed.message, owner: parsed.owner, ...(typeof parsed.edited === 'string' ? { edited: parsed.edited } : {}) }
       : null
   } catch {
     return null
@@ -58,15 +59,19 @@ export function StartScreen({ onBack, createTimeoutMs = CREATE_TIMEOUT_MS }: { o
   const [initialPending] = useState(readPending)
   const pending = useRef<PendingCreate | null>(initialPending)
   const [lead, setLead] = useState<string | null>(initialPending?.owner ?? null)
+  // A send from before a reload is still unconfirmed: said out loud until a
+  // create succeeds, so the retry is never hidden behind whatever the
+  // composer shows.
+  const [unconfirmed, setUnconfirmed] = useState(initialPending !== null)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const composer = useRef<ComposerHandle | null>(null)
   const leadId = lead ?? mainAgentId
 
   // After a reload mid-create the composer's own draft is gone (it clears on
-  // send): show the pending message so the retry is visible, never hidden.
+  // send): show the latest text again. A draft the composer saved itself wins.
   useEffect(() => {
-    if (initialPending && (composer.current?.isEmpty() ?? false)) composer.current?.setText(initialPending.message)
+    if (initialPending && (composer.current?.isEmpty() ?? false)) composer.current?.setText(initialPending.edited ?? initialPending.message)
   }, [initialPending])
 
   const create = async (content: string) => {
@@ -84,6 +89,12 @@ export function StartScreen({ onBack, createTimeoutMs = CREATE_TIMEOUT_MS }: { o
         writePending(pending.current)
       }
       const { requestId, message, owner } = pending.current
+      // Newer text is recorded before the request goes out, so a reload
+      // mid-retry brings it back instead of the original.
+      if ((content !== message ? content : undefined) !== pending.current.edited) {
+        pending.current = { requestId, message, owner, ...(content !== message ? { edited: content } : {}) }
+        writePending(pending.current)
+      }
       // The create only writes the project (the first turn starts detached,
       // D1), so an answer that takes longer than this is a stall, not work.
       const init: RequestInit = {
@@ -97,6 +108,7 @@ export function StartScreen({ onBack, createTimeoutMs = CREATE_TIMEOUT_MS }: { o
       if (typeof result.id !== 'string' || !result.id) throw new Error('Projects did not return the new project.')
       pending.current = null
       writePending(null)
+      setUnconfirmed(false)
       // Text edited after the first attempt is not lost: it waits in the
       // project's composer as a draft.
       if (content !== message) writeComposerDraft(`project:${result.id}`, content)
@@ -146,6 +158,15 @@ export function StartScreen({ onBack, createTimeoutMs = CREATE_TIMEOUT_MS }: { o
               <Alert tone="danger">
                 <TriangleAlert aria-hidden="true" />
                 <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            </div>
+          ) : unconfirmed ? (
+            <div className="px-bakin-4 pb-bakin-2">
+              <Alert tone="attention">
+                <TriangleAlert aria-hidden="true" />
+                <AlertDescription>
+                  Your first send hasn't been confirmed yet. Send again to retry it as written — anything you change here is kept as the project's draft.
+                </AlertDescription>
               </Alert>
             </div>
           ) : null}

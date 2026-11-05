@@ -31,7 +31,8 @@ on a per-plugin basis: each plugin tags its own releases as
   mutations, upload chips) now comes from one helper that builds a v4 from
   `getRandomValues` there, and anything that throws before the request
   leaves surfaces as an error with the text kept. A reload mid-create shows
-  the pending message and lead again, and the retry keeps the original lead.
+  the latest text and lead again under an "unconfirmed send" notice, and the
+  retry keeps the original lead and message with the edit as the draft.
 
 ### Fixed
 - `projects` (0.12.1): the manifest no longer declares the removed

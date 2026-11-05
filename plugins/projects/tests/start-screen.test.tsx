@@ -17,6 +17,7 @@ const fetchMock = mock(async (_url: string, _init?: RequestInit) => (responses.s
 
 beforeEach(() => {
   sessionStorage.clear()
+  ;(composerDrafts as Map<string, string>).clear()
   push.mockClear()
   fetchMock.mockClear()
   responses = []
@@ -159,6 +160,43 @@ describe('StartScreen while creating', () => {
     await act(async () => { fireEvent.keyDown(input(), { key: 'Enter' }) })
     const [original, retry] = bodies()
     expect(retry).toEqual(original)
+  })
+
+  it('a reload during an edited retry keeps the edit, says a send is unconfirmed, and retries the original', async () => {
+    responses = [
+      () => Response.json({ error: 'Lost response' }, { status: 503 }),
+      () => new Promise<never>(() => {}) as unknown as Response, // the retry never answers before the reload
+    ]
+    const first = render(<StartScreen />)
+    await send('Original idea')
+    await send('Original idea, with more detail')
+    first.unmount()
+    render(<StartScreen />)
+    expect(input().value).toBe('Original idea, with more detail')
+    expect(screen.getByText(/hasn't been confirmed yet/)).toBeDefined()
+    await act(async () => { fireEvent.keyDown(input(), { key: 'Enter' }) })
+    const sent = bodies()
+    expect(sent).toHaveLength(3)
+    expect(sent[2]).toEqual(sent[0])
+    expect((composerDrafts as Map<string, string>).get('project:p1')).toBe('Original idea, with more detail')
+    expect(push).toHaveBeenCalledWith('/projects/p1')
+  })
+
+  it('a saved composer draft after a reload does not hide the unconfirmed send', async () => {
+    responses = [() => Response.json({ error: 'Lost response' }, { status: 503 })]
+    const first = render(<StartScreen />)
+    await send('Original idea')
+    first.unmount()
+    // The real composer restores its own saved draft on mount.
+    ;(composerDrafts as Map<string, string>).set('projects:new', 'A different idea')
+    render(<StartScreen />)
+    expect(input().value).toBe('A different idea')
+    expect(screen.getByText(/hasn't been confirmed yet/)).toBeDefined()
+    await act(async () => { fireEvent.keyDown(input(), { key: 'Enter' }) })
+    const [original, retry] = bodies()
+    expect(retry).toEqual(original)
+    expect((composerDrafts as Map<string, string>).get('project:p1')).toBe('A different idea')
+    expect(push).toHaveBeenCalledWith('/projects/p1')
   })
 })
 
