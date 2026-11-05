@@ -1398,7 +1398,7 @@ describe('Routes', () => {
       })
     })
 
-    it('a draft project gets the shaping posture: one question card per turn, draft when firm', async () => {
+    it('a draft project gets the shaping interview: at most one card per turn, draft once the blocking gaps close', async () => {
       writeProjectFixture('proj-plan-prompt', { title: 'Plan Prompt Project', status: 'draft', titleSource: 'fallback' })
       const streamMock = mockRuntimeStream(['ok'])
       const settled = nextSettle()
@@ -1410,8 +1410,9 @@ describe('Routes', () => {
       await settled
 
       const prompt = String(streamMock.mock.calls[0]?.[0]?.content ?? '')
-      expect(prompt).toContain('brainstorm buddy')
-      expect(prompt).toContain('Ask exactly ONE question per turn with bakin_exec_ask_user')
+      expect(prompt).toContain('interviewer and planning partner')
+      expect(prompt).toContain('AT MOST one question')
+      expect(prompt).toContain('Ask it with bakin_exec_ask_user')
       expect(prompt).toContain('Draft plan is ready in the Plan tab')
       expect(prompt).toContain('The title is provisional')
       expect(prompt).toContain('Invoke Bakin tools as described in your Tool access section — the exact call form depends on the active runtime.')
@@ -1427,7 +1428,7 @@ describe('Routes', () => {
       expect(result).toMatchObject({ ok: true, reply: 'tool reply' })
 
       const prompt = String(sendMock.mock.calls[0]?.[0]?.content ?? '')
-      expect(prompt).toContain('brainstorm buddy')
+      expect(prompt).toContain('interviewer and planning partner')
       expect(prompt).toContain('in plain text')
       expect(prompt).not.toContain('bakin_exec_ask_user')
       expect(prompt).toContain('The user named this project — keep their title.')

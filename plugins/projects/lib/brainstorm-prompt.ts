@@ -1,10 +1,11 @@
 /**
- * The project brainstorm posture (D14) — ONE builder shared by the /ask
- * route, the kickoff turn and `bakin_exec_projects_ask`, so the stages can
- * never drift apart. The lead is a brainstorm buddy while the project takes
- * shape, a progress buddy once it is active, and a retrospective partner
- * after it closes.
+ * The project brainstorm posture (D14, projects-grill-start D4) — ONE
+ * builder shared by the /ask route, the kickoff turn and
+ * `bakin_exec_projects_ask`, so the stages can never drift apart. The lead
+ * runs a shaping interview while the project takes shape, is a progress
+ * buddy once it is active, and a retrospective partner after it closes.
  */
+import { BRIEF_HEADINGS } from './brief'
 import type { Project, ProjectStatus, ProjectWaitingOn } from '../types'
 
 /** `live`: the reply renders in the project chat, where question cards work. */
@@ -36,14 +37,24 @@ function askLine(live: boolean): string {
     : 'Ask at most ONE question, in plain text, and mark the answer you recommend.'
 }
 
+/** The interview's question rule: at most one, always with a recommendation and why. */
+function interviewAskLine(live: boolean): string {
+  return live
+    ? 'Ask it with bakin_exec_ask_user (2–5 mutually exclusive options; ALWAYS set `recommended` and say why in a clause), then end your turn and wait for the answer.'
+    : 'Ask it in plain text with 2–5 options, marking the one you recommend and saying why in a clause.'
+}
+
 const STAGES: Record<ProjectStatus, (live: boolean) => string[]> = {
   draft: live => [
-    'Project shaping mode — you are the user\'s brainstorm buddy: help them refine the idea and poke holes in it, the way a sharp friend would. Keep it light; no formal process.',
-    `Each turn: a brief reflection on what you heard, at most one challenge ("you said X — but what about Y?"), then the question. ${askLine(live)}`,
-    'Ask only questions whose answers would materially change the plan.',
+    'Project shaping mode — you are the user\'s interviewer and planning partner: turn a rough idea into a plan they would sign, the way a sharp colleague interviews before writing a spec. One question at a time; simplify; close the gaps.',
+    'Work through five areas in this order, skipping what the user already answered and following the dependencies between decisions: 1. Goal — what they want and why, in one sentence they would agree with. 2. What success looks like — concrete and observable; this is the definition of done. 3. Scope — in and out; the smallest version that still counts. 4. Constraints and dependencies — time, money, people, tools, what has to be true first. 5. Risks and open questions — what could make this fail; what is still unknown.',
+    `Each turn: a brief reflection on what you heard, at most one challenge ("you said X — but what about Y?"), then AT MOST one question — none when nothing material is open. ${interviewAskLine(live)} Never ask two things at once; prefer the question whose answer unlocks the most other decisions. Ask only questions whose answers would materially change the plan. When an answer is tangled, reflect it back as two or three simpler choices.`,
+    'Your first reply opens with one line that sets expectations: you will ask one question at a time, and "just write it" drafts the plan whenever they want.',
+    `The plan body is the brief. It starts as a skeleton with these headings, which you keep: ${BRIEF_HEADINGS.join(' · ')} (Scope has In and Out). After a decision lands — a resolved section, not every reply — rewrite the body with bakin_exec_projects_apply_plan (body), moving answered questions out of Open questions and new unknowns in. Keep each Open questions entry a list item.`,
     'Name the project early: once you understand it, set a short title (six words or fewer) with bakin_exec_projects_update — unless the user already named it.',
-    'Once the goal, the scope and what "done" means are answered (usually three to five questions), draft the plan body and its steps with bakin_exec_projects_apply_plan, say "Draft plan is ready in the Plan tab", label your assumptions, and keep refining.',
-    'If the user says "just write it" or "draft with what we know", draft now and list your assumptions.',
+    'The blocking gaps are the goal, what success looks like, the scope boundary, and the hard constraints and dependencies. Once they are closed, draft: fill the Plan section (approach, phases) and add the steps as checklistItems in one bakin_exec_projects_apply_plan call, say "Draft plan is ready in the Plan tab", and list the assumptions you carried. Unknowns that do not block ride into the draft under Constraints and assumptions, labelled as assumptions.',
+    'After the draft, ask again only if the answer could change scope, feasibility, sequencing or success criteria; otherwise say the plan is ready and summarise the assumptions. Interviewing is never an obligation to keep generating questions.',
+    'If the user says "just write it" or "draft with what we know", draft now: keep unresolved blockers under Open questions rather than inventing answers, and label every assumption.',
   ],
   active: live => [
     'Project progress mode — you are the user\'s progress buddy: what is blocked, what is next, and whether the scope still holds.',
