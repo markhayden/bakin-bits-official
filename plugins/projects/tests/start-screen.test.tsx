@@ -9,7 +9,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import { composerDrafts } from '@makinbakin/sdk/conversation'
 import { StartScreen } from '../components/start-screen'
-import { STARTER_PROMPTS, fallbackTitle } from '../lib/start'
+import { STARTER_PROMPTS, fallbackTitle, newRequestId } from '../lib/start'
 
 const push = mock((_to: string) => {})
 let responses: Array<() => Response> = []
@@ -154,5 +154,42 @@ describe('fallbackTitle', () => {
     expect(title.length).toBeLessThanOrEqual(61)
     expect(title.endsWith('…')).toBe(true)
     expect(long.startsWith(title.slice(0, -1))).toBe(true)
+  })
+})
+
+describe('StartScreen on a plain-http origin', () => {
+  // Over Tailscale the page is http://<host>:3737 — not a secure context — and
+  // crypto.randomUUID does not exist there. The create must still go out.
+  const v4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+  let saved: Crypto['randomUUID']
+  beforeEach(() => {
+    saved = crypto.randomUUID
+    Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true, writable: true })
+  })
+  afterEach(() => {
+    Object.defineProperty(crypto, 'randomUUID', { value: saved, configurable: true, writable: true })
+  })
+
+  it('still mints a v4 request id and opens the project', async () => {
+    render(<StartScreen />)
+    await send('Help me plan a trip.')
+    expect(bodies()[0]?.requestId).toMatch(v4)
+    expect(push).toHaveBeenCalledWith('/projects/p1')
+  })
+})
+
+describe('newRequestId', () => {
+  const v4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+  it('is a v4 UUID with or without crypto.randomUUID', () => {
+    expect(newRequestId()).toMatch(v4)
+    const saved = crypto.randomUUID
+    Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true, writable: true })
+    try {
+      const ids = new Set(Array.from({ length: 50 }, () => newRequestId()))
+      expect(ids.size).toBe(50)
+      for (const id of ids) expect(id).toMatch(v4)
+    } finally {
+      Object.defineProperty(crypto, 'randomUUID', { value: saved, configurable: true, writable: true })
+    }
   })
 })

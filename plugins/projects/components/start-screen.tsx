@@ -16,7 +16,7 @@ import { Composer, ConversationEmptyState, writeComposerDraft, type ComposerHand
 import { useAgentList, useMainAgentId } from '@makinbakin/sdk/hooks'
 import { useRouter } from '@makinbakin/sdk/navigation'
 import { projectRequest } from '../lib/project-api'
-import { CREATE_TIMEOUT_MS, STARTER_PROMPTS, fallbackTitle } from '../lib/start'
+import { CREATE_TIMEOUT_MS, STARTER_PROMPTS, fallbackTitle, newRequestId } from '../lib/start'
 
 type PendingCreate = { requestId: string; message: string }
 const PENDING_KEY = 'projects:new:pending'
@@ -62,12 +62,14 @@ export function StartScreen({ onBack, createTimeoutMs = CREATE_TIMEOUT_MS }: { o
   const create = async (content: string) => {
     setCreating(true)
     setError(null)
-    if (!pending.current) {
-      pending.current = { requestId: crypto.randomUUID(), message: content }
-      writePending(pending.current)
-    }
-    const { requestId, message } = pending.current
     try {
+      // Minted inside the try: whatever throws here must surface as an error
+      // below, never leave the composer locked on "Sending…".
+      if (!pending.current) {
+        pending.current = { requestId: newRequestId(), message: content }
+        writePending(pending.current)
+      }
+      const { requestId, message } = pending.current
       // The create only writes the project (the first turn starts detached,
       // D1), so an answer that takes longer than this is a stall, not work.
       const result = await projectRequest('', {

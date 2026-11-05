@@ -24,6 +24,11 @@ on a per-plugin basis: each plugin tags its own releases as
   rest as labelled assumptions; "Start project" says when the brief still
   lists open questions and offers "Continue shaping". Lock bodies are
   synchronous by type; the dead per-request SSE transport hook is gone.
+  The create's request id no longer needs a secure origin: over Tailscale
+  (plain `http://<host>:3737`) `crypto.randomUUID` does not exist, and the
+  send threw before the request left the browser, leaving the composer on
+  "Sending…" forever — the id is built from `getRandomValues` there, and
+  anything that throws while minting now surfaces as an error.
 
 ### Fixed
 - `projects` (0.12.1): the manifest no longer declares the removed
