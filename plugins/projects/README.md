@@ -26,7 +26,8 @@ timeout proves nothing about the create; the receipt dedupes). A retried
 create — lost response, double click — returns the same project and never a
 second turn. The pending send survives a reload (`sessionStorage`: request
 id, message, lead, any newer text): the page shows the latest text and the
-lead again under an "unconfirmed send" notice until a create succeeds, and
+lead again under an "unconfirmed send" notice — shown after any failed send,
+beside the error, until a create succeeds — and
 the retry sends the original message with the edit kept as the project's
 draft. Every client-minted id comes from `lib/request-id.ts` — the page is
 plain `http://<host>:3737` over Tailscale, not a secure context, so

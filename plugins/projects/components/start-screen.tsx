@@ -59,9 +59,9 @@ export function StartScreen({ onBack, createTimeoutMs = CREATE_TIMEOUT_MS }: { o
   const [initialPending] = useState(readPending)
   const pending = useRef<PendingCreate | null>(initialPending)
   const [lead, setLead] = useState<string | null>(initialPending?.owner ?? null)
-  // A send from before a reload is still unconfirmed: said out loud until a
-  // create succeeds, so the retry is never hidden behind whatever the
-  // composer shows.
+  // While a first send is unconfirmed — failed in this visit or carried over
+  // a reload — it is said out loud until a create succeeds, so the retry is
+  // never hidden behind whatever the composer shows.
   const [unconfirmed, setUnconfirmed] = useState(initialPending !== null)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -108,7 +108,6 @@ export function StartScreen({ onBack, createTimeoutMs = CREATE_TIMEOUT_MS }: { o
       if (typeof result.id !== 'string' || !result.id) throw new Error('Projects did not return the new project.')
       pending.current = null
       writePending(null)
-      setUnconfirmed(false)
       // Text edited after the first attempt is not lost: it waits in the
       // project's composer as a draft.
       if (content !== message) writeComposerDraft(`project:${result.id}`, content)
@@ -122,6 +121,7 @@ export function StartScreen({ onBack, createTimeoutMs = CREATE_TIMEOUT_MS }: { o
       const timedOut = err instanceof DOMException && (err.name === 'TimeoutError' || err.name === 'AbortError')
       setError(timedOut ? 'Projects did not answer. Retry — your text is kept.' : err instanceof Error ? err.message : 'The project could not be created. Try again.')
     } finally {
+      setUnconfirmed(pending.current !== null)
       setCreating(false)
     }
   }
@@ -160,7 +160,8 @@ export function StartScreen({ onBack, createTimeoutMs = CREATE_TIMEOUT_MS }: { o
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             </div>
-          ) : unconfirmed ? (
+          ) : null}
+          {unconfirmed ? (
             <div className="px-bakin-4 pb-bakin-2">
               <Alert tone="attention">
                 <TriangleAlert aria-hidden="true" />

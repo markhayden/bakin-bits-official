@@ -198,6 +198,35 @@ describe('StartScreen while creating', () => {
     expect((composerDrafts as Map<string, string>).get('project:p1')).toBe('A different idea')
     expect(push).toHaveBeenCalledWith('/projects/p1')
   })
+
+  it('a failed retry after a reload keeps the notice beside the error until the create succeeds', async () => {
+    responses = [
+      () => Response.json({ error: 'Lost response' }, { status: 503 }),
+      () => Response.json({ error: 'Still down' }, { status: 503 }),
+    ]
+    const first = render(<StartScreen />)
+    await send('Original idea')
+    first.unmount()
+    ;(composerDrafts as Map<string, string>).set('projects:new', 'A different idea')
+    render(<StartScreen />)
+    await act(async () => { fireEvent.keyDown(input(), { key: 'Enter' }) })
+    expect(screen.getByText('Still down')).toBeDefined()
+    expect(screen.getByText(/hasn't been confirmed yet/)).toBeDefined()
+    expect(input().value).toBe('A different idea')
+    await act(async () => { fireEvent.keyDown(input(), { key: 'Enter' }) })
+    const sent = bodies()
+    expect(sent).toHaveLength(3)
+    expect(sent[2]).toEqual(sent[0])
+    expect(push).toHaveBeenCalledWith('/projects/p1')
+  })
+
+  it('a failed first send says the send is unconfirmed in the same visit, so an edited retry is never silent', async () => {
+    responses = [() => Response.json({ error: 'Lost response' }, { status: 503 })]
+    render(<StartScreen />)
+    await send('Original idea')
+    expect(screen.getByText('Lost response')).toBeDefined()
+    expect(screen.getByText(/hasn't been confirmed yet/)).toBeDefined()
+  })
 })
 
 describe('StartScreen retry after an edit', () => {
