@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react'
 import { toast } from '@makinbakin/sdk/hooks'
 import type { ComposerAttachments } from '@makinbakin/sdk/conversation'
 import { projectRequest } from '../lib/project-api'
+import { newRequestId } from '../lib/request-id'
 
 /** The file kinds the asset library stores (the composer has no "any file" wildcard). */
 const ACCEPTED = ['image/*', 'video/*', 'audio/*', 'text/*', 'application/pdf', '.md', '.csv', '.json', '.docx', '.xlsx', '.pptx'] as const
@@ -60,7 +61,7 @@ export function useProjectUploads(projectId: string, onAttached: () => Promise<u
     items,
     onAdd: (files: File[]) => {
       for (const file of files) {
-        const id = crypto.randomUUID()
+        const id = newRequestId()
         setItems(current => [...current, { id, name: file.name, status: 'uploading' }])
         void upload(id, file)
       }

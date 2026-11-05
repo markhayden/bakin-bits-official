@@ -9,7 +9,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import { composerDrafts } from '@makinbakin/sdk/conversation'
 import { StartScreen } from '../components/start-screen'
-import { STARTER_PROMPTS, fallbackTitle, newRequestId } from '../lib/start'
+import { STARTER_PROMPTS, fallbackTitle } from '../lib/start'
 
 const push = mock((_to: string) => {})
 let responses: Array<() => Response> = []
@@ -178,18 +178,31 @@ describe('StartScreen on a plain-http origin', () => {
   })
 })
 
-describe('newRequestId', () => {
-  const v4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
-  it('is a v4 UUID with or without crypto.randomUUID', () => {
-    expect(newRequestId()).toMatch(v4)
-    const saved = crypto.randomUUID
-    Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true, writable: true })
-    try {
-      const ids = new Set(Array.from({ length: 50 }, () => newRequestId()))
-      expect(ids.size).toBe(50)
-      for (const id of ids) expect(id).toMatch(v4)
-    } finally {
-      Object.defineProperty(crypto, 'randomUUID', { value: saved, configurable: true, writable: true })
-    }
+describe('StartScreen when minting the request id throws', () => {
+  // Whatever fails before the request leaves must read as an error with the
+  // text kept and the composer unlocked — never "Sending…" forever.
+  let saved: Crypto['randomUUID']
+  beforeEach(() => {
+    saved = crypto.randomUUID
+    Object.defineProperty(crypto, 'randomUUID', { value: () => { throw new Error('no entropy today') }, configurable: true, writable: true })
+  })
+  afterEach(() => {
+    Object.defineProperty(crypto, 'randomUUID', { value: saved, configurable: true, writable: true })
+  })
+
+  it('shows the error, keeps the text, sends nothing, records nothing, and the retry works', async () => {
+    render(<StartScreen />)
+    await send('Help me plan a trip.')
+    expect(screen.getByText('no entropy today')).toBeDefined()
+    expect(input().value).toBe('Help me plan a trip.')
+    expect(input().disabled).toBe(false)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(sessionStorage.length).toBe(0)
+    expect(push).not.toHaveBeenCalled()
+
+    Object.defineProperty(crypto, 'randomUUID', { value: saved, configurable: true, writable: true })
+    await act(async () => { fireEvent.keyDown(input(), { key: 'Enter' }) })
+    expect(bodies()).toHaveLength(1)
+    expect(push).toHaveBeenCalledWith('/projects/p1')
   })
 })

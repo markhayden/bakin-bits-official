@@ -16,7 +16,8 @@ import { Composer, ConversationEmptyState, writeComposerDraft, type ComposerHand
 import { useAgentList, useMainAgentId } from '@makinbakin/sdk/hooks'
 import { useRouter } from '@makinbakin/sdk/navigation'
 import { projectRequest } from '../lib/project-api'
-import { CREATE_TIMEOUT_MS, STARTER_PROMPTS, fallbackTitle, newRequestId } from '../lib/start'
+import { newRequestId } from '../lib/request-id'
+import { CREATE_TIMEOUT_MS, STARTER_PROMPTS, fallbackTitle } from '../lib/start'
 
 type PendingCreate = { requestId: string; message: string }
 const PENDING_KEY = 'projects:new:pending'
@@ -62,6 +63,10 @@ export function StartScreen({ onBack, createTimeoutMs = CREATE_TIMEOUT_MS }: { o
   const create = async (content: string) => {
     setCreating(true)
     setError(null)
+    // Whether the request left the browser: a failure before that clears the
+    // composer in the same tick (its draft ref lags a render), so the text is
+    // restored unconditionally; after it, only an untouched composer is.
+    let sent = false
     try {
       // Minted inside the try: whatever throws here must surface as an error
       // below, never leave the composer locked on "Sending…".
@@ -72,6 +77,7 @@ export function StartScreen({ onBack, createTimeoutMs = CREATE_TIMEOUT_MS }: { o
       const { requestId, message } = pending.current
       // The create only writes the project (the first turn starts detached,
       // D1), so an answer that takes longer than this is a stall, not work.
+      sent = true
       const result = await projectRequest('', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -88,7 +94,7 @@ export function StartScreen({ onBack, createTimeoutMs = CREATE_TIMEOUT_MS }: { o
     } catch (err) {
       // The composer cleared its draft on send — put the text back, unless
       // newer text was typed while the request was out.
-      if (composer.current?.isEmpty() ?? true) composer.current?.setText(content)
+      if (!sent || (composer.current?.isEmpty() ?? true)) composer.current?.setText(content)
       // A timeout proves nothing about the create: the retry re-sends the
       // SAME request id, and the receipt dedupes.
       const timedOut = err instanceof DOMException && (err.name === 'TimeoutError' || err.name === 'AbortError')

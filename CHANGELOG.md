@@ -27,8 +27,10 @@ on a per-plugin basis: each plugin tags its own releases as
   The create's request id no longer needs a secure origin: over Tailscale
   (plain `http://<host>:3737`) `crypto.randomUUID` does not exist, and the
   send threw before the request left the browser, leaving the composer on
-  "Sending…" forever — the id is built from `getRandomValues` there, and
-  anything that throws while minting now surfaces as an error.
+  "Sending…" forever — every client-minted id (the create, checklist
+  mutations, upload chips) now comes from one helper that builds a v4 from
+  `getRandomValues` there, and anything that throws before the request
+  leaves surfaces as an error with the text kept.
 
 ### Fixed
 - `projects` (0.12.1): the manifest no longer declares the removed

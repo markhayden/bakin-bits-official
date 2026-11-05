@@ -17,20 +17,6 @@ export const STARTER_PROMPTS: readonly { label: string; prompt: string }[] = [
   { label: 'Research a big purchase', prompt: 'Help me research a big purchase.' },
 ]
 
-/**
- * A v4 UUID for the create's request identity. `crypto.randomUUID` exists only
- * on secure origins; over Tailscale the page is plain http://<host>:3737, so
- * the id is built from `getRandomValues` there (same shape, same entropy).
- */
-export function newRequestId(): string {
-  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
-  const bytes = crypto.getRandomValues(new Uint8Array(16))
-  bytes[6] = (bytes[6]! & 0x0f) | 0x40
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80
-  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
-}
-
 /** How long the start screen waits for the create before it says so (D1a). */
 export const CREATE_TIMEOUT_MS = 10_000
 

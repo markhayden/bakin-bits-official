@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ProjectTask } from '../types'
 import { ProjectApiError, projectRequest } from '../lib/project-api'
+import { newRequestId } from '../lib/request-id'
 
 export interface DescriptionDraft {
   item: ProjectTask
@@ -97,7 +98,7 @@ export function useChecklistDrafts(projectId: string, tasks: ProjectTask[], refr
   async function add() {
     if (!current.current.newTitle.trim() && !current.current.addIntent) return true
     if (current.current.addIntent?.deleted) return false
-    const intent = current.current.addIntent ?? { requestId: crypto.randomUUID(), title: current.current.newTitle.trim(), raw: current.current.newTitle }
+    const intent = current.current.addIntent ?? { requestId: newRequestId(), title: current.current.newTitle.trim(), raw: current.current.newTitle }
     update({ addIntent: intent })
     return run('add', async () => {
       const result = await projectRequest(`${encodeURIComponent(projectId)}/checklist`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: intent.title, requestId: intent.requestId }) }) as { deleted?: boolean }
@@ -126,7 +127,7 @@ export function useChecklistDrafts(projectId: string, tasks: ProjectTask[], refr
       if (!latestTasks.current.some(task => task.id === item.id && task.instanceId === item.instanceId)) throw new Error('This checklist item changed or was removed. Refresh to review.')
       const key = `${item.instanceId ?? item.id}:${action}`
       let requestId = requestIds.current.get(key)
-      if (!requestId) { requestId = crypto.randomUUID(); requestIds.current.set(key, requestId) }
+      if (!requestId) { requestId = newRequestId(); requestIds.current.set(key, requestId) }
       const suffix = action === 'remove' ? '' : `/${action}`
       await projectRequest(`${encodeURIComponent(projectId)}/checklist/${encodeURIComponent(item.id)}${suffix}`, {
         method: action === 'remove' ? 'DELETE' : action === 'toggle' ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' },
