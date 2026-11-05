@@ -9,7 +9,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import { composerDrafts } from '@makinbakin/sdk/conversation'
 import { StartScreen } from '../components/start-screen'
-import { fallbackTitle } from '../lib/start'
+import { STARTER_PROMPTS, fallbackTitle } from '../lib/start'
 
 const push = mock((_to: string) => {})
 let responses: Array<() => Response> = []
@@ -44,8 +44,13 @@ describe('StartScreen', () => {
     render(<StartScreen />)
     expect(screen.getByRole('heading', { name: 'What kind of project is on your mind?' })).toBeDefined()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Clean up my email' })) })
-    expect(input().value).toBe('I want to clean up my email inbox — ')
+    // A complete prompt: Enter works as-is; the lead's interview draws out the specifics.
+    expect(input().value).toBe('Help me clean up my email inbox.')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('every starter is a complete sentence', () => {
+    for (const starter of STARTER_PROMPTS) expect(starter.prompt).toMatch(/^[A-Z].*\.$/)
   })
 
   it('the first send creates the project with the lead and a fallback title, then opens it', async () => {
@@ -71,6 +76,30 @@ describe('StartScreen', () => {
 
     await act(async () => { fireEvent.keyDown(input(), { key: 'Enter' }) })
     const [first, retry] = bodies()
+    expect(retry.requestId).toBe(first.requestId)
+    expect(push).toHaveBeenCalledWith('/projects/p1')
+  })
+})
+
+describe('StartScreen when Projects never answers', () => {
+  it('times out honestly: the error shows, the text is kept, and the retry reuses the request id', async () => {
+    // A real fetch rejects with the signal's reason once the timeout aborts it.
+    const hanging = mock((_url: string, init?: RequestInit) => new Promise<Response>((_, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal!.reason), { once: true })
+    }))
+    ;(globalThis as unknown as { fetch: typeof fetch }).fetch = hanging as unknown as typeof fetch
+    render(<StartScreen createTimeoutMs={20} />)
+    await send('Plan a trip.')
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 60)) })
+    expect(screen.getByText('Projects did not answer. Retry — your text is kept.')).toBeDefined()
+    expect(input().value).toBe('Plan a trip.')
+    expect(input().disabled).toBe(false)
+    expect(push).not.toHaveBeenCalled()
+
+    ;(globalThis as unknown as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch
+    await act(async () => { fireEvent.keyDown(input(), { key: 'Enter' }) })
+    const first = JSON.parse(String(hanging.mock.calls[0]?.[1]?.body)) as { requestId: string }
+    const [retry] = bodies()
     expect(retry.requestId).toBe(first.requestId)
     expect(push).toHaveBeenCalledWith('/projects/p1')
   })

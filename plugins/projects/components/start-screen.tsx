@@ -1,10 +1,12 @@
 'use client'
 
 /**
- * The start screen (D7/D8): "what kind of project is on your mind?" — a
- * starter chip pre-fills the composer, the lead agent is picked beside it,
- * and the first send creates the project and its first brainstorm turn. No
- * form, nothing created until send.
+ * The start screen (D7/D8, projects-grill-start D1–D2): "what kind of
+ * project is on your mind?" — a starter chip pre-fills the composer with a
+ * complete prompt, the lead agent is picked beside it, and the first send
+ * creates the project and opens it at once; the first brainstorm turn
+ * starts on the server, detached. No form, nothing created until send, and
+ * the create never spins past its timeout.
  */
 import { useMemo, useRef, useState } from 'react'
 import { ArrowLeft, TriangleAlert } from 'lucide-react'
@@ -14,7 +16,7 @@ import { Composer, ConversationEmptyState, writeComposerDraft, type ComposerHand
 import { useAgentList, useMainAgentId } from '@makinbakin/sdk/hooks'
 import { useRouter } from '@makinbakin/sdk/navigation'
 import { projectRequest } from '../lib/project-api'
-import { STARTER_PROMPTS, fallbackTitle } from '../lib/start'
+import { CREATE_TIMEOUT_MS, STARTER_PROMPTS, fallbackTitle } from '../lib/start'
 
 type PendingCreate = { requestId: string; message: string }
 const PENDING_KEY = 'projects:new:pending'
@@ -37,7 +39,7 @@ function writePending(value: PendingCreate | null): void {
   }
 }
 
-export function StartScreen({ onBack }: { onBack?: () => void }) {
+export function StartScreen({ onBack, createTimeoutMs = CREATE_TIMEOUT_MS }: { onBack?: () => void; createTimeoutMs?: number }) {
   const router = useRouter()
   const mainAgentId = useMainAgentId() ?? 'main'
   const agentList = useAgentList()
@@ -66,10 +68,13 @@ export function StartScreen({ onBack }: { onBack?: () => void }) {
     }
     const { requestId, message } = pending.current
     try {
+      // The create only writes the project (the first turn starts detached,
+      // D1), so an answer that takes longer than this is a stall, not work.
       const result = await projectRequest('', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ requestId, title: fallbackTitle(message), owner: leadId, firstMessage: message }),
+        signal: AbortSignal.timeout(createTimeoutMs),
       }) as { id?: unknown }
       if (typeof result.id !== 'string' || !result.id) throw new Error('Projects did not return the new project.')
       pending.current = null
@@ -82,7 +87,10 @@ export function StartScreen({ onBack }: { onBack?: () => void }) {
       // The composer cleared its draft on send — put the text back, unless
       // newer text was typed while the request was out.
       if (composer.current?.isEmpty() ?? true) composer.current?.setText(content)
-      setError(err instanceof Error ? err.message : 'The project could not be created. Try again.')
+      // A timeout proves nothing about the create: the retry re-sends the
+      // SAME request id, and the receipt dedupes.
+      const timedOut = err instanceof DOMException && (err.name === 'TimeoutError' || err.name === 'AbortError')
+      setError(timedOut ? 'Projects did not answer. Retry — your text is kept.' : err instanceof Error ? err.message : 'The project could not be created. Try again.')
     } finally {
       setCreating(false)
     }

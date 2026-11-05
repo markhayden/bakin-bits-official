@@ -3,15 +3,22 @@
  * first message becomes until the lead names the project.
  */
 
-/** Starter chips: each pre-fills the composer with an editable sentence. */
+/**
+ * Starter chips: each pre-fills the composer with a COMPLETE editable
+ * prompt — Enter works as-is, and the lead's interview draws out the
+ * specifics (projects-grill-start D2).
+ */
 export const STARTER_PROMPTS: readonly { label: string; prompt: string }[] = [
-  { label: 'Clean up my email', prompt: 'I want to clean up my email inbox — ' },
-  { label: 'Add a new feature', prompt: 'I want to add a new feature to my app: ' },
-  { label: 'Plan a trip', prompt: 'Help me plan a trip to ' },
-  { label: 'Launch a newsletter', prompt: 'I want to launch a newsletter about ' },
-  { label: 'Organize my files', prompt: 'I want to get my files organized — ' },
-  { label: 'Research a big purchase', prompt: 'Help me research a big purchase: ' },
+  { label: 'Clean up my email', prompt: 'Help me clean up my email inbox.' },
+  { label: 'Add a new feature', prompt: 'Help me plan and ship a new feature for my app.' },
+  { label: 'Plan a trip', prompt: 'Help me plan a trip.' },
+  { label: 'Launch a newsletter', prompt: 'Help me launch a newsletter.' },
+  { label: 'Organize my files', prompt: 'Help me get my files organized.' },
+  { label: 'Research a big purchase', prompt: 'Help me research a big purchase.' },
 ]
+
+/** How long the start screen waits for the create before it says so (D1a). */
+export const CREATE_TIMEOUT_MS = 10_000
 
 const TITLE_MAX = 60
 
