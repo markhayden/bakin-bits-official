@@ -8,7 +8,7 @@
  * starts on the server, detached. No form, nothing created until send, and
  * the create never spins past its timeout.
  */
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, TriangleAlert } from 'lucide-react'
 import { Alert, AlertDescription, Button } from '@makinbakin/sdk/ui'
 import { AgentSelect, Page, PageBody, PageComposer, PageHeader } from '@makinbakin/sdk/patterns'
@@ -19,14 +19,16 @@ import { projectRequest } from '../lib/project-api'
 import { newRequestId } from '../lib/request-id'
 import { CREATE_TIMEOUT_MS, STARTER_PROMPTS, fallbackTitle } from '../lib/start'
 
-type PendingCreate = { requestId: string; message: string }
+type PendingCreate = { requestId: string; message: string; owner: string }
 const PENDING_KEY = 'projects:new:pending'
 
 /** The unconfirmed first send survives a reload, so its retry still dedupes. */
 function readPending(): PendingCreate | null {
   try {
     const parsed = JSON.parse(sessionStorage.getItem(PENDING_KEY) ?? 'null') as Partial<PendingCreate> | null
-    return parsed && typeof parsed.requestId === 'string' && typeof parsed.message === 'string' ? { requestId: parsed.requestId, message: parsed.message } : null
+    return parsed && typeof parsed.requestId === 'string' && typeof parsed.message === 'string' && typeof parsed.owner === 'string'
+      ? { requestId: parsed.requestId, message: parsed.message, owner: parsed.owner }
+      : null
   } catch {
     return null
   }
@@ -49,16 +51,23 @@ export function StartScreen({ onBack, createTimeoutMs = CREATE_TIMEOUT_MS }: { o
     name: agent.name ?? agent.id,
     imageSrc: agent.headshot ?? null,
   })), [agentList])
-  const [lead, setLead] = useState<string | null>(null)
+  // The first send's payload, minted when the user presses send. Every retry
+  // — including after a reload — re-sends it UNCHANGED (same requestId, same
+  // message, same lead), so a lost response can never create a second
+  // project, silently drop an edit, or land under another lead (D8).
+  const [initialPending] = useState(readPending)
+  const pending = useRef<PendingCreate | null>(initialPending)
+  const [lead, setLead] = useState<string | null>(initialPending?.owner ?? null)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const composer = useRef<ComposerHandle | null>(null)
-  // The first send's payload, minted when the user presses send. Every retry
-  // — including after a reload — re-sends it UNCHANGED (same requestId, same
-  // message), so a lost response can never create a second project or
-  // silently drop an edit (D8).
-  const pending = useRef<PendingCreate | null>(readPending())
   const leadId = lead ?? mainAgentId
+
+  // After a reload mid-create the composer's own draft is gone (it clears on
+  // send): show the pending message so the retry is visible, never hidden.
+  useEffect(() => {
+    if (initialPending && (composer.current?.isEmpty() ?? false)) composer.current?.setText(initialPending.message)
+  }, [initialPending])
 
   const create = async (content: string) => {
     setCreating(true)
@@ -71,16 +80,16 @@ export function StartScreen({ onBack, createTimeoutMs = CREATE_TIMEOUT_MS }: { o
       // Minted inside the try: whatever throws here must surface as an error
       // below, never leave the composer locked on "Sending…".
       if (!pending.current) {
-        pending.current = { requestId: newRequestId(), message: content }
+        pending.current = { requestId: newRequestId(), message: content, owner: leadId }
         writePending(pending.current)
       }
-      const { requestId, message } = pending.current
+      const { requestId, message, owner } = pending.current
       // The create only writes the project (the first turn starts detached,
       // D1), so an answer that takes longer than this is a stall, not work.
       const init: RequestInit = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ requestId, title: fallbackTitle(message), owner: leadId, firstMessage: message }),
+        body: JSON.stringify({ requestId, title: fallbackTitle(message), owner, firstMessage: message }),
         signal: AbortSignal.timeout(createTimeoutMs),
       }
       sent = true

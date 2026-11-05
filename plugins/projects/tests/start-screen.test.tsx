@@ -130,6 +130,36 @@ describe('StartScreen while creating', () => {
     expect(retry.requestId).toBe(original.requestId)
     expect(sessionStorage.getItem('projects:new:pending')).toBeNull()
   })
+
+  it('an interrupted reload shows the pending message and lead, and Enter retries them unchanged', async () => {
+    responses = [() => Response.json({ error: 'Lost response' }, { status: 503 })]
+    const first = render(<StartScreen />)
+    await act(async () => { fireEvent.change(screen.getByRole('combobox', { name: 'Lead agent' }), { target: { value: 'scout' } }) })
+    await send('Reload me')
+    first.unmount()
+    render(<StartScreen />)
+    // The text and the lead are visible again — nothing hidden retries behind the user's back.
+    expect(input().value).toBe('Reload me')
+    expect((screen.getByRole('combobox', { name: 'Lead agent' }) as HTMLSelectElement).value).toBe('scout')
+    await act(async () => { fireEvent.keyDown(input(), { key: 'Enter' }) })
+    const [original, retry] = bodies()
+    expect(retry).toEqual(original)
+    expect(retry.owner).toBe('scout')
+    expect(push).toHaveBeenCalledWith('/projects/p1')
+  })
+
+  it('a retry after a reload keeps the original lead even when the picker now shows another', async () => {
+    responses = [() => Response.json({ error: 'Lost response' }, { status: 503 })]
+    const first = render(<StartScreen />)
+    await act(async () => { fireEvent.change(screen.getByRole('combobox', { name: 'Lead agent' }), { target: { value: 'scout' } }) })
+    await send('Reload me')
+    first.unmount()
+    render(<StartScreen />)
+    await act(async () => { fireEvent.change(screen.getByRole('combobox', { name: 'Lead agent' }), { target: { value: 'main' } }) })
+    await act(async () => { fireEvent.keyDown(input(), { key: 'Enter' }) })
+    const [original, retry] = bodies()
+    expect(retry).toEqual(original)
+  })
 })
 
 describe('StartScreen retry after an edit', () => {
