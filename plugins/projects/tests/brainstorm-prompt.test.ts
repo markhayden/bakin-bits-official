@@ -71,6 +71,7 @@ describe('projectBrainstormInstructions — the shaping interview (projects-gril
     expect(text).toContain('checklistItems')
     expect(text).toContain('Draft plan is ready in the Plan tab')
     expect(text).toContain('labelled as assumptions')
+    expect(text).toContain('first message already covers those four areas, draft in that same turn')
     expect(text).toContain('ask again only if the answer could change scope, feasibility, sequencing or success criteria')
     expect(text).toContain('never an obligation to keep generating questions')
     expect(text).toContain('"just write it"')
