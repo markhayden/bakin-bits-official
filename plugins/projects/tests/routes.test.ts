@@ -55,7 +55,7 @@ function clearGlobals() {
 // Plugin import (after mocks)
 // ---------------------------------------------------------------------------
 
-import projectsPlugin from '../../../plugins/projects'
+import projectsPlugin, { kickoffTiming } from '../../../plugins/projects'
 import { createProjectRepository } from '../../../plugins/projects/lib/parser'
 import { MarkdownStorageAdapter } from '../test-helpers'
 
@@ -191,6 +191,7 @@ function mockRuntimeStreamError(message: string) {
 
 beforeEach(async () => {
   clearGlobals()
+  kickoffTiming.contextBuildMs = 15_000
   if (existsSync(testDir)) rmSync(testDir, { recursive: true, force: true })
   mkdirSync(projectsDir, { recursive: true })
   plugin = await activatePlugin(projectsPlugin, testDir)
@@ -952,7 +953,7 @@ describe('Routes', () => {
 
     describe('kickoff create (D8)', () => {
       const createRoute = () => findRoute(plugin.routes, 'POST', '/')!
-      const kickoffBody = { requestId: 'req-kickoff-0001', title: 'Clean up my inbox', firstMessage: 'Help me clean up my inbox' }
+      const kickoffBody = { requestId: 'req-kickoff-0001', title: 'Clean up my inbox', owner: 'main', firstMessage: 'Help me clean up my inbox' }
 
       it('creates a fallback-titled draft and starts the first turn on the turn engine', async () => {
         const streamMock = mockRuntimeStream(['On it.'])
@@ -1040,7 +1041,97 @@ describe('Routes', () => {
         expect((await readViaTool('proj-accepted-retry')).kickoff).toMatchObject({ state: 'started' })
       })
 
-      it('a kickoff the engine did not admit is a retryable failure that the retry resumes', async () => {
+      // ── The start protocol (projects-grill-start D1b) ────────────────────
+
+      /** A promise the test settles by hand — the controllable hang. */
+      function deferred<T>() {
+        let resolve!: (value: T) => void
+        let reject!: (err: unknown) => void
+        const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej })
+        return { promise, resolve, reject }
+      }
+      // Read from disk, not through the get tool: the tool reads the board,
+      // and these tests hang the board on purpose.
+      const receipt = async (id: string) => createProjectRepository(new MarkdownStorageAdapter(testDir)).readProject(id)?.kickoff as Record<string, unknown>
+      const userRows = (id: string) => (JSON.parse(readFileSync(join(projectsDir, `${id}.brainstorm.json`), 'utf-8')) as Array<{ kind: string }>).filter(row => row.kind === 'user')
+      /** Collect every projects.changed { action: 'kickoff' } from now on. */
+      function collectKickoffChanges(): string[] {
+        const ids: string[] = []
+        plugin.ctx.events.on('*', (event, payload) => {
+          if (event === 'projects.changed' && (payload as { action?: string })?.action === 'kickoff') ids.push(String((payload as { projectId: string }).projectId))
+        })
+        return ids
+      }
+      /** The first admission hangs on the runtime's agent list until released; later calls answer at once. */
+      function hangFirstAdmission() {
+        const gate = deferred<void>()
+        const realList = plugin.ctx.runtime.agents.list
+        let first = true
+        plugin.ctx.runtime.agents.list = (async (...args: Parameters<typeof realList>) => {
+          if (first) { first = false; await gate.promise }
+          return realList(...args)
+        }) as typeof realList
+        return gate
+      }
+      /**
+       * Every board read made while `hanging` waits on the gate (the kickoff's
+       * context build AND the create's search indexing both read the board —
+       * a call count cannot tell them apart); the test flips `hanging` off
+       * before the attempt that must succeed, then releases the stale ones.
+       */
+      function hangContextBuilds() {
+        const gate = deferred<void>()
+        const realList = plugin.ctx.tasks.list
+        const control = { hanging: true, release: gate.resolve }
+        plugin.ctx.tasks.list = (async (...args: Parameters<typeof realList>) => {
+          if (control.hanging) await gate.promise
+          return realList(...args)
+        }) as typeof realList
+        return control
+      }
+      /** Every board read made while `rejecting` fails. */
+      function rejectContextBuilds(message: string) {
+        const realList = plugin.ctx.tasks.list
+        const control = { rejecting: true }
+        plugin.ctx.tasks.list = (async (...args: Parameters<typeof realList>) => {
+          if (control.rejecting) throw new Error(message)
+          return realList(...args)
+        }) as typeof realList
+        return control
+      }
+
+      it('answers before the first turn is admitted: the receipt is pending with its first attempt', async () => {
+        const gate = hangFirstAdmission()
+        const streamMock = mockRuntimeStream(['On it.'])
+        const started = Date.now()
+        const { status, body } = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        expect(Date.now() - started).toBeLessThan(100)
+        expect(status).toBe(200)
+        expect(await receipt(body.id as string)).toMatchObject({ state: 'pending', attempts: 1, attempt: expect.any(String) })
+        expect(streamMock).not.toHaveBeenCalled()
+        const settled = nextSettle()
+        gate.resolve()
+        await settled
+        await waitForKickoff(body.id as string, 'settled')
+        expect(streamMock).toHaveBeenCalledTimes(1)
+      })
+
+      it('a hung admission blocks neither another create nor that project\'s first turn', async () => {
+        const gate = hangFirstAdmission()
+        const streamMock = mockRuntimeStream(['On it.'])
+        const first = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        const settled = nextSettle()
+        const second = await callRoute(createRoute(), plugin.ctx, { body: { requestId: 'req-kickoff-0002', title: 'Plan a trip', firstMessage: 'Help me plan a trip.' } })
+        expect(second.status).toBe(200)
+        await settled
+        await waitForKickoff(second.body.id as string, 'settled')
+        expect(await receipt(first.body.id as string)).toMatchObject({ state: 'pending' })
+        expect(streamMock).toHaveBeenCalledTimes(1)
+        gate.resolve()
+        await waitForKickoff(first.body.id as string, 'settled')
+      })
+
+      it('a refused admission is recorded on the receipt; the retried create starts the turn', async () => {
         const streamMock = mockRuntimeStream(['On it.'])
         // The engine's first user-row append fails once (it answers not_found).
         const storage = plugin.ctx.storage
@@ -1051,12 +1142,123 @@ describe('Routes', () => {
           return realWrite(path, content)
         }
         const first = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
-        expect(first).toMatchObject({ status: 503, body: { code: 'kickoff_pending' } })
+        expect(first.status).toBe(200)
+        await waitUntil(async () => typeof (await receipt(first.body.id as string)).lastError === 'string', { label: 'refusal recorded' })
+        expect(await receipt(first.body.id as string)).toMatchObject({ state: 'pending', attempts: 1, lastError: expect.stringContaining('not_found') })
         const settled = nextSettle()
         const retry = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
         expect(retry).toMatchObject({ status: 200, body: { id: first.body.id, created: false } })
         await settled
         expect(streamMock).toHaveBeenCalledTimes(1)
+        await waitForKickoff(first.body.id as string, 'settled')
+      })
+
+      it('a thrown admission is recorded, trimmed, and leaves the receipt pending', async () => {
+        const realList = plugin.ctx.runtime.agents.list
+        let throwOnce = true
+        plugin.ctx.runtime.agents.list = (async (...args: Parameters<typeof realList>) => {
+          if (throwOnce) { throwOnce = false; throw new Error('x'.repeat(300)) }
+          return realList(...args)
+        }) as typeof realList
+        const { body } = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        await waitUntil(async () => typeof (await receipt(body.id as string)).lastError === 'string', { label: 'throw recorded' })
+        expect(await receipt(body.id as string)).toMatchObject({ state: 'pending', attempts: 1, attempt: expect.any(String), lastError: 'x'.repeat(200) })
+      })
+
+      it('a failed started-write after an accepted admission is repaired from the transcript, never restarted', async () => {
+        const streamMock = mockRuntimeStream(['On it.'])
+        const storage = plugin.ctx.storage
+        const realWrite = storage.write.bind(storage)
+        let armed = false
+        let failOnce = true
+        storage.write = (path: string, content: string) => {
+          if (path.endsWith('.brainstorm.json')) armed = true
+          else if (armed && failOnce && path.endsWith('.md')) { failOnce = false; throw new Error('disk full') }
+          return realWrite(path, content)
+        }
+        const settled = nextSettle()
+        const { body } = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        await settled
+        // The turn ran, but the receipt never recorded it.
+        expect(await receipt(body.id as string)).toMatchObject({ state: 'pending' })
+        await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        await waitForKickoff(body.id as string, 'started')
+        expect(streamMock).toHaveBeenCalledTimes(1)
+        expect(userRows(body.id as string)).toHaveLength(1)
+      })
+
+      it('the context build is bounded: a hung board read is recorded and retired; a resumed stale build never reaches the engine (resumes AFTER a later attempt ran)', async () => {
+        kickoffTiming.contextBuildMs = 20
+        const board = hangContextBuilds()
+        const streamMock = mockRuntimeStream(['On it.'])
+        const { body } = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        await waitUntil(async () => (await receipt(body.id as string)).lastError === 'context build timed out', { label: 'timeout recorded' })
+        expect(await receipt(body.id as string)).toMatchObject({ state: 'pending', attempts: 1 })
+        expect((await receipt(body.id as string)).attempt).toBeUndefined()
+        board.hanging = false
+        const settled = nextSettle()
+        await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        await settled
+        await waitForKickoff(body.id as string, 'settled')
+        board.release()
+        await new Promise(resolve => setTimeout(resolve, 10))
+        expect(streamMock).toHaveBeenCalledTimes(1)
+        expect(userRows(body.id as string)).toHaveLength(1)
+      })
+
+      it('a resumed stale build never reaches the engine (resumes BEFORE any later attempt)', async () => {
+        kickoffTiming.contextBuildMs = 20
+        const board = hangContextBuilds()
+        const streamMock = mockRuntimeStream(['On it.'])
+        const { body } = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        await waitUntil(async () => (await receipt(body.id as string)).lastError === 'context build timed out', { label: 'timeout recorded' })
+        board.hanging = false
+        board.release()
+        await new Promise(resolve => setTimeout(resolve, 10))
+        expect(streamMock).not.toHaveBeenCalled()
+        expect(existsSync(join(projectsDir, `${body.id}.brainstorm.json`))).toBe(false)
+        const settled = nextSettle()
+        await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        await settled
+        await waitForKickoff(body.id as string, 'settled')
+        expect(streamMock).toHaveBeenCalledTimes(1)
+      })
+
+      it('an immediate board read rejection is recorded and retires the token; the next attempt admits', async () => {
+        const board = rejectContextBuilds('board exploded')
+        const streamMock = mockRuntimeStream(['On it.'])
+        const { body } = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        await waitUntil(async () => typeof (await receipt(body.id as string)).lastError === 'string', { label: 'rejection recorded' })
+        expect(await receipt(body.id as string)).toMatchObject({ state: 'pending', attempts: 1, lastError: 'board exploded' })
+        expect((await receipt(body.id as string)).attempt).toBeUndefined()
+        board.rejecting = false
+        const settled = nextSettle()
+        await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        await settled
+        await waitForKickoff(body.id as string, 'settled')
+        expect(streamMock).toHaveBeenCalledTimes(1)
+      })
+
+      it('/ask on a pending kickoff is refused with 409 kickoff_pending', async () => {
+        writeProjectFixture('proj-pending', {
+          title: 'Pending', status: 'draft',
+          extra: { kickoff: { requestId: 'req-pending-0001', state: 'pending', message: 'Plan my garden', agentId: 'main' } },
+        })
+        const askRoute = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+        const { status, body } = await callRoute(askRoute, plugin.ctx, { searchParams: { projectId: 'proj-pending' }, body: { prompt: 'hello' } })
+        expect(status).toBe(409)
+        expect(body.code).toBe('kickoff_pending')
+      })
+
+      it('every receipt transition is announced as projects.changed { action: kickoff }', async () => {
+        mockRuntimeStream(['On it.'])
+        const ids = collectKickoffChanges()
+        const settled = nextSettle()
+        const { body } = await callRoute(createRoute(), plugin.ctx, { body: kickoffBody })
+        await settled
+        await waitForKickoff(body.id as string, 'settled')
+        // begin → started → settled
+        expect(ids.filter(id => id === body.id)).toHaveLength(3)
       })
 
       it('rejects a malformed request identity', async () => {

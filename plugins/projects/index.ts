@@ -7,7 +7,7 @@ import { defineRoute } from '@makinbakin/sdk'
 import type { BakinPlugin, ConversationTurnService, PluginContext, RuntimeAgent } from '@makinbakin/sdk/types'
 import { conversationThreadId } from '@makinbakin/sdk/utils'
 import { createProjectRepository, PlanHistoryUnavailableError, projectToSummary } from './lib/parser'
-import { createProjectService, deriveChecklist } from './lib/project-service'
+import { createProjectService, deriveChecklist, withProjectLock } from './lib/project-service'
 import { ProjectMutationError } from './lib/project-mutations'
 import { buildProjectBrainstormContext } from './lib/brainstorm-prompt'
 import { createStewardGates } from './lib/steward/gates'
@@ -49,6 +49,24 @@ async function admitTurn<T>(fn: () => Promise<T>): Promise<T | 'closed'> {
   } finally {
     pendingAdmissions.delete(work)
   }
+}
+
+/**
+ * The start protocol's clocks (projects-grill-start D1b–D1d). Mutable so
+ * tests can shorten them; production never touches them.
+ */
+export const kickoffTiming = {
+  /** The bound on building a kickoff's turn context (the board read). */
+  contextBuildMs: 15_000,
+}
+
+const CONTEXT_BUILD_TIMED_OUT = 'context build timed out'
+
+/** `work` settled, or a rejection with `error` after `ms` — the timer never outlives the race. */
+function withDeadline<T>(work: Promise<T>, ms: number, error: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(error)), ms) })
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer))
 }
 
 // ---------------------------------------------------------------------------
@@ -301,37 +319,71 @@ const projectsPlugin: BakinPlugin = {
      * or the boot sweep can never start it twice; a busy engine leaves it
      * pending for the next attempt.
      */
-    // In-process admission: one start attempt per project at a time. The
-    // receipt is re-read after the awaits, so a retry that lost the race to
-    // a completed start never starts the turn again.
+    // In-process ownership (D1b.1): one start attempt per project at a time,
+    // held until the admission settles — a hung admission answers every other
+    // starter 'in-flight' and blocks nothing else.
     const startingKickoffs = new Set<string>()
-    /** `pending` = the engine did not admit the turn; the receipt stays for a retry. */
+    /**
+     * ONE start protocol for every starter — the create, Retry, the pump and
+     * the boot sweep (projects-grill-start D1b). `pending` = the engine did
+     * not admit the turn; the receipt records why for the page and the pump.
+     */
     async function startKickoff(projectId: string): Promise<'started' | 'in-flight' | 'pending'> {
       if (startingKickoffs.has(projectId)) return 'in-flight'
       startingKickoffs.add(projectId)
       try {
-        const project = readProject(projectId)
-        const kickoff = project?.kickoff
-        if (!project || kickoff?.state !== 'pending' || !kickoff.message) return 'started'
-        // The engine persists the user row BEFORE accepting: a transcript is
-        // proof the turn was already accepted (e.g. the `started` write failed).
+        const kickoff = readProject(projectId)?.kickoff
+        if (kickoff?.state !== 'pending') return 'started'
+        // Step 2: the engine persists the user row BEFORE accepting, so a
+        // transcript is proof an earlier attempt was accepted (its `started`
+        // write failed) — repair, never restart.
         if (readBrainstormMessages(projectId).length > 0) {
           await projectService.advanceKickoff(projectId, kickoff.requestId, 'pending', 'started')
           return 'started'
         }
-        const message = kickoff.message
-        const result = await admitTurn(async () => {
-          const runtimeContent = buildProjectBrainstormContext(await derive(project), message, { live: true })
-          if (readProject(projectId)?.kickoff?.state !== 'pending') return 'superseded' as const
-          return brainstormTurns.start(ctx, projectId, message, {
-            agentId: kickoff.agentId ?? project.owner,
-            runtimeContent,
-          })
-        })
-        if (result === 'superseded') return 'started'
-        if (result !== 'accepted') return 'pending'
-        await projectService.advanceKickoff(projectId, kickoff.requestId, 'pending', 'started')
-        return 'started'
+        const attempt = await projectService.beginKickoffAttempt(projectId)
+        if (!attempt) return 'started'
+        const fail = (error: unknown, retire: boolean) =>
+          projectService.failKickoffAttempt(projectId, attempt.attempt, error instanceof Error ? error.message : String(error), { retire })
+
+        // Step 3: the plugin's own context build, bounded. A timeout or a
+        // rejection ends THIS attempt: the token is retired so a stale build
+        // that resumes later finds no owner (step 4) and never reaches the engine.
+        let runtimeContent: string
+        try {
+          runtimeContent = await withDeadline(
+            derive(readProject(projectId)!).then(project => buildProjectBrainstormContext(project, attempt.message, { live: true })),
+            kickoffTiming.contextBuildMs,
+            CONTEXT_BUILD_TIMED_OUT,
+          )
+        } catch (err) {
+          await fail(err, true)
+          return 'pending'
+        }
+        // Step 4: the fence — still pending, still this attempt's token?
+        const owner = await withProjectLock(() => readProject(projectId)?.kickoff)
+        if (owner?.state !== 'pending' || owner.attempt !== attempt.attempt) return 'started'
+        // Step 5: the admission, outside the lock and unbounded (a hang in
+        // here is a host-level outage, D1g); ownership is held throughout.
+        let result: Awaited<ReturnType<typeof brainstormTurns.start>> | 'closed'
+        try {
+          result = await admitTurn(() => brainstormTurns.start(ctx, projectId, attempt.message, { agentId: attempt.agentId, runtimeContent }))
+        } catch (err) {
+          await fail(err, false)
+          return 'pending'
+        }
+        // Step 6.
+        if (result === 'accepted') {
+          try {
+            await projectService.markKickoffStarted(projectId, attempt.requestId, attempt.attempt)
+          } catch (err) {
+            // The turn is running; the transcript repairs the receipt next time (step 2).
+            log.error('kickoff started-write failed; the transcript repairs it', err, { projectId })
+          }
+          return 'started'
+        }
+        await fail(result === 'closed' ? 'Projects is restarting' : `the engine did not admit the turn (${typeof result === 'string' ? result : 'queued'})`, false)
+        return 'pending'
       } finally {
         startingKickoffs.delete(projectId)
       }
@@ -592,12 +644,11 @@ const projectsPlugin: BakinPlugin = {
           const result = await projectService.kickoffProject({
             requestId: body.requestId ?? '', title: body.title, owner, message: body.firstMessage ?? '',
           })
-          const started = result.kickoff.state === 'pending' ? await startKickoff(result.id) : 'started'
           if (result.created) indexProject(result.id).catch(() => {})
-          // The project exists but its first turn did not start: a retryable
-          // failure — the client's retry (same requestId) resumes this project.
-          if (started === 'pending') {
-            return json({ error: 'The project was created but the conversation could not start. Try again.', code: 'kickoff_pending', id: result.id }, 503)
+          // The answer never waits for the engine (D1): the first turn starts
+          // detached, and the receipt tells the project page how it went.
+          if (result.kickoff.state === 'pending') {
+            startKickoff(result.id).catch(err => log.error('kickoff start failed', err, { projectId: result.id }))
           }
           return json({ ok: true, id: result.id, created: result.created })
         } catch (error) {
@@ -910,6 +961,11 @@ const projectsPlugin: BakinPlugin = {
       }
       const project = readProject(projectId)
       if (!project) return json({ error: 'Project not found' }, 404)
+      // The first message is still the kickoff's to deliver (D1b): no
+      // competing turn until it has started or been retried.
+      if (project.kickoff?.state === 'pending') {
+        return json({ error: 'The conversation is still starting — wait for it, or retry the start.', code: 'kickoff_pending' }, 409)
+      }
       const agentId = body.agent || await getRuntimeMainAgentId(ctx)
       // The next user message ends an open check-in question (D25): it rides
       // this turn's context, and the gate flips only once the turn is
