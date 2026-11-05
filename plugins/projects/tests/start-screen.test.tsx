@@ -206,3 +206,24 @@ describe('StartScreen when minting the request id throws', () => {
     expect(push).toHaveBeenCalledWith('/projects/p1')
   })
 })
+
+describe('StartScreen when building the request throws', () => {
+  // Nothing has left the browser yet, so the text comes back and nothing is sent.
+  let saved: typeof AbortSignal.timeout
+  beforeEach(() => {
+    saved = AbortSignal.timeout
+    Object.defineProperty(AbortSignal, 'timeout', { value: () => { throw new Error('no timers here') }, configurable: true, writable: true })
+  })
+  afterEach(() => {
+    Object.defineProperty(AbortSignal, 'timeout', { value: saved, configurable: true, writable: true })
+  })
+
+  it('shows the error, keeps the text, and sends nothing', async () => {
+    render(<StartScreen />)
+    await send('Help me plan a trip.')
+    expect(screen.getByText('no timers here')).toBeDefined()
+    expect(input().value).toBe('Help me plan a trip.')
+    expect(input().disabled).toBe(false)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})

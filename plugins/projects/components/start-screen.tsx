@@ -77,13 +77,14 @@ export function StartScreen({ onBack, createTimeoutMs = CREATE_TIMEOUT_MS }: { o
       const { requestId, message } = pending.current
       // The create only writes the project (the first turn starts detached,
       // D1), so an answer that takes longer than this is a stall, not work.
-      sent = true
-      const result = await projectRequest('', {
+      const init: RequestInit = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ requestId, title: fallbackTitle(message), owner: leadId, firstMessage: message }),
         signal: AbortSignal.timeout(createTimeoutMs),
-      }) as { id?: unknown }
+      }
+      sent = true
+      const result = await projectRequest('', init) as { id?: unknown }
       if (typeof result.id !== 'string' || !result.id) throw new Error('Projects did not return the new project.')
       pending.current = null
       writePending(null)
