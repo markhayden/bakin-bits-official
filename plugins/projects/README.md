@@ -79,8 +79,10 @@ Steps, completed → Files, archived → Plan.
 
 The conversation is the main surface. On its tab it takes the full width;
 beside Plan, Steps and Files it is docked on the right on desktop (the
-public `PageAside` conversation-width rail), collapsible to a slim strip with
-the lead's avatar and a working/unread marker. Exactly one composer is ever
+public `PageAside` conversation-width rail), resizable by dragging its
+page-facing edge (width persisted per surface, 280px minimum) and
+collapsible to a slim strip with the lead's avatar and a working/unread
+marker. Exactly one composer is ever
 mounted, so the draft follows you between tabs. On mobile there is no dock —
 an "Ask {lead}" button opens the Conversation tab.
 
@@ -263,6 +265,8 @@ produced (linked steps plus tasks carrying the `projectId`), derived live
 through the assets plugin's `assets.listByTask` hook by
 `GET /:projectId/files`, never stored — and **Attached**, with attach,
 relink, detach and preview. A file in both shows once, under Attached.
+With nothing produced and nothing attached the tab shows ONE empty state
+("No files yet") carrying the attach action, never one per group.
 
 ## Projects list
 

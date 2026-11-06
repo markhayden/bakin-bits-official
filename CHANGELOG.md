@@ -36,6 +36,10 @@ on a per-plugin basis: each plugin tags its own releases as
   The lead is told the question card adds "Not sure — help me choose" and
   an own-answer field by itself, so it never offers a duplicate "Help me
   choose" or "other" option (bakin's card now has one text field).
+  The docked conversation is resizable by dragging its page-facing edge
+  (the kit rail's grab bar; width persisted, 280px minimum), and the Files
+  tab shows one "No files yet" empty state with the attach action instead
+  of one per group.
 
 ### Fixed
 - `projects` (0.12.1): the manifest no longer declares the removed

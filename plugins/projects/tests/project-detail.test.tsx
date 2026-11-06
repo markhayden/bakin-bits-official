@@ -112,6 +112,8 @@ describe('ProjectDetail shell', () => {
     const dock = screen.getByRole('complementary', { name: 'Project conversation' })
     expect(within(dock).getAllByTestId('chat-input')).toHaveLength(1)
     expect(composers()).toHaveLength(1)
+    // The dock is the kit's resizable rail (drag its page-facing edge), width persisted per project surface.
+    expect(dock.getAttribute('data-resizable')).toBe('projects:conversation-dock')
 
     await act(async () => { fireEvent.click(within(dock).getByRole('button', { name: 'Collapse project conversation' })) })
     expect(composers()).toHaveLength(0)
@@ -446,11 +448,53 @@ describe('Files tab', () => {
     expect(within(dialog).getByRole('link', { name: 'Open asset' }).getAttribute('href')).toBe('/assets/20260531-brief-abc12345')
   })
 
+  it('with nothing produced and nothing attached, the Files tab shows ONE empty state with the attach action', async () => {
+    mockFetch('proj-nofiles', { status: 'completed' }, { '/api/plugins/projects/proj-nofiles/files': () => ({ produced: [] }) })
+    render(<ProjectDetail projectId="proj-nofiles" onBack={() => {}} />)
+    await screen.findByText('No files yet')
+    expect(screen.queryByText('Nothing produced yet')).toBeNull()
+    expect(screen.queryByText('No files attached')).toBeNull()
+    expect(screen.queryByRole('heading', { name: "From this project's work" })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Attached' })).toBeNull()
+    expect(screen.getAllByRole('button', { name: 'Attach a file' })).toHaveLength(1)
+  })
+
+  it('with files attached but nothing produced, both groups show and the produced group says so', async () => {
+    mockFetch('proj-attached-only', {
+      status: 'completed',
+      assets: [{ assetId: '20260531-brief-abc12345', label: 'Launch brief' }],
+      resolvedAssets: [{ assetId: '20260531-brief-abc12345', label: 'Launch brief', type: 'pdf', description: 'Campaign planning PDF' }],
+    }, { '/api/plugins/projects/proj-attached-only/files': () => ({ produced: [] }) })
+    render(<ProjectDetail projectId="proj-attached-only" onBack={() => {}} />)
+    await screen.findByText('Nothing produced yet')
+    expect(screen.getByRole('heading', { name: 'Attached' })).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Open Launch brief' })).toBeDefined()
+    expect(screen.queryByText('No files yet')).toBeNull()
+  })
+
+  it('an open picker survives the switch between the two groups and the merged empty state', async () => {
+    let produced: unknown[] = [{ assetId: '20260531-report-abc12345', type: 'pdf', description: 'Weekly report' }]
+    mockFetch('proj-switch', { status: 'completed' }, {
+      '/api/plugins/projects/proj-switch/files': () => ({ produced }),
+      '/api/plugins/assets/versioned': () => ({ assets: [{ assetId: '20260531-brief-abc12345', type: 'pdf', description: 'Launch brief' }] }),
+    })
+    render(<ProjectDetail projectId="proj-switch" onBack={() => {}} />)
+    await screen.findByRole('button', { name: 'Open Weekly report' })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Attach a file' })) })
+    const picker = await waitFor(() => { const node = document.querySelector('[data-asset-picker]'); if (!node) throw new Error('picker not open'); return node })
+    // The produced file goes away (its task was deleted): the tab switches to the merged empty state.
+    produced = []
+    await act(async () => { emitPluginEvent({ event: 'projects.changed', projectId: 'proj-switch', action: 'task.statusChanged' }) })
+    await screen.findByText('No files yet')
+    // Same DOM node: the layout switch must not remount the open dialog.
+    expect(document.querySelector('[data-asset-picker]')).toBe(picker)
+  })
+
   it('produced files reload when the project signals a board change', async () => {
     let filesCalls = 0
     mockFetch('proj-reload', { status: 'completed' }, { '/api/plugins/projects/proj-reload/files': () => { filesCalls++; return { produced: [] } } })
     render(<ProjectDetail projectId="proj-reload" onBack={() => {}} />)
-    await screen.findByText('Nothing produced yet')
+    await screen.findByText('No files yet')
     const before = filesCalls
     await act(async () => { emitPluginEvent({ event: 'projects.changed', projectId: 'proj-reload', action: 'task.statusChanged' }) })
     await waitFor(() => expect(filesCalls).toBeGreaterThan(before))
