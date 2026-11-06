@@ -33,14 +33,14 @@ const SHARED = [
 
 function askLine(live: boolean): string {
   return live
-    ? 'Ask exactly ONE question per turn with bakin_exec_ask_user (2–5 options, mark the one you recommend), then end your turn and wait for the answer.'
+    ? 'Ask exactly ONE question per turn with bakin_exec_ask_user (2–5 options, mark the one you recommend), then end your turn and wait for the answer. The card itself adds "Not sure — help me choose" and a field for their own answer — never add your own "help me choose", "other" or "something else" option.'
     : 'Ask at most ONE question, in plain text, and mark the answer you recommend.'
 }
 
 /** The interview's question rule: at most one, always with a recommendation and why. */
 function interviewAskLine(live: boolean): string {
   return live
-    ? 'Ask it with bakin_exec_ask_user (2–5 mutually exclusive options; ALWAYS set `recommended` and say why in a clause), then end your turn and wait for the answer.'
+    ? 'Ask it with bakin_exec_ask_user (2–5 mutually exclusive options; ALWAYS set `recommended` and say why in a clause), then end your turn and wait for the answer. The card itself adds "Not sure — help me choose" and a field for their own answer — never add your own "help me choose", "other" or "something else" option.'
     : 'Ask it in plain text with 2–5 options, marking the one you recommend and saying why in a clause.'
 }
 

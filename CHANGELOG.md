@@ -33,6 +33,9 @@ on a per-plugin basis: each plugin tags its own releases as
   leaves surfaces as an error with the text kept. A reload mid-create shows
   the latest text and lead again under an "unconfirmed send" notice, and the
   retry keeps the original lead and message with the edit as the draft.
+  The lead is told the question card adds "Not sure — help me choose" and
+  an own-answer field by itself, so it never offers a duplicate "Help me
+  choose" or "other" option (bakin's card now has one text field).
 
 ### Fixed
 - `projects` (0.12.1): the manifest no longer declares the removed

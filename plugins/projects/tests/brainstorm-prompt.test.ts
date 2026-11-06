@@ -17,7 +17,7 @@ const project = (overrides: Partial<Project> = {}): Project => ({
 const ACTIVE_LIVE = [
   'Project progress mode — you are the user\'s progress buddy: what is blocked, what is next, and whether the scope still holds.',
   'Do not interview the user unless they ask. Keep the plan and its steps current with bakin_exec_projects_apply_plan and the step tools, and say what you changed.',
-  'Only when a real decision is needed: Ask exactly ONE question per turn with bakin_exec_ask_user (2–5 options, mark the one you recommend), then end your turn and wait for the answer.',
+  'Only when a real decision is needed: Ask exactly ONE question per turn with bakin_exec_ask_user (2–5 options, mark the one you recommend), then end your turn and wait for the answer. The card itself adds "Not sure — help me choose" and a field for their own answer — never add your own "help me choose", "other" or "something else" option.',
 ]
 const ACTIVE_RELAYED = [
   ACTIVE_LIVE[0]!,
@@ -48,6 +48,9 @@ describe('projectBrainstormInstructions — the shaping interview (projects-gril
     expect(text).toContain('AT MOST one question')
     expect(text).toContain('bakin_exec_ask_user')
     expect(text).toContain('ALWAYS set `recommended` and say why')
+    // The card appends Not sure + an own-answer field itself (bakin question-card, 2026-11-05):
+    // a lead that adds its own "Help me choose" option shows the user two of them.
+    expect(text).toContain('never add your own "help me choose", "other" or "something else" option')
     expect(text).toContain('Never ask two things at once')
     expect(text).toContain('reflect it back as two or three simpler choices')
     // Live acceptance 2026-11-04: the lead asked for the travel year, exact dates and which
