@@ -93,28 +93,39 @@ The lead's posture follows the project's stage, from one shared builder
 `bakin_exec_projects_ask`:
 
 - **Draft — the shaping interview.** The lead interviews the way a sharp
-  colleague does before writing a spec: five areas in order (goal; what
-  success looks like, which is the definition of done; scope in and out;
-  constraints and dependencies; risks and open questions), skipping what you
-  already answered and following the dependencies between decisions. Each
-  turn: a brief reflection, at most one challenge, and AT MOST one question
-  card (`bakin_exec_ask_user`, 2–5 options, the recommended one always marked
-  and justified, never preselected) — none when nothing material is open. A
-  tangled answer comes back as two or three simpler choices, and a detail the
-  plan would carry the same way either way (a year, exact dates, a head
-  count) becomes a labelled assumption rather than a question. The first reply
-  sets expectations in one line (one question at a time; "just write it"
+  colleague does before writing a spec, and turns every stone before it
+  drafts: six areas in order (goal and who it is for; what success looks
+  like, which is the definition of done; scope in and out and what exists
+  already; constraints, dependencies and who has to agree; risks and what has
+  gone wrong before; approach — first step, order, hand-offs, what happens
+  after), skipping what you already answered and following the dependencies
+  between decisions. Each turn: a brief reflection, at most one challenge, and
+  AT MOST one question card (`bakin_exec_ask_user`, 2–5 options, the
+  recommended one always marked and justified, never preselected) — none when
+  nothing material is open. Every decision the plan rests on gets asked, and
+  every answer gets the follow-up a sceptical colleague would raise (what it
+  rules out, who else it touches, what happens when it goes wrong, the
+  trade-off); an answer that opens new ground is followed before the lead
+  returns to the list. A tangled answer comes back as two or three simpler
+  choices. Only trivia the plan would carry the same way either way (a year,
+  exact dates, a head count) becomes a labelled assumption — a choice, a
+  priority or a trade-off is always asked. The first reply sets expectations
+  in one line (a proper interview, one question at a time; "just write it"
   drafts whenever you want). The plan body is the **brief** (seeded at
   creation, see Plan): after a decision lands the lead rewrites it with
   `bakin_exec_projects_apply_plan`, keeping every heading and moving answered
-  questions out of "Open questions". Once the four blocking gaps are closed
-  (goal, success, the scope boundary, hard constraints and dependencies) it
-  drafts — fills the Plan section and adds the steps — says "Draft plan is
-  ready in the Plan tab" and lists the assumptions it carried; non-blocking
-  unknowns ride along labelled as assumptions. After the draft it asks again
-  only if the answer could change scope, feasibility, sequencing or success
-  criteria. "Just write it" drafts at once, keeping unresolved blockers under
-  "Open questions" rather than inventing answers.
+  questions out of "Open questions". The interview is done when every area
+  has been walked to the bottom (a project of any substance takes fifteen to
+  thirty questions; a first message that covers the areas is where the
+  digging starts, not the end) and you have been asked once whether anything
+  is missing. Then it drafts — fills the Plan section and adds the steps —
+  says "Draft plan is ready in the Plan tab" and lists the assumptions it
+  carried; what you could not answer rides along labelled as an assumption.
+  After the draft it asks again only if the answer could change scope,
+  feasibility, sequencing or success criteria — relentless, not insane: no
+  filler, no trivia, never two questions in one turn. "Just write it" drafts
+  at once, keeping unresolved blockers under "Open questions" rather than
+  inventing answers.
 - **Active — progress.** What is blocked, what is next, whether scope holds;
   no interviewing. Between your conversations the lead also checks in on its
   own (below).

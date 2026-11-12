@@ -13,8 +13,9 @@ import { MessageSquare } from 'lucide-react'
 import { formatAge } from '@makinbakin/sdk/utils'
 import { emitPluginEvent, toast, useAgentList, useMainAgentId, useMediaQuery, usePluginEvent } from '@makinbakin/sdk/hooks'
 import { useQueryState, useUnsavedChangesGuard } from '@makinbakin/sdk/navigation'
+import { MarkdownContent } from '@makinbakin/sdk/content'
 import { ConversationEmptyState, ConversationPanel, useConversationThread } from '@makinbakin/sdk/conversation'
-import type { ConversationAgent } from '@makinbakin/sdk/conversation'
+import type { ConversationAgent, ConversationTextFormat } from '@makinbakin/sdk/conversation'
 import {
   AgentSelect,
   ConfirmDialog,
@@ -36,6 +37,18 @@ import { useProjectDetail } from '../hooks/use-project-detail'
 import { useProjectHistory } from '../hooks/use-project-history'
 import { projectRequest } from '../lib/project-api'
 import type { PlanSnapshot, ProjectStatus, ProjectTask } from '../types'
+
+/** The kit renders text as the consumer says: markdown on both sides of the thread, code and plain as-is. */
+function renderProjectText(content: string, format: ConversationTextFormat) {
+  if (format !== 'markdown') {
+    return (
+      <pre className="whitespace-pre-wrap font-bakin-typography-family-mono text-bakin-typography-size-meta">
+        {content}
+      </pre>
+    )
+  }
+  return <MarkdownContent content={content} />
+}
 
 const EMPTY_TASKS: ProjectTask[] = []
 
@@ -384,6 +397,7 @@ export function ProjectDetail({ projectId, onBack, kickoffStaleMs = KICKOFF_STAL
       onAbort={abort}
       onRetry={retry}
       agent={leadAgent}
+      renderText={renderProjectText}
       agentControl={(
         <AgentSelect
           value={replyAgent}

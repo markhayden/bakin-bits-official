@@ -20,8 +20,10 @@ on a per-plugin basis: each plugin tags its own releases as
   and retries with the same request id. The lead now runs a shaping
   interview over a brief seeded into the plan body (goal, success, scope,
   constraints, open questions, plan), at most one card per turn with a
-  recommendation, drafting once the blocking gaps close and carrying the
-  rest as labelled assumptions; "Start project" says when the brief still
+  recommendation, walking six areas to the bottom (fifteen to thirty
+  questions for a project of any substance — every decision asked and every
+  answer tested, only trivia assumed) before drafting and carrying what you
+  could not answer as labelled assumptions; "Start project" says when the brief still
   lists open questions and offers "Continue shaping". Lock bodies are
   synchronous by type; the dead per-request SSE transport hook is gone.
   The create's request id no longer needs a secure origin: over Tailscale

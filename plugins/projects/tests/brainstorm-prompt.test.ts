@@ -35,8 +35,8 @@ const SHARED = [
 describe('projectBrainstormInstructions — the shaping interview (projects-grill-start D4)', () => {
   const text = projectBrainstormInstructions('draft', { live: true })
 
-  it('walks five areas in order, skipping what is answered and following dependencies', () => {
-    const areas = ['Goal —', 'What success looks like —', 'Scope —', 'Constraints and dependencies —', 'Risks and open questions —']
+  it('walks six areas in order, skipping what is answered and following dependencies', () => {
+    const areas = ['Goal —', 'What success looks like —', 'Scope —', 'Constraints and dependencies —', 'Risks and open questions —', 'Approach —']
     const positions = areas.map(area => text.indexOf(area))
     expect(positions.every(position => position >= 0)).toBe(true)
     expect([...positions].sort((a, b) => a - b)).toEqual(positions)
@@ -54,9 +54,13 @@ describe('projectBrainstormInstructions — the shaping interview (projects-gril
     expect(text).toContain('Never ask two things at once')
     expect(text).toContain('reflect it back as two or three simpler choices')
     // Live acceptance 2026-11-04: the lead asked for the travel year, exact dates and which
-    // days count — details a draft carries as assumptions. The rule names them.
-    expect(text).toContain('Prefer a labelled assumption to a question whenever the plan would have the same shape either way')
-    expect(text).toContain('Ask only questions whose answers would materially change the plan.')
+    // days count — details a draft carries as assumptions. The rule names them — and ONLY
+    // them: a decision is never assumed away (2026-11-11, "it only asked like 7 questions").
+    expect(text).toContain('Assume only trivia the plan would carry the same way either way')
+    expect(text).toContain('A choice, a priority or a trade-off is never trivia: ask it.')
+    expect(text).toContain('every answer gets tested with the follow-up a sceptical colleague would raise')
+    expect(text).toContain('follow it before returning to the area list')
+    expect(text).not.toContain('materially change the plan')
     expect(text).toContain('one line that sets expectations')
     expect(text).not.toContain('brainstorm buddy')
   })
@@ -69,15 +73,24 @@ describe('projectBrainstormInstructions — the shaping interview (projects-gril
     expect(text).toContain('set a short title')
   })
 
-  it('states the stopping rule: draft once the four blocking gaps close, carry the rest as labelled assumptions, converge after the draft', () => {
-    expect(text).toContain('The blocking gaps are the goal, what success looks like, the scope boundary, and the hard constraints and dependencies.')
+  it('states the stopping rule: every area walked to the bottom, carry what the user cannot answer as labelled assumptions, converge after the draft', () => {
+    // 2026-11-11 live feedback: seven questions is not an interview. The lead turns every
+    // stone before drafting; a first message that covers the areas is where it starts digging.
+    expect(text).toContain('The interview is done when every area has been walked to the bottom, not when the obvious gaps close')
+    expect(text).toContain('somewhere between fifteen and thirty questions')
+    expect(text).toContain('A first message that already covers the areas is a starting point, not a finished interview')
+    expect(text).toContain('ask once whether there is anything you have not covered')
+    expect(text).not.toContain('blocking gaps')
     expect(text).toContain('checklistItems')
     expect(text).toContain('Draft plan is ready in the Plan tab')
     expect(text).toContain('labelled as assumptions')
-    expect(text).toContain('first message already covers those four areas, draft in that same turn')
     expect(text).toContain('ask again only if the answer could change scope, feasibility, sequencing or success criteria')
-    expect(text).toContain('never an obligation to keep generating questions')
+    expect(text).toContain('Relentless, not insane: never a filler question, never trivia, never two in one turn')
+    expect(text).toContain('a decision you have not tested is always worth a turn')
     expect(text).toContain('"just write it"')
+    // 2026-11-11 live: "ask me a shit load more questions" got "Absolutely — we'll go deeper" and no card.
+    expect(text).toContain('the interview is open again whatever the draft state: that same turn asks the next question with the card')
+    expect(text).toContain('never a promise to ask')
     expect(text).toContain('keep unresolved blockers under Open questions rather than inventing answers')
   })
 
