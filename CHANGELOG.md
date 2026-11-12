@@ -8,6 +8,43 @@ on a per-plugin basis: each plugin tags its own releases as
 
 ## [Unreleased]
 
+### Changed
+- `projects` (0.14.0): **instant start + the shaping interview.** The start
+  screen opens the project the moment the create is written; the first turn
+  starts on the server, detached, behind one fenced start protocol
+  (counted attempts, a fence token, a bounded context build, a Retry route
+  `POST /:projectId/kickoff`, a 30 s kickoff pump, per-project boot
+  dispatch), and the project page shows "Starting the conversation…" or an
+  honest "hasn't started yet" with Retry — never a spinner that outlives the
+  request. Starter chips are complete prompts; the create times out at 10 s
+  and retries with the same request id. The lead now runs a shaping
+  interview over a brief seeded into the plan body (goal, success, scope,
+  constraints, open questions, plan), at most one card per turn with a
+  recommendation, walking six areas to the bottom (fifteen to thirty
+  questions for a project of any substance — every decision asked and every
+  answer tested, settled once resolved or deferred, only trivia assumed; a
+  request for more questions reopens the interview in that same turn)
+  before drafting and carrying what you
+  could not answer as labelled assumptions; "Start project" says when the brief still
+  lists open questions and offers "Continue shaping". Lock bodies are
+  synchronous by type; the dead per-request SSE transport hook is gone.
+  The create's request id no longer needs a secure origin: over Tailscale
+  (plain `http://<host>:3737`) `crypto.randomUUID` does not exist, and the
+  send threw before the request left the browser, leaving the composer on
+  "Sending…" forever — every client-minted id (the create, checklist
+  mutations, upload chips) now comes from one helper that builds a v4 from
+  `getRandomValues` there, and anything that throws before the request
+  leaves surfaces as an error with the text kept. A reload mid-create shows
+  the latest text and lead again under an "unconfirmed send" notice, and the
+  retry keeps the original lead and message with the edit as the draft.
+  The lead is told the question card adds "Not sure — help me choose" and
+  an own-answer field by itself, so it never offers a duplicate "Help me
+  choose" or "other" option (bakin's card now has one text field).
+  The docked conversation is resizable by dragging its page-facing edge
+  (the kit rail's grab bar; width persisted, 280px minimum), and the Files
+  tab shows one "No files yet" empty state with the attach action instead
+  of one per group.
+
 ### Fixed
 - `projects` (0.12.1): the manifest no longer declares the removed
   `/projects/[id]/edit` route.

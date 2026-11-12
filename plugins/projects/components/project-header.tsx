@@ -51,20 +51,31 @@ interface NextStep {
    * is phrasing content (the dialog renders it in a paragraph); structured
    * content — lists, links — goes in `body`.
    */
-  confirm?: { title: string; description: ReactNode; body?: ReactNode; confirmLabel: string }
+  confirm?: {
+    title: string
+    description: ReactNode
+    body?: ReactNode
+    confirmLabel: string
+    /** A way out other than Cancel: the label and where it goes (projects-grill-start D5). */
+    cancel?: { label: string; onCancel: () => void }
+  }
 }
 
 const UNFINISHED_LISTED = 5
 
 /** The one primary lifecycle action for a status (D11). */
 export function nextStepFor(
-  project: Pick<ProjectDetailData, 'status' | 'tasks' | 'archivedFrom'>,
+  project: Pick<ProjectDetailData, 'status' | 'tasks' | 'archivedFrom' | 'brief'>,
   leadName: string,
-  opts: { onReviewSteps?: () => void } = {},
+  opts: { onReviewSteps?: () => void; onContinueShaping?: () => void } = {},
 ): NextStep {
   switch (project.status) {
     case 'draft': {
       const steps = project.tasks.length
+      // The brief's advisory (projects-grill-start D5): Start stays the
+      // user's call; the dialog only says what the brief still lists, and
+      // offers the conversation as the way out. Unknown never adds a claim.
+      const openQuestions = project.brief?.openQuestions === true
       // The hand-off (D27): Start gives the lead the wheel.
       return {
         label: 'Start project',
@@ -74,14 +85,18 @@ export function nextStepFor(
           title: 'Start project?',
           description: `${leadName} takes it from here — sends steps to the board, assigns each to the right agent or keeps it, and checks in as work moves. You'll be asked when a decision or sign-off is needed.`,
           body: (
-            <Inline gap="dense">
-              <Text size="meta" tone="muted">{steps === 0 ? `No steps yet — ${leadName} breaks the plan down first.` : `${steps} ${steps === 1 ? 'step' : 'steps'} in the plan.`}</Text>
-              {steps > 0 && opts.onReviewSteps ? (
-                <Button type="button" variant="link" size="sm" className="h-auto p-0" onClick={opts.onReviewSteps}>Review steps first</Button>
-              ) : null}
-            </Inline>
+            <div className="flex flex-col gap-bakin-1">
+              {openQuestions ? <Text size="meta" tone="muted">The brief still lists open questions. Start anyway?</Text> : null}
+              <Inline gap="dense">
+                <Text size="meta" tone="muted">{steps === 0 ? `No steps yet — ${leadName} breaks the plan down first.` : `${steps} ${steps === 1 ? 'step' : 'steps'} in the plan.`}</Text>
+                {steps > 0 && opts.onReviewSteps ? (
+                  <Button type="button" variant="link" size="sm" className="h-auto p-0" onClick={opts.onReviewSteps}>Review steps first</Button>
+                ) : null}
+              </Inline>
+            </div>
           ),
           confirmLabel: 'Start project',
+          ...(openQuestions && opts.onContinueShaping ? { cancel: { label: 'Continue shaping', onCancel: opts.onContinueShaping } } : {}),
         },
       }
     }
@@ -123,6 +138,7 @@ export function ProjectHeader({
   onChanged,
   onDelete,
   onReviewSteps,
+  onContinueShaping,
 }: {
   project: ProjectDetailData
   agents: readonly HeaderAgent[]
@@ -131,14 +147,14 @@ export function ProjectHeader({
   onDelete: () => void
   /** Leave the Start dialog for the Steps tab. */
   onReviewSteps?: () => void
+  /** Leave the Start dialog for the conversation (the brief still lists open questions). */
+  onContinueShaping?: () => void
 }) {
   const leadName = agents.find(agent => agent.id === project.owner)?.name ?? (project.owner || 'The lead agent')
-  const step = nextStepFor(project, leadName, onReviewSteps ? {
-    onReviewSteps: () => {
-      setConfirming(null)
-      onReviewSteps()
-    },
-  } : {})
+  const step = nextStepFor(project, leadName, {
+    ...(onReviewSteps ? { onReviewSteps: () => { setConfirming(null); onReviewSteps() } } : {}),
+    ...(onContinueShaping ? { onContinueShaping: () => { setConfirming(null); onContinueShaping() } } : {}),
+  })
   const [confirming, setConfirming] = useState<NextStep | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmError, setConfirmError] = useState<string | null>(null)
@@ -262,12 +278,18 @@ export function ProjectHeader({
         title={confirming?.confirm?.title ?? ''}
         description={confirming?.confirm?.description}
         confirmLabel={confirming?.confirm?.confirmLabel}
+        cancelLabel={confirming?.confirm?.cancel?.label}
         busyLabel="Saving…"
         confirmTone="primary"
         busy={busy}
         error={confirmError}
         onConfirm={() => { if (confirming) void transition(confirming.from, confirming.to, true) }}
-        onCancel={() => { if (!busy) setConfirming(null) }}
+        onCancel={() => {
+          if (busy) return
+          const cancel = confirming?.confirm?.cancel
+          setConfirming(null)
+          cancel?.onCancel()
+        }}
       >
         {confirming?.confirm?.body}
       </ConfirmDialog>

@@ -69,3 +69,18 @@ it('removing a chip while it attaches takes the reference back off the project',
   await act(async () => { releaseAttach() })
   await waitFor(() => expect(calls).toContain('DELETE /api/plugins/projects/p1/assets/a1'))
 })
+
+it('mints chip ids without crypto.randomUUID (plain-http origin)', async () => {
+  const saved = crypto.randomUUID
+  Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true, writable: true })
+  try {
+    globalThis.fetch = (async (url: string) => url === '/api/plugins/assets/upload'
+      ? Response.json({ ok: true, assetId: 'a1', filename: 'notes.md' })
+      : Response.json({ ok: true })) as typeof fetch
+    const view = renderHook(() => useProjectUploads('p1', mock(async () => {})))
+    await act(async () => { view.result.current.onAdd([new File(['# notes'], 'notes.md', { type: 'text/markdown' })]) })
+    await waitFor(() => expect(view.result.current.items).toHaveLength(0))
+  } finally {
+    Object.defineProperty(crypto, 'randomUUID', { value: saved, configurable: true, writable: true })
+  }
+})

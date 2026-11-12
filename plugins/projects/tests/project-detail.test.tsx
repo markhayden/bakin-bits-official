@@ -95,6 +95,23 @@ describe('ProjectDetail shell', () => {
     expect(screen.queryByRole('complementary', { name: 'Project conversation' })).toBeNull()
   })
 
+  it('both sides of the thread render as markdown (2026-11-11: the user bubble showed raw **bold**)', async () => {
+    mockFetch('proj-md', {
+      brainstormMessages: [
+        { kind: 'user', ts: '2026-05-09T10:00:01.000Z', content: '**Goal** → ship it' },
+        { kind: 'assistant', ts: '2026-05-09T10:00:02.000Z', agentId: 'main', content: 'Noted: _ship it_.' },
+      ],
+    })
+    render(<ProjectDetail projectId="proj-md" onBack={() => {}} />)
+    await screen.findByText('Noted: _ship it_.')
+    const rendered = screen.getAllByTestId('markdown-content').map(node => node.textContent)
+    expect(rendered).toContain('**Goal** → ship it')
+    expect(rendered).toContain('Noted: _ship it_.')
+    // The user row's text reaches the renderer, not the bubble directly.
+    const userRow = document.querySelector('[data-conv-kind="user"]')
+    expect(userRow?.querySelector('[data-testid="markdown-content"]')).not.toBeNull()
+  })
+
   it('opens on what matters at each stage', async () => {
     for (const [status, tab] of [['active', 'Steps'], ['completed', 'Files'], ['archived', 'Plan']] as const) {
       mockFetch(`proj-${status}`, { status })
@@ -112,6 +129,8 @@ describe('ProjectDetail shell', () => {
     const dock = screen.getByRole('complementary', { name: 'Project conversation' })
     expect(within(dock).getAllByTestId('chat-input')).toHaveLength(1)
     expect(composers()).toHaveLength(1)
+    // The dock is the kit's resizable rail (drag its page-facing edge), width persisted per project surface.
+    expect(dock.getAttribute('data-resizable')).toBe('projects:conversation-dock')
 
     await act(async () => { fireEvent.click(within(dock).getByRole('button', { name: 'Collapse project conversation' })) })
     expect(composers()).toHaveLength(0)
@@ -298,6 +317,118 @@ describe('ProjectDetail brainstorm durability (bakin#703)', () => {
   })
 })
 
+describe('Start dialog (projects-grill-start D5)', () => {
+  it('Continue shaping returns to the Conversation tab without a turn', async () => {
+    const asks: unknown[] = []
+    mockFetch('proj-shape', { brief: { openQuestions: true }, kickoff: { requestId: 'req-00000001', state: 'settled' } }, {
+      '/api/plugins/projects/proj-shape/ask': (init) => { asks.push(init); return { ok: true } },
+    })
+    render(<ProjectDetail projectId="proj-shape" onBack={() => {}} />)
+    await screen.findByRole('tablist', { name: 'Project sections' })
+    await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Steps' })) })
+    expect(selectedTab()).toBe('Steps')
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Start project' })) })
+    const dialog = screen.getByRole('dialog', { name: 'Start project?' })
+    expect(dialog.textContent).toContain('The brief still lists open questions. Start anyway?')
+    await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Continue shaping' })) })
+    expect(screen.queryByRole('dialog', { name: 'Start project?' })).toBeNull()
+    expect(selectedTab()).toBe('Conversation')
+    expect(asks).toHaveLength(0)
+  })
+})
+
+describe('Starting state (projects-grill-start D1e)', () => {
+  const pending = (over: Record<string, unknown> = {}) => ({
+    kickoff: { requestId: 'req-00000001', state: 'pending', message: 'Help me plan a trip.', agentId: 'main', attempts: 1, attempt: 'tok', ...over },
+  })
+  const recent = () => new Date(Date.now() - 1_000).toISOString()
+  const longAgo = () => new Date(Date.now() - 60_000).toISOString()
+
+  it('while the kickoff is pending the conversation is read-only with a starting notice and no composer', async () => {
+    mockFetch('proj-starting', { created: recent(), ...pending() })
+    render(<ProjectDetail projectId="proj-starting" onBack={() => {}} />)
+    expect(await screen.findByText('Starting the conversation…')).toBeDefined()
+    expect(composers()).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+  })
+
+  it('a recorded start failure shows the hasn\'t-started notice, the reason, and Retry', async () => {
+    mockFetch('proj-failed', { created: recent(), ...pending({ lastError: 'the engine did not admit the turn (not_found)' }) })
+    render(<ProjectDetail projectId="proj-failed" onBack={() => {}} />)
+    expect(await screen.findByText('The conversation hasn\'t started yet')).toBeDefined()
+    expect(screen.getByText('the engine did not admit the turn (not_found)')).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeDefined()
+    expect(composers()).toHaveLength(0)
+  })
+
+  it('a kickoff pending for longer than the stale window offers Retry even without a recorded error', async () => {
+    mockFetch('proj-stale', { created: longAgo(), ...pending() })
+    render(<ProjectDetail projectId="proj-stale" onBack={() => {}} />)
+    expect(await screen.findByText('The conversation hasn\'t started yet')).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeDefined()
+  })
+
+  it('Retry schedules the start: 202 restarts the window, and the window elapsing brings Retry back', async () => {
+    const retries: RequestInit[] = []
+    mockFetch('proj-retry', { created: longAgo(), ...pending() }, {
+      '/api/plugins/projects/proj-retry/kickoff': (init) => { retries.push(init!); return { ok: true, state: 'starting' } },
+    })
+    render(<ProjectDetail projectId="proj-retry" onBack={() => {}} kickoffStaleMs={30} />)
+    const retryButton = await screen.findByRole('button', { name: 'Retry' })
+    await act(async () => { fireEvent.click(retryButton) })
+    expect(retries).toHaveLength(1)
+    expect(retries[0]?.method).toBe('POST')
+    expect(screen.getByText('Starting the conversation…')).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 60)) })
+    expect(screen.getByText('The conversation hasn\'t started yet')).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeDefined()
+  })
+
+  it('Retry while the first attempt is still running says so and keeps waiting', async () => {
+    mockFetch('proj-inflight', { created: longAgo(), ...pending() }, {
+      '/api/plugins/projects/proj-inflight/kickoff': () => ({ ok: true, state: 'in-flight' }),
+    })
+    render(<ProjectDetail projectId="proj-inflight" onBack={() => {}} />)
+    const retryButton = await screen.findByRole('button', { name: 'Retry' })
+    await act(async () => { fireEvent.click(retryButton) })
+    expect(screen.getByText('Still starting — the first attempt is running')).toBeDefined()
+  })
+
+  it('a receipt change reaching the page clears the notice once the turn has started', async () => {
+    let state = 'pending'
+    globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/plugins/projects/proj-flip') {
+        return Response.json(projectPayload('proj-flip', {
+          created: recent(),
+          kickoff: { requestId: 'req-00000001', state, message: 'Help me plan a trip.', agentId: 'main', attempts: 1 },
+          brainstormStreaming: state === 'started',
+          brainstormMessages: state === 'started' ? [{ kind: 'user', ts: '2026-05-09T10:00:01.000Z', content: 'Help me plan a trip.' }] : [],
+        }))
+      }
+      if (url.endsWith('/history')) return Response.json({ history: [] })
+      if (url.endsWith('/brainstorm/seen')) return Response.json({ ok: true })
+      throw new Error(`Unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+    render(<ProjectDetail projectId="proj-flip" onBack={() => {}} />)
+    expect(await screen.findByText('Starting the conversation…')).toBeDefined()
+    state = 'started'
+    await act(async () => { emitPluginEvent({ event: 'projects.changed', projectId: 'proj-flip', action: 'kickoff' }) })
+    await waitFor(() => expect(screen.queryByText('Starting the conversation…')).toBeNull())
+    expect(composers()).toHaveLength(1)
+    expect(screen.getByTestId('thinking')).toBeDefined()
+  })
+
+  it('a settled kickoff shows nothing of the sort', async () => {
+    mockFetch('proj-settled', { kickoff: { requestId: 'req-00000001', state: 'settled' } })
+    render(<ProjectDetail projectId="proj-settled" onBack={() => {}} />)
+    await screen.findByRole('tablist', { name: 'Project sections' })
+    expect(screen.queryByText('Starting the conversation…')).toBeNull()
+    expect(composers()).toHaveLength(1)
+  })
+})
+
 describe('Files tab', () => {
   it('lists what the project\'s tasks produced apart from what is attached', async () => {
     mockFetch('proj-produced', {
@@ -334,11 +465,53 @@ describe('Files tab', () => {
     expect(within(dialog).getByRole('link', { name: 'Open asset' }).getAttribute('href')).toBe('/assets/20260531-brief-abc12345')
   })
 
+  it('with nothing produced and nothing attached, the Files tab shows ONE empty state with the attach action', async () => {
+    mockFetch('proj-nofiles', { status: 'completed' }, { '/api/plugins/projects/proj-nofiles/files': () => ({ produced: [] }) })
+    render(<ProjectDetail projectId="proj-nofiles" onBack={() => {}} />)
+    await screen.findByText('No files yet')
+    expect(screen.queryByText('Nothing produced yet')).toBeNull()
+    expect(screen.queryByText('No files attached')).toBeNull()
+    expect(screen.queryByRole('heading', { name: "From this project's work" })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Attached' })).toBeNull()
+    expect(screen.getAllByRole('button', { name: 'Attach a file' })).toHaveLength(1)
+  })
+
+  it('with files attached but nothing produced, both groups show and the produced group says so', async () => {
+    mockFetch('proj-attached-only', {
+      status: 'completed',
+      assets: [{ assetId: '20260531-brief-abc12345', label: 'Launch brief' }],
+      resolvedAssets: [{ assetId: '20260531-brief-abc12345', label: 'Launch brief', type: 'pdf', description: 'Campaign planning PDF' }],
+    }, { '/api/plugins/projects/proj-attached-only/files': () => ({ produced: [] }) })
+    render(<ProjectDetail projectId="proj-attached-only" onBack={() => {}} />)
+    await screen.findByText('Nothing produced yet')
+    expect(screen.getByRole('heading', { name: 'Attached' })).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Open Launch brief' })).toBeDefined()
+    expect(screen.queryByText('No files yet')).toBeNull()
+  })
+
+  it('an open picker survives the switch between the two groups and the merged empty state', async () => {
+    let produced: unknown[] = [{ assetId: '20260531-report-abc12345', type: 'pdf', description: 'Weekly report' }]
+    mockFetch('proj-switch', { status: 'completed' }, {
+      '/api/plugins/projects/proj-switch/files': () => ({ produced }),
+      '/api/plugins/assets/versioned': () => ({ assets: [{ assetId: '20260531-brief-abc12345', type: 'pdf', description: 'Launch brief' }] }),
+    })
+    render(<ProjectDetail projectId="proj-switch" onBack={() => {}} />)
+    await screen.findByRole('button', { name: 'Open Weekly report' })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Attach a file' })) })
+    const picker = await waitFor(() => { const node = document.querySelector('[data-asset-picker]'); if (!node) throw new Error('picker not open'); return node })
+    // The produced file goes away (its task was deleted): the tab switches to the merged empty state.
+    produced = []
+    await act(async () => { emitPluginEvent({ event: 'projects.changed', projectId: 'proj-switch', action: 'task.statusChanged' }) })
+    await screen.findByText('No files yet')
+    // Same DOM node: the layout switch must not remount the open dialog.
+    expect(document.querySelector('[data-asset-picker]')).toBe(picker)
+  })
+
   it('produced files reload when the project signals a board change', async () => {
     let filesCalls = 0
     mockFetch('proj-reload', { status: 'completed' }, { '/api/plugins/projects/proj-reload/files': () => { filesCalls++; return { produced: [] } } })
     render(<ProjectDetail projectId="proj-reload" onBack={() => {}} />)
-    await screen.findByText('Nothing produced yet')
+    await screen.findByText('No files yet')
     const before = filesCalls
     await act(async () => { emitPluginEvent({ event: 'projects.changed', projectId: 'proj-reload', action: 'task.statusChanged' }) })
     await waitFor(() => expect(filesCalls).toBeGreaterThan(before))

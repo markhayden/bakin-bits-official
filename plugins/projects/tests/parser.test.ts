@@ -218,6 +218,22 @@ Body.
 // serializeProject
 // ---------------------------------------------------------------------------
 
+describe('kickoff receipt (projects-grill-start D1e)', () => {
+  it('round-trips attempts, the fence token and the last error', () => {
+    const project = parseProject(SAMPLE_PROJECT, 'abc12345')
+    project.kickoff = { requestId: 'req-00000001', state: 'pending', message: 'Plan a trip.', agentId: 'main', attempts: 2, attempt: 'tok-1', lastError: 'context build timed out' }
+    const parsed = parseProject(serializeProject(project), 'abc12345')
+    expect(parsed.kickoff).toEqual(project.kickoff)
+  })
+
+  it('a receipt without the fields round-trips unchanged (absent attempts read as zero)', () => {
+    const project = parseProject(SAMPLE_PROJECT, 'abc12345')
+    project.kickoff = { requestId: 'req-00000001', state: 'pending', message: 'Plan a trip.', agentId: 'main' }
+    const parsed = parseProject(serializeProject(project), 'abc12345')
+    expect(parsed.kickoff).toEqual({ requestId: 'req-00000001', state: 'pending', message: 'Plan a trip.', agentId: 'main' })
+  })
+})
+
 describe('serializeProject', () => {
   it('round-trips a project', () => {
     const original = parseProject(SAMPLE_PROJECT)

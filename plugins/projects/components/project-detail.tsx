@@ -13,8 +13,9 @@ import { MessageSquare } from 'lucide-react'
 import { formatAge } from '@makinbakin/sdk/utils'
 import { emitPluginEvent, toast, useAgentList, useMainAgentId, useMediaQuery, usePluginEvent } from '@makinbakin/sdk/hooks'
 import { useQueryState, useUnsavedChangesGuard } from '@makinbakin/sdk/navigation'
+import { MarkdownContent } from '@makinbakin/sdk/content'
 import { ConversationEmptyState, ConversationPanel, useConversationThread } from '@makinbakin/sdk/conversation'
-import type { ConversationAgent } from '@makinbakin/sdk/conversation'
+import type { ConversationAgent, ConversationTextFormat } from '@makinbakin/sdk/conversation'
 import {
   AgentSelect,
   ConfirmDialog,
@@ -37,6 +38,18 @@ import { useProjectHistory } from '../hooks/use-project-history'
 import { projectRequest } from '../lib/project-api'
 import type { PlanSnapshot, ProjectStatus, ProjectTask } from '../types'
 
+/** The kit renders text as the consumer says: markdown on both sides of the thread, code and plain as-is. */
+function renderProjectText(content: string, format: ConversationTextFormat) {
+  if (format !== 'markdown') {
+    return (
+      <pre className="whitespace-pre-wrap font-bakin-typography-family-mono text-bakin-typography-size-meta">
+        {content}
+      </pre>
+    )
+  }
+  return <MarkdownContent content={content} />
+}
+
 const EMPTY_TASKS: ProjectTask[] = []
 
 export const PROJECT_TABS = [
@@ -57,7 +70,10 @@ export const DEFAULT_TAB: Record<ProjectStatus, ProjectTab> = {
 
 const isTab = (value: string): value is ProjectTab => PROJECT_TABS.some(tab => tab.id === value)
 
-export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack: () => void }) {
+/** A kickoff still pending this long after its start (or its last Retry) is stale: offer Retry (D1e). */
+const KICKOFF_STALE_MS = 20_000
+
+export function ProjectDetail({ projectId, onBack, kickoffStaleMs = KICKOFF_STALE_MS }: { projectId: string; onBack: () => void; kickoffStaleMs?: number }) {
   const mainAgentId = useMainAgentId() ?? ''
   const detail = useProjectDetail(projectId)
   const { project, loading, error: loadError, refresh } = detail
@@ -209,8 +225,15 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
     if (hydratedUnread && !panelVisibleRef.current) setUnread(true)
   }, [hydratedUnread])
 
-  // Mid-turn plan/step edits land as tool activity — refresh immediately.
-  usePluginEvent('projects.changed', (payload) => { if (payload.projectId === projectId) void refresh() })
+  // Mid-turn plan/step edits land as tool activity — refresh immediately. A
+  // kickoff receipt change also reloads the thread: once the first turn is
+  // admitted, the user's message and the working state are the thread's.
+  const threadRefresh = thread.refresh
+  usePluginEvent('projects.changed', (payload) => {
+    if (payload.projectId !== projectId) return
+    void refresh()
+    if (payload.action === 'kickoff') void threadRefresh()
+  })
   usePluginEvent('projects.brainstorm.chunk', (payload) => {
     if (payload.projectId !== projectId) return
     if ((payload.chunk as { type?: string } | undefined)?.type === 'tool') void refresh()
@@ -219,6 +242,54 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
   const abort = useCallback(() => {
     void fetch(`/api/plugins/projects/${encodeURIComponent(projectId)}/ask/abort`, { method: 'POST' }).catch(() => {})
   }, [projectId])
+
+  // ── The starting state (projects-grill-start D1e): the first turn starts on
+  // the server, detached; until the receipt says it started, the conversation
+  // is read-only and the composer's slot carries the status. A recorded
+  // failure, or a pending start older than the stale window (since the
+  // create or the last Retry), offers Retry; every receipt write refetches.
+  const kickoff = project?.kickoff
+  const starting = kickoff?.state === 'pending'
+  const [retryAt, setRetryAt] = useState<number | null>(null)
+  const [retryNote, setRetryNote] = useState<string | null>(null)
+  const [retrying, setRetrying] = useState(false)
+  const [startStale, setStartStale] = useState(false)
+  const createdAt = project?.created
+  useEffect(() => {
+    if (!starting || !createdAt) { setStartStale(false); return }
+    const since = Math.max(Date.parse(createdAt), retryAt ?? 0)
+    const remaining = kickoffStaleMs - (Date.now() - since)
+    if (remaining <= 0) { setStartStale(true); return }
+    setStartStale(false)
+    const timer = setTimeout(() => setStartStale(true), remaining)
+    return () => clearTimeout(timer)
+  }, [starting, createdAt, retryAt, kickoffStaleMs])
+  const startFailed = starting && (Boolean(kickoff.lastError) || startStale)
+  const retryStart = async () => {
+    setRetrying(true)
+    setRetryNote(null)
+    try {
+      const answer = await projectRequest(`${encodeURIComponent(projectId)}/kickoff`, { method: 'POST' }) as { state?: string }
+      if (answer.state === 'in-flight') setRetryNote('Still starting — the first attempt is running')
+      else setRetryAt(Date.now())
+      void refresh()
+    } catch (err) {
+      setRetryNote(err instanceof Error ? err.message : 'The start could not be retried. Try again.')
+    } finally {
+      setRetrying(false)
+    }
+  }
+  const startNotice = starting ? (
+    <div data-slot="kickoff-notice" className="flex flex-wrap items-center gap-bakin-2">
+      <StatusMarker tone={startFailed ? 'attention' : 'accent'} />
+      <Text size="meta">{startFailed ? 'The conversation hasn\'t started yet' : 'Starting the conversation…'}</Text>
+      {startFailed && kickoff.lastError ? <Text size="meta" tone="muted">{kickoff.lastError}</Text> : null}
+      {retryNote ? <Text size="meta" tone="muted">{retryNote}</Text> : null}
+      {startFailed ? (
+        <Button type="button" variant="ghost" size="xs" disabled={retrying} onClick={() => { void retryStart() }}>Retry</Button>
+      ) : null}
+    </div>
+  ) : undefined
   const retry = useCallback(() => {
     const lastUser = [...thread.messages].reverse().find(message => message.kind === 'user')
     if (lastUser?.kind === 'user' && lastUser.content) void thread.send(lastUser.content)
@@ -326,6 +397,7 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
       onAbort={abort}
       onRetry={retry}
       agent={leadAgent}
+      renderText={renderProjectText}
       agentControl={(
         <AgentSelect
           value={replyAgent}
@@ -338,6 +410,8 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
       )}
       storageKey={`project:${projectId}`}
       attachments={uploads}
+      readOnly={starting}
+      readOnlyNotice={startNotice}
       showHeader={false}
       fitParent
       chrome="top-divider"
@@ -400,6 +474,7 @@ export function ProjectDetail({ projectId, onBack }: { projectId: string; onBack
         onChanged={refresh}
         onDelete={() => { setDeleteError(null); setDeleteOpen(true) }}
         onReviewSteps={() => selectTab('steps')}
+        onContinueShaping={() => selectTab('conversation')}
       />
       <PageBody gap="content">
         <div className="flex min-h-0 min-w-0 flex-1">

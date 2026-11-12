@@ -12,6 +12,7 @@ import {
 } from './parser'
 import type { ChecklistPromotionOperation, MutationCaller, Project, ProjectKickoff, ProjectTask, ProjectStatus, ResolvedBoardTask, TitleSource } from '../types'
 import { assertItemIdentity, assertExpectedFields, ProjectMutationError, validateItemPatch, validateProjectPatch } from './project-mutations'
+import { BRIEF_SKELETON } from './brief'
 
 const log = {
   info: (...args: unknown[]) => console.info('[projects]', ...args),
@@ -29,8 +30,16 @@ function getProjectLock(): { queue: Promise<void> } {
   return g.__bakinProjectLock as { queue: Promise<void> }
 }
 
-/** The ONE project-file lock — every read-modify-write of a project runs inside it. */
-export function withProjectLock<T>(fn: () => T | Promise<T>): Promise<T> {
+/** A body that is not a promise: the lock never holds an await (D1f). */
+type NotPromise<T> = T extends PromiseLike<unknown> ? never : T
+
+/**
+ * The ONE project-file lock — every read-modify-write of a project runs
+ * inside it, and every body is SYNCHRONOUS: anything that must be awaited
+ * (an asset lookup, the board) is resolved before the lock is taken, so a
+ * hung service can never wedge every project write behind it.
+ */
+export function withProjectLock<T>(fn: () => NotPromise<T>): Promise<T> {
   const lock = getProjectLock()
   const next = lock.queue.then(fn, fn) as Promise<T>
   lock.queue = next.then(() => {}, () => {})
@@ -55,6 +64,16 @@ export interface CreateProjectOpts {
   owner?: string
   tasks?: string[]
 }
+
+/** What a start attempt needs once it owns the kickoff (D1b). */
+export interface KickoffAttempt {
+  requestId: string
+  attempt: string
+  message: string
+  agentId: string
+}
+
+const KICKOFF_ERROR_MAX = 200
 
 /** The start screen's first send (D8). */
 export interface KickoffProjectOpts {
@@ -137,6 +156,18 @@ export interface ProjectService {
   kickoffProject(opts: KickoffProjectOpts): Promise<{ id: string; created: boolean; kickoff: ProjectKickoff }>
   /** Compare-and-set the kickoff state; false when the receipt moved on. */
   advanceKickoff(id: string, requestId: string, from: ProjectKickoff['state'], to: ProjectKickoff['state']): Promise<boolean>
+  /**
+   * Lock section A of the start protocol (D1b): on a pending receipt, count
+   * the attempt and mint its fence token; null when there is nothing to start.
+   * `reset` (Retry, D1c) starts the count over and drops the last error in
+   * the same write, so no caller ever yields between the two.
+   */
+  beginKickoffAttempt(id: string, opts?: { reset?: boolean }): Promise<KickoffAttempt | null>
+  /** Section C, success: pending → started for exactly this request AND attempt. */
+  markKickoffStarted(id: string, requestId: string, attempt: string): Promise<boolean>
+  /** Section C, failure: record why, for this attempt only; `retire` drops the token. */
+  failKickoffAttempt(id: string, attempt: string, error: string, opts: { retire: boolean }): Promise<boolean>
+
   updateProject(id: string, updates: UpdateProjectOpts, caller: MutationCaller, expected?: UpdateProjectOpts): Promise<void>
   applyProjectPlan(id: string, updates: ApplyProjectPlanOpts, caller: MutationCaller): Promise<ApplyProjectPlanResult>
   /** Restore a plan snapshot by history index; snapshots the current body first (bakin#703). */
@@ -309,14 +340,23 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       const id = generateProjectId()
       const now = new Date().toISOString()
       const kickoff: ProjectKickoff = { requestId: opts.requestId, state: 'pending', message, agentId: opts.owner }
+      // The brief skeleton is the initial content (revision zero, no
+      // snapshot): the Plan tab shows structure from second one (D6).
       repo.writeProject({
         id, title, titleSource: 'fallback', status: 'draft', created: now, updated: now,
-        owner: opts.owner, tasks: [], assets: [], body: '', progress: 0, kickoff, planRevision: 0,
+        owner: opts.owner, tasks: [], assets: [], body: BRIEF_SKELETON.trim(), progress: 0, kickoff, planRevision: 0,
       })
       ctx.activity.audit('created', opts.owner, { id, title })
       broadcast({ type: 'project.created', id, title })
       return { id, created: true, kickoff }
     })
+  }
+
+  /** Every receipt write is announced so an open project page refetches (D1b.7). */
+  function writeKickoff(project: Project, kickoff: ProjectKickoff): void {
+    project.kickoff = kickoff
+    repo.writeProject(project)
+    broadcast({ type: 'kickoff', id: project.id })
   }
 
   async function advanceKickoff(id: string, requestId: string, from: ProjectKickoff['state'], to: ProjectKickoff['state']): Promise<boolean> {
@@ -325,8 +365,43 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
       const kickoff = project?.kickoff
       if (!project || !kickoff || kickoff.requestId !== requestId || kickoff.state !== from) return false
       // Settled receipts keep only the dedupe identity.
-      project.kickoff = to === 'settled' ? { requestId, state: to } : { ...kickoff, state: to }
-      repo.writeProject(project)
+      writeKickoff(project, to === 'settled' ? { requestId, state: to } : { ...kickoff, state: to })
+      return true
+    })
+  }
+
+  async function beginKickoffAttempt(id: string, opts: { reset?: boolean } = {}): Promise<KickoffAttempt | null> {
+    return withProjectLock(() => {
+      const project = repo.readProject(id)
+      const kickoff = project?.kickoff
+      if (!project || kickoff?.state !== 'pending' || !kickoff.message) return null
+      const attempt = crypto.randomUUID()
+      const { lastError, ...rest } = kickoff
+      writeKickoff(project, opts.reset
+        ? { ...rest, attempts: 1, attempt }
+        : { ...rest, ...(lastError === undefined ? {} : { lastError }), attempts: (kickoff.attempts ?? 0) + 1, attempt })
+      return { requestId: kickoff.requestId, attempt, message: kickoff.message, agentId: kickoff.agentId ?? project.owner }
+    })
+  }
+
+  async function markKickoffStarted(id: string, requestId: string, attempt: string): Promise<boolean> {
+    return withProjectLock(() => {
+      const project = repo.readProject(id)
+      const kickoff = project?.kickoff
+      if (!project || !kickoff || kickoff.state !== 'pending' || kickoff.requestId !== requestId || kickoff.attempt !== attempt) return false
+      const { lastError: _lastError, ...rest } = kickoff
+      writeKickoff(project, { ...rest, state: 'started' })
+      return true
+    })
+  }
+
+  async function failKickoffAttempt(id: string, attempt: string, error: string, opts: { retire: boolean }): Promise<boolean> {
+    return withProjectLock(() => {
+      const project = repo.readProject(id)
+      const kickoff = project?.kickoff
+      if (!project || !kickoff || kickoff.state !== 'pending' || kickoff.attempt !== attempt) return false
+      const { attempt: token, ...rest } = kickoff
+      writeKickoff(project, { ...rest, ...(opts.retire ? {} : { attempt: token }), lastError: error.slice(0, KICKOFF_ERROR_MAX) })
       return true
     })
   }
@@ -548,11 +623,12 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
   }
 
   async function attachAsset(projectId: string, assetId: string, label?: string): Promise<void> {
-    return withProjectLock(async () => {
+    // Resolved BEFORE the lock: the lookup may be slow, the write is not.
+    const asset = await ctx.assets.getAsset(assetId)
+    if (!asset) throw new Error(`Asset not found: ${assetId}`)
+    return withProjectLock(() => {
       const project = repo.readProject(projectId)
       if (!project) throw new Error(`Project not found: ${projectId}`)
-      const asset = await ctx.assets.getAsset(assetId)
-      if (!asset) throw new Error(`Asset not found: ${assetId}`)
       if (project.assets.some(a => a.assetId === assetId)) return
       project.assets.push({ assetId, label })
       project.updated = new Date().toISOString()
@@ -575,13 +651,14 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
   }
 
   async function relinkAsset(projectId: string, oldAssetId: string, newAssetId: string, label?: string): Promise<void> {
-    return withProjectLock(async () => {
+    // Resolved BEFORE the lock, like attach.
+    const asset = await ctx.assets.getAsset(newAssetId)
+    if (!asset) throw new Error(`Asset not found: ${newAssetId}`)
+    return withProjectLock(() => {
       const project = repo.readProject(projectId)
       if (!project) throw new Error(`Project not found: ${projectId}`)
       const idx = project.assets.findIndex(a => a.assetId === oldAssetId)
       if (idx === -1) throw new Error(`Asset not attached: ${oldAssetId}`)
-      const asset = await ctx.assets.getAsset(newAssetId)
-      if (!asset) throw new Error(`Asset not found: ${newAssetId}`)
 
       const existingIdx = project.assets.findIndex(a => a.assetId === newAssetId)
       if (existingIdx !== -1 && existingIdx !== idx) {
@@ -807,6 +884,9 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     restorePlanVersion,
     kickoffProject,
     advanceKickoff,
+    beginKickoffAttempt,
+    markKickoffStarted,
+    failKickoffAttempt,
     getProjectForTask,
     getProjectTitleForTask,
     createProject,
@@ -829,3 +909,12 @@ export function createProjectService(ctx: PluginContext, repo: ProjectRepository
     resolveLinkedTaskStatuses,
   }
 }
+
+/**
+ * The pin for the lock contract (projects-grill-start D1f): a lock body
+ * cannot be async. `tsc` fails the moment this line type-checks — an
+ * `await` on a service inside the lock once let a hung lookup wedge every
+ * project write, the create included.
+ */
+// @ts-expect-error — an async body must be refused by the lock's signature.
+export const ASYNC_LOCK_BODY_REFUSED = (): Promise<number> => withProjectLock(async () => 1)

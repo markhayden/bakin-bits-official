@@ -228,19 +228,90 @@ export function FilesTab({ project, onChanged }: { project: ProjectDetailData; o
     }
   }
 
+  const attachButton = (
+    <Button variant="outline" size="sm" onClick={() => openPicker({ type: 'attach' })}>
+      <Paperclip aria-hidden="true" />
+      Attach a file
+    </Button>
+  )
+
+  const pickerAndDialogs = (
+    <>
+    <ConfirmDialog
+      open={Boolean(detachTarget)}
+      title="Detach file?"
+      description={detachTarget ? <>This removes <Text weight="medium">{assetName(detachTarget)}</Text> from this project. It will not delete the file.</> : undefined}
+      confirmLabel="Detach"
+      busyLabel="Detaching..."
+      confirmTone="danger"
+      busy={detaching}
+      error={detachError}
+      onConfirm={() => { if (detachTarget) void detach(detachTarget) }}
+      onCancel={() => { if (!detaching) setDetachTarget(null) }}
+    >
+      {detachTarget?.missing && (
+        <Alert tone="attention">
+          <AlertDescription>Bakin can't find this file. Detaching it cleans up the broken project reference.</AlertDescription>
+        </Alert>
+      )}
+    </ConfirmDialog>
+
+    <AssetPicker
+      open={pickerOpen}
+      onOpenChange={(open) => { if (!open && picking) return; setPickerOpen(open) }}
+      collection={collection}
+      query={search}
+      onQueryChange={setSearch}
+      onPick={(assetId) => { void pick(assetId) }}
+      onRetry={() => { void loadCollection(pickerMode) }}
+      busy={picking}
+      notice={pickerError}
+      view="list"
+      title={pickerMode.type === 'relink' ? 'Relink file' : 'Attach a file'}
+      description={pickerMode.type === 'relink'
+        ? `Choose a replacement for ${assetName(pickerMode.target)}.`
+        : 'Choose a file from the asset library to attach to this project.'}
+      emptyTitle="No assets available"
+      emptyDescription="Add an asset to the library, then return here to choose it."
+    />
+
+    {preview && <AssetPreviewModal asset={preview} onClose={() => setPreview(null)} />}
+    </>
+  )
+
+  // Nothing attached and nothing produced: ONE empty state for the tab, not
+  // one per group (Mark, 2026-11-05: "we have double empty states here").
+  // The two groups return the moment either side has a file.
+  const producedFiles = produced.state.status === 'ready' ? produced.state.files.filter(file => !attachedIds.has(file.assetId)) : null
+  const nothingYet = project.resolvedAssets.length === 0 && producedFiles !== null && producedFiles.length === 0
+
+  // The picker and dialogs are always the outer div's second child, so a
+  // layout switch (a first file arriving, or the list emptying) never
+  // remounts one that is open.
   return (
     <div className="flex min-w-0 flex-col gap-bakin-6">
+      {nothingYet ? (
+        <SystemState
+          kind="initial-empty"
+          scope="inline"
+          headingLevel={2}
+          title="No files yet"
+          description="Files the project's tasks create show up here. Attach specs, designs or docs the project should keep close."
+          action={attachButton}
+        />
+      ) : (
+        <>
       <section aria-labelledby="project-produced-heading" className="flex min-w-0 flex-col gap-bakin-3">
         <h2 id="project-produced-heading">From this project's work</h2>
         {produced.state.status === 'loading' ? (
           <SystemState kind="loading" scope="inline" headingLevel={3} title="Loading produced files" />
         ) : produced.state.status === 'error' ? (
           <SystemState kind="error" recovery="available" scope="inline" headingLevel={3} title="Produced files could not be loaded" description={produced.state.message} action={<Button variant="outline" size="sm" onClick={() => { void produced.retry() }}>Try again</Button>} />
-        ) : produced.state.files.filter(file => !attachedIds.has(file.assetId)).length === 0 ? (
+        ) : producedFiles!.length === 0 ? (
           <SystemState kind="initial-empty" scope="inline" headingLevel={3} title="Nothing produced yet" description="Files the project's tasks create show up here." />
         ) : (
           <ListRows variant="separated" size="sm" aria-label="Produced files">
-            {produced.state.files.filter(file => !attachedIds.has(file.assetId)).map(file => {
+            {producedFiles!.map(file => {
               const asset: ResolvedAsset = { assetId: file.assetId, type: file.type, ...(file.description ? { description: file.description } : {}) }
               return (
                 <ListRow key={file.assetId} className="flex items-start gap-bakin-2" interactive={{ label: `Open ${file.description || file.assetId}`, onActivate: () => setPreview(asset) }}>
@@ -259,10 +330,7 @@ export function FilesTab({ project, onChanged }: { project: ProjectDetailData; o
       <section aria-labelledby="project-files-heading" className="flex min-w-0 flex-col gap-bakin-3">
         <div className="flex flex-wrap items-center justify-between gap-bakin-3">
           <h2 id="project-files-heading">Attached</h2>
-          <Button variant="outline" size="sm" onClick={() => openPicker({ type: 'attach' })}>
-            <Paperclip aria-hidden="true" />
-            Attach a file
-          </Button>
+          {attachButton}
         </div>
 
         {project.resolvedAssets.length === 0 ? (
@@ -309,46 +377,10 @@ export function FilesTab({ project, onChanged }: { project: ProjectDetailData; o
           </div>
         )}
 
-        <ConfirmDialog
-          open={Boolean(detachTarget)}
-          title="Detach file?"
-          description={detachTarget ? <>This removes <Text weight="medium">{assetName(detachTarget)}</Text> from this project. It will not delete the file.</> : undefined}
-          confirmLabel="Detach"
-          busyLabel="Detaching..."
-          confirmTone="danger"
-          busy={detaching}
-          error={detachError}
-          onConfirm={() => { if (detachTarget) void detach(detachTarget) }}
-          onCancel={() => { if (!detaching) setDetachTarget(null) }}
-        >
-          {detachTarget?.missing && (
-            <Alert tone="attention">
-              <AlertDescription>Bakin can't find this file. Detaching it cleans up the broken project reference.</AlertDescription>
-            </Alert>
-          )}
-        </ConfirmDialog>
-
-        <AssetPicker
-          open={pickerOpen}
-          onOpenChange={(open) => { if (!open && picking) return; setPickerOpen(open) }}
-          collection={collection}
-          query={search}
-          onQueryChange={setSearch}
-          onPick={(assetId) => { void pick(assetId) }}
-          onRetry={() => { void loadCollection(pickerMode) }}
-          busy={picking}
-          notice={pickerError}
-          view="list"
-          title={pickerMode.type === 'relink' ? 'Relink file' : 'Attach a file'}
-          description={pickerMode.type === 'relink'
-            ? `Choose a replacement for ${assetName(pickerMode.target)}.`
-            : 'Choose a file from the asset library to attach to this project.'}
-          emptyTitle="No assets available"
-          emptyDescription="Add an asset to the library, then return here to choose it."
-        />
-
-        {preview && <AssetPreviewModal asset={preview} onClose={() => setPreview(null)} />}
       </section>
+        </>
+      )}
+      {pickerAndDialogs}
     </div>
   )
 }

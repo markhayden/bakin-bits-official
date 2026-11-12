@@ -27,6 +27,7 @@ function clearIndex() {
 
 import { createProjectService, deriveChecklist, type ProjectService } from '../../../plugins/projects/lib/project-service'
 import { createProjectRepository, type ProjectRepository } from '../../../plugins/projects/lib/parser'
+import { BRIEF_SKELETON } from '../../../plugins/projects/lib/brief'
 import { MarkdownStorageAdapter } from '../test-helpers'
 import type { PluginContext } from '@makinbakin/sdk/types'
 
@@ -489,6 +490,25 @@ describe('attachAsset / detachAsset', () => {
     ])
   })
 
+  it('resolves the asset before taking the lock — a slow lookup never blocks another project write', async () => {
+    const { id: attaching } = await createProject({ titleSource: 'user', title: 'Attaching' })
+    const { id: other } = await createProject({ titleSource: 'user', title: 'Other' })
+    let releaseLookup!: () => void
+    const lookup = new Promise<void>(resolve => { releaseLookup = resolve })
+    const realGetAsset = ctx.assets.getAsset
+    ctx.assets.getAsset = (async (assetId: string) => { await lookup; return realGetAsset(assetId) }) as typeof ctx.assets.getAsset
+
+    const attach = attachAsset(attaching, '20260401-logo-a1b2c3d4', 'Logo')
+    // The unrelated write lands while the lookup is still pending.
+    await updateProject(other, { title: 'Other, renamed' }, USER)
+    expect(readProject(other)!.title).toBe('Other, renamed')
+    expect(readProject(attaching)!.assets).toEqual([])
+
+    releaseLookup()
+    await attach
+    expect(readProject(attaching)!.assets).toEqual([{ assetId: '20260401-logo-a1b2c3d4', label: 'Logo' }])
+  })
+
   it('relink removes the old reference when the replacement is already attached', async () => {
     const { id } = await createProject({ titleSource: 'user', title: 'P' })
     await attachAsset(id, '20260401-deleted-a1b2c3d4', 'Deleted')
@@ -499,6 +519,95 @@ describe('attachAsset / detachAsset', () => {
     expect(readProject(id)!.assets).toEqual([
       { assetId: '20260401-hero-e5f6g7h8', label: 'Hero' },
     ])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The brief skeleton (projects-grill-start D6)
+// ---------------------------------------------------------------------------
+
+describe('the brief skeleton', () => {
+  it('the start screen\'s kickoff seeds the brief as revision zero with no snapshot', async () => {
+    const { id } = await service.kickoffProject({ requestId: 'req-brief-0001', title: 'Trip', owner: 'main', message: 'Plan a trip.' })
+    const project = readProject(id)!
+    expect(project.body).toBe(BRIEF_SKELETON.trim())
+    expect(project.planRevision).toBe(0)
+    expect(repo.readPlanHistory(id)).toEqual([])
+  })
+
+  it('a title-only create keeps an empty body', async () => {
+    const { id } = await createProject({ titleSource: 'user', title: 'Plain' })
+    expect(readProject(id)!.body).toBe('')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Kickoff receipt helpers (projects-grill-start D1b): every one a
+// compare-and-set under the lock, every write announced.
+// ---------------------------------------------------------------------------
+
+describe('kickoff receipt helpers', () => {
+  const kickoff = () => service.kickoffProject({ requestId: 'req-kick-0001', title: 'Trip', owner: 'main', message: 'Plan a trip.' })
+  const changes = () => (ctx.events.emit as ReturnType<typeof mock>).mock.calls.filter(([name, payload]) => name === 'projects.changed' && (payload as { action?: string }).action === 'kickoff')
+
+  it('beginKickoffAttempt counts the attempt and mints the fence token; nothing to begin once started', async () => {
+    const { id } = await kickoff()
+    const first = await service.beginKickoffAttempt(id)
+    expect(first).toMatchObject({ requestId: 'req-kick-0001', message: 'Plan a trip.', agentId: 'main' })
+    expect(readProject(id)!.kickoff).toMatchObject({ state: 'pending', attempts: 1, attempt: first!.attempt })
+    const second = await service.beginKickoffAttempt(id)
+    expect(second!.attempt).not.toBe(first!.attempt)
+    expect(readProject(id)!.kickoff).toMatchObject({ attempts: 2, attempt: second!.attempt })
+    await service.markKickoffStarted(id, 'req-kick-0001', second!.attempt)
+    expect(await service.beginKickoffAttempt(id)).toBeNull()
+    expect(changes()).toHaveLength(3)
+  })
+
+  it('markKickoffStarted is a compare-and-set on the request AND the attempt', async () => {
+    const { id } = await kickoff()
+    const { attempt } = (await service.beginKickoffAttempt(id))!
+    expect(await service.markKickoffStarted(id, 'req-kick-0001', 'stale-token')).toBe(false)
+    expect(await service.markKickoffStarted(id, 'req-other-0001', attempt)).toBe(false)
+    expect(readProject(id)!.kickoff).toMatchObject({ state: 'pending' })
+    expect(await service.markKickoffStarted(id, 'req-kick-0001', attempt)).toBe(true)
+    expect(readProject(id)!.kickoff).toMatchObject({ state: 'started', message: 'Plan a trip.', attempts: 1 })
+    expect(readProject(id)!.kickoff!.lastError).toBeUndefined()
+  })
+
+  it('failKickoffAttempt records a trimmed last error for its own token only, and can retire the token', async () => {
+    const { id } = await kickoff()
+    const { attempt } = (await service.beginKickoffAttempt(id))!
+    expect(await service.failKickoffAttempt(id, 'stale-token', 'nope', { retire: false })).toBe(false)
+    expect(readProject(id)!.kickoff!.lastError).toBeUndefined()
+    expect(await service.failKickoffAttempt(id, attempt, 'x'.repeat(250), { retire: false })).toBe(true)
+    expect(readProject(id)!.kickoff).toMatchObject({ state: 'pending', attempt, lastError: 'x'.repeat(200) })
+    expect(await service.failKickoffAttempt(id, attempt, 'context build timed out', { retire: true })).toBe(true)
+    expect(readProject(id)!.kickoff).toMatchObject({ state: 'pending', lastError: 'context build timed out' })
+    expect(readProject(id)!.kickoff!.attempt).toBeUndefined()
+    // A retired token can no longer mark the kickoff started.
+    expect(await service.markKickoffStarted(id, 'req-kick-0001', attempt)).toBe(false)
+  })
+
+  it('a Retry attempt (reset) starts the count over and drops the last error, atomically with the mint', async () => {
+    const { id } = await kickoff()
+    const { attempt } = (await service.beginKickoffAttempt(id))!
+    await service.failKickoffAttempt(id, attempt, 'boom', { retire: true })
+    await service.failKickoffAttempt(id, (await service.beginKickoffAttempt(id))!.attempt, 'boom again', { retire: true })
+    expect(readProject(id)!.kickoff).toMatchObject({ attempts: 2, lastError: 'boom again' })
+    const reset = (await service.beginKickoffAttempt(id, { reset: true }))!
+    expect(readProject(id)!.kickoff).toEqual({ requestId: 'req-kick-0001', state: 'pending', message: 'Plan a trip.', agentId: 'main', attempts: 1, attempt: reset.attempt })
+    await service.markKickoffStarted(id, 'req-kick-0001', reset.attempt)
+    expect(await service.beginKickoffAttempt(id, { reset: true })).toBeNull()
+  })
+
+  it('advanceKickoff to settled keeps only the dedupe identity and announces the change', async () => {
+    const { id } = await kickoff()
+    const { attempt } = (await service.beginKickoffAttempt(id))!
+    await service.markKickoffStarted(id, 'req-kick-0001', attempt)
+    const before = changes().length
+    expect(await service.advanceKickoff(id, 'req-kick-0001', 'started', 'settled')).toBe(true)
+    expect(readProject(id)!.kickoff).toEqual({ requestId: 'req-kick-0001', state: 'settled' })
+    expect(changes().length).toBe(before + 1)
   })
 })
 

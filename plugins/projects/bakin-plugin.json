@@ -1,7 +1,7 @@
 {
   "id": "projects",
   "name": "Projects",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "bakin": ">=0.0.1-rc.45",
   "description": "Project management with specs, checklists, task linking, and agent access via MCP tools",
   "contentFiles": [],
@@ -223,6 +223,15 @@
         "summary": "Abort the in-flight brainstorm turn",
         "permissions": [
           "runtime.messaging"
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/:projectId/kickoff",
+        "summary": "Start (or retry) a pending kickoff's first turn — schedules and answers at once",
+        "permissions": [
+          "runtime.messaging",
+          "storage.write"
         ]
       },
       {

@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'bun:test'
 
 import { buildProjectBrainstormContext, projectBrainstormInstructions } from '../lib/brainstorm-prompt'
+import { BRIEF_HEADINGS } from '../lib/brief'
 import type { Project } from '../types'
 
 const project = (overrides: Partial<Project> = {}): Project => ({
@@ -12,38 +13,107 @@ const project = (overrides: Partial<Project> = {}): Project => ({
   owner: 'main', tasks: [], assets: [], body: '', progress: 0, planRevision: 0, ...overrides,
 })
 
-describe('projectBrainstormInstructions', () => {
-  it('shaping: one question card per turn, draft once goal/scope/done are answered, name the project', () => {
-    const text = projectBrainstormInstructions('draft', { live: true })
-    expect(text).toContain('brainstorm buddy')
-    expect(text).toContain('bakin_exec_ask_user')
-    expect(text).toContain('Ask only questions whose answers would materially change the plan.')
-    expect(text).toContain('Draft plan is ready in the Plan tab')
-    expect(text).toContain('just write it')
-    expect(text).toContain('set a short title')
+/** The three later stages, pinned byte for byte: the interview changes only the draft stage. */
+const ACTIVE_LIVE = [
+  'Project progress mode — you are the user\'s progress buddy: what is blocked, what is next, and whether the scope still holds.',
+  'Do not interview the user unless they ask. Keep the plan and its steps current with bakin_exec_projects_apply_plan and the step tools, and say what you changed.',
+  'Only when a real decision is needed: Ask exactly ONE question per turn with bakin_exec_ask_user (2–5 options, mark the one you recommend), then end your turn and wait for the answer. The card itself adds "Not sure — help me choose" and a field for their own answer — never add your own "help me choose", "other" or "something else" option.',
+]
+const ACTIVE_RELAYED = [
+  ACTIVE_LIVE[0]!,
+  ACTIVE_LIVE[1]!,
+  'Only when a real decision is needed: Ask at most ONE question, in plain text, and mark the answer you recommend.',
+]
+const COMPLETED = ['Project retrospective mode — the project is complete. Answer questions and reflect on what happened; change the plan only when the user asks.']
+const ARCHIVED = ['Project retrospective mode — the project is archived. Answer questions; change the plan only when the user asks.']
+const SHARED = [
+  'Every plan edit is snapshotted with a visible diff and one-click restore, so direct edits are safe.',
+  'You cannot start, complete or archive the project — those are the user\'s decisions.',
+  'Invoke Bakin tools as described in your Tool access section — the exact call form depends on the active runtime.',
+]
+
+describe('projectBrainstormInstructions — the shaping interview (projects-grill-start D4)', () => {
+  const text = projectBrainstormInstructions('draft', { live: true })
+
+  it('walks six areas in order, skipping what is answered and following dependencies', () => {
+    const areas = ['Goal —', 'What success looks like —', 'Scope —', 'Constraints and dependencies —', 'Risks and open questions —', 'Approach —']
+    const positions = areas.map(area => text.indexOf(area))
+    expect(positions.every(position => position >= 0)).toBe(true)
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions)
+    expect(text).toContain('skipping what the user already answered')
+    expect(text).toContain('this is the definition of done')
   })
 
-  it('active: progress buddy, no interviewing; cards only for real decisions', () => {
-    const text = projectBrainstormInstructions('active', { live: true })
-    expect(text).toContain('progress buddy')
-    expect(text).toContain('Do not interview the user unless they ask.')
+  it('asks at most one question per turn, always with a recommendation, and simplifies tangled answers', () => {
+    expect(text).toContain('AT MOST one question')
+    expect(text).toContain('bakin_exec_ask_user')
+    expect(text).toContain('ALWAYS set `recommended` and say why')
+    // The card appends Not sure + an own-answer field itself (bakin question-card, 2026-11-05):
+    // a lead that adds its own "Help me choose" option shows the user two of them.
+    expect(text).toContain('never add your own "help me choose", "other" or "something else" option')
+    expect(text).toContain('Never ask two things at once')
+    expect(text).toContain('reflect it back as two or three simpler choices')
+    // Live acceptance 2026-11-04: the lead asked for the travel year, exact dates and which
+    // days count — details a draft carries as assumptions. The rule names them — and ONLY
+    // them: a decision is never assumed away (2026-11-11, "it only asked like 7 questions").
+    expect(text).toContain('Assume only trivia the plan would carry the same way either way')
+    expect(text).toContain('A choice, a priority or a trade-off is never trivia: ask it.')
+    expect(text).toContain('every answer gets tested with the follow-up a sceptical colleague would raise')
+    expect(text).toContain('follow it before returning to the area list')
+    expect(text).not.toContain('materially change the plan')
+    expect(text).toContain('one line that sets expectations')
     expect(text).not.toContain('brainstorm buddy')
   })
 
-  it('completed and archived: retrospective only', () => {
-    expect(projectBrainstormInstructions('completed', { live: true })).toContain('retrospective')
-    expect(projectBrainstormInstructions('archived', { live: true })).toContain('retrospective')
-    expect(projectBrainstormInstructions('completed', { live: true })).not.toContain('bakin_exec_ask_user')
+  it('keeps the brief in the plan body under the seeded headings, updated after decisions land', () => {
+    for (const heading of BRIEF_HEADINGS) expect(text).toContain(heading)
+    expect(text).toContain('a resolved section, not every reply')
+    expect(text).toContain('bakin_exec_projects_apply_plan')
+    expect(text).toContain('Keep each Open questions entry a list item')
+    expect(text).toContain('set a short title')
   })
 
-  it('every stage states the authority limit', () => {
-    for (const status of ['draft', 'active', 'completed', 'archived'] as const) {
-      expect(projectBrainstormInstructions(status, { live: true })).toContain('cannot start, complete or archive')
-    }
+  it('states the stopping rule: every area walked to the bottom, carry what the user cannot answer as labelled assumptions, converge after the draft', () => {
+    // 2026-11-11 live feedback: seven questions is not an interview. The lead turns every
+    // stone before drafting; a first message that covers the areas is where it starts digging.
+    expect(text).toContain('The interview is done when every area has been walked to the bottom, not when the obvious gaps close')
+    expect(text).toContain('somewhere between fifteen and thirty questions')
+    expect(text).toContain('A first message that already covers the areas is a starting point, not a finished interview')
+    expect(text).toContain('ask once whether there is anything you have not covered')
+    expect(text).not.toContain('blocking gaps')
+    expect(text).toContain('checklistItems')
+    expect(text).toContain('Draft plan is ready in the Plan tab')
+    expect(text).toContain('labelled as assumptions')
+    expect(text).toContain('ask again only if the answer could change scope, feasibility, sequencing or success criteria')
+    expect(text).toContain('Relentless, not insane: never a filler question, never trivia, never two in one turn')
+    expect(text).toContain('a decision you have not tested is always worth a turn')
+    expect(text).toContain('"just write it"')
+    // 2026-11-11 live: "ask me a shit load more questions" got "Absolutely — we'll go deeper" and no card.
+    expect(text).toContain('the interview is open again whatever the draft state: that same turn asks the next question with the card')
+    expect(text).toContain('never a promise to ask')
+    // Closure is defined, so "test every answer" cannot loop over settled decisions,
+    // and the labelled trivia the lead assumed does not count as an untested guess.
+    expect(text).toContain('A decision is settled once it has been asked, tested once and either resolved or deferred on purpose')
+    expect(text).toContain('a settled decision gets another follow-up only when a later answer reopens it')
+    expect(text).toContain('nothing material in the brief is a guess you could have asked about (the trivia you assumed and labelled is fine)')
+    expect(text).toContain('keep unresolved blockers under Open questions rather than inventing answers')
   })
 
-  it('relayed (non-live) asking never mentions the card tool', () => {
+  it('the later stages are unchanged, byte for byte', () => {
+    expect(projectBrainstormInstructions('active', { live: true })).toBe([...ACTIVE_LIVE, ...SHARED].join('\n'))
+    expect(projectBrainstormInstructions('active', { live: false })).toBe([...ACTIVE_RELAYED, ...SHARED].join('\n'))
+    expect(projectBrainstormInstructions('completed', { live: true })).toBe([...COMPLETED, ...SHARED].join('\n'))
+    expect(projectBrainstormInstructions('archived', { live: true })).toBe([...ARCHIVED, ...SHARED].join('\n'))
+  })
+
+  it('relayed (non-live) asking never mentions the card tool, in any stage', () => {
     expect(projectBrainstormInstructions('draft', { live: false })).not.toContain('bakin_exec_ask_user')
+    expect(projectBrainstormInstructions('draft', { live: false })).toContain('AT MOST one question')
+    // The re-open rule follows the transport too: a relayed "go deeper" gets a plain-text
+    // question, never a card that renders nowhere.
+    expect(projectBrainstormInstructions('draft', { live: false })).toContain('that same turn asks the next question in plain text')
+    expect(projectBrainstormInstructions('draft', { live: false })).not.toContain('with the card')
+    expect(projectBrainstormInstructions('draft', { live: true })).toContain('that same turn asks the next question with the card')
     expect(projectBrainstormInstructions('active', { live: false })).not.toContain('bakin_exec_ask_user')
   })
 })

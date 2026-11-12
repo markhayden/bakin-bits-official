@@ -70,6 +70,26 @@ function renderRow(row: ProjectBrainstormMessage): string | null {
   }
 }
 
+const PLAN_HEADING = /^##\s+plan\s*$/i
+const LEVEL_TWO_HEADING = /^##\s/
+
+/**
+ * The plan first, the rest of the brief after it (projects-grill-start D7):
+ * under the excerpt cap the actionable plan is what a check-in must see.
+ */
+export function planFirst(body: string): string {
+  const lines = body.split('\n')
+  const start = lines.findIndex(line => PLAN_HEADING.test(line))
+  if (start === -1) return body
+  let end = lines.length
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (LEVEL_TWO_HEADING.test(lines[i]!)) { end = i; break }
+  }
+  const plan = lines.slice(start, end).join('\n').trimEnd()
+  const rest = [...lines.slice(0, start), ...lines.slice(end)].join('\n').trim()
+  return rest ? `${plan}\n\n${rest}` : plan
+}
+
 export interface StewardPromptInput {
   project: Project
   digest: StewardDigest
@@ -117,7 +137,7 @@ export function buildStewardDescription({ project, digest, taskId, recentRows, k
     capBytes([why, ...signals].join('\n'), STEWARD_SIGNALS_BYTES, 'signal list'),
     instructions,
     `## Steps\n${steps.length ? steps.join('\n') : '(none yet)'}`,
-    `## Plan (excerpt)\n${project.body ? capBytes(project.body, STEWARD_PLAN_EXCERPT_BYTES, 'plan') : '(empty)'}\nRead the full project with bakin_exec_projects_get.`,
+    `## Plan (excerpt)\n${project.body ? capBytes(planFirst(project.body), STEWARD_PLAN_EXCERPT_BYTES, 'plan') : '(empty)'}\nRead the full project with bakin_exec_projects_get.`,
     `## Recent conversation\n${rows.length ? rows.join('\n') : '(no messages yet)'}`,
   ]
   return capBytes(sections.join('\n\n'), STEWARD_DESCRIPTION_MAX_BYTES, 'check-in brief')

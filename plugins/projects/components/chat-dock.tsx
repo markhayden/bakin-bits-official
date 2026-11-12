@@ -3,7 +3,8 @@
 /**
  * The docked project conversation (D10): the trailing collapsible rail
  * beside Plan, Steps and Files — the public `PageAside` conversation-width,
- * end-edge rail (Components/Pages/Collapsible aside — ConversationDock).
+ * end-edge rail (Components/Pages/Collapsible aside — ConversationDock),
+ * resizable from its page-facing edge (width persisted per surface).
  * Collapsed, the kit strip shows the lead's avatar and a working/unread
  * marker. The page decides whether the panel is mounted here at all.
  */
@@ -33,6 +34,7 @@ export function ChatDock({
       label="Project conversation"
       width="conversation"
       side="end"
+      resizable={{ storageKey: 'projects:conversation-dock', minWidth: 280 }}
       collapsible={{
         collapsed,
         onCollapsedChange,

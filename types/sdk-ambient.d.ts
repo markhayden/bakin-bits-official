@@ -1672,6 +1672,7 @@ declare module '@makinbakin/sdk/conversation' {
 
   // ── Turn model (mirrors the kit's fold contract) ───────────────────────
   export type ConversationTextFormat = 'markdown' | 'plain' | 'code'
+  export type ConversationTextRenderer = (content: string, format: ConversationTextFormat) => ReactNode
 
   export interface ConversationToolActivity {
     phase: 'call' | 'result'
@@ -1845,6 +1846,7 @@ declare module '@makinbakin/sdk/conversation' {
     onSend: (content: string) => void | Promise<void>
     onAbort?: () => void
     onRetry?: () => void
+    renderText?: ConversationTextRenderer
     transformText?: ConversationTextTransform
     storageKey: string
     title?: ReactNode

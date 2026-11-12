@@ -77,3 +77,20 @@ it('a confirmed promotion spends its request id; the next Send to board is a new
   expect(requests).toHaveLength(2)
   expect(requests[0].requestId).not.toBe(requests[1].requestId)
 })
+
+it('mints request ids without crypto.randomUUID (plain-http origin)', async () => {
+  const saved = crypto.randomUUID
+  Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true, writable: true })
+  try {
+    const requests: any[] = []
+    globalThis.fetch = (async (_url, init) => { requests.push(JSON.parse(String(init?.body))); return Response.json({ ok: true, taskItemId: 't003' }) }) as typeof fetch
+    const view = renderHook(() => useChecklistDrafts('p1', tasks, async () => null))
+    act(() => view.result.current.setNewTitle('New task'))
+    await act(async () => { expect(await view.result.current.add()).toBe(true) })
+    await act(async () => { await view.result.current.mutate(tasks[0]!, 'toggle', true) })
+    expect(requests).toHaveLength(2)
+    for (const request of requests) expect(request.requestId).toMatch(/^[0-9a-f-]{36}$/)
+  } finally {
+    Object.defineProperty(crypto, 'randomUUID', { value: saved, configurable: true, writable: true })
+  }
+})

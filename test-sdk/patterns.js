@@ -24,7 +24,7 @@ export const PageControls = ({ children, actions, as, divider, variant = 'defaul
   children,
   actions ?? null,
 )
-export const PageAside = ({ children, label, labelledBy, collapsible, width, side, ...props }) => {
+export const PageAside = ({ children, label, labelledBy, collapsible, width, side, resizable, ...props }) => {
   const collapsed = collapsible?.collapsed ?? false
   return React.createElement(
     'aside',
@@ -35,6 +35,7 @@ export const PageAside = ({ children, label, labelledBy, collapsible, width, sid
       'data-width': collapsible ? width ?? 'session' : undefined,
       'data-side': collapsible && side === 'end' ? 'end' : undefined,
       'data-collapsed': collapsible ? String(collapsed) : undefined,
+      'data-resizable': collapsible && resizable ? resizable.storageKey : undefined,
     },
     collapsible && collapsed
       ? React.createElement('button', {

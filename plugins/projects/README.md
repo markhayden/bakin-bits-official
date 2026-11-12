@@ -8,20 +8,59 @@ and one project conversation that stays with it the whole way.
 
 "New project" opens the start screen at `/projects/new` — there is no form or
 modal. It asks "What kind of project is on your mind?" with six starter chips.
-A chip only pre-fills the composer with an editable sentence; nothing is
-created until you send. The lead-agent picker sits beside the composer
-(default: the main agent). A list with no projects at all shows the start
-screen directly.
+A chip pre-fills the composer with a complete, editable prompt ("Help me plan
+a trip.") — Enter works as-is, and the lead's interview draws out the
+specifics; nothing is created until you send. The lead-agent picker sits
+beside the composer (default: the main agent). A list with no projects at
+all shows the start screen directly.
 
-The first send creates the project and starts its first conversation turn.
-The client mints a `requestId` when you press send; `POST /` with `requestId`
-+ `firstMessage` writes a draft project (title = the first message trimmed to
-60 characters, `titleSource: 'fallback'`) with a kickoff receipt, then starts
-the first brainstorm turn on the same path as `/ask`. A retried create —
-lost response, double click — returns the same project and never a second
-turn. If the server dies before the turn starts, the boot resume starts it
-once. A failed create keeps your text in the composer; the retry reuses the
-same `requestId`.
+**The first send opens the project at once.** The client mints a `requestId`
+when you press send; `POST /` with `requestId` + `firstMessage` writes a
+draft project (title = the first message trimmed to 60 characters,
+`titleSource: 'fallback'`, the plan body seeded with the brief skeleton —
+see Plan) with a kickoff receipt and answers in milliseconds; the client
+navigates to the project page and the server starts the first brainstorm
+turn **detached**. The create carries a 10 s timeout: a stall shows an inline
+error that keeps your text, and the retry re-sends the SAME `requestId` (a
+timeout proves nothing about the create; the receipt dedupes). A retried
+create — lost response, double click — returns the same project and never a
+second turn. The pending send survives a reload (`sessionStorage`: request
+id, message, lead, any newer text): the page shows the latest text and the
+lead again under an "unconfirmed send" notice — shown after any failed send,
+beside the error, until a create succeeds — and
+the retry sends the original message with the edit kept as the project's
+draft. Every client-minted id comes from `lib/request-id.ts` — the page is
+plain `http://<host>:3737` over Tailscale, not a secure context, so
+`crypto.randomUUID` is unavailable there.
+
+**One start protocol** (`startKickoff`) serves every starter — the create,
+the project page's Retry, the kickoff pump and the boot sweep: in-process
+ownership per project; a transcript with a user row is proof an earlier
+attempt was accepted (its `started` write failed) and is repaired, never
+restarted; each attempt is counted on the receipt (`attempts`) and owns it
+through a fence token (`attempt`); the plugin's own context build (the board
+read) is bounded (15 s) and a timeout or rejection retires the token so a
+stale build that resumes later can never reach the engine; the admission
+itself runs outside the project lock and is never bounded (a hang in there
+is a host-level outage, shown as "Still starting"); a refused or thrown
+admission is recorded as `lastError` (200 chars). Every receipt write emits
+`projects.changed { action: 'kickoff' }`.
+
+While the receipt is `pending` the project page's conversation is read-only
+and the composer's slot says "Starting the conversation…"; once a failure is
+recorded, or the start is older than 20 s (since the create or the last
+Retry), it says "The conversation hasn't started yet" with **Retry**.
+`POST /:projectId/kickoff` schedules the start and answers at once
+(`202 starting` / `200 in-flight` / `409 kickoff_not_pending`), resetting
+the attempt count. A 30 s **kickoff pump** re-dispatches pending receipts
+older than 10 s, per project and never in sequence, so one hung start blocks
+no other. The attempt cap (three) lives in the protocol itself, after the
+transcript repair: a replayed create, the pump and the boot sweep all stop at
+it, only Retry resets it, and a capped receipt whose turn actually ran is
+still repaired from its transcript.
+`/ask` answers `409 kickoff_pending` while the kickoff is pending. The boot
+sweep still starts a crash-orphaned pending kickoff once, with the same
+per-project dispatch.
 
 ## The project page
 
@@ -40,8 +79,10 @@ Steps, completed → Files, archived → Plan.
 
 The conversation is the main surface. On its tab it takes the full width;
 beside Plan, Steps and Files it is docked on the right on desktop (the
-public `PageAside` conversation-width rail), collapsible to a slim strip with
-the lead's avatar and a working/unread marker. Exactly one composer is ever
+public `PageAside` conversation-width rail), resizable by dragging its
+page-facing edge (width persisted per surface, 280px minimum) and
+collapsible to a slim strip with the lead's avatar and a working/unread
+marker. Exactly one composer is ever
 mounted, so the draft follows you between tabs. On mobile there is no dock —
 an "Ask {lead}" button opens the Conversation tab.
 
@@ -51,11 +92,45 @@ The lead's posture follows the project's stage, from one shared builder
 (`lib/brainstorm-prompt.ts`) used by `/ask`, the kickoff turn and
 `bakin_exec_projects_ask`:
 
-- **Draft — shaping.** A brainstorm buddy: a brief reflection, at most one
-  challenge, and ONE question card per turn (`bakin_exec_ask_user`, with a
-  recommendation that is never preselected). Once the goal, scope and
-  definition of done are answered it drafts the plan and steps and says
-  "Draft plan is ready in the Plan tab". "Just write it" skips ahead.
+- **Draft — the shaping interview.** The lead interviews the way a sharp
+  colleague does before writing a spec, and turns every stone before it
+  drafts: six areas in order (goal and who it is for; what success looks
+  like, which is the definition of done; scope in and out and what exists
+  already; constraints, dependencies and who has to agree; risks and what has
+  gone wrong before; approach — first step, order, hand-offs, what happens
+  after), skipping what you already answered and following the dependencies
+  between decisions. Each turn: a brief reflection, at most one challenge, and
+  AT MOST one question card (`bakin_exec_ask_user`, 2–5 options, the
+  recommended one always marked and justified, never preselected) — none when
+  nothing material is open. Every decision the plan rests on gets asked, and
+  every answer gets the follow-up a sceptical colleague would raise (what it
+  rules out, who else it touches, what happens when it goes wrong, the
+  trade-off); an answer that opens new ground is followed before the lead
+  returns to the list. A tangled answer comes back as two or three simpler
+  choices. Only trivia the plan would carry the same way either way (a year,
+  exact dates, a head count) becomes a labelled assumption — a choice, a
+  priority or a trade-off is always asked. The first reply sets expectations
+  in one line (a proper interview, one question at a time; "just write it"
+  drafts whenever you want). The plan body is the **brief** (seeded at
+  creation, see Plan): after a decision lands the lead rewrites it with
+  `bakin_exec_projects_apply_plan`, keeping every heading and moving answered
+  questions out of "Open questions". The interview is done when every area
+  has been walked to the bottom (a project of any substance takes fifteen to
+  thirty questions; a first message that covers the areas is where the
+  digging starts, not the end) and you have been asked once whether anything
+  is missing. Then it drafts — fills the Plan section and adds the steps —
+  says "Draft plan is ready in the Plan tab" and lists the assumptions it
+  carried; what you could not answer rides along labelled as an assumption.
+  A decision counts as settled once it has been asked, tested once and
+  resolved or deferred on purpose; it comes back only when a later answer
+  reopens it. After the draft it asks again only if the answer could change
+  scope, feasibility, sequencing or success criteria — relentless, not
+  insane: no filler, no trivia, never two questions in one turn. Asking for
+  more questions, "go deeper" or "what would you suggest" reopens the
+  interview whatever the draft state: that same turn asks the next question
+  (a card in the project chat, plain text over a relayed request), never a
+  promise to ask later. "Just write it" drafts at once, keeping unresolved
+  blockers under "Open questions" rather than inventing answers.
 - **Active — progress.** What is blocked, what is next, whether scope holds;
   no interviewing. Between your conversations the lead also checks in on its
   own (below).
@@ -152,6 +227,23 @@ changing the status.
 
 ## Plan
 
+A project created from the start screen begins with the **brief skeleton**
+as its plan body (revision 0, no snapshot): `# Brief` with Goal · What
+success looks like · Scope (In / Out) · Constraints and assumptions · Open
+questions (seeded with "Goals, scope and constraints still need
+clarification.") · Plan. The lead fills it in as the interview lands
+decisions; title-only creates (CLI, tools) keep an empty body.
+
+The detail carries `brief.openQuestions` — ONE tolerant parser over the
+"Open questions" section: `true` when every line is a list item (the seeded
+placeholder counts until the lead rewrites it), `false` when blank, `null`
+when there is no heading or the content is not a list (prose, a
+sub-heading, a mix) — doubt never reads as "resolved", and no count is ever
+shown. **Start project** reads it: when `true` the dialog adds "The brief
+still lists open questions. Start anyway?" and its cancel button becomes
+**Continue shaping**, which closes the dialog and returns to the
+Conversation tab without a turn; Start stays your call.
+
 The Plan tab renders the plan with change hints against the previous
 version, a History view (line diff + restore), and **Edit plan**
 (`?edit=1`) — the editor and one SaveBar in place. The plan draft lives at
@@ -189,6 +281,8 @@ produced (linked steps plus tasks carrying the `projectId`), derived live
 through the assets plugin's `assets.listByTask` hook by
 `GET /:projectId/files`, never stored — and **Attached**, with attach,
 relink, detach and preview. A file in both shows once, under Attached.
+With nothing produced and nothing attached the tab shows ONE empty state
+("No files yet") carrying the attach action, never one per group.
 
 ## Projects list
 
@@ -210,9 +304,10 @@ and an SDK with structured questions (`bakin_exec_ask_user`) and the
 conversation-width `PageAside` rail.
 
 Frontmatter additions are all optional with defaults — no migration:
-`titleSource` (absent ⇒ `user`), `kickoff`, `planRevision` (absent ⇒ 0),
-`planUpdatedBy`, `planUpdatedAt`, `archivedFrom`. Stored `checked` on a linked
-step is ignored.
+`titleSource` (absent ⇒ `user`), `kickoff` (`requestId`, `state`, `message`,
+`agentId`, plus `attempts` (absent ⇒ 0), the `attempt` fence token and
+`lastError`), `planRevision` (absent ⇒ 0), `planUpdatedBy`, `planUpdatedAt`,
+`archivedFrom`. Stored `checked` on a linked step is ignored.
 
 Optional private `operations` frontmatter records durable add results and promotion
 reservations for the project's lifetime. Checklist `instanceId` separates stable
@@ -317,16 +412,25 @@ omitted, the existing project label is preserved.
 
 Unit tests run against the `test-sdk` stubs (`bun run test` at the repo root):
 
-- `tests/routes.test.ts` — routes and exec tools: kickoff idempotency and boot
-  resume, the authority rules, derived steps, plan revisions/seen, produced
-  files, list resume signals, thread IDs and streaming
+- `tests/routes.test.ts` — routes and exec tools: the start protocol (the
+  create answers before admission, fence orderings, bounded context build,
+  refused/thrown/hung admissions, the Retry route, the pump, per-project boot
+  dispatch, `/ask` while pending), the authority rules, derived steps, plan
+  revisions/seen, `brief.openQuestions`, produced files, list resume signals,
+  thread IDs and streaming
 - `tests/service.test.ts`, `tests/project-conflicts.test.ts` — the service:
-  derived completion, revisions and the pinned baseline, expected-value writes
-- `tests/brainstorm-prompt.test.ts` — the staged posture
-- `tests/start-screen.test.tsx`, `tests/project-header.test.tsx`,
-  `tests/project-detail.test.tsx`, `tests/steps-tab.test.tsx`,
-  `tests/project-list.test.tsx`, `tests/project-row.test.ts`,
-  `tests/plan-draft*.test.ts*`, `tests/project-uploads.test.tsx` — the UI
+  synchronous lock bodies (type-pinned), the kickoff receipt helpers, the
+  seeded brief, derived completion, revisions and the pinned baseline,
+  expected-value writes
+- `tests/brief.test.ts` — the skeleton and the open-questions parser
+- `tests/brainstorm-prompt.test.ts` — the shaping interview and the pinned
+  later stages; `tests/steward-prompt.test.ts` — the plan-first excerpt
+- `tests/start-screen.test.tsx` (complete chips, the honest timeout),
+  `tests/project-header.test.tsx` (the Start advisory + Continue shaping),
+  `tests/project-detail.test.tsx` (the starting state + Retry),
+  `tests/steps-tab.test.tsx`, `tests/project-list.test.tsx`,
+  `tests/project-row.test.ts`, `tests/plan-draft*.test.ts*`,
+  `tests/project-uploads.test.tsx` — the UI
 
 Browser fixtures need the real SDK. Root `BAKIN_SDK_PACKAGE_DIR=<assembled
 sdk> bun run ui:conformance` copies this package, installs that SDK and runs
