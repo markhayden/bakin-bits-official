@@ -95,6 +95,23 @@ describe('ProjectDetail shell', () => {
     expect(screen.queryByRole('complementary', { name: 'Project conversation' })).toBeNull()
   })
 
+  it('both sides of the thread render as markdown (2026-11-11: the user bubble showed raw **bold**)', async () => {
+    mockFetch('proj-md', {
+      brainstormMessages: [
+        { kind: 'user', ts: '2026-05-09T10:00:01.000Z', content: '**Goal** → ship it' },
+        { kind: 'assistant', ts: '2026-05-09T10:00:02.000Z', agentId: 'main', content: 'Noted: _ship it_.' },
+      ],
+    })
+    render(<ProjectDetail projectId="proj-md" onBack={() => {}} />)
+    await screen.findByText('Noted: _ship it_.')
+    const rendered = screen.getAllByTestId('markdown-content').map(node => node.textContent)
+    expect(rendered).toContain('**Goal** → ship it')
+    expect(rendered).toContain('Noted: _ship it_.')
+    // The user row's text reaches the renderer, not the bubble directly.
+    const userRow = document.querySelector('[data-conv-kind="user"]')
+    expect(userRow?.querySelector('[data-testid="markdown-content"]')).not.toBeNull()
+  })
+
   it('opens on what matters at each stage', async () => {
     for (const [status, tab] of [['active', 'Steps'], ['completed', 'Files'], ['archived', 'Plan']] as const) {
       mockFetch(`proj-${status}`, { status })

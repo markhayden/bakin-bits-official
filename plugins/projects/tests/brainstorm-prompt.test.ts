@@ -91,6 +91,11 @@ describe('projectBrainstormInstructions — the shaping interview (projects-gril
     // 2026-11-11 live: "ask me a shit load more questions" got "Absolutely — we'll go deeper" and no card.
     expect(text).toContain('the interview is open again whatever the draft state: that same turn asks the next question with the card')
     expect(text).toContain('never a promise to ask')
+    // Closure is defined, so "test every answer" cannot loop over settled decisions,
+    // and the labelled trivia the lead assumed does not count as an untested guess.
+    expect(text).toContain('A decision is settled once it has been asked, tested once and either resolved or deferred on purpose')
+    expect(text).toContain('a settled decision gets another follow-up only when a later answer reopens it')
+    expect(text).toContain('nothing material in the brief is a guess you could have asked about (the trivia you assumed and labelled is fine)')
     expect(text).toContain('keep unresolved blockers under Open questions rather than inventing answers')
   })
 
@@ -104,6 +109,11 @@ describe('projectBrainstormInstructions — the shaping interview (projects-gril
   it('relayed (non-live) asking never mentions the card tool, in any stage', () => {
     expect(projectBrainstormInstructions('draft', { live: false })).not.toContain('bakin_exec_ask_user')
     expect(projectBrainstormInstructions('draft', { live: false })).toContain('AT MOST one question')
+    // The re-open rule follows the transport too: a relayed "go deeper" gets a plain-text
+    // question, never a card that renders nowhere.
+    expect(projectBrainstormInstructions('draft', { live: false })).toContain('that same turn asks the next question in plain text')
+    expect(projectBrainstormInstructions('draft', { live: false })).not.toContain('with the card')
+    expect(projectBrainstormInstructions('draft', { live: true })).toContain('that same turn asks the next question with the card')
     expect(projectBrainstormInstructions('active', { live: false })).not.toContain('bakin_exec_ask_user')
   })
 })

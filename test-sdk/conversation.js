@@ -8,10 +8,12 @@ import { usePluginEvent, useNavBadge, toast, useAgent, useRouter } from './hooks
 // while identity comes from consumer-supplied `agent`/`resolveAgent` — the
 // focused kit never reads host stores.
 
-function messageText(message, transformText) {
-  if (message.kind === 'user') return message.content
+function messageText(message, transformText, renderText) {
+  // Mirrors the kit: both speakers' text goes through the consumer's renderer.
+  if (message.kind === 'user') return renderText ? renderText(message.content, 'markdown') : message.content
   if (message.kind === 'assistant') {
-    return transformText ? transformText(message.content).text : message.content
+    const text = transformText ? transformText(message.content).text : message.content
+    return renderText ? renderText(text, 'markdown') : text
   }
   if (message.kind === 'tool') {
     const question = message.metadata?.bakinQuestion
@@ -50,6 +52,7 @@ export function ConversationPanel({
   placeholder,
   emptyState,
   transformText,
+  renderText,
 }) {
   const [draft, setDraft] = useState('')
   const inputRef = useRef(null)
@@ -102,7 +105,7 @@ export function ConversationPanel({
           }, option.label)),
         )
       }
-      return React.createElement('div', { key: index, 'data-conv-kind': message.kind }, messageText(message, transformText))
+      return React.createElement('div', { key: index, 'data-conv-kind': message.kind }, messageText(message, transformText, renderText))
     }),
     ...extras,
     liveText ? React.createElement('div', { 'data-testid': 'live-text' }, liveText) : null,

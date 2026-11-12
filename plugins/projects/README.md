@@ -121,11 +121,16 @@ The lead's posture follows the project's stage, from one shared builder
   is missing. Then it drafts — fills the Plan section and adds the steps —
   says "Draft plan is ready in the Plan tab" and lists the assumptions it
   carried; what you could not answer rides along labelled as an assumption.
-  After the draft it asks again only if the answer could change scope,
-  feasibility, sequencing or success criteria — relentless, not insane: no
-  filler, no trivia, never two questions in one turn. "Just write it" drafts
-  at once, keeping unresolved blockers under "Open questions" rather than
-  inventing answers.
+  A decision counts as settled once it has been asked, tested once and
+  resolved or deferred on purpose; it comes back only when a later answer
+  reopens it. After the draft it asks again only if the answer could change
+  scope, feasibility, sequencing or success criteria — relentless, not
+  insane: no filler, no trivia, never two questions in one turn. Asking for
+  more questions, "go deeper" or "what would you suggest" reopens the
+  interview whatever the draft state: that same turn asks the next question
+  (a card in the project chat, plain text over a relayed request), never a
+  promise to ask later. "Just write it" drafts at once, keeping unresolved
+  blockers under "Open questions" rather than inventing answers.
 - **Active — progress.** What is blocked, what is next, whether scope holds;
   no interviewing. Between your conversations the lead also checks in on its
   own (below).
