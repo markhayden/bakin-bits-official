@@ -111,13 +111,36 @@ jobs:
           bun install --frozen-lockfile
           bun run build
 
+      # The starting catalog is the newest published release that carries one,
+      # found through the releases API. The stable
+      # releases/latest/download redirect is NOT used here: it can keep serving
+      # the previous release for a while after a new one is published, and a
+      # publish that started ~30 s after another went green carried forward a
+      # catalog without it (2026-11-12: projects-v0.14.0 dropped
+      # messaging 0.12.3). The two releases before it are kept to check
+      # nothing was lost.
       - name: Carry forward the previous release index
         if: steps.tag.outputs.kind == 'plugin'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p "$RUNNER_TEMP/release"
-          curl -fsSL "https://github.com/${{ github.repository }}/releases/latest/download/whiskit-artifacts.json" \
-            -o "$RUNNER_TEMP/release/whiskit-artifacts.json" \
-            || echo "No previous index (first release) — starting a fresh catalog."
+          mkdir -p "$RUNNER_TEMP/release" "$RUNNER_TEMP/previous"
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=30" \
+            --jq '[.[] | select(.draft | not) | select(any(.assets[]?; .name == "whiskit-artifacts.json"))] | sort_by(.published_at) | reverse | .[0:3] | .[].tag_name' \
+            > "$RUNNER_TEMP/previous/tags.txt"
+          n=0
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            n=$((n + 1))
+            mkdir -p "$RUNNER_TEMP/previous/$n"
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern whiskit-artifacts.json --dir "$RUNNER_TEMP/previous/$n"
+            echo "Previous catalog $n: $tag"
+          done < "$RUNNER_TEMP/previous/tags.txt"
+          if [ "$n" -eq 0 ]; then
+            echo "No previous index (first release) — starting a fresh catalog."
+          else
+            cp "$RUNNER_TEMP/previous/1/whiskit-artifacts.json" "$RUNNER_TEMP/release/whiskit-artifacts.json"
+          fi
 
       - name: Publish artifact
         if: steps.tag.outputs.kind == 'plugin'
@@ -127,6 +150,31 @@ jobs:
             "$GITHUB_WORKSPACE/plugins/${{ steps.tag.outputs.id }}" \
             --out "$RUNNER_TEMP/release" \
             --base-url "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+
+      # Every plugin version any recent catalog listed must still be listed.
+      # A catalog that lost one would make that release uninstallable for
+      # everyone the moment this becomes `latest`.
+      - name: Check the catalog lost nothing
+        if: steps.tag.outputs.kind == 'plugin'
+        run: |
+          NEW="$RUNNER_TEMP/release/whiskit-artifacts.json"
+          LIST='.plugins | to_entries[] | .key as $p | .value.versions | keys[] | "\($p)@\(.)"'
+          jq -r "$LIST" "$NEW" | sort -u > "$RUNNER_TEMP/new-versions.txt"
+          lost=0
+          for prev in "$RUNNER_TEMP"/previous/*/whiskit-artifacts.json; do
+            [ -f "$prev" ] || continue
+            for entry in $(jq -r "$LIST" "$prev" | sort -u | comm -23 - "$RUNNER_TEMP/new-versions.txt"); do
+              echo "::error::The new catalog is missing $entry, which $(basename "$(dirname "$prev")") releases ago listed."
+              lost=1
+            done
+          done
+          TAGGED="${{ steps.tag.outputs.id }}@${{ steps.tag.outputs.version }}"
+          if ! grep -qx "$TAGGED" "$RUNNER_TEMP/new-versions.txt"; then
+            echo "::error::The new catalog does not list $TAGGED."
+            lost=1
+          fi
+          [ "$lost" -eq 0 ] || exit 1
+          echo "Catalog keeps every earlier version and adds $TAGGED."
 
       - name: Compose release notes
         env:

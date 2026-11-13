@@ -67,6 +67,16 @@ pushing the next.** Two GitHub behaviors make batch pushes fail silently
   queued run evicts (cancels) the previously queued one. Tags pushed in quick
   succession cancel each other's runs; the evicted runs need `gh run rerun`.
 
+- **The `releases/latest` redirect lags a new release.** On 2026-11-12
+  `projects-v0.14.0` was pushed about 30 seconds after the
+  `messaging-v0.12.3` run went green, read the catalog through that
+  redirect, and published one without Messaging 0.12.3 (repaired by hand).
+  The workflow now reads the previous catalog through the releases API and
+  refuses to publish a catalog that lost a version any of the last three
+  listed, so "wait for green" is enough again. If that check ever fails,
+  re-run the job; do not hand-edit a catalog unless a bad one is already
+  `latest`.
+
 The serialization itself is intentional — each run carries forward the
 previous catalog — so there's no "release everything" button by design; you
 choose exactly what ships, one tag at a time.
