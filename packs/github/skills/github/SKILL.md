@@ -81,14 +81,16 @@ bakin_exec_tasks_request_approval taskId=<id> action=github.comment
   summary="Answer the repro question on #742" contentAssetId=<assetId>
 ```
 
-`approved` (a standing grant covers this class) → run it. `pending` → END
-YOUR TURN; the operator decides on the board or in Discord and the task
-returns with the decision in its context. Never run while pending; never
-re-ask for the same request. Resuming with an approved request: call
-`bakin_exec_tasks_approval_outcome … outcome=attempting`, run EXACTLY the
-recorded command, then report `done`, `failed` or `unknown`. An `unknown`
-(lost response) means verify first — `gh issue view --comments` — never
-re-post blindly.
+`pending` → END YOUR TURN; the operator decides on the board or in Discord
+and the task returns with the decision in its context. Never run while
+pending; never re-ask for the same request.
+
+Whenever you hold an approved request — answered `approved` right away by a
+standing grant, OR resumed after the operator approved — the execution is
+ALWAYS two calls around the command: `bakin_exec_tasks_approval_outcome …
+outcome=attempting` first, then run EXACTLY the recorded command, then
+report `done`, `failed` or `unknown`. An `unknown` (lost response) means
+verify first — `gh issue view --comments` — never re-post blindly.
 
 ## Rules
 

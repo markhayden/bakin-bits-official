@@ -55,15 +55,18 @@ bakin_exec_tasks_request_approval taskId=<id> action=gmail.send
   summary="Reply to Alice about the Q3 invoice" contentAssetId=<assetId>
 ```
 
-If it answers `approved` (a standing grant covers this class): run it. If it
-answers `pending`: END YOUR TURN — the operator decides on the board or in
-Discord and the task comes back to you with the decision in its context.
-Never run the command while an approval is pending; never re-ask for the
-same request. When you resume with an approved request: call
-`bakin_exec_tasks_approval_outcome … outcome=attempting`, run EXACTLY the
-recorded command, then report `done`, `failed`, or `unknown` (lost response,
-timeout). An `unknown` means verify before anything else (search for the
-sent message) — never resend blindly.
+If it answers `pending`: END YOUR TURN — the operator decides on the board
+or in Discord and the task comes back to you with the decision in its
+context. Never run the command while an approval is pending; never re-ask
+for the same request.
+
+Whenever you hold an approved request — answered `approved` right away by a
+standing grant, OR resumed after the operator approved — the execution is
+ALWAYS two calls around the command: `bakin_exec_tasks_approval_outcome …
+outcome=attempting` first, then run EXACTLY the recorded command, then
+report `done`, `failed`, or `unknown` (lost response, timeout). An `unknown`
+means verify before anything else (search for the sent message) — never
+resend blindly.
 
 ## Provider facts that bite
 
