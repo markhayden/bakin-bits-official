@@ -26,14 +26,17 @@ gog talks to Google as you, through your own OAuth client. About five minutes:
    ```bash
    gog auth setup you@example.com --credentials ~/Downloads/client_secret_*.json --login
    export GOG_ACCOUNT=you@example.com     # put it in the server's environment too
-   gog auth list --check
+   gog auth list --check --json --no-input
    ```
 
    `gog auth setup … --dry-run --json --no-input` shows the plan without doing anything.
 
 Then click **Check login** (Explore → Capabilities, the runtime hub, or the
 Health card) or run `bakin packages login-check google-workspace`. Readiness
-turns green only when `gog auth list --check` succeeds and names `GOG_ACCOUNT`.
+turns green only when `gog auth list --check --json --no-input` reports an
+account with `"valid": true` (every `gog auth` command exits 0 even when no
+account is stored, so the pack's `expect` pattern — not the exit status — is
+the login contract) and, when `GOG_ACCOUNT` is set, names that account.
 
 ## What the agent gets
 

@@ -70,11 +70,14 @@
           "gog",
           "auth",
           "list",
-          "--check"
+          "--check",
+          "--json",
+          "--no-input"
         ],
         "setup": "gog auth setup you@example.com --credentials ~/Downloads/client_secret_*.json --login",
         "help": "https://gogcli.sh/quickstart",
-        "accountEnv": "GOG_ACCOUNT"
+        "accountEnv": "GOG_ACCOUNT",
+        "expect": "\"email\":\\s*\"([^\"]+)\"[^}]*\"valid\":\\s*true"
       }
     ]
   }
