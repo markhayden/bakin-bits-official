@@ -36,7 +36,8 @@ Health card) or run `bakin packages login-check google-workspace`. Readiness
 turns green only when `gog auth list --check --json --no-input` reports an
 account with `"valid": true` (every `gog auth` command exits 0 even when no
 account is stored, so the pack's `expect` pattern — not the exit status — is
-the login contract) and, when `GOG_ACCOUNT` is set, names that account.
+the login contract) and, when `GOG_ACCOUNT` is set, lists that account itself
+as valid (another account's valid token never counts for it).
 
 ## What the agent gets
 
