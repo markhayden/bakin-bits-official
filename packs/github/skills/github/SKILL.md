@@ -51,12 +51,47 @@ gh pr comment 750 --body "..."
 gh pr ready 751
 ```
 
+## What needs approval
+
+Approval is required for anything another person can see or that cannot be
+undone. Each is an **action class** you name when you ask:
+
+| class | operations |
+|---|---|
+| `github.issue` | create, edit, close, reopen, label, assign an issue |
+| `github.comment` | comment on an issue or PR |
+| `github.pr` | create a non-draft PR, mark ready for review, edit, close |
+| `github.merge` | merge, delete a branch, force-push |
+| `github.release` | publish or edit a release |
+| `github.project` | Projects v2 item / field / status changes |
+
+Reads (`list`, `view`, `diff`, `run view`, `api` GETs) and draft PRs on your
+own branch need no approval. An operation not in the table → ask, with the
+closest class or `github.other`.
+
+**In a chat** (replying to the operator live): show the exact command and
+what it does with `bakin_exec_ask_user`, and proceed only on a yes.
+
+**In a dispatched task**: put long bodies in an asset first
+(`bakin_exec_assets_save`; the run directory dies when your turn ends), then
+
+```
+bakin_exec_tasks_request_approval taskId=<id> action=github.comment
+  command="gh issue comment 742 --body-file <asset path>"
+  summary="Answer the repro question on #742" contentAssetId=<assetId>
+```
+
+`approved` (a standing grant covers this class) → run it. `pending` → END
+YOUR TURN; the operator decides on the board or in Discord and the task
+returns with the decision in its context. Never run while pending; never
+re-ask for the same request. Resuming with an approved request: call
+`bakin_exec_tasks_approval_outcome … outcome=attempting`, run EXACTLY the
+recorded command, then report `done`, `failed` or `unknown`. An `unknown`
+(lost response) means verify first — `gh issue view --comments` — never
+re-post blindly.
+
 ## Rules
 
-- **Ask before anything irreversible or outward-facing.** Merging, closing,
-  force-pushing, deleting a branch, publishing a release, and editing someone
-  else's issue or PR all need explicit confirmation first. Creating a draft PR
-  or leaving a comment on your own work does not.
 - **Long bodies go through a file**, not a shell string:
   `gh pr create --body-file /tmp/body.md`. Backticks and `$(...)` in a
   double-quoted `--body` are executed by the shell before `gh` ever sees them
@@ -66,8 +101,14 @@ gh pr ready 751
 - **Report failures verbatim.** If `gh` returns 403, 404, or a rate-limit
   error, say exactly what it said. Never retry in a loop and never invent the
   contents of an issue, PR, or run you could not read.
-- **Do not fabricate identifiers.** If you need an issue or PR number you do
-  not have, list and find it.
+- **Do not fabricate identifiers.** Issue numbers are repository-local; PRs
+  show up in issue lists; Projects v2 items, fields and options have their own
+  node ids — never copy a status label between projects. If you need a
+  number or id you do not have, list and find it.
+- **Projects v2 needs its own scope** (`read:project` / `project`); a token
+  that reads issues may still be refused there — report it, do not retry.
+- A `gh` GraphQL call can partially fail: treat any `errors` in the result
+  as a failed operation, not a success.
 
 ## Authentication
 
@@ -79,7 +120,9 @@ up:
 - Or nothing at all, in which case `gh` uses the login the operator already
   did on this machine (`gh auth login`).
 
-Check with `gh auth status`. If `gh` reports it is not authenticated, or that
-the token lacks a scope, report that honestly and stop — the fix belongs to
-the operator in Bakin's settings, not to you. Never write a token into a
-file, a command you echo, or a commit.
+Check with `gh auth status` — its first line names the account you act as.
+A `GH_TOKEN` in Bakin's keys OVERRIDES the keyring login, so that account is
+the one that shows. If `gh` reports it is not authenticated, or that the
+token lacks a scope, report that honestly and stop — the fix belongs to the
+operator (`gh auth login`, or the key in Settings), not to you. Never write a
+token into a file, a command you echo, or a commit.
