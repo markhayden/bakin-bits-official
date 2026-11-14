@@ -21,12 +21,16 @@ gog talks to Google as you, through your own OAuth client. About five minutes:
    - **Personal gmail.com:** choose External, add yourself as a test user, then
      **Publish app** (Audience → Publish) so refresh tokens stop expiring weekly.
 4. Create a **Desktop app** OAuth client (<https://console.cloud.google.com/auth/clients>) and download its JSON.
-5. Log in — this is the pack's `setup` command, shown on the Health card and in Explore until it succeeds:
+5. Log in — this is the pack's `setup` command, shown on the Health card, in
+   Explore and by `bakin packages login-check google-workspace` until it
+   succeeds. Bakin installs gog into `~/.bakin/bin`, which your shell's PATH
+   does not include, so Bakin shows the command with that full path. Use the
+   name of the JSON file you downloaded in step 4:
 
    ```bash
-   gog auth setup you@example.com --credentials ~/Downloads/client_secret_*.json --login
+   ~/.bakin/bin/gog auth setup you@example.com --credentials ~/Downloads/client_secret_*.json --login
    export GOG_ACCOUNT=you@example.com     # put it in the server's environment too
-   gog auth list --check --json --no-input
+   ~/.bakin/bin/gog auth list --check --json --no-input
    ```
 
    `gog auth setup … --dry-run --json --no-input` shows the plan without doing anything.
