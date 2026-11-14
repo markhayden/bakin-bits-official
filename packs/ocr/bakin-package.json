@@ -2,10 +2,10 @@
   "id": "ocr",
   "kind": "skill-pack",
   "name": "OCR (Apple Vision)",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Lets your agents read text out of images, screenshots, and scanned PDFs — receipts, forms, whiteboard photos — fully local via Apple's Vision framework. No API key, nothing leaves the box.",
   "author": "Bakin",
-  "bakin": "^1.0.0",
+  "bakin": ">=0.0.1",
   "capability": "ocr",
   "platforms": [
     "darwin-arm64",

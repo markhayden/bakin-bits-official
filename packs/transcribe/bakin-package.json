@@ -2,15 +2,21 @@
   "id": "transcribe",
   "kind": "skill-pack",
   "name": "Audio Transcription",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Lets your agents turn audio and video files into text — meetings, voice memos, recordings — fully local on this machine, no API key, nothing leaves the box.",
   "author": "Bakin (skill by Mario Zechner, badlogic/pi-skills, MIT; parakeet.cpp by mudler)",
-  "bakin": "^1.0.0",
+  "bakin": ">=0.0.1",
   "capability": "transcribe",
-  "runtimes": ["*"],
-  "platforms": ["darwin-arm64"],
+  "runtimes": [
+    "*"
+  ],
+  "platforms": [
+    "darwin-arm64"
+  ],
   "contributions": {
-    "skills": ["skills/transcribe"]
+    "skills": [
+      "skills/transcribe"
+    ]
   },
   "requires": {
     "bins": [
@@ -21,10 +27,16 @@
           "darwin-arm64": {
             "url": "https://github.com/badlogic/pibot/releases/download/parakeet-cpp-transcribe-v0.1.2/parakeet-cpp-transcribe-macos-arm64.tar.gz",
             "sha256": "b00ed12e06aaf4023d74a3dcd919fa3e69afe8fea7b992913f8783eafa490ce0",
-            "archive": { "format": "tar.gz", "member": "parakeet-cpp-transcribe", "extractedSha256": "2df5a1b677bea0faf332674f6c1978446c02636a70444bc1d7dcb7605738ebc5" }
+            "archive": {
+              "format": "tar.gz",
+              "member": "parakeet-cpp-transcribe",
+              "extractedSha256": "2df5a1b677bea0faf332674f6c1978446c02636a70444bc1d7dcb7605738ebc5"
+            }
           }
         },
-        "verifyArgs": ["--help"]
+        "verifyArgs": [
+          "--help"
+        ]
       }
     ],
     "models": [
@@ -34,7 +46,9 @@
         "sha256": "4d69a4a6683f4f2d952bad794c1357ca6eb628027695b4699c5a9ad4cd07d757",
         "bytes": 940663680,
         "dest": "parakeet-cpp-gguf/tdt-0.6b-v3-q8_0.gguf",
-        "env": { "PARAKEET_CPP_MODEL_PATH": "{dest}" }
+        "env": {
+          "PARAKEET_CPP_MODEL_PATH": "{dest}"
+        }
       }
     ],
     "prereqs": [
