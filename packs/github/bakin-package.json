@@ -2,10 +2,10 @@
   "id": "github",
   "kind": "skill-pack",
   "name": "GitHub",
-  "version": "1.0.0",
-  "description": "Lets your agents work GitHub the way you do — read issues and pull requests, watch CI runs, inspect diffs, and open PRs — through the official `gh` command line tool.",
+  "version": "1.1.0",
+  "description": "Lets your agents work GitHub the way you do — read issues and pull requests, watch CI runs, inspect diffs, and open PRs — through the official `gh` command line tool, with every outward-facing write gated by your approval.",
   "author": "Bakin",
-  "bakin": "^1.0.0",
+  "bakin": ">=0.1.0-rc.9",
   "capability": "github",
   "runtimes": [
     "*"
@@ -18,10 +18,22 @@
   "requires": {
     "prereqs": [
       {
-        "name": "GitHub CLI (gh)",
+        "name": "GitHub CLI (gh) 2.90 or newer",
         "kind": "binary",
         "probe": "gh",
         "help": "https://cli.github.com/"
+      }
+    ],
+    "login": [
+      {
+        "name": "GitHub account (gh)",
+        "probe": [
+          "gh",
+          "auth",
+          "status"
+        ],
+        "setup": "gh auth login",
+        "help": "https://cli.github.com/manual/gh_auth_login"
       }
     ]
   },

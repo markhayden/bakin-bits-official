@@ -2,15 +2,22 @@
   "id": "browser-tools",
   "kind": "skill-pack",
   "name": "Browser Tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Lets your agents drive a real Chrome browser — open pages, read what actually renders, run JavaScript, take screenshots, and extract article text. Uses the Chrome already on your Mac.",
   "author": "Bakin (skill by Mario Zechner, badlogic/pi-skills, MIT)",
-  "bakin": "^1.0.0",
+  "bakin": ">=0.0.1",
   "capability": "browser",
-  "runtimes": ["*"],
-  "platforms": ["darwin-arm64", "darwin-x64"],
+  "runtimes": [
+    "*"
+  ],
+  "platforms": [
+    "darwin-arm64",
+    "darwin-x64"
+  ],
   "contributions": {
-    "skills": ["skills/browser-tools"]
+    "skills": [
+      "skills/browser-tools"
+    ]
   },
   "requires": {
     "npm": [
@@ -24,7 +31,9 @@
           "turndown": "7.2.2",
           "turndown-plugin-gfm": "1.0.2"
         },
-        "env": { "PUPPETEER_SKIP_DOWNLOAD": "1" }
+        "env": {
+          "PUPPETEER_SKIP_DOWNLOAD": "1"
+        }
       }
     ],
     "prereqs": [

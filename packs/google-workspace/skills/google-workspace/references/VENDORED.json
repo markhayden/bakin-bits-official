@@ -1,0 +1,17 @@
+{
+  "repo": "openclaw/gogcli",
+  "tag": "v0.48.0",
+  "commit": "f939ed37151af5b789ac08b98339fe8ddf880b09",
+  "fetchedAt": "2026-11-14",
+  "files": {
+    "gog.md": "2d07403dca21b90e9af18407e09e80eb690981b73e00d526bf0e798b94b04cb0",
+    "gog-gmail.md": "a711176663945abec38ae1b9de09429b72433682d04b6a429679ff89f6bcc79e",
+    "gog-calendar.md": "c0cccd0aa810fdae4ab4b5f7509c84df21df46a125fa2b9432846e47f45d8249",
+    "gog-drive.md": "8323c8945da0f3c021b0ce380c46d898f22c9ecac08ca9eaca5bf39113393d97",
+    "gog-docs.md": "8569ae8380e42c6eee36f6200e6f0cddb98b37058df0730fcf1f0618e7f20b47",
+    "gog-sheets.md": "8330eafdda61174dd6365e6cc553f8946a18c2c69ef58f76d4a1d857197de1f4",
+    "gog-inbox-triage.md": "57a9a4e90d0ef985424dfdf4a808aeab9967611403da09b83389424fa81b0d92",
+    "gog-weekly-digest.md": "917c4ee7363d559129c79742e1848b3b695a59e1d64e2bd439f041ad9d186434",
+    "LICENSE": "14293556b79940745123d0160c71d27ed0e9fe9b8a848093f3ed78f4853caafe"
+  }
+}

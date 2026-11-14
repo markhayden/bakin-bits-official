@@ -2,10 +2,10 @@
   "id": "web-search-brave",
   "kind": "skill-pack",
   "name": "Web Search (Brave)",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Lets your agents search the web — fresh information, documentation, and news, read straight from the page and cited back to their sources. No browser required.",
   "author": "Bakin",
-  "bakin": "^1.0.0",
+  "bakin": ">=0.0.1",
   "capability": "web-search",
   "runtimes": [
     "*"
