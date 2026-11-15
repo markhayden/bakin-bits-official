@@ -1,8 +1,8 @@
 {
   "id": "messaging",
   "name": "Messaging",
-  "version": "0.12.3",
-  "bakin": ">=0.0.1-rc.42",
+  "version": "0.13.0",
+  "bakin": ">=0.0.1-rc.50",
   "description": "Content messaging with scheduling, brainstorming, and multi-agent content pipeline",
   "contentFiles": [],
   "dependencies": [
@@ -27,6 +27,21 @@
     "search"
   ],
   "contributes": {
+    "entities": [
+      {
+        "kind": "session",
+        "label": "Brainstorm",
+        "icon": "Lightbulb",
+        "href": "/messaging/brainstorm?session={id}",
+        "handoff": true
+      },
+      {
+        "kind": "plan",
+        "label": "Plan",
+        "icon": "ClipboardList",
+        "href": "/messaging/plans/{id}"
+      }
+    ],
     "nav": [
       {
         "id": "messaging",
@@ -389,6 +404,7 @@
       },
       {
         "name": "bakin_exec_messaging_session_create",
+        "reports": ["messaging:session"],
         "summary": "Create a planning session",
         "permissions": [
           "storage.write"
@@ -396,6 +412,7 @@
       },
       {
         "name": "bakin_exec_messaging_session_update",
+        "reports": ["messaging:session"],
         "summary": "Update a planning session",
         "permissions": [
           "storage.write"
@@ -446,6 +463,7 @@
       },
       {
         "name": "bakin_exec_messaging_plan_create",
+        "reports": ["messaging:plan"],
         "summary": "Create content Plan",
         "permissions": [
           "storage.write"

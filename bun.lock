@@ -63,7 +63,7 @@
         "playwright": "1.63.0",
       },
       "peerDependencies": {
-        "@makinbakin/sdk": ">=0.0.1-rc.42",
+        "@makinbakin/sdk": ">=0.0.1-rc.50",
         "react": "^19.0.0",
         "react-dom": "^19.0.0",
       },

@@ -8,6 +8,7 @@
  */
 import type { ConversationMessage } from '@makinbakin/sdk/conversation'
 import type { SessionMessage } from '../types'
+import { CONVERSATION_ROW_KIND, storedConversationRow } from './session-rows'
 
 export function sessionMessageToConversation(agentId: string, message: SessionMessage): ConversationMessage | null {
   if (message.role === 'user') {
@@ -18,6 +19,10 @@ export function sessionMessageToConversation(agentId: string, message: SessionMe
     return { kind: 'assistant', ts: message.timestamp, agentId, content: message.content }
   }
   if (message.role === 'activity') {
+    // A row carried over from a chat is stored whole and returned untouched.
+    const stored = storedConversationRow(message)
+    if (stored) return stored
+    if (message.kind === CONVERSATION_ROW_KIND) return null
     if (message.kind === 'turn_error') {
       return {
         kind: 'error',
@@ -37,11 +42,14 @@ export function sessionMessageToConversation(agentId: string, message: SessionMe
         inputPreview?: string
         outputPreview?: string
         durationMs?: number
+        turnId?: string
+        metadata?: Record<string, unknown>
       }
       return {
         kind: 'tool',
         ts: message.timestamp,
         agentId,
+        ...(data.turnId ? { turnId: data.turnId } : {}),
         toolName: data.toolName ?? 'tool',
         status: data.status === 'failed' ? 'failed' : 'completed',
         ...(data.callId ? { callId: data.callId } : {}),
@@ -49,6 +57,9 @@ export function sessionMessageToConversation(agentId: string, message: SessionMe
         ...(data.inputPreview ? { inputPreview: data.inputPreview } : {}),
         ...(data.outputPreview ? { outputPreview: data.outputPreview } : {}),
         ...(typeof data.durationMs === 'number' ? { durationMs: data.durationMs } : {}),
+        // The row's metadata carries its cards (a question, the entities the
+        // call created or changed): without it they vanish on reload.
+        ...(data.metadata && typeof data.metadata === 'object' ? { metadata: data.metadata } : {}),
       }
     }
     if (message.kind === 'error') {

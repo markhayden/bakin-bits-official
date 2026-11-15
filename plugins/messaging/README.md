@@ -179,6 +179,32 @@ draft fields (`imageAssetId` / `videoAssetId`) are resolved server-side to the
 current-version file with `ctx.assets.resolveVersionFile` immediately before
 publishing.
 
+## Carried over from a chat
+
+When a chat reply creates a brainstorm session
+(`bakin_exec_messaging_session_create`), Bakin carries the chat's history into
+the session and the open chat follows it there. Messaging declares the
+`session` kind with `handoff: true` and registers the acceptor in
+`activate()`. Plans declare a kind too, for cards and links; they accept no
+hand-off.
+
+- The batch is one save of the session: a `handoff` marker row
+  (`direction: 'in'`, naming the chat), then the carried rows.
+- Each carried row is stored whole, as an activity message of kind
+  `conversation_row` whose `data` is the row (`lib/session-rows.ts`), and the
+  read mapper returns it untouched: original timestamps and authorship, cards
+  on tool rows, assistant text never split at a JSON fence. A session's own
+  turns keep their existing storage.
+- A chat longer than the 300-message cap keeps the marker and the most recent
+  messages; the marker's `carried` count says how many follow it.
+- A repeat of the same hand-off is a no-op. A session that no longer exists
+  refuses it.
+- The session's agent is primed with the carried history on its next
+  brainstorm turn (`handoffPreamble`) until it has replied. Plan-refinement
+  turns are never primed.
+- The session view refetches on `messaging.brainstorm.appended` and shows the
+  history under a "Carried over from the chat …" divider.
+
 ## Routes
 
 Routes are mounted under `/api/plugins/messaging`.
