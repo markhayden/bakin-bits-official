@@ -644,10 +644,23 @@ declare module '@makinbakin/sdk/types' {
     resolveVersionFile(assetId: string, version?: number): Promise<AssetVersionFileRef | null>
   }
 
+  /** Something a tool call created or changed, reported on its result for the conversation card. */
+  export interface EntityRef {
+    /** Public kind id, `<pluginId>:<kind>`. */
+    kind: string
+    id: string
+    /** Title at the time of the call. */
+    title: string
+    action: 'created' | 'updated'
+    params?: Record<string, string>
+  }
+
   export interface ExecToolResult {
     ok: boolean
     error?: string
     details?: unknown
+    /** What this call created or changed; kinds must be listed under the tool's manifest `reports`. */
+    entities?: EntityRef[]
     [key: string]: unknown
   }
 
@@ -857,11 +870,28 @@ declare module '@makinbakin/sdk/types' {
       }
     | { kind: 'error'; ts: string; turnId?: string; message: string; errorKind?: string }
     | { kind: 'aborted'; ts: string; turnId?: string }
+    | { kind: 'done'; ts: string; turnId?: string }
+    /** A hand-off marker: `out` = continued in its peers; `in` = carried over from its peer, followed by `carried` rows of history. */
+    | { kind: 'handoff'; ts: string; handoffId: string; direction: 'out' | 'in'; peers: { entity: string; id: string; title: string }[]; carried?: number }
 
   export interface ConversationTurnOutcome {
     aborted: boolean
     errored: boolean
+    /** The turn this outcome settles — the `turnId` on every row it wrote. */
+    turnId: string
+    /** What the turn's tool calls created or changed, in order. */
+    entities: EntityRef[]
   }
+
+  /** A chat hand-off for the acceptor to write into its target's conversation. */
+  export interface ConversationHandoffRequest {
+    /** `<chatId>:<turnId>:<entityId>` — accept once; a repeat is a no-op. */
+    handoffId: string
+    target: { kind: string; id: string }
+    /** The complete batch to write atomically: the `in` marker, then the carried rows. */
+    rows: ConversationTurnRow[]
+  }
+  export type ConversationHandoffAcceptor = (request: ConversationHandoffRequest) => Promise<void> | void
 
   export type ConversationStartTurnResult = 'accepted' | 'not_found' | 'busy'
 
@@ -890,6 +920,8 @@ declare module '@makinbakin/sdk/types' {
     payload: (key: string) => Record<string, unknown>
     resolveThread: (key: string) => { agentId: string } | null | Promise<{ agentId: string } | null>
     appendRow: (key: string, row: ConversationTurnRow) => void | Promise<void>
+    /** Append a batch of out-of-turn rows as ONE durable write: all of the rows land, or none. */
+    appendRows?: (key: string, rows: ConversationTurnRow[]) => void | Promise<void>
     threadId: (key: string, agentId: string) => string
     framing?: string
     ephemeral?: boolean
@@ -997,6 +1029,11 @@ declare module '@makinbakin/sdk/types' {
 
   export interface ConversationTurnsAPI {
     createTurnService(config: ConversationTurnServiceConfig): ConversationTurnService
+    /**
+     * Accept chat hand-offs for one of this plugin's entity kinds (the short
+     * kind from the manifest, declared with `handoff: true`). One per kind.
+     */
+    acceptHandoff(kind: string, acceptor: ConversationHandoffAcceptor): void
   }
 
   export interface PluginContext {
@@ -1657,6 +1694,12 @@ declare module '@makinbakin/sdk/navigation' {
     back: () => void
   }
   export function usePathname(): string
+  /** The in-app href for an entity, from its declared kind; `null` when no loaded plugin declares it. */
+  export function entityHref(
+    kind: string,
+    id: string,
+    options?: { params?: Readonly<Record<string, string>>; query?: Readonly<Record<string, string>> },
+  ): string | null
   export function useSearchParams(): URLSearchParams
   export function useQueryState(
     key: string,
@@ -1720,6 +1763,7 @@ declare module '@makinbakin/sdk/conversation' {
     | { kind: 'error'; ts: string; turnId?: string; message: string; errorKind?: string }
     | { kind: 'aborted'; ts: string; turnId?: string }
     | { kind: 'done'; ts: string; turnId?: string }
+    | { kind: 'handoff'; ts: string; handoffId: string; direction: 'out' | 'in'; peers: { entity: string; id: string; title: string }[]; carried?: number }
 
 
   export interface ConversationThreadLoad<Meta = unknown> {
@@ -2013,6 +2057,12 @@ declare module '@makinbakin/sdk/hooks' {
     back(): void
   }
   export function usePathname(): string
+  /** The in-app href for an entity, from its declared kind; `null` when no loaded plugin declares it. */
+  export function entityHref(
+    kind: string,
+    id: string,
+    options?: { params?: Readonly<Record<string, string>>; query?: Readonly<Record<string, string>> },
+  ): string | null
   export function useSearchParams(): URLSearchParams
   export function useQueryState(key: string, defaultValue: string): [string, (next: string, opts?: unknown) => void, (next: string, opts?: unknown) => void]
   export function useQueryArrayState(key: string): [string[], (next: string[]) => void]
@@ -2131,6 +2181,26 @@ declare module '@makinbakin/sdk/utils' {
     | { ok: true; value: Omit<import('@makinbakin/sdk/conversation').BakinQuestion, 'v' | 'id'> }
     | { ok: false; error: string }
   export function formatDateTime(timestamp: string): string
+
+  // Chat hand-off helpers for a surface that accepts a chat's history.
+  import type { ConversationHandoffRequest, ConversationTurnContext, ConversationTurnRow, ConversationTurnService } from '@makinbakin/sdk/types'
+  export const HANDOFF_PREAMBLE_BYTES: number
+  /** Whether a transcript already holds this hand-off. */
+  export function hasAcceptedHandoff(rows: readonly ConversationTurnRow[], handoffId: string): boolean
+  /** The acceptor's write: a repeat is a no-op; otherwise one batch, resolving once it is durable. */
+  export function writeHandoffBatch(
+    service: Pick<ConversationTurnService, 'appendExternal'>,
+    ctx: ConversationTurnContext,
+    key: string,
+    request: ConversationHandoffRequest,
+    existing: readonly ConversationTurnRow[],
+  ): Promise<void>
+  /** The carried history as a one-time preamble for `agentId`'s next turn, or `null` once that agent has replied. */
+  export function handoffPreamble(
+    rows: readonly ConversationTurnRow[],
+    agentId: string,
+    options?: { maxBytes?: number },
+  ): string | null
 }
 
 declare module '@makinbakin/sdk/testing/ui' {
