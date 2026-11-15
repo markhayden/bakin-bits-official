@@ -3,7 +3,7 @@ import { Plus, Trash, ChevronRight, Send } from 'lucide-react'
 import { Alert, AlertDescription, Button, Checkbox, Field, FieldLabel, Form, InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput, Progress, Switch, SystemState, Text, Textarea, buttonVariants } from '@makinbakin/sdk/ui'
 import { Stack } from '@makinbakin/sdk/layout'
 import { ListRow, ListRowActions, ListRows, StatusBadge } from '@makinbakin/sdk/patterns'
-import { PluginLink } from '@makinbakin/sdk/navigation'
+import { PluginLink, entityHref } from '@makinbakin/sdk/navigation'
 import { useAgentList } from '@makinbakin/sdk/hooks'
 import type { ProjectTask, ResolvedBoardTask } from '../types'
 import type { ChecklistModel } from '../hooks/use-checklist-drafts'
@@ -36,7 +36,7 @@ function TaskItem({ item, resolved, model, agentNames }: { item: ProjectTask; re
       {item.taskId && resolved === null && <StatusBadge tone="attention" size="xs">Board task missing</StatusBadge>}
       <ListRowActions reveal="always">
         {item.taskId && resolved ? (
-          <PluginLink to={`/tasks?taskId=${encodeURIComponent(item.taskId)}`} aria-label={`Open task: ${item.title}`} className={buttonVariants({ variant: 'ghost', size: 'xs' })}>Open task</PluginLink>
+          <PluginLink to={entityHref('tasks:task', item.taskId) ?? '/tasks'} aria-label={`Open task: ${item.title}`} className={buttonVariants({ variant: 'ghost', size: 'xs' })}>Open task</PluginLink>
         ) : null}
         {!item.taskId && <Button type="button" variant="ghost" size="xs" disabled={busy} onClick={() => { void model.mutate(item, 'promote') }} aria-label={`Send to board: ${item.title}`}><Send aria-hidden="true" />Send to board</Button>}
         <Button type="button" variant="ghost" size="icon-xs" disabled={busy || (draft && draft.value !== draft.baseline)} onClick={() => { void model.mutate(item, 'remove') }} aria-label={`Remove ${item.title}`}><Trash aria-hidden="true" /></Button>

@@ -3,7 +3,7 @@
  */
 import { registerPlugin } from '@makinbakin/sdk'
 import type { NavItem } from '@makinbakin/sdk'
-import { useRouter } from '@makinbakin/sdk/navigation'
+import { useRouter, entityHref } from '@makinbakin/sdk/navigation'
 import { Suspense, useEffect } from 'react'
 import { ContentCalendar } from './components/content-calendar'
 import { BrainstormView } from './components/brainstorm-view'
@@ -67,7 +67,7 @@ function MessagingPlansRoute() {
   return (
     <Suspense>
       <PlanList
-        onSelectPlan={(plan) => router.push(`/messaging/plans/${plan.id}`)}
+        onSelectPlan={(plan) => router.push(entityHref('messaging:plan', plan.id) ?? '/messaging/plans')}
         onStartBrainstorm={() => router.push('/messaging/brainstorm')}
       />
     </Suspense>

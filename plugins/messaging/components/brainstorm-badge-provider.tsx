@@ -10,6 +10,7 @@
  * seen (`?session=` query — the visible key lives in the query string).
  */
 import { ConversationReplyToast, useConversationAttention } from '@makinbakin/sdk/conversation'
+import { entityHref } from '@makinbakin/sdk/navigation'
 
 /**
  * The session whose turns are on screen. Two surfaces qualify: the
@@ -52,7 +53,7 @@ export function BrainstormBadgeProvider() {
         agentId={done.agentId}
         title="replied in a brainstorm"
         preview={done.preview}
-        to={`/messaging/brainstorm?session=${encodeURIComponent(done.key)}`}
+        to={entityHref('messaging:session', done.key) ?? '/messaging/brainstorm'}
         onNavigate={dismiss}
         testId={{ attr: 'data-messaging-brainstorm-toast', value: done.key }}
       />
@@ -60,7 +61,7 @@ export function BrainstormBadgeProvider() {
     osNotification: (done) => ({
       title: `${done.agentId} replied`,
       body: done.preview ?? '',
-      href: `/messaging/brainstorm?session=${encodeURIComponent(done.key)}`,
+      href: entityHref('messaging:session', done.key) ?? '/messaging/brainstorm',
     }),
     errorToast: (payload) => `Brainstorm turn failed: ${String(payload.message ?? 'unknown error')}`,
   })

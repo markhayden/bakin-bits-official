@@ -14,7 +14,7 @@ import { Alert, AlertDescription, Button } from '@makinbakin/sdk/ui'
 import { AgentSelect, Page, PageBody, PageComposer, PageHeader } from '@makinbakin/sdk/patterns'
 import { Composer, ConversationEmptyState, writeComposerDraft, type ComposerHandle } from '@makinbakin/sdk/conversation'
 import { useAgentList, useMainAgentId } from '@makinbakin/sdk/hooks'
-import { useRouter } from '@makinbakin/sdk/navigation'
+import { useRouter, entityHref } from '@makinbakin/sdk/navigation'
 import { projectRequest } from '../lib/project-api'
 import { newRequestId } from '../lib/request-id'
 import { CREATE_TIMEOUT_MS, STARTER_PROMPTS, fallbackTitle } from '../lib/start'
@@ -111,7 +111,7 @@ export function StartScreen({ onBack, createTimeoutMs = CREATE_TIMEOUT_MS }: { o
       // Text edited after the first attempt is not lost: it waits in the
       // project's composer as a draft.
       if (content !== message) writeComposerDraft(`project:${result.id}`, content)
-      router.push(`/projects/${encodeURIComponent(result.id)}`)
+      router.push(entityHref('projects:project', result.id) ?? '/projects')
     } catch (err) {
       // The composer cleared its draft on send — put the text back, unless
       // newer text was typed while the request was out.
