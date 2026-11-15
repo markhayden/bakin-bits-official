@@ -338,13 +338,33 @@ traceability, not prompt-history replay.
 
 Brainstorm messages use the project's `.brainstorm.json` sidecar in the same
 plugin-scoped directory as the Markdown project. It stores the conversation kit's
-user, assistant, tool, error and aborted rows, bounded to 300 rows; a question
-card's tool row keeps its `metadata.bakinQuestion`. A separate
+user, assistant, tool, error, aborted and hand-off marker rows, bounded to 300
+rows; a tool row keeps its metadata (`bakinQuestion` for a question card,
+`bakinEntities` for the cards of what it created or changed). A separate
 `.brainstorm-seen.json` records what the user has seen — `lastSeenAt` for replies
 and `planSeenRevision` for the plan — and its fields merge on write.
 `.history.json` holds the newest 20 prior plan bodies, each with the revision it
 was, plus the snapshot at the seen revision while it is the comparison baseline.
 These files do not replace the composer's existing draft persistence.
+
+### Carried over from a chat
+
+When a chat reply creates a project (`bakin_exec_projects_create`), Bakin
+carries the chat's history into the project's conversation and the open chat
+follows it here. Projects declares the `project` kind with `handoff: true`
+and registers the acceptor in `activate()`.
+
+- The batch is one write of the sidecar: a `handoff` marker row
+  (`direction: 'in'`, naming the chat), then the carried rows. A chat longer
+  than the cap keeps the marker and the most recent messages
+  (`fitHandoffBatch`); the marker's `carried` count says how many follow it.
+- A repeat of the same hand-off is a no-op. A project that no longer exists
+  refuses it.
+- The lead's next turn (`POST /:projectId/ask`) is primed with the carried
+  history (`handoffPreamble`) until it has replied in the project. A turn
+  that failed before the lead replied primes again on retry.
+- Nothing runs automatically on arrival; the conversation tab shows the
+  history under a "Carried over from the chat …" divider.
 
 ## Project Storage
 

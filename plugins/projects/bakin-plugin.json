@@ -1,8 +1,8 @@
 {
   "id": "projects",
   "name": "Projects",
-  "version": "0.14.0",
-  "bakin": ">=0.0.1-rc.45",
+  "version": "0.15.0",
+  "bakin": ">=0.0.1-rc.50",
   "description": "Project management with specs, checklists, task linking, and agent access via MCP tools",
   "contentFiles": [],
   "secrets": [],
@@ -30,6 +30,15 @@
     "search"
   ],
   "contributes": {
+    "entities": [
+      {
+        "kind": "project",
+        "label": "Project",
+        "icon": "FolderKanban",
+        "href": "/projects/{id}",
+        "handoff": true
+      }
+    ],
     "nav": [
       {
         "id": "projects",
@@ -302,6 +311,7 @@
       },
       {
         "name": "bakin_exec_projects_create",
+        "reports": ["projects:project"],
         "summary": "Create a project",
         "permissions": [
           "storage.write"
@@ -309,6 +319,7 @@
       },
       {
         "name": "bakin_exec_projects_update",
+        "reports": ["projects:project"],
         "summary": "Update a project",
         "permissions": [
           "storage.write"
@@ -316,6 +327,7 @@
       },
       {
         "name": "bakin_exec_projects_apply_plan",
+        "reports": ["projects:project"],
         "summary": "Apply a confirmed project plan update",
         "permissions": [
           "storage.write"

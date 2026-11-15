@@ -438,10 +438,41 @@ function normalizeConversationRow(value: unknown): ProjectBrainstormMessage | nu
         : null
     case 'aborted':
       return { kind: 'aborted', ts, ...opt('turnId') }
+    case 'handoff': {
+      // A chat hand-off marker (the `in` row leads the carried history).
+      const peers = Array.isArray(raw.peers)
+        ? raw.peers.filter((peer): peer is { entity: string; id: string; title: string } =>
+            !!peer && typeof peer === 'object'
+            && typeof (peer as Record<string, unknown>).entity === 'string'
+            && typeof (peer as Record<string, unknown>).id === 'string'
+            && typeof (peer as Record<string, unknown>).title === 'string')
+        : []
+      if (typeof raw.handoffId !== 'string' || (raw.direction !== 'in' && raw.direction !== 'out')) return null
+      return {
+        kind: 'handoff',
+        ts,
+        handoffId: raw.handoffId,
+        direction: raw.direction,
+        peers: peers.map(({ entity, id, title }) => ({ entity, id, title })),
+        ...(typeof raw.carried === 'number' ? { carried: raw.carried } : {}),
+      }
+    }
     default:
       // Pre-kit role-based rows: dropped (accepted degraded replay).
       return null
   }
+}
+
+/**
+ * Fit a chat hand-off batch (the `in` marker, then the carried rows) into the
+ * transcript cap: the marker stays first and the most recent carried rows are
+ * kept, with the marker's `carried` count corrected to match.
+ */
+export function fitHandoffBatch<Row extends { kind: string }>(rows: Row[], cap = BRAINSTORM_ROW_CAP): Row[] {
+  const [marker, ...carried] = rows
+  if (!marker || rows.length <= cap) return rows
+  const kept = carried.slice(-(cap - 1))
+  return [{ ...marker, carried: kept.length }, ...kept]
 }
 
 export function projectToSummary(p: Project): ProjectSummary {

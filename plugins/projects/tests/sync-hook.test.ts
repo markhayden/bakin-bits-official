@@ -95,6 +95,7 @@ function makeCtx(): CapturedCtx {
       invoke: mock(async () => undefined),
     },
     conversations: {
+      acceptHandoff: mock(),
       createTurnService: mock(() => ({
         start: mock(async () => 'accepted' as const),
         abort: mock(() => false),

@@ -5,12 +5,12 @@
 import { z } from 'zod'
 import { defineRoute } from '@makinbakin/sdk'
 import type { BakinPlugin, ConversationTurnService, PluginContext, RuntimeAgent } from '@makinbakin/sdk/types'
-import { conversationThreadId } from '@makinbakin/sdk/utils'
-import { createProjectRepository, PlanHistoryUnavailableError, projectToSummary } from './lib/parser'
+import { conversationThreadId, handoffPreamble, writeHandoffBatch } from '@makinbakin/sdk/utils'
+import { createProjectRepository, fitHandoffBatch, PlanHistoryUnavailableError, projectToSummary } from './lib/parser'
 import { createProjectService, deriveChecklist, withProjectLock } from './lib/project-service'
 import { ProjectMutationError } from './lib/project-mutations'
 import { buildProjectBrainstormContext } from './lib/brainstorm-prompt'
-import { briefOpenQuestions } from './lib/brief'
+import { BRIEF_SKELETON, briefOpenQuestions } from './lib/brief'
 import { createStewardGates } from './lib/steward/gates'
 import { withAdmissionFence } from './lib/steward/admission'
 import { createInputGate } from './lib/steward/input-gate'
@@ -294,6 +294,15 @@ const projectsPlugin: BakinPlugin = {
           row as unknown as ProjectBrainstormMessage,
         ])
       },
+      // A batch (a chat hand-off's marker and carried history) is ONE write
+      // of the sidecar: all of its rows land, or none.
+      appendRows: (key, rows) => {
+        if (!readProject(key)) throw new Error(`project ${key} is gone — dropping brainstorm rows`)
+        writeBrainstormMessages(key, [
+          ...readBrainstormMessages(key),
+          ...(rows as unknown as ProjectBrainstormMessage[]),
+        ])
+      },
       threadId: (key, agentId) => conversationThreadId('projects', key, agentId),
       metering: {
         workClass: 'chat',
@@ -330,6 +339,16 @@ const projectsPlugin: BakinPlugin = {
     })
     const stewardGates = createStewardGates({ ctx, repo, turns: stewardTurns, projectService })
     stewardGates.registerGates()
+
+    // A chat that creates a project hands its history over (the manifest
+    // declares `project` with handoff: true). Same admission tracking as
+    // steward rows; the write is one batch and a repeat is a no-op.
+    ctx.conversations.acceptHandoff('project', async (request) => {
+      const projectId = request.target.id
+      if (!readProject(projectId)) throw new Error(`Project ${projectId} not found`)
+      const existing = readBrainstormMessages(projectId) as unknown as Parameters<typeof writeHandoffBatch>[4]
+      await writeHandoffBatch(stewardTurns, ctx, projectId, { ...request, rows: fitHandoffBatch(request.rows) }, existing)
+    })
 
     activeBrainstormTurns = brainstormTurns
     admissionsOpen = true
@@ -1026,7 +1045,12 @@ const projectsPlugin: BakinPlugin = {
       const result = await admitTurn(() => withAdmissionFence(projectId, async () => {
         const derived = await derive(project)
         const pendingQuestion = readProject(projectId)?.waitingOn
-        const context = buildProjectBrainstormContext(derived, body.prompt, { live: true, ...(pendingQuestion ? { pendingQuestion } : {}) })
+        const built = buildProjectBrainstormContext(derived, body.prompt, { live: true, ...(pendingQuestion ? { pendingQuestion } : {}) })
+        // A project handed over from a chat: until this agent has replied
+        // here, its turn carries the chat's history (derived from the
+        // transcript, so a failed first turn primes again on retry).
+        const carriedOver = handoffPreamble(readBrainstormMessages(projectId) as unknown as Parameters<typeof handoffPreamble>[0], agentId)
+        const context = carriedOver ? `${carriedOver}\n\n${built}` : built
         const started = await brainstormTurns.start(ctx, projectId, body.prompt, { agentId, runtimeContent: context })
         if (started === 'accepted' && pendingQuestion) {
           await inputGate.admitReply(projectId, pendingQuestion.questionId)
@@ -1202,6 +1226,12 @@ const projectsPlugin: BakinPlugin = {
       },
     })
 
+    /** The conversation card for a project a tool changed, under its current title. */
+    const updatedCard = (projectId: string) => {
+      const title = readProject(projectId)?.title
+      return title ? { entities: [{ kind: 'projects:project', id: projectId, title, action: 'updated' as const }] } : {}
+    }
+
     ctx.registerExecTool({
       name: 'bakin_exec_projects_create',
       label: 'Created a project',
@@ -1216,12 +1246,18 @@ const projectsPlugin: BakinPlugin = {
         const result = await createProject({
           title: params.title as string,
           titleSource: 'agent',
-          body: params.body as string | undefined,
+          // No plan supplied: the project starts as a proper draft, on the
+          // brief the lead fills in, exactly as the start screen seeds it.
+          body: (params.body as string | undefined) ?? BRIEF_SKELETON.trim(),
           owner: (params.owner as string) || agent,
           tasks: params.tasks as string[] | undefined,
         })
         indexProject(result.id).catch(() => {})
-        return { ok: true, ...result }
+        return {
+          ok: true,
+          ...result,
+          entities: [{ kind: 'projects:project', id: result.id, title: params.title as string, action: 'created' as const }],
+        }
       },
     })
 
@@ -1243,7 +1279,7 @@ const projectsPlugin: BakinPlugin = {
             owner: params.owner as string | undefined,
           }, { kind: 'agent', agentId: agent })
           indexProject(params.projectId as string).catch(() => {})
-          return { ok: true }
+          return { ok: true, ...updatedCard(params.projectId as string) }
         } catch (err: unknown) {
           return { ok: false, error: (err as Error).message }
         }
@@ -1272,7 +1308,7 @@ const projectsPlugin: BakinPlugin = {
             checklistItems: params.checklistItems as string[] | undefined,
           }, { kind: 'agent', agentId: agent })
           indexProject(params.projectId as string).catch(() => {})
-          return { ok: true, ...result }
+          return { ok: true, ...result, ...updatedCard(params.projectId as string) }
         } catch (err: unknown) {
           return { ok: false, error: (err as Error).message }
         }

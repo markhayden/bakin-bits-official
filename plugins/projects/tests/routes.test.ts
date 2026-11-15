@@ -2036,10 +2036,10 @@ describe('Exec Tools', () => {
   // bakin_exec_projects_create
   // -------------------------------------------------------------------------
   describe('bakin_exec_projects_create', () => {
-    it('keeps an empty body — only the start screen\'s kickoff seeds the brief', async () => {
+    it('seeds the brief when no plan is supplied; a plain route create stays empty', async () => {
       const tool = findTool(plugin.execTools, 'bakin_exec_projects_create')!
       const result = await callTool(tool, { title: 'Tool-made' })
-      expect((await readViaTool(result.id as string)).body).toBe('')
+      expect(String((await readViaTool(result.id as string)).body)).toContain('## Open questions')
       const plainCreate = await callRoute(findRoute(plugin.routes, 'POST', '/')!, plugin.ctx, { body: { title: 'Route-made' } })
       expect((await readViaTool(plainCreate.body.id as string)).body).toBe('')
     })
@@ -2563,3 +2563,108 @@ describe('projects cliCommands args', () => {
   })
 })
 
+
+describe('entity cards and chat hand-off', () => {
+  const chatSource = { entity: 'chat:chat', id: 'c-1', title: 'Launch chat' }
+  const carried = [
+    { kind: 'user' as const, ts: '2026-11-14T09:00:00.000Z', content: 'plan the spring launch' },
+    { kind: 'assistant' as const, ts: '2026-11-14T09:00:01.000Z', turnId: 't1', agentId: 'main', content: 'Creating a project for it.' },
+  ]
+  const stored = (projectId: string) =>
+    createProjectRepository(new MarkdownStorageAdapter(testDir)).readBrainstormMessages(projectId)
+  const settle = () => new Promise<void>((resolve) => {
+    const off = plugin.ctx.events.on('*', (event) => {
+      if (event === 'projects.brainstorm.done' || event === 'projects.brainstorm.error') { off(); resolve() }
+    })
+  })
+
+  it('the manifest declares the project kind as accepting a hand-off', () => {
+    const manifest = JSON.parse(readFileSync(join(import.meta.dir, '..', 'bakin-plugin.json'), 'utf8'))
+    expect(manifest.contributes.entities).toEqual([
+      { kind: 'project', label: 'Project', icon: 'FolderKanban', href: '/projects/{id}', handoff: true },
+    ])
+  })
+
+  it('create reports the project it created, as a proper draft with the brief skeleton', async () => {
+    const result = await callTool(findTool(plugin.execTools, 'bakin_exec_projects_create')!, { title: 'Spring launch' }, 'main')
+    expect(result.entities).toEqual([{ kind: 'projects:project', id: result.id, title: 'Spring launch', action: 'created' }])
+
+    const project = await readViaTool(result.id as string)
+    expect(String(project.body)).toContain('## Open questions')
+    expect(String(project.body)).toContain('## Goal')
+  })
+
+  it('create keeps a body the agent supplied', async () => {
+    const result = await callTool(findTool(plugin.execTools, 'bakin_exec_projects_create')!, { title: 'With a plan', body: '# My plan\n\nShip it.' }, 'main')
+    expect(String((await readViaTool(result.id as string)).body)).toContain('Ship it.')
+  })
+
+  it('update and apply_plan report the project as updated', async () => {
+    writeProjectFixture('proj-card', { title: 'Card project', titleSource: 'agent' })
+    const updated = await callTool(findTool(plugin.execTools, 'bakin_exec_projects_update')!, { projectId: 'proj-card', body: 'New body' }, 'main')
+    expect(updated.entities).toEqual([{ kind: 'projects:project', id: 'proj-card', title: 'Card project', action: 'updated' }])
+
+    const applied = await callTool(findTool(plugin.execTools, 'bakin_exec_projects_apply_plan')!, { projectId: 'proj-card', body: '# Plan\n\nStep one.' }, 'main')
+    expect(applied.entities).toEqual([{ kind: 'projects:project', id: 'proj-card', title: 'Card project', action: 'updated' }])
+  })
+
+  it('accepts a chat hand-off: the marker and the carried rows land together and survive a reload', async () => {
+    writeProjectFixture('proj-ho', { title: 'Handed off' })
+    await plugin.deliverHandoff({ kind: 'project', id: 'proj-ho', handoffId: 'c-1:t1:proj-ho', source: chatSource, carried, ts: '2026-11-14T10:00:00.000Z' })
+
+    expect(stored('proj-ho')).toEqual([
+      { kind: 'handoff', ts: '2026-11-14T10:00:00.000Z', handoffId: 'c-1:t1:proj-ho', direction: 'in', peers: [chatSource], carried: 2 },
+      ...carried,
+    ])
+    // Through the route the page reads.
+    const hydrated = await callRoute(findRoute(plugin.routes, 'GET', '/:projectId')!, plugin.ctx, { searchParams: { projectId: 'proj-ho' } })
+    expect(hydrated.body.project.brainstormMessages.map((row: { kind: string }) => row.kind)).toEqual(['handoff', 'user', 'assistant'])
+  })
+
+  it('a repeated hand-off is a no-op, and a missing project is refused', async () => {
+    writeProjectFixture('proj-once', { title: 'Once' })
+    const delivery = { kind: 'project', id: 'proj-once', handoffId: 'c-1:t1:proj-once', source: chatSource, carried }
+    await plugin.deliverHandoff(delivery)
+    await plugin.deliverHandoff(delivery)
+    expect(stored('proj-once').filter((row) => row.kind === 'handoff')).toHaveLength(1)
+    expect(stored('proj-once')).toHaveLength(3)
+
+    await expect(plugin.deliverHandoff({ ...delivery, id: 'proj-missing', handoffId: 'c-1:t1:proj-missing' })).rejects.toThrow(/not found/i)
+  })
+
+  it('a chat longer than the transcript cap keeps the marker and the most recent messages', async () => {
+    writeProjectFixture('proj-long', { title: 'Long' })
+    const long = Array.from({ length: 400 }, (_, i) => ({ kind: 'user' as const, ts: '2026-11-14T09:00:00.000Z', content: `message ${i}` }))
+    await plugin.deliverHandoff({ kind: 'project', id: 'proj-long', handoffId: 'c-1:t1:proj-long', source: chatSource, carried: long })
+
+    const rows = stored('proj-long')
+    expect(rows).toHaveLength(300)
+    expect(rows[0]).toMatchObject({ kind: 'handoff', direction: 'in', carried: 299 })
+    expect(rows[1]).toMatchObject({ content: 'message 101' })
+    expect(rows[299]).toMatchObject({ content: 'message 399' })
+  })
+
+  it('the first turn after a hand-off is primed with the carried history, and the next one is not', async () => {
+    writeProjectFixture('proj-prime', { title: 'Primed' })
+    await plugin.deliverHandoff({ kind: 'project', id: 'proj-prime', handoffId: 'c-1:t1:proj-prime', source: chatSource, carried })
+    const ask = findRoute(plugin.routes, 'POST', '/:projectId/ask')!
+
+    const first = mockRuntimeStream(['Start with the audience.'])
+    let done = settle()
+    expect((await callRoute(ask, plugin.ctx, { body: { projectId: 'proj-prime', prompt: 'what is first?' }, rawResponse: true })).response.status).toBe(202)
+    await done
+    const firstContent = (first.mock.calls[0]![0] as MessageArgs).content
+    expect(firstContent).toContain('carried over from the chat "Launch chat"')
+    expect(firstContent).toContain('User: plan the spring launch')
+    expect(firstContent).toContain('what is first?')
+
+    const second = mockRuntimeStream(['Then the channels.'])
+    done = settle()
+    await callRoute(ask, plugin.ctx, { body: { projectId: 'proj-prime', prompt: 'and then?' }, rawResponse: true })
+    await done
+    expect((second.mock.calls[0]![0] as MessageArgs).content).not.toContain('carried over from the chat')
+
+    // The carried rows are still there after turns were written behind them.
+    expect(stored('proj-prime').slice(0, 3).map((row) => row.kind)).toEqual(['handoff', 'user', 'assistant'])
+  })
+})
