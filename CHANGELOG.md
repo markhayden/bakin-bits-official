@@ -9,6 +9,20 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- `messaging` (0.13.0, requires Bakin `>=0.0.1-rc.50`): **cards and chat
+  hand-off.** The manifest declares the `session` kind
+  (`/messaging/brainstorm?session={id}`) and the `plan` kind
+  (`/messaging/plans/{id}`). `bakin_exec_messaging_session_create`,
+  `_session_update` and `_plan_create` report what they touched, and the
+  agent's reply shows a card linking to it. A brainstorm session created from
+  a chat accepts the chat's history: the marker and the carried messages are
+  one save of the session, each row stored whole so it reads back exactly as
+  it was written (original timestamps, no fence splitting), kept to the
+  300-message cap with the newest first; a repeat is a no-op; and the
+  session's agent is primed with that history on its next turn until it has
+  replied. A session's own tool rows now keep their turn id and metadata, so
+  cards survive a reload. Deliverables have no page of their own and get no
+  card.
 - `projects` (0.15.0, requires Bakin `>=0.0.1-rc.50`): **cards and chat
   hand-off.** The manifest declares the `project` kind (`/projects/{id}`),
   so Bakin links to a project from one declaration. `bakin_exec_projects_create`,

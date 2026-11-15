@@ -6,7 +6,8 @@ import { z } from 'zod'
 import { defineRoute } from '@makinbakin/sdk'
 import type { BakinPlugin, PluginContext, PluginLogger } from '@makinbakin/sdk/types'
 import { approvalProvenanceFromRequest } from '@makinbakin/sdk/routing'
-import { conversationThreadId } from '@makinbakin/sdk/utils'
+import type { ConversationMessage } from '@makinbakin/sdk/conversation'
+import { conversationThreadId, handoffPreamble, writeHandoffBatch } from '@makinbakin/sdk/utils'
 import type {
   BrainstormSession,
   ContentTone,
@@ -21,6 +22,8 @@ import type {
   MessagingSettings,
 } from './types'
 import { DEFAULT_CHANNEL, DEFAULT_CONTENT_TYPES } from './types'
+import { conversationRowToSessionMessage, fitHandoffBatch } from './lib/session-rows'
+import { sessionMessageToConversation } from './lib/session-to-conversation'
 import { buildMessages, buildPlanRefinementMessages } from './lib/prompt-builder'
 import {
   buildDoc as buildBrainstormDoc,
@@ -509,6 +512,13 @@ function listBrainstormSessionSummaries(
 }
 
 const SESSION_MESSAGE_CAP = 300
+
+/** A session's stored messages as conversation rows — what the page renders. */
+function sessionConversationRows(session: BrainstormSession): Parameters<typeof handoffPreamble>[0] {
+  return session.messages
+    .map(message => sessionMessageToConversation(session.agentId, message))
+    .filter((row): row is ConversationMessage => row !== null) as unknown as Parameters<typeof handoffPreamble>[0]
+}
 
 function appendBrainstormMessage(
   contentStore: MessagingContentStorage,
@@ -1254,6 +1264,8 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         // Fires at 202-accept — the nav working dot must not wait out model
         // latency for the first chunk (bakin#707).
         started: 'messaging.brainstorm.started',
+        // Rows written outside a turn (a chat's history handed over).
+        appended: 'messaging.brainstorm.appended',
       },
       payload: (key) => ({ sessionId: key }),
       resolveThread: (key) => {
@@ -1311,6 +1323,19 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
           appendBrainstormMessage(contentStore, key, { role: 'activity', kind: 'turn_aborted', content: 'Turn stopped.' })
         }
       },
+      // A batch written outside a turn (a chat hand-off: the marker, then the
+      // carried history) is ONE save of the session — all of it or none — and
+      // each row is stored whole, so it reads back exactly as it was written.
+      appendRows: (key, rows) => {
+        const session = contentStore.getBrainstormSession(key)
+        if (!session) throw new Error(`Session ${key} not found`)
+        contentStore.updateBrainstormSession(key, {
+          messages: [
+            ...session.messages,
+            ...(rows as unknown as ConversationMessage[]).map(row => conversationRowToSessionMessage(row, generateId())),
+          ].slice(-SESSION_MESSAGE_CAP),
+        })
+      },
       // Plan-refinement turns run on the plan's own thread; the state map is
       // written before start(), so the per-turn mode is visible here.
       threadId: (key, agentId) => {
@@ -1342,6 +1367,21 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
           brainstormTurnState.delete(key)
         },
       },
+    })
+
+    // A chat that creates a brainstorm session hands its history over (the
+    // manifest declares `session` with handoff: true). One batch, written
+    // once: a repeat of the same hand-off is a no-op.
+    ctx.conversations.acceptHandoff('session', async (request) => {
+      const session = contentStore.getBrainstormSession(request.target.id)
+      if (!session) throw new Error(`Session ${request.target.id} not found`)
+      await writeHandoffBatch(
+        brainstormTurns,
+        ctx,
+        session.id,
+        { ...request, rows: fitHandoffBatch(request.rows, SESSION_MESSAGE_CAP) },
+        sessionConversationRows(session),
+      )
     })
 
     // Boot sweep (bakin#706): sessions whose transcript ends on a user row
@@ -1401,8 +1441,13 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         brainstormTurnState.set(id, staged)
         let result: Awaited<ReturnType<typeof brainstormTurns.start>>
         try {
+          // A session a chat was handed over to: until its agent has replied
+          // here, the turn carries the chat's history (derived from the
+          // stored rows, so a failed first turn primes again on retry).
+          const carriedOver = plan ? null : handoffPreamble(sessionConversationRows(session), session.agentId)
+          const flattened = flattenChatMessages(messages)
           result = await brainstormTurns.start(ctx, id, body.message, {
-            runtimeContent: flattenChatMessages(messages),
+            runtimeContent: carriedOver ? `${carriedOver}\n\n${flattened}` : flattened,
           })
         } catch (err) {
           if (brainstormTurnState.get(id) === staged) brainstormTurnState.delete(id)
@@ -1856,7 +1901,11 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
           channels: normalizePlanChannels(params.channels),
         })
         ctx.activity.audit('plan.created', params.agent as string, { planId: plan.id, title: plan.title })
-        return { ok: true, plan }
+        return {
+          ok: true,
+          plan,
+          entities: [{ kind: 'messaging:plan', id: plan.id, title: plan.title, action: 'created' as const }],
+        }
       },
     })
 
@@ -2192,7 +2241,11 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
           scope: params.scope as string | undefined,
         })
         ctx.activity.audit('session.created', params.agentId as string, { sessionId: session.id })
-        return { ok: true, session }
+        return {
+          ok: true,
+          session,
+          entities: [{ kind: 'messaging:session', id: session.id, title: session.title, action: 'created' as const }],
+        }
       },
     })
 
@@ -2212,7 +2265,11 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
             title: params.title as string | undefined,
             status: params.status as BrainstormSession['status'] | undefined,
           })
-          return { ok: true, session }
+          return {
+            ok: true,
+            session,
+            entities: [{ kind: 'messaging:session', id: session.id, title: session.title, action: 'updated' as const }],
+          }
         } catch (e: unknown) {
           return { ok: false, error: (e as Error).message }
         }

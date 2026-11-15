@@ -64,6 +64,7 @@ import {
   execToolArgShape,
 } from '../test-helpers'
 import type { ActivatedPlugin } from '../test-helpers'
+import { sessionMessageToConversation } from '../../../plugins/messaging/lib/session-to-conversation'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -731,3 +732,94 @@ describe('messaging cliCommands args', () => {
   })
 })
 
+
+describe('entity cards and chat hand-off', () => {
+  const chatSource = { entity: 'chat:chat', id: 'c-1', title: 'Launch chat' }
+  const carried = [
+    { kind: 'user' as const, ts: '2026-11-14T09:00:00.000Z', content: 'plan the launch posts' },
+    { kind: 'assistant' as const, ts: '2026-11-14T09:00:01.000Z', turnId: 't1', agentId: 'main', content: 'Starting a brainstorm:\n```json\n{"note":"kept whole"}\n```\nReady.' },
+  ]
+  async function sessionRows(sessionId: string) {
+    const getSession = findRoute(plugin.routes, 'GET', '/sessions/:id')!
+    const { body } = await callRoute(getSession, plugin.ctx, { searchParams: { id: sessionId } })
+    const session = body.session as { agentId: string; messages: Array<Parameters<typeof sessionMessageToConversation>[1]> }
+    return session.messages.map((message) => sessionMessageToConversation(session.agentId, message)).filter((row) => row !== null)
+  }
+  const deliver = (sessionId: string, rows = carried) =>
+    plugin.deliverHandoff({ kind: 'session', id: sessionId, handoffId: `c-1:t1:${sessionId}`, source: chatSource, carried: rows, ts: '2026-11-14T10:00:00.000Z' })
+
+  it('the manifest declares the session kind as accepting a hand-off, and the plan kind', () => {
+    const manifest = JSON.parse(readFileSync(join(import.meta.dir, '..', 'bakin-plugin.json'), 'utf8'))
+    expect(manifest.contributes.entities).toEqual([
+      { kind: 'session', label: 'Brainstorm', icon: 'Lightbulb', href: '/messaging/brainstorm?session={id}', handoff: true },
+      { kind: 'plan', label: 'Plan', icon: 'ClipboardList', href: '/messaging/plans/{id}' },
+    ])
+  })
+
+  it('session and plan tools report what they created or changed', async () => {
+    const { callTool } = await import('../test-helpers')
+    const created = await callTool(findTool(plugin.execTools, 'bakin_exec_messaging_session_create')!, { agentId: 'basil', title: 'Launch posts' })
+    const sessionId = (created.session as { id: string }).id
+    expect(created.entities).toEqual([{ kind: 'messaging:session', id: sessionId, title: 'Launch posts', action: 'created' }])
+
+    const updated = await callTool(findTool(plugin.execTools, 'bakin_exec_messaging_session_update')!, { sessionId, title: 'Launch week posts' })
+    expect(updated.entities).toEqual([{ kind: 'messaging:session', id: sessionId, title: 'Launch week posts', action: 'updated' }])
+
+    const plan = await callTool(findTool(plugin.execTools, 'bakin_exec_messaging_plan_create')!, { title: 'Launch week', targetDate: '2026-12-01', agent: 'basil' })
+    expect(plan.entities).toEqual([{ kind: 'messaging:plan', id: (plan.plan as { id: string }).id, title: 'Launch week', action: 'created' }])
+  })
+
+  it('accepts a chat hand-off: the marker and the carried rows land together, verbatim, and announce themselves', async () => {
+    const sessionId = await createTestSession()
+    const bus = collectBusEvents()
+    await deliver(sessionId)
+    bus.stop()
+
+    expect(await sessionRows(sessionId)).toEqual([
+      { kind: 'handoff', ts: '2026-11-14T10:00:00.000Z', handoffId: `c-1:t1:${sessionId}`, direction: 'in', peers: [chatSource], carried: 2 },
+      ...carried,
+    ])
+    expect(bus.events.filter((e) => e.event === 'messaging.brainstorm.appended')).toHaveLength(1)
+  })
+
+  it('a repeated hand-off is a no-op, and a missing session is refused', async () => {
+    const sessionId = await createTestSession()
+    await deliver(sessionId)
+    await deliver(sessionId)
+    expect((await sessionRows(sessionId)).filter((row) => row.kind === 'handoff')).toHaveLength(1)
+
+    await expect(deliver('no-such-session')).rejects.toThrow(/not found/i)
+  })
+
+  it('a chat longer than the session cap keeps the marker and the most recent messages', async () => {
+    const sessionId = await createTestSession()
+    await deliver(sessionId, Array.from({ length: 400 }, (_, i) => ({ kind: 'user' as const, ts: '2026-11-14T09:00:00.000Z', content: `message ${i}` })))
+    const rows = await sessionRows(sessionId)
+    expect(rows).toHaveLength(300)
+    expect(rows[0]).toMatchObject({ kind: 'handoff', carried: 299 })
+    expect(rows[299]).toMatchObject({ content: 'message 399' })
+  })
+
+  it('the first turn after a hand-off is primed with the carried history, and the next one is not', async () => {
+    const sessionId = await createTestSession()
+    await deliver(sessionId)
+
+    streamRuntimeResponse('Let us start with the audience.')
+    await sendAndSettle(sessionId, 'what is first?')
+    const first = (mockRuntimeStream.mock.calls[0] as unknown as [{ content: string }])[0].content
+    expect(first).toContain('carried over from the chat "Launch chat"')
+    expect(first).toContain('User: plan the launch posts')
+    expect(first).toContain('what is first?')
+
+    streamRuntimeResponse('Then the channels.')
+    await sendAndSettle(sessionId, 'and then?')
+    const second = (mockRuntimeStream.mock.calls[1] as unknown as [{ content: string }])[0].content
+    expect(second).not.toContain('carried over from the chat')
+
+    // The carried rows are intact after the session's own turns were written.
+    expect((await sessionRows(sessionId)).slice(0, 3)).toEqual([
+      expect.objectContaining({ kind: 'handoff', carried: 2 }),
+      ...carried,
+    ])
+  })
+})

@@ -847,6 +847,8 @@ export function BrainstormView() {
       chunk: 'messaging.brainstorm.chunk',
       done: 'messaging.brainstorm.done',
       error: 'messaging.brainstorm.error',
+      // A chat's history handed over to this session, written outside a turn.
+      appended: 'messaging.brainstorm.appended',
     },
     keyOf: useCallback((payload: Record<string, unknown>) => payload.sessionId, []),
     load: useCallback(async (key: string) => {
