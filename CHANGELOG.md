@@ -14,6 +14,10 @@ on a per-plugin basis: each plugin tags its own releases as
   owning plugin's declared kind, instead of a hand-written URL. A repo
   architecture test (`plugins/no-literal-entity-href.test.ts`) fails on a
   hand-built entity link in either plugin. Behaviour is unchanged.
+  `projects` 0.15.1 also fixes the project page for a project carried over
+  from a chat: the page's response check did not know the hand-off marker
+  row and refused the whole project ("Projects returned invalid project
+  data").
 - `messaging` (0.13.0, requires Bakin `>=0.0.1-rc.50`): **cards and chat
   hand-off.** The manifest declares the `session` kind
   (`/messaging/brainstorm?session={id}`) and the `plan` kind

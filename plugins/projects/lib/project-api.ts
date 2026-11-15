@@ -43,6 +43,9 @@ function record(value: unknown): value is Record<string, unknown> {
 const string = (value: unknown): value is string => typeof value === 'string'
 const optionalString = (value: unknown) => value === undefined || string(value)
 
+/** Every conversation row kind the server stores; a kind missing here fails the whole project load. */
+const CONVERSATION_ROW_KINDS = ['user', 'assistant', 'tool', 'error', 'aborted', 'done', 'handoff']
+
 function validProject(value: unknown): value is ProjectDetailData {
   if (!record(value)) return false
   return ['id', 'title', 'owner', 'body', 'created', 'updated'].every(field => string(value[field]))
@@ -52,7 +55,7 @@ function validProject(value: unknown): value is ProjectDetailData {
     && Array.isArray(value.assets) && value.assets.every(asset => record(asset) && string(asset.assetId) && optionalString(asset.label))
     && record(value.resolvedTasks) && Object.values(value.resolvedTasks).every(task => task === null || (record(task) && string(task.column) && string(task.title) && optionalString(task.agent)))
     && Array.isArray(value.resolvedAssets) && value.resolvedAssets.every(asset => record(asset) && string(asset.assetId) && string(asset.type) && optionalString(asset.label) && optionalString(asset.description) && (asset.missing === undefined || typeof asset.missing === 'boolean') && (asset.tags === undefined || (Array.isArray(asset.tags) && asset.tags.every(string))))
-    && (value.brainstormMessages === undefined || (Array.isArray(value.brainstormMessages) && value.brainstormMessages.every(row => record(row) && ['user', 'assistant', 'tool', 'error', 'aborted', 'done'].includes(String(row.kind)))))
+    && (value.brainstormMessages === undefined || (Array.isArray(value.brainstormMessages) && value.brainstormMessages.every(row => record(row) && CONVERSATION_ROW_KINDS.includes(String(row.kind)))))
 }
 
 export async function readProjectDetail(id: string, signal: AbortSignal): Promise<ProjectDetailData> {
