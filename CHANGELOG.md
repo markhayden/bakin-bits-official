@@ -9,6 +9,17 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- `projects` (0.15.0, requires Bakin `>=0.0.1-rc.50`): **cards and chat
+  hand-off.** The manifest declares the `project` kind (`/projects/{id}`),
+  so Bakin links to a project from one declaration. `bakin_exec_projects_create`,
+  `_update` and `_apply_plan` report the project they touched, and the agent's
+  reply shows a card linking to it. A project created from a chat accepts the
+  chat's history: the marker and the carried messages are written as one batch
+  (kept to the 300-row cap, newest first), a repeat is a no-op, and the lead's
+  next turn is primed with that history until it has replied in the project.
+  A project the create tool makes without a plan now starts on the brief
+  skeleton, like one made from the start screen. The SDK pin moves to bakin
+  main after conversation entity links and hand-off.
 - `projects` (0.14.0): **instant start + the shaping interview.** The start
   screen opens the project the moment the create is written; the first turn
   starts on the server, detached, behind one fenced start protocol

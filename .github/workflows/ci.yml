@@ -12,12 +12,12 @@ concurrency:
 
 env:
   # The ONE compatible Bakin SDK source both jobs build and verify against.
-  # Terminal multi-device (bakin #1028/#1029 + H3): the reviewed bakin stack
-  # tip, which carries main (the Projects revamp SDK pins #1034/#1038) plus
-  # plugin socket routes, interactive CLI launch, useFullscreen and the
-  # canonical stylesheet for this stack; repinned to the release commit before
-  # this stack merges. Pin a reviewed commit, never a moving branch.
-  BAKIN_SDK_REF: fd65b5cd53ca70afab04d8fd2a960201d6aa9b18
+  # bakin main after conversation entity links and hand-off (#1089–#1093):
+  # manifest entity kinds and tool `reports`, `ExecToolResult.entities`,
+  # `entityHref`, entity cards, `ctx.conversations.acceptHandoff`, the batch
+  # writer `appendRows`, and the hand-off helpers in `@makinbakin/sdk/utils`.
+  # Pin a reviewed commit, never a moving branch.
+  BAKIN_SDK_REF: 7ddb128f8ff9dcfbcd90155b18c65d3a14943e2d
 
 jobs:
   check:

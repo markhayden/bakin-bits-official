@@ -24,6 +24,8 @@ import type {
   TaskCreateInput,
   TaskService,
   WorkflowDefinitionInput,
+  ConversationHandoffRequest,
+  ConversationTurnRow,
 } from '@makinbakin/sdk/types'
 
 
@@ -47,7 +49,10 @@ function createTestTurnService(config: TurnConfig, meteredTurns: Array<Record<st
   const pending = new Map<string, Batch[]>()
 
   const writeBatch = async (ctx: TurnCtx, key: string, batch: Omit<Batch, 'resolve' | 'reject'>) => {
-    for (const row of batch.rows) await config.appendRow(key, row)
+    // The engine writes a batch through `appendRows` when the service has one
+    // (one atomic write), else row by row.
+    if (config.appendRows) await config.appendRows(key, batch.rows)
+    else for (const row of batch.rows) await config.appendRow(key, row)
     if (config.events.appended) ctx.events.emit(config.events.appended, { ...config.payload(key), ...(batch.notice ? { notice: batch.notice } : {}) })
   }
 
@@ -559,10 +564,34 @@ export interface ActivatedPlugin {
   meteredTurns: Array<Record<string, unknown>>
   /** The operator's side of ctx.approvals (resolve, inspect). */
   approvals: TestApprovals
+  /** Hand a chat's history to the plugin's acceptor for `kind`, exactly as Bakin delivers it. */
+  deliverHandoff: (delivery: {
+    kind: string
+    id: string
+    handoffId: string
+    source: { entity: string; id: string; title: string }
+    carried: ConversationTurnRow[]
+    ts?: string
+  }) => Promise<void>
+}
+
+interface TestManifest {
+  contributes?: {
+    entities?: Array<{ kind: string; handoff?: boolean }>
+    execTools?: Array<{ name: string; reports?: string[] }>
+  }
+}
+
+/** The plugin's real manifest, so tests hold tools and acceptors to what it declares. */
+function readPluginManifest(pluginId: string): TestManifest | undefined {
+  const path = join(import.meta.dir, pluginId, 'bakin-plugin.json')
+  return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) as TestManifest : undefined
 }
 
 export function createTestContext(pluginId: string, testDir: string): ActivatedPlugin {
   if (!existsSync(testDir)) mkdirSync(testDir, { recursive: true })
+  const manifest = readPluginManifest(pluginId)
+  const handoffAcceptors = new Map<string, (request: ConversationHandoffRequest) => Promise<void> | void>()
 
   const routes: APIRoute[] = []
   const execTools: ExecToolDefinition[] = []
@@ -674,6 +703,13 @@ export function createTestContext(pluginId: string, testDir: string): ActivatedP
     },
     conversations: {
       createTurnService: (config) => createTestTurnService(config as unknown as TurnConfig, meteredTurns) as ReturnType<PluginContext['conversations']['createTurnService']>,
+      // The host's rule: only a kind the manifest declares with `handoff: true`.
+      acceptHandoff: (kind, acceptor) => {
+        const declared = (manifest?.contributes?.entities ?? []).some(entity => entity.kind === kind && entity.handoff === true)
+        if (!declared) throw new Error(`Plugin "${pluginId}" cannot accept hand-offs for "${kind}": declare the kind in contributes.entities with "handoff": true`)
+        if (handoffAcceptors.has(kind)) throw new Error(`Hand-off kind "${pluginId}:${kind}" already has an acceptor`)
+        handoffAcceptors.set(kind, acceptor)
+      },
     },
     approvals: approvals.api,
   }
@@ -685,6 +721,19 @@ export function createTestContext(pluginId: string, testDir: string): ActivatedP
     fileBackedContentTypes,
     meteredTurns,
     approvals,
+    deliverHandoff: async ({ kind, id, handoffId, source, carried, ts }) => {
+      const acceptor = handoffAcceptors.get(kind)
+      if (!acceptor) throw new Error(`No acceptor registered for "${pluginId}:${kind}"`)
+      // The batch Bakin builds: the `in` marker, then the carried rows.
+      await acceptor({
+        handoffId,
+        target: { kind: `${pluginId}:${kind}`, id },
+        rows: [
+          { kind: 'handoff', ts: ts ?? new Date().toISOString(), handoffId, direction: 'in', peers: [source], carried: carried.length },
+          ...carried,
+        ],
+      })
+    },
     seedResults: (results, aggregations) => {
       seededResults = results
       seededAggregations = aggregations
@@ -771,7 +820,20 @@ export async function callTool(
   params: Record<string, unknown>,
   agent = 'test-agent',
 ): Promise<Record<string, unknown>> {
-  return tool.handler(params, agent)
+  const result = await tool.handler(params, agent)
+  // Bakin drops an entity whose kind the tool's manifest entry does not list
+  // under `reports`, so the card silently never appears. Fail here instead.
+  const reported = Array.isArray(result.entities) ? result.entities as Array<{ kind: string }> : []
+  if (reported.length > 0) {
+    const pluginId = /^bakin_exec_([a-z0-9-]+?)_/.exec(tool.name)?.[1] ?? ''
+    const reports = readPluginManifest(pluginId)?.contributes?.execTools?.find(entry => entry.name === tool.name)?.reports ?? []
+    for (const ref of reported) {
+      if (!reports.includes(ref.kind)) {
+        throw new Error(`${tool.name} reported "${ref.kind}", which its manifest entry does not list under contributes.execTools[].reports`)
+      }
+    }
+  }
+  return result
 }
 
 type ZodLike = {

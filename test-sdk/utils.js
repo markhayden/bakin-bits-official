@@ -199,3 +199,78 @@ export function parseBakinQuestion(value) {
   if (typeof value.allowOther !== 'boolean') return null
   return value
 }
+
+// ── Chat hand-off helpers (functional ports of the real SDK:
+// packages/core/src/conversation/handoff.ts) ───────────────────────────────
+
+export const HANDOFF_PREAMBLE_BYTES = 16 * 1024
+
+export function hasAcceptedHandoff(rows, id) {
+  return rows.some(row => row.kind === 'handoff' && row.direction === 'in' && row.handoffId === id)
+}
+
+export async function writeHandoffBatch(service, ctx, key, request, existing) {
+  if (hasAcceptedHandoff(existing, request.handoffId)) return
+  const result = await service.appendExternal(ctx, key, request.rows)
+  await result.written
+}
+
+const handoffBytes = text => new TextEncoder().encode(text).length
+
+export function handoffPreamble(rows, agentId, { maxBytes = HANDOFF_PREAMBLE_BYTES } = {}) {
+  let at = -1
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i]
+    if (row.kind === 'handoff' && row.direction === 'in') { at = i; break }
+  }
+  if (at < 0) return null
+  const marker = rows[at]
+  const carriedEnd = at + 1 + (marker.carried ?? 0)
+  const replied = rows.slice(carriedEnd).some(row =>
+    row.kind === 'assistant' && (row.agentId === undefined || row.agentId === agentId))
+  if (replied) return null
+
+  const lines = rows.slice(at + 1, carriedEnd).flatMap((row) => {
+    if (row.kind === 'user') return [`User: ${row.content}`]
+    if (row.kind === 'assistant' && row.content.trim()) return [`Assistant: ${row.content}`]
+    return []
+  })
+  if (lines.length === 0) return null
+
+  const source = marker.peers[0]?.title
+  const head = [
+    'The user began this conversation in a chat and continued it here. The earlier conversation follows.',
+    'It is context, not a new request: do not answer or repeat it. Reply to the message that comes after it.',
+    '',
+    `--- Earlier conversation${source ? ` (carried over from the chat "${source}")` : ''} ---`,
+  ].join('\n')
+  const tail = '--- End of the earlier conversation ---'
+  const omitted = count => `[… ${count} earlier message${count === 1 ? '' : 's'} omitted …]`
+
+  let budget = maxBytes - handoffBytes(head) - handoffBytes(tail) - 2
+  const kept = []
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]
+    const reserve = i > 0 ? handoffBytes(omitted(i)) + 1 : 0
+    const cost = handoffBytes(line) + 1
+    if (cost + reserve <= budget) {
+      kept.unshift(line)
+      budget -= cost
+      continue
+    }
+    if (kept.length > 0) {
+      kept.unshift(omitted(i + 1))
+      break
+    }
+    const note = ' […]'
+    let clipped = ''
+    for (const char of line) {
+      if (handoffBytes(clipped + char) + handoffBytes(note) + 1 + reserve > budget) break
+      clipped += char
+    }
+    if (clipped) kept.unshift(clipped + note)
+    if (i > 0) kept.unshift(omitted(i))
+    break
+  }
+  return [head, ...kept, tail].join('\n')
+}
