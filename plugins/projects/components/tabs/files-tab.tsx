@@ -25,7 +25,7 @@ import {
 } from '@makinbakin/sdk/ui'
 import { AssetPicker, ConfirmDialog, ListRow, ListRowActions, ListRows, StatusBadge } from '@makinbakin/sdk/patterns'
 import type { AssetPickerCollection } from '@makinbakin/sdk/patterns'
-import { PluginLink } from '@makinbakin/sdk/navigation'
+import { PluginLink, entityHref } from '@makinbakin/sdk/navigation'
 import { usePluginEvent } from '@makinbakin/sdk/hooks'
 import { projectRequest } from '../../lib/project-api'
 import type { ProducedFile, ProjectDetailData, ResolvedProjectAsset as ResolvedAsset } from '../../types'
@@ -102,7 +102,7 @@ function AssetPreviewModal({ asset, onClose }: { asset: ResolvedAsset; onClose: 
           )}
         </div>
         <DialogFooter showCloseButton>
-          <PluginLink to={`/assets/${encodeURIComponent(asset.assetId)}`} className={buttonVariants({ variant: 'outline', size: 'sm' })}>Open asset</PluginLink>
+          <PluginLink to={entityHref('assets:asset', asset.assetId) ?? '/assets'} className={buttonVariants({ variant: 'outline', size: 'sm' })}>Open asset</PluginLink>
         </DialogFooter>
       </DialogContent>
     </Dialog>

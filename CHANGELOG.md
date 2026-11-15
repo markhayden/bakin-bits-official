@@ -9,6 +9,11 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- `projects` (0.15.1), `messaging` (0.13.1): every link to a project, plan,
+  brainstorm session, task or asset is built with `entityHref` from the
+  owning plugin's declared kind, instead of a hand-written URL. A repo
+  architecture test (`plugins/no-literal-entity-href.test.ts`) fails on a
+  hand-built entity link in either plugin. Behaviour is unchanged.
 - `messaging` (0.13.0, requires Bakin `>=0.0.1-rc.50`): **cards and chat
   hand-off.** The manifest declares the `session` kind
   (`/messaging/brainstorm?session={id}`) and the `plan` kind

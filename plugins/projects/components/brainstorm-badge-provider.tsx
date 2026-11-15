@@ -9,6 +9,7 @@
  * the detail page marks it seen).
  */
 import { ConversationReplyToast, useConversationAttention, visibleIdFromLocation } from '@makinbakin/sdk/conversation'
+import { entityHref } from '@makinbakin/sdk/navigation'
 
 export function BrainstormBadgeProvider() {
   useConversationAttention({
@@ -47,7 +48,7 @@ export function BrainstormBadgeProvider() {
         agentId={done.agentId}
         title="replied in a project brainstorm"
         preview={done.preview}
-        to={`/projects/${encodeURIComponent(done.key)}`}
+        to={entityHref('projects:project', done.key) ?? '/projects'}
         onNavigate={dismiss}
         testId={{ attr: 'data-project-brainstorm-toast', value: done.key }}
       />
@@ -55,7 +56,7 @@ export function BrainstormBadgeProvider() {
     osNotification: (done) => ({
       title: `${done.agentId} replied`,
       body: done.preview ?? '',
-      href: `/projects/${encodeURIComponent(done.key)}`,
+      href: entityHref('projects:project', done.key) ?? '/projects',
     }),
     errorToast: (payload) => `Project brainstorm failed: ${String(payload.message ?? 'unknown error')}`,
   })

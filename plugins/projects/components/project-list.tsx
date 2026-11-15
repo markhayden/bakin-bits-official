@@ -23,6 +23,7 @@ import { OPERATOR_DECLARATION_HEADERS } from '@makinbakin/sdk/utils'
 import { ProjectRow } from './project-row'
 import { StartScreen } from './start-screen'
 import type { ProjectSummary, ProjectStatus } from '../types'
+import { entityHref } from '@makinbakin/sdk/navigation'
 
 interface ScoreInfo {
   score: number
@@ -263,7 +264,7 @@ export function ProjectList() {
                   key={p.id}
                   project={p}
                   leadName={agentNames.get(p.owner) ?? (p.owner || 'The lead')}
-                  onClick={() => router.push(`/projects/${p.id}`)}
+                  onClick={() => router.push(entityHref('projects:project', p.id) ?? '/projects')}
                   onDelete={(trigger) => {
                     deleteTriggerRef.current = trigger
                     setDeleteError(null)
