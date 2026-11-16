@@ -349,7 +349,7 @@ export function createProjectRepository(storage: StorageAdapter): ProjectReposit
     readBrainstormMessages,
 
     writeBrainstormMessages(id: string, messages: ProjectBrainstormMessage[]): void {
-      storage.write(projectBrainstormPath(id), JSON.stringify(messages.slice(-BRAINSTORM_ROW_CAP), null, 2))
+      storage.write(projectBrainstormPath(id), JSON.stringify(trimKeepingHandoff(messages), null, 2))
     },
 
     readSeen,
@@ -464,15 +464,32 @@ function normalizeConversationRow(value: unknown): ProjectBrainstormMessage | nu
 }
 
 /**
- * Fit a chat hand-off batch (the `in` marker, then the carried rows) into the
- * transcript cap: the marker stays first and the most recent carried rows are
- * kept, with the marker's `carried` count corrected to match.
+ * Trim a transcript to the cap without orphaning carried history. Plain
+ * `slice(-cap)` evicts a chat hand-off's `in` marker first, because it leads
+ * its batch: the "Carried over from …" divider would vanish, a repeat of the
+ * hand-off would no longer be recognised, and the carried rows would read as
+ * this conversation's own. While any carried row survives, the marker is kept
+ * in front of them with its `carried` count corrected.
  */
+export function trimKeepingHandoff<Row extends { kind: string }>(rows: Row[], cap = BRAINSTORM_ROW_CAP): Row[] {
+  if (rows.length <= cap) return rows
+  const drop = rows.length - cap
+  let at = -1
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i] as { kind: string; direction?: unknown }
+    if (row.kind === 'handoff' && row.direction === 'in') { at = i; break }
+  }
+  if (at < 0 || at >= drop) return rows.slice(drop)
+  const carriedEnd = at + 1 + (((rows[at] as { carried?: number }).carried) ?? 0)
+  // One more row goes to make room for the marker.
+  const remaining = carriedEnd - (drop + 1)
+  if (remaining <= 0) return rows.slice(drop)
+  return [{ ...rows[at]!, carried: remaining }, ...rows.slice(drop + 1)]
+}
+
+/** Fit a chat hand-off batch (the `in` marker, then the carried rows) into the cap, newest kept. */
 export function fitHandoffBatch<Row extends { kind: string }>(rows: Row[], cap = BRAINSTORM_ROW_CAP): Row[] {
-  const [marker, ...carried] = rows
-  if (!marker || rows.length <= cap) return rows
-  const kept = carried.slice(-(cap - 1))
-  return [{ ...marker, carried: kept.length }, ...kept]
+  return trimKeepingHandoff(rows, cap)
 }
 
 export function projectToSummary(p: Project): ProjectSummary {

@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from 'bun:test'
 import type { ConversationMessage } from '@makinbakin/sdk/conversation'
-import { conversationRowToSessionMessage, fitHandoffBatch, storedConversationRow } from '../lib/session-rows'
+import { conversationRowToSessionMessage, fitHandoffBatch, storedConversationRow, trimSessionMessages } from '../lib/session-rows'
 import { sessionMessageToConversation } from '../lib/session-to-conversation'
 import type { SessionMessage } from '../types'
 
@@ -62,5 +62,40 @@ describe('fitHandoffBatch', () => {
     expect(fitted).toHaveLength(4)
     expect(fitted[0]).toMatchObject({ kind: 'handoff', carried: 3 })
     expect(fitted.slice(1)).toEqual(ROWS.slice(3))
+  })
+})
+
+describe('trimSessionMessages', () => {
+  const marker = (carried: number): SessionMessage => conversationRowToSessionMessage({ kind: 'handoff', ts: 't', handoffId: 'h', direction: 'in', peers: [{ entity: 'chat:chat', id: 'c', title: 'Chat' }], carried }, 'marker')
+  const carriedRow = (i: number): SessionMessage => conversationRowToSessionMessage({ kind: 'user', ts: 't', content: `carried ${i}` }, `c${i}`)
+  const own = (i: number): SessionMessage => ({ id: `o${i}`, role: 'user', content: `own ${i}`, timestamp: 't' })
+  const carriedOf = (message: SessionMessage) => (storedConversationRow(message) as { carried?: number }).carried
+
+  test('under the cap nothing changes', () => {
+    const messages = [marker(2), carriedRow(0), carriedRow(1), own(0)]
+    expect(trimSessionMessages(messages, 10)).toBe(messages)
+  })
+
+  test('the marker is kept while any carried row remains, with its count corrected', () => {
+    const messages = [marker(4), carriedRow(0), carriedRow(1), carriedRow(2), carriedRow(3), own(0), own(1)]
+    const trimmed = trimSessionMessages(messages, 5)
+    expect(trimmed).toHaveLength(5)
+    expect(trimmed[0]!.id).toBe('marker')
+    expect(carriedOf(trimmed[0]!)).toBe(2)
+    expect(trimmed.slice(1).map((m) => m.id)).toEqual(['c2', 'c3', 'o0', 'o1'])
+    // Trimming again keeps holding the marker.
+    const again = trimSessionMessages([...trimmed, own(2)], 5)
+    expect(again.map((m) => m.id)).toEqual(['marker', 'c3', 'o0', 'o1', 'o2'])
+    expect(carriedOf(again[0]!)).toBe(1)
+  })
+
+  test('once every carried row has aged out the marker goes too', () => {
+    const messages = [marker(1), carriedRow(0), own(0), own(1), own(2), own(3)]
+    expect(trimSessionMessages(messages, 3).map((m) => m.id)).toEqual(['o1', 'o2', 'o3'])
+  })
+
+  test('a session with no hand-off trims as before', () => {
+    const messages = [own(0), own(1), own(2), own(3)]
+    expect(trimSessionMessages(messages, 2).map((m) => m.id)).toEqual(['o2', 'o3'])
   })
 })

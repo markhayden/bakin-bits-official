@@ -49,3 +49,26 @@ export function fitHandoffBatch<Row extends { kind: string }>(rows: Row[], cap: 
   const kept = carried.slice(-(cap - 1))
   return [{ ...marker, carried: kept.length }, ...kept]
 }
+
+/**
+ * Trim a session's messages to the cap without orphaning carried history.
+ * Plain `slice(-cap)` evicts a hand-off's marker first, because it leads its
+ * batch: the divider would vanish, a repeat of the hand-off would no longer
+ * be recognised, and the carried rows would read as the session's own. While
+ * any carried row survives, the marker is kept in front of them with its
+ * `carried` count corrected.
+ */
+export function trimSessionMessages(messages: SessionMessage[], cap: number): SessionMessage[] {
+  if (messages.length <= cap) return messages
+  const drop = messages.length - cap
+  let at = -1
+  let marker: Extract<ConversationMessage, { kind: 'handoff' }> | null = null
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const row = storedConversationRow(messages[i]!)
+    if (row?.kind === 'handoff' && row.direction === 'in') { at = i; marker = row; break }
+  }
+  if (!marker || at >= drop) return messages.slice(drop)
+  const remaining = at + 1 + (marker.carried ?? 0) - (drop + 1)
+  if (remaining <= 0) return messages.slice(drop)
+  return [{ ...messages[at]!, data: { ...marker, carried: remaining } }, ...messages.slice(drop + 1)]
+}

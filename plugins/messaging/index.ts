@@ -22,7 +22,7 @@ import type {
   MessagingSettings,
 } from './types'
 import { DEFAULT_CHANNEL, DEFAULT_CONTENT_TYPES } from './types'
-import { conversationRowToSessionMessage, fitHandoffBatch } from './lib/session-rows'
+import { conversationRowToSessionMessage, fitHandoffBatch, trimSessionMessages } from './lib/session-rows'
 import { sessionMessageToConversation } from './lib/session-to-conversation'
 import { buildMessages, buildPlanRefinementMessages } from './lib/prompt-builder'
 import {
@@ -547,7 +547,7 @@ function appendBrainstormMessage(
   contentStore.updateBrainstormSession(sessionId, {
     // Bounded (bakin#706): sessions are working conversations — the oldest
     // rows drop so the per-row full-file rewrite stays cheap.
-    messages: [...session.messages, nextMessage].slice(-SESSION_MESSAGE_CAP),
+    messages: trimSessionMessages([...session.messages, nextMessage], SESSION_MESSAGE_CAP),
   })
   return nextMessage
 }
@@ -1330,10 +1330,10 @@ ${historyContext ? `Conversation so far:\n${historyContext}\n\n` : ''}Mark says:
         const session = contentStore.getBrainstormSession(key)
         if (!session) throw new Error(`Session ${key} not found`)
         contentStore.updateBrainstormSession(key, {
-          messages: [
+          messages: trimSessionMessages([
             ...session.messages,
             ...(rows as unknown as ConversationMessage[]).map(row => conversationRowToSessionMessage(row, generateId())),
-          ].slice(-SESSION_MESSAGE_CAP),
+          ], SESSION_MESSAGE_CAP),
         })
       },
       // Plan-refinement turns run on the plan's own thread; the state map is

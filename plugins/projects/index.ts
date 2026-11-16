@@ -1049,7 +1049,10 @@ const projectsPlugin: BakinPlugin = {
         // A project handed over from a chat: until this agent has replied
         // here, its turn carries the chat's history (derived from the
         // transcript, so a failed first turn primes again on retry).
-        const carriedOver = handoffPreamble(readBrainstormMessages(projectId) as unknown as Parameters<typeof handoffPreamble>[0], agentId)
+        // Steward notes are written by the agent from a task session, not
+        // this conversation's: they are no sign its thread has the history.
+        const ownRows = readBrainstormMessages(projectId).filter(row => !('turnId' in row && row.turnId?.startsWith('steward:')))
+        const carriedOver = handoffPreamble(ownRows as unknown as Parameters<typeof handoffPreamble>[0], agentId)
         const context = carriedOver ? `${carriedOver}\n\n${built}` : built
         const started = await brainstormTurns.start(ctx, projectId, body.prompt, { agentId, runtimeContent: context })
         if (started === 'accepted' && pendingQuestion) {
