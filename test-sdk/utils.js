@@ -227,7 +227,8 @@ export function handoffPreamble(rows, agentId, { maxBytes = HANDOFF_PREAMBLE_BYT
   const marker = rows[at]
   const carriedEnd = at + 1 + (marker.carried ?? 0)
   const replied = rows.slice(carriedEnd).some(row =>
-    row.kind === 'assistant' && (row.agentId === undefined || row.agentId === agentId))
+    (row.kind === 'assistant' && (row.agentId === undefined || row.agentId === agentId))
+    || (row.kind === 'tool' && row.agentId === agentId))
   if (replied) return null
 
   const lines = rows.slice(at + 1, carriedEnd).flatMap((row) => {

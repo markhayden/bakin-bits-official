@@ -2668,3 +2668,56 @@ describe('entity cards and chat hand-off', () => {
     expect(stored('proj-prime').slice(0, 3).map((row) => row.kind)).toEqual(['handoff', 'user', 'assistant'])
   })
 })
+
+describe('chat hand-off: review findings', () => {
+  const chatSource = { entity: 'chat:chat', id: 'c-1', title: 'Launch chat' }
+  const stored = (projectId: string) =>
+    createProjectRepository(new MarkdownStorageAdapter(testDir)).readBrainstormMessages(projectId)
+  const settle = () => new Promise<void>((resolve) => {
+    const off = plugin.ctx.events.on('*', (event) => {
+      if (event === 'projects.brainstorm.done' || event === 'projects.brainstorm.error') { off(); resolve() }
+    })
+  })
+  const ask = (projectId: string, prompt: string) =>
+    callRoute(findRoute(plugin.routes, 'POST', '/:projectId/ask')!, plugin.ctx, { body: { projectId, prompt }, rawResponse: true })
+
+  it('a chat at the transcript cap keeps its divider when the next rows are written', async () => {
+    writeProjectFixture('proj-cap', { title: 'At the cap' })
+    const long = Array.from({ length: 400 }, (_, i) => ({ kind: 'user' as const, ts: '2026-11-14T09:00:00.000Z', content: `message ${i}` }))
+    await plugin.deliverHandoff({ kind: 'project', id: 'proj-cap', handoffId: 'c-1:t1:proj-cap', source: chatSource, carried: long })
+
+    mockRuntimeStream(['On it.'])
+    const done = settle()
+    await ask('proj-cap', 'what is first?')
+    await done
+
+    const rows = stored('proj-cap')
+    expect(rows).toHaveLength(300)
+    expect(rows[0]).toMatchObject({ kind: 'handoff', direction: 'in' })
+    const marker = rows[0] as { carried: number }
+    // The count still says exactly how many carried rows follow the divider.
+    expect(rows[marker.carried]).toMatchObject({ content: 'message 399' })
+    expect(rows[marker.carried + 1]).toMatchObject({ kind: 'user', content: 'what is first?' })
+    // And a redelivery is still recognised as a repeat.
+    await plugin.deliverHandoff({ kind: 'project', id: 'proj-cap', handoffId: 'c-1:t1:proj-cap', source: chatSource, carried: long })
+    expect(stored('proj-cap').filter((row) => row.kind === 'handoff')).toHaveLength(1)
+  })
+
+  it('a steward note written before the first message does not count as the lead having replied', async () => {
+    writeProjectFixture('proj-steward', { title: 'Steward first' })
+    await plugin.deliverHandoff({ kind: 'project', id: 'proj-steward', handoffId: 'c-1:t1:proj-steward', source: chatSource, carried: [
+      { kind: 'user', ts: '2026-11-14T09:00:00.000Z', content: 'our mascot is a heron' },
+    ] })
+    const repo = createProjectRepository(new MarkdownStorageAdapter(testDir))
+    repo.writeBrainstormMessages('proj-steward', [
+      ...repo.readBrainstormMessages('proj-steward'),
+      { kind: 'assistant', ts: '2026-11-14T11:00:00.000Z', turnId: 'steward:task-1', agentId: 'main', content: 'Checked in: nothing to report.' },
+    ])
+
+    const stream = mockRuntimeStream(['A heron.'])
+    const done = settle()
+    await ask('proj-steward', 'what is our mascot?')
+    await done
+    expect((stream.mock.calls[0]![0] as MessageArgs).content).toContain('User: our mascot is a heron')
+  })
+})

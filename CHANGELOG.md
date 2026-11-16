@@ -9,6 +9,13 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- `projects` (0.15.2), `messaging` (0.13.2): fixes from the code review of
+  chat hand-off. A transcript trimmed to its 300-row cap now keeps the
+  "Carried over from the chat …" marker while any carried row remains, with
+  its count corrected; before, the marker was the first row evicted, which
+  lost the divider and let a repeated hand-off duplicate the history. In
+  Projects, a steward note written before the first message no longer counts
+  as the lead having replied, so the lead still receives the chat's history.
 - `terminal` (0.4.0-dev.32, requires Bakin `>=0.0.1-rc.50`): a session's links
   to its task and project are built with `entityHref` from the declared kinds.
   The architecture test now covers every official plugin.
