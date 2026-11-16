@@ -9,6 +9,9 @@ on a per-plugin basis: each plugin tags its own releases as
 ## [Unreleased]
 
 ### Changed
+- `terminal` (0.4.0-dev.32, requires Bakin `>=0.0.1-rc.50`): a session's links
+  to its task and project are built with `entityHref` from the declared kinds.
+  The architecture test now covers every official plugin.
 - `projects` (0.15.1), `messaging` (0.13.1): every link to a project, plan,
   brainstorm session, task or asset is built with `entityHref` from the
   owning plugin's declared kind, instead of a hand-written URL. A repo

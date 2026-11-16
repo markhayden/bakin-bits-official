@@ -8,15 +8,14 @@
  * (`\`/projects/\${id}\``, `'/tasks?taskId=' + id`). A different route that
  * shares the prefix (`/projects/new`, a client route pattern) is allowed.
  *
- * Covers Projects and Messaging. Terminal still builds two links by hand; it
- * moves when it next raises its minimum Bakin release.
+ * Covers every official plugin here: Projects, Messaging and Terminal.
  */
 import { describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 
 const PLUGINS = import.meta.dir
-const SCANNED = ['projects', 'messaging']
+const SCANNED = ['projects', 'messaging', 'terminal']
 
 /** The core kinds' prefixes (Bakin's manifests are not in this repo). */
 const CORE_PREFIXES = ['/tasks?taskId=', '/assets/', '/schedule?jobId=', '/workflows/', '/brands/', '/chat/', '/team/']
@@ -78,7 +77,7 @@ describe('no hand-built entity links', () => {
     ])
   })
 
-  test('Projects and Messaging build no entity link by hand', () => {
+  test('no official plugin builds an entity link by hand', () => {
     const offenders: string[] = []
     for (const plugin of SCANNED) {
       for (const file of sourceFiles(join(PLUGINS, plugin))) {

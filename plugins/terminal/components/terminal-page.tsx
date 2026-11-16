@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom'
 import { Page, PageBody, PageHeader, WorkspacePage, WorkspacePageHeader, WorkspacePageCompactHeader, WorkspacePageBody, ConfirmDialog, AgentAvatar, AgentSelect, CopyButton, DataTable, SegmentedControl } from '@makinbakin/sdk/patterns'
 import { Inline, Panel, Stack } from '@makinbakin/sdk/layout'
 import { Alert, AlertDescription, Badge, Banner, Button, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SystemState, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, Text, Separator, Popover, PopoverTrigger, PopoverContent, PopoverTitle, DropdownMenuItem, DropdownMenuSwitchItem, DropdownMenuSeparator } from '@makinbakin/sdk/ui'
-import { PluginLink, useQueryState, useRouter } from '@makinbakin/sdk/navigation'
+import { PluginLink, entityHref, useQueryState, useRouter } from '@makinbakin/sdk/navigation'
 import { formatAge } from '@makinbakin/sdk/utils'
 import { toast, useFullscreen } from '@makinbakin/sdk/hooks'
 import { Plus, Hand, Play, Square, UserRoundCheck, CornerDownLeft, ArrowLeft, Info, Terminal, RotateCw, Keyboard, Ruler, AppWindow, ClipboardCopy, Expand, Shrink, MessageSquareText } from 'lucide-react'
@@ -568,8 +568,8 @@ function Workspace({ sessionId }: { sessionId?: string }) {
                     <Tool label="Assign agent" description="Apply the selected agent to this session." disabled={busy || Boolean(agentsError) || assignment === (session.agentId ?? '')} onClick={() => void operate('assign', { agentId: assignment || undefined })}><UserRoundCheck size={16} /></Tool>
                   </Inline>
                   {agentsError && <SystemState kind="error" scope="inline" title={agentsError} description="Current assignment is unchanged." action={<Button size="sm" variant="outline" onClick={() => void loadAgents()}>Retry agents</Button>} />}
-                  {session.taskId && <PluginLink to={`/tasks?taskId=${encodeURIComponent(session.taskId)}`}><CornerDownLeft size={14} />Task {session.taskId}</PluginLink>}
-                  {session.projectId && <PluginLink to={`/projects/${encodeURIComponent(session.projectId)}`}><CornerDownLeft size={14} />Project {session.projectId}</PluginLink>}
+                  {session.taskId && <PluginLink to={entityHref('tasks:task', session.taskId) ?? '/tasks'}><CornerDownLeft size={14} />Task {session.taskId}</PluginLink>}
+                  {session.projectId && <PluginLink to={entityHref('projects:project', session.projectId) ?? '/projects'}><CornerDownLeft size={14} />Project {session.projectId}</PluginLink>}
                 </Stack>
               </PopoverContent>
             </Popover>
