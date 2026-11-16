@@ -8,7 +8,8 @@ and normal permission prompts. Bakin does not disable CLI safety controls.
 ## Development Status
 
 This is a macOS-first implementation. It requires Bakin and `@makinbakin/sdk`
-`>=0.0.1-rc.45`: it uses the host's full screen (`useFullscreen`, rc.45); the
+`>=0.0.1-rc.50`: it links to tasks and projects through their declared kinds
+(`entityHref`, rc.50) and uses the host's full screen (`useFullscreen`, rc.45); the
 client bundle is built for the host-provided zod contract (`react19-sdk-focused-v2`,
 rc.42), and rc.40 added consent, verified downloads, and repair for
 plugin-managed binaries.
@@ -27,7 +28,7 @@ or API billing.
 
 ## Setup and Access
 
-1. Run Bakin `0.0.1-rc.45` or newer and install this plugin, or use
+1. Run Bakin `0.0.1-rc.50` or newer and install this plugin, or use
    `bakin plugins link <checkout>/plugins/terminal` for hot reload.
    An existing dev instance can use its normal Bakin home; a disposable home is
    only needed for isolated testing.
