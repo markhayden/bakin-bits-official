@@ -54,6 +54,7 @@ interface PackManifest {
     bins?: Array<{ name?: string; version?: string; install?: Record<string, BinDownload>; verifyArgs?: string[] }>
     npm?: Array<{ name?: string; source?: string; dependencies?: Record<string, string> }>
     prereqs?: Array<{ name?: string; kind?: string; probe?: string; help?: string }>
+    login?: Array<{ name?: string; probe?: string[]; setup?: string; help?: string; accountEnv?: string }>
     models?: unknown[]
   }
   secrets?: Array<{ name?: string; description?: string; required?: boolean; secretSlot?: string; help?: string }>
@@ -152,6 +153,32 @@ describe('pack contracts', () => {
         }
       })
 
+      it('binds every login probe to a declared bin or binary prereq, with the setup command and a help link (provider-integrations §4.1)', () => {
+        const bound = new Set<string>([
+          ...(manifest.requires?.bins ?? []).map((bin) => bin.name!),
+          ...(manifest.requires?.prereqs ?? []).filter((p) => p.kind === 'binary').map((p) => p.probe!),
+        ])
+        for (const login of manifest.requires?.login ?? []) {
+          expect(login.name).toBeTruthy()
+          expect((login.probe ?? []).length, `${packId}: login ${login.name} has an empty probe`).toBeGreaterThan(0)
+          const bin = login.probe![0]!
+          // probe[0] runs on the operator's box: only this pack's own binary, never a path, never a prereq's display name.
+          expect(bin.includes('/'), `${packId}: login probe "${bin}" is a path`).toBe(false)
+          expect(bound.has(bin), `${packId}: login probe "${bin}" is not a declared bin or binary prereq`).toBe(true)
+          expect(login.setup, `${packId}: login ${login.name} has no setup command`).toBeTruthy()
+          expect(login.help, `${packId}: login ${login.name} has no help URL`).toMatch(/^https:\/\//)
+          if (login.accountEnv) expect(login.accountEnv).toMatch(/^[A-Z][A-Z0-9_]*$/)
+        }
+        // A login leg needs a host that understands it; an older host would drop the leg and report ready.
+        if ((manifest.requires?.login ?? []).length > 0) {
+          expect(manifest.bakin, `${packId}: a pack with requires.login must floor bakin at the rc that reads it`).toMatch(/^>=0\.1\.0-rc\.(9|[1-9]\d+)$|^>=0\.[2-9]|^>=[1-9]/)
+        }
+      })
+
+      it('declares a truthful bakin range — never the ^1.0.0 placeholder a 0.x host refuses', () => {
+        expect(manifest.bakin).not.toBe('^1.0.0')
+      })
+
       it('declares secrets as env vars with a bindable slot and a help link', () => {
         for (const secret of manifest.secrets ?? []) {
           expect(secret.name).toMatch(/^[A-Z_][A-Z0-9_]*$/)
@@ -175,6 +202,33 @@ describe('pack contracts', () => {
       })
     })
   }
+})
+
+describe('google-workspace vendored references (provider-integrations D11)', () => {
+  const refsDir = join(packsRoot, 'google-workspace', 'skills', 'google-workspace', 'references')
+  const stamp = JSON.parse(readFileSync(join(refsDir, 'VENDORED.json'), 'utf-8')) as { repo: string; tag: string; commit: string; files: Record<string, string> }
+
+  it('vendors gog\'s skills at exactly the pinned gog version, with upstream\'s LICENSE', () => {
+    const manifest = readManifest('google-workspace')
+    const gog = manifest.requires?.bins?.find((bin) => bin.name === 'gog')!
+    expect(stamp.repo).toBe('openclaw/gogcli')
+    expect(stamp.tag).toBe(`v${gog.version}`)
+    expect(stamp.commit).toMatch(/^[0-9a-f]{40}$/)
+    expect(Object.keys(stamp.files)).toContain('LICENSE')
+    for (const [file, sha] of Object.entries(stamp.files)) {
+      expect(existsSync(join(refsDir, file)), `missing vendored ${file}`).toBe(true)
+      expect(sha).toMatch(/^[0-9a-f]{64}$/)
+    }
+  })
+
+  it('the entry skill names every vendored reference it points at', () => {
+    const entry = readFileSync(join(packsRoot, 'google-workspace', 'skills', 'google-workspace', 'SKILL.md'), 'utf-8')
+    for (const file of Object.keys(stamp.files)) {
+      if (file === 'LICENSE') continue
+      expect(entry.includes(file), `SKILL.md never mentions references/${file}`).toBe(true)
+    }
+    expect(entry.length).toBeLessThanOrEqual(6 * 1024)
+  })
 })
 
 describe('packs ↔ catalog', () => {

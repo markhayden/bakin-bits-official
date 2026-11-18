@@ -2,10 +2,10 @@
   "id": "notion",
   "kind": "skill-pack",
   "name": "Notion",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Lets your agents read and write your Notion workspace — search pages, pull a doc's content as text, append notes, and query databases. Nothing to install; just connect a key.",
   "author": "Bakin",
-  "bakin": "^1.0.0",
+  "bakin": ">=0.0.1",
   "capability": "notion",
   "runtimes": [
     "*"

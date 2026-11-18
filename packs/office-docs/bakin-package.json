@@ -2,10 +2,10 @@
   "id": "office-docs",
   "kind": "skill-pack",
   "name": "Word & Excel Documents",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Lets your agents read and write real Word and Excel files — pull the text out of a .docx, turn a spreadsheet into data they can reason over, and hand back a formatted document or workbook. Fully local, no Office install, no API key.",
   "author": "Bakin",
-  "bakin": "^1.0.0",
+  "bakin": ">=0.0.1",
   "capability": "office-docs",
   "runtimes": [
     "*"
